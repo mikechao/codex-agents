@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fail } from "./errors.mjs";
-import { canonicalJson } from "./validation.mjs";
+import { canonicalJson, exactPaths } from "./validation.mjs";
 
 function git(root, args, maxBuffer = 4 * 1024 * 1024) {
   try {
@@ -16,6 +16,20 @@ function git(root, args, maxBuffer = 4 * 1024 * 1024) {
   }
 }
 
+function gitStatus(root, args) {
+  try {
+    return {
+      status: 0,
+      output: execFileSync("git", ["-C", root, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    };
+  } catch (error) {
+    return { status: error.status ?? 1, output: error.stdout ?? "" };
+  }
+}
+
 export function currentHead(root) {
   const head = git(root, ["rev-parse", "--verify", "HEAD"]).trim();
   if (!/^[0-9a-f]{40}$/u.test(head)) fail("ERROR_NO_HEAD", "repository has no commit");
@@ -24,6 +38,84 @@ export function currentHead(root) {
 
 export function repositoryRoot(cwd) {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
+}
+
+export function verifyRevision(root, revision) {
+  if (typeof revision !== "string" || !/^[0-9a-f]{40}$/u.test(revision)) {
+    fail("ERROR_INVALID_REVISION", "revision is invalid");
+  }
+  const { status, output } = gitStatus(root, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${revision}^{commit}`,
+  ]);
+  if (status !== 0 || output.trim() !== revision) {
+    fail("ERROR_INVALID_REVISION", "revision is not a commit");
+  }
+  return revision;
+}
+
+export function verifyRange(root, baseRevision, headRevision) {
+  verifyRevision(root, baseRevision);
+  verifyRevision(root, headRevision);
+  if (baseRevision === headRevision) {
+    fail("ERROR_INVALID_REVISION", "range must be two distinct commits");
+  }
+  const { status } = gitStatus(root, [
+    "merge-base",
+    "--is-ancestor",
+    baseRevision,
+    headRevision,
+  ]);
+  if (status !== 0) fail("ERROR_NON_ANCESTOR", "base is not an ancestor of head");
+  return { base_revision: baseRevision, head_revision: headRevision };
+}
+
+function treeEntry(root, revision, path) {
+  const output = git(root, ["ls-tree", "-z", revision, "--", path]);
+  const record = output.split("\0")[0];
+  if (!record) return null;
+  const separator = record.indexOf("\t");
+  if (separator < 0) fail("ERROR_INVALID_REVIEW_PATH", "review path metadata is invalid");
+  const fields = record.slice(0, separator).split(" ");
+  if (fields.length !== 3) fail("ERROR_INVALID_REVIEW_PATH", "review path metadata is invalid");
+  return { mode: fields[0], type: fields[1], object: fields[2] };
+}
+
+export function reviewRange(root, target) {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    fail("ERROR_INVALID_REVIEW_PATH", "review target is invalid");
+  }
+  const { base_revision, head_revision } = verifyRange(
+    root,
+    target.base_revision,
+    target.head_revision,
+  );
+  let paths;
+  try {
+    paths = exactPaths(target.approved_paths, root);
+  } catch {
+    fail("ERROR_INVALID_REVIEW_PATH", "review path is invalid");
+  }
+  const results = paths.map((path) => {
+    const base = treeEntry(root, base_revision, path);
+    const head = treeEntry(root, head_revision, path);
+    if ((base && base.type !== "blob") || (head && head.type !== "blob")) {
+      fail("ERROR_INVALID_REVIEW_PATH", "review path is not a file");
+    }
+    if (!base && !head) {
+      fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
+    }
+    const kind = base && head ? (base.object === head.object ? "unchanged" : "modified") : base ? "deleted" : "added";
+    return {
+      path,
+      kind,
+      base: base ? { mode: base.mode, object: base.object } : null,
+      head: head ? { mode: head.mode, object: head.object } : null,
+    };
+  });
+  return { base_revision, head_revision, paths: results };
 }
 
 function digest(value) {

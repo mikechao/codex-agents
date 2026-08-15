@@ -429,7 +429,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
 
 ### Review modes and linked follow-ups
 
-- [ ] **MCP-5.1 — Add exact historical Git target helpers**
+- [x] **MCP-5.1 — Add exact historical Git target helpers**
   - **Prerequisites/commit:** MCP-4.2; `feat(workflow): validate historical review targets`.
   - **Owned:** `.codex/workflow-mcp/git.mjs`, `.codex/workflow-mcp/tests/git.node.mjs`.
   - **Implement:** read-only helpers for commit verification, ancestry, and endpoint blob metadata.
@@ -1183,6 +1183,45 @@ Plan deviations:
 - Minor: `workflow_accept_concerns` clears `stop_context` on entry to `REVIEWING`, mirroring the
   resume behavior the plan specifies ("clears the stop"); the plan does not state it explicitly for
   concern acceptance but leaving a stale stop in a reviewing workflow would be inconsistent.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-5.1 — Add exact historical Git target helpers
+
+DONE
+
+Task: MCP-5.1
+Outcome: `git.mjs` now exports read-only historical-target helpers — `verifyRevision`, `verifyRange`, and `reviewRange` — that validate commit-range review targets without any current-filesystem dependence. Revisions are verified as full lowercase 40-character commit IDs (`ERROR_INVALID_REVISION`), base must be a distinct ancestor of head (`ERROR_NON_ANCESTOR`), and every approved path must be a blob at one or both endpoint trees (`ERROR_INVALID_REVIEW_PATH`). Directories and submodules are rejected, both rename paths are supported by authorizing exact old and new paths, and no git stderr ever leaks.
+
+Files changed:
+- `.codex/workflow-mcp/git.mjs`
+- `.codex/workflow-mcp/tests/git.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Read-only helpers: `verifyRevision(root, revision)` resolves a 40-hex input to a commit via `rev-parse --verify --quiet <rev>^{commit}`; `verifyRange(root, base, head)` verifies both commits, requires distinct base/head, and checks ancestry via `merge-base --is-ancestor`; `reviewRange(root, target)` applies every normative range/path rule and returns per-path endpoint blob metadata `{path, kind, base:{mode,object}|null, head:{mode,object}|null}`.
+- Error mapping: invalid-format, unknown, and non-commit revisions → `ERROR_INVALID_REVISION`; reversed (non-ancestor) ranges → `ERROR_NON_ANCESTOR`; directory, submodule, both-endpoints-absent, and unsafe paths → `ERROR_INVALID_REVIEW_PATH`.
+- Normative path rules: each approved path must be a blob at one or both endpoint trees; directories (tree) and submodules (gitlink/commit) are rejected; a path absent at both endpoints is rejected; unchanged/added/deleted/modified classified by endpoint presence and blob object equality; renames have no special meaning — authorizing both exact old and new paths succeeds.
+- No current-filesystem dependence: all metadata comes from `git ls-tree -z` on commit objects and `exactPaths` lexical validation; no worktree inspection.
+- Never leak stderr: every new git invocation uses `stdio: ["ignore", "pipe", "ignore"]` and outcomes are read from exit codes only.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `git.node.mjs`: verifyRevision valid/invalid-format/unknown/non-commit; verifyRange valid/reversed/equal; reviewRange unknown/non-commit revisions; unchanged/added/deleted/modified classification; both rename paths; absent both endpoints; unsafe paths (dot-segment/absolute/glob); directory and submodule rejection. 7/7 pass.
+
+Validation:
+- `node --test .codex/workflow-mcp/tests/git.node.mjs`: pass, 7/7.
+- `pnpm test:workflow-mcp`: pass, 67/67 (60 existing + 7 new).
+- `pnpm test`: pass, 86/86.
+- `git diff --check`: pass.
+- `git status --short`: only the two owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- Minor: an equal base/head range is rejected as `ERROR_INVALID_REVISION` rather than `ERROR_NON_ANCESTOR`, because a commit is its own ancestor (`merge-base --is-ancestor` succeeds) and the plan maps only invalid/non-commit IDs, ancestry, and endpoint/path errors; the distinctness requirement is treated as a range validity error.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.
