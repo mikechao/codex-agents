@@ -115,7 +115,8 @@ const createReviewTargetSchema = {
 export const tools = [
   {
     name: "workflow_create",
-    description: "Create an IMPLEMENTING change workflow and return one-time role capabilities.",
+    description:
+      "Create an IMPLEMENTING change workflow and return the parent view plus one-time role capabilities.",
     inputSchema: schema(
       {
         workflow_type: { type: "string", enum: ["change", "review_only"] },
@@ -155,7 +156,8 @@ export const tools = [
   },
   {
     name: "workflow_get",
-    description: "Read a workflow state; capabilities are never returned.",
+    description:
+      "Read the authenticated role's least-authority workflow view with its permitted next actions; capabilities are never returned.",
     inputSchema: schema(
       {
         workflow_id: { type: "string" },

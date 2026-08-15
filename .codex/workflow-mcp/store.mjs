@@ -21,6 +21,7 @@ import {
   migrateV1State,
   optionalFollowupInput,
   recordCommit,
+  roleView,
   submitImplementation,
   submitReview,
 } from "./transitions.mjs";
@@ -40,10 +41,6 @@ export function resolveStatePath(root) {
   const stableRoot = realpathSync(root);
   const digest = createHash("sha256").update(stableRoot, "utf8").digest("hex").slice(0, 24);
   return join(homedir(), ".codex", "state", "workflow-mcp", digest, "state.sqlite");
-}
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
 }
 
 function mutationInput(value) {
@@ -234,10 +231,6 @@ export class WorkflowStore {
       );
   }
 
-  #publicState(state) {
-    return clone(state);
-  }
-
   create(input) {
     this.#ensureOpen();
     const head = currentHead(this.root);
@@ -279,14 +272,14 @@ export class WorkflowStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    return { workflow: this.#publicState(state), capabilities };
+    return { workflow: roleView(state, "parent"), capabilities };
   }
 
   get(workflowId, actorRole, token) {
     this.#ensureOpen();
     const row = this.#row(workflowId);
     this.#assertAuth(row, actorRole, token);
-    return this.#publicState(parseState(row));
+    return roleView(parseState(row), actorRole);
   }
 
   audit(workflowId, actorRole, token) {
@@ -334,7 +327,7 @@ export class WorkflowStore {
         auditEnvelope(current, next, row.state_digest, { outcome }),
       );
       this.db.exec("COMMIT");
-      return this.#publicState(next);
+      return roleView(next, actorRole);
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -559,7 +552,7 @@ export class WorkflowStore {
         auditEnvelope(state, next, row.state_digest, { linked_workflow_id: childId }),
       );
       this.db.exec("COMMIT");
-      return { workflow: this.#publicState(childState), capabilities: childCapabilities };
+      return { workflow: roleView(childState, "parent"), capabilities: childCapabilities };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

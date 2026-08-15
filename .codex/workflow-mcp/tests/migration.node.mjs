@@ -195,7 +195,6 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
     assert.equal(migrated.implementation_status, "DONE");
     assert.deepEqual(migrated.agent_touched_paths, ["note.txt"]);
     assert.deepEqual(migrated.scope_changed_paths, ["note.txt"]);
-    assert.deepEqual(migrated.implementation_changed_paths, ["note.txt"]);
     assert.deepEqual(migrated.acceptance_results, []);
     assert.deepEqual(migrated.validation_results, []);
     assert.deepEqual(migrated.implementation_receipt, { base_head: "a".repeat(40) });
@@ -212,18 +211,31 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
     assert.equal(migrated.commit_authorization, null);
     assert.equal(migrated.commit_preparation, null);
     assert.equal(migrated.commit_result, null);
-    assert.deepEqual(migrated.implementation_acceptance_evidence, ["accepted"]);
-    assert.deepEqual(migrated.implementation_validation_evidence, ["validated"]);
-    assert.deepEqual(migrated.authorized_optional_ids, []);
-    assert.equal(migrated.user_authorization_summary, null);
-    assert.deepEqual(migrated.legacy_evidence, {
+    assert.deepEqual(migrated.permitted_next_actions, []);
+    for (const key of [
+      "implementation_changed_paths",
+      "implementation_acceptance_evidence",
+      "implementation_validation_evidence",
+      "authorized_optional_ids",
+      "user_authorization_summary",
+      "legacy_evidence",
+    ]) {
+      assert.equal(key in migrated, false, `parent view exposes ${key}`);
+    }
+    const row = store.db
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(state.workflow_id);
+    const raw = JSON.parse(row.state_json);
+    assert.deepEqual(raw.implementation_changed_paths, ["note.txt"]);
+    assert.deepEqual(raw.implementation_acceptance_evidence, ["accepted"]);
+    assert.deepEqual(raw.implementation_validation_evidence, ["validated"]);
+    assert.deepEqual(raw.authorized_optional_ids, []);
+    assert.equal(raw.user_authorization_summary, null);
+    assert.deepEqual(raw.legacy_evidence, {
       acceptance_evidence: ["accepted"],
       validation_evidence: ["validated"],
     });
-    const row = store.db
-      .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
-      .get(state.workflow_id);
-    assert.equal(row.state_digest, objectDigest(migrated));
+    assert.equal(row.state_digest, objectDigest(raw));
     const events = store.audit(state.workflow_id, "parent", issued.get(state.workflow_id).parent);
     assert.equal(events.filter((event) => event.event_type === "WORKFLOW_MIGRATED").length, 1);
     assert.equal(events.filter((event) => event.event_type === "WORKFLOW_MIGRATED")[0].version, 4);

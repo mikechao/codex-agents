@@ -37,6 +37,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.equal(created.workflow.phase, "IMPLEMENTING");
     assert.equal(created.workflow.capabilities, undefined);
     assert.equal(Object.keys(created.capabilities).length, 4);
+    assert.deepEqual(created.workflow.permitted_next_actions, []);
     const denied = await client.callTool({ name: "workflow_get", arguments: { workflow_id: created.workflow.workflow_id, role: "parent", capability: "bad" } });
     assert.equal(denied.isError, true);
     assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_CAPABILITY_DENIED");
@@ -63,6 +64,61 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     git("commit", "-qm", "protocol change");
     const committed = await call("workflow_record_commit", { workflow_id: base.workflow_id, capability: created.capabilities.committer, expected_version: 6, commit_hash: git("rev-parse", "HEAD") });
     assert.equal(committed.phase, "COMMITTED");
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("role view projection over STDIO returns only role data without capabilities", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-roleview-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const createdResult = await client.callTool({ name: "workflow_create", arguments: { workflow_type: "change", objective: "role view protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } } });
+    const created = JSON.parse(createdResult.content[0].text);
+    const get = async (role, capability) => JSON.parse((await client.callTool({ name: "workflow_get", arguments: { workflow_id: created.workflow.workflow_id, role, capability } })).content[0].text);
+
+    const implementer = await get("implementer", created.capabilities.implementer);
+    assert.equal(implementer.phase, "IMPLEMENTING");
+    assert.deepEqual(implementer.permitted_next_actions, ["workflow_submit_implementation"]);
+    assert.equal("initial_receipt" in implementer, true);
+    assert.equal("acceptance_criteria" in implementer, true);
+    assert.equal("review_receipt" in implementer, false);
+    assert.equal("optional_findings" in implementer, false);
+    assert.equal("commit_authorization" in implementer, false);
+
+    const reviewer = await get("reviewer", created.capabilities.reviewer);
+    assert.equal("initial_receipt" in reviewer, false);
+    assert.equal("review_receipt" in reviewer, true);
+    assert.equal("commit_authorization" in reviewer, false);
+
+    const committer = await get("committer", created.capabilities.committer);
+    assert.equal("initial_receipt" in committer, false);
+    assert.equal("commit_authorization" in committer, true);
+
+    const parent = await get("parent", created.capabilities.parent);
+    assert.equal("initial_receipt" in parent, true);
+    assert.equal("commit_authorization" in parent, true);
+    for (const view of [implementer, reviewer, committer, parent]) {
+      const serialized = JSON.stringify(view);
+      assert.equal(serialized.includes("legacy_evidence"), false);
+      for (const token of Object.values(created.capabilities)) {
+        assert.equal(serialized.includes(token), false, `view contains capability ${token}`);
+      }
+    }
+    const denied = await client.callTool({ name: "workflow_get", arguments: { workflow_id: created.workflow.workflow_id, role: "parent", capability: created.capabilities.implementer } });
+    assert.equal(denied.isError, true);
+    assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_CAPABILITY_DENIED");
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }

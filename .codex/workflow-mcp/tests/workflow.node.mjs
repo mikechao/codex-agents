@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { WorkflowError } from "../errors.mjs";
 import { resolveStatePath, WorkflowStore } from "../store.mjs";
+import { permittedNextActions, roleView } from "../transitions.mjs";
 import { objectDigest } from "../validation.mjs";
 
 function fixture() {
@@ -149,7 +150,9 @@ test("optional findings require a fresh linked workflow", () => {
     assert.equal(linked.workflow.phase, "IMPLEMENTING");
     assert.equal(linked.workflow.repair_cycle, 0);
     assert.equal(linked.workflow.parent_workflow_id, created.workflow.workflow_id);
-    assert.deepEqual(linked.workflow.authorized_optional_ids, ["F-3"]);
+    const childState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(linked.workflow.workflow_id).state_json);
+    assert.deepEqual(childState.authorized_optional_ids, ["F-3"]);
+    assert.equal("authorized_optional_ids" in linked.workflow, false);
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, 3);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -421,13 +424,24 @@ test("v2 creation constructs every normative state key and stores a verified dig
     assert.equal(workflow.commit_authorization, null);
     assert.equal(workflow.commit_preparation, null);
     assert.equal(workflow.commit_result, null);
-    assert.deepEqual(workflow.implementation_changed_paths, []);
-    assert.deepEqual(workflow.implementation_acceptance_evidence, []);
-    assert.deepEqual(workflow.implementation_validation_evidence, []);
-    assert.deepEqual(workflow.authorized_optional_ids, []);
-    assert.equal(workflow.user_authorization_summary, null);
+    for (const key of [
+      "implementation_changed_paths",
+      "implementation_acceptance_evidence",
+      "implementation_validation_evidence",
+      "authorized_optional_ids",
+      "user_authorization_summary",
+      "legacy_evidence",
+    ]) {
+      assert.equal(key in workflow, false, `parent view exposes ${key}`);
+    }
     const row = store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id);
-    assert.equal(row.state_digest, objectDigest(JSON.parse(row.state_json)));
+    const rawState = JSON.parse(row.state_json);
+    assert.deepEqual(rawState.implementation_changed_paths, []);
+    assert.deepEqual(rawState.implementation_acceptance_evidence, []);
+    assert.deepEqual(rawState.implementation_validation_evidence, []);
+    assert.deepEqual(rawState.authorized_optional_ids, []);
+    assert.equal(rawState.user_authorization_summary, null);
+    assert.equal(row.state_digest, objectDigest(rawState));
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).phase, "IMPLEMENTING");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -505,7 +519,8 @@ test("audit envelopes use exact sanitized keys and sorted changed fields", () =>
       "state_digest_after",
       "state_digest_before",
     ];
-    const stateKeys = Object.keys(created.workflow)
+    const rawState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id).state_json);
+    const stateKeys = Object.keys(rawState)
       .filter((key) => key !== "version")
       .sort();
 
@@ -562,20 +577,18 @@ test("audit digests form a continuity chain across mutations", () => {
     const id = created.workflow.workflow_id;
     const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
     const rowDigest = () => store.db.prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?").get(id).state_digest;
+    const rawState = () => JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json);
 
     const createdEvent = readAudit()[0];
     assert.equal(createdEvent.summary.state_digest_before, null);
     assert.equal(createdEvent.summary.state_digest_after, rowDigest());
-    assert.equal(createdEvent.summary.state_digest_after, objectDigest(created.workflow));
+    assert.equal(createdEvent.summary.state_digest_after, objectDigest(rawState()));
 
     implementation(store, created, root, 0, "implemented");
     const implEvent = readAudit()[1];
     assert.equal(implEvent.summary.state_digest_before, createdEvent.summary.state_digest_after);
     assert.equal(implEvent.summary.state_digest_after, rowDigest());
-    assert.equal(
-      implEvent.summary.state_digest_after,
-      objectDigest(store.get(id, "parent", created.capabilities.parent)),
-    );
+    assert.equal(implEvent.summary.state_digest_after, objectDigest(rawState()));
 
     const blocker = { finding_id: "CHAIN-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
@@ -821,5 +834,266 @@ test("restart persists execution contracts and review target", () => {
     });
     assert.deepEqual(persisted.initial_receipt, created.workflow.initial_receipt);
     reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+const COMMON_KEYS = [
+  "workflow_id",
+  "schema_version",
+  "version",
+  "workflow_type",
+  "phase",
+  "objective",
+  "approved_paths",
+  "repair_cycle",
+  "max_repair_cycles",
+  "review_target",
+  "permitted_next_actions",
+];
+const PARENT_EXTRA_KEYS = [
+  "legacy_v1",
+  "base_head",
+  "acceptance_criteria",
+  "validation_requirements",
+  "initial_receipt",
+  "dirty_baseline_paths",
+  "parent_workflow_id",
+  "source_workflow_id",
+  "linked_findings",
+  "remediation_context",
+  "implementation_summary",
+  "implementation_status",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "acceptance_results",
+  "validation_results",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "finding_resolution_map",
+  "prior_finding_classifications",
+  "blocking_findings",
+  "optional_findings",
+  "review_receipt",
+  "stop_context",
+  "recovery_context",
+  "repair_authorized_ids",
+  "concern_acceptance",
+  "commit_authorization",
+  "commit_preparation",
+  "commit_result",
+];
+const IMPLEMENTER_EXTRA_KEYS = [
+  "acceptance_criteria",
+  "validation_requirements",
+  "initial_receipt",
+  "dirty_baseline_paths",
+  "linked_findings",
+  "remediation_context",
+  "implementation_summary",
+  "implementation_status",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "acceptance_results",
+  "validation_results",
+  "finding_resolution_map",
+  "blocking_findings",
+  "repair_authorized_ids",
+  "stop_context",
+  "recovery_context",
+];
+const REVIEWER_EXTRA_KEYS = [
+  "acceptance_criteria",
+  "validation_requirements",
+  "dirty_baseline_paths",
+  "implementation_summary",
+  "implementation_status",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "acceptance_results",
+  "validation_results",
+  "finding_resolution_map",
+  "blocking_findings",
+  "optional_findings",
+  "prior_finding_classifications",
+  "concern_acceptance",
+  "review_receipt",
+  "stop_context",
+  "recovery_context",
+];
+const COMMITTER_EXTRA_KEYS = [
+  "acceptance_criteria",
+  "validation_requirements",
+  "dirty_baseline_paths",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "implementation_summary",
+  "implementation_status",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "acceptance_results",
+  "validation_results",
+  "blocking_findings",
+  "optional_findings",
+  "prior_finding_classifications",
+  "concern_acceptance",
+  "review_receipt",
+  "commit_authorization",
+  "commit_preparation",
+  "commit_result",
+  "stop_context",
+  "recovery_context",
+];
+
+test("role views expose exact projection keys and sorted permitted actions", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "role views", max_repair_cycles: 1 });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+
+    const parentView = store.get(id, "parent", caps.parent);
+    assert.deepEqual(Object.keys(parentView), [...COMMON_KEYS, ...PARENT_EXTRA_KEYS]);
+    assert.deepEqual(parentView.permitted_next_actions, []);
+
+    const implementerView = store.get(id, "implementer", caps.implementer);
+    assert.deepEqual(Object.keys(implementerView), [...COMMON_KEYS, ...IMPLEMENTER_EXTRA_KEYS]);
+    assert.deepEqual(implementerView.permitted_next_actions, ["workflow_submit_implementation"]);
+
+    const reviewerView = store.get(id, "reviewer", caps.reviewer);
+    assert.deepEqual(Object.keys(reviewerView), [...COMMON_KEYS, ...REVIEWER_EXTRA_KEYS]);
+    assert.deepEqual(reviewerView.permitted_next_actions, []);
+
+    const committerView = store.get(id, "committer", caps.committer);
+    assert.deepEqual(Object.keys(committerView), [...COMMON_KEYS, ...COMMITTER_EXTRA_KEYS]);
+    assert.deepEqual(committerView.permitted_next_actions, []);
+
+    implementation(store, created, root, 0, "implemented");
+    assert.deepEqual(store.get(id, "reviewer", caps.reviewer).permitted_next_actions, ["workflow_submit_review"]);
+    assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, []);
+
+    const blocker = { finding_id: "ROLE-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_repair", "workflow_finalize_blocked"]);
+
+    store.authorizeRepair({ workflow_id: id, capability: caps.parent, expected_version: 2, finding_ids: ["ROLE-1"] });
+    assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, ["workflow_submit_implementation"]);
+
+    implementation(store, created, root, 3, "repaired", { "ROLE-1": "resolved" });
+    writeFileSync(join(root, "note.txt"), "changed\n");
+    review(store, created, root, 4, "APPROVED", [], [], { "ROLE-1": "resolved" });
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_optional_followup"]);
+
+    store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, user_authorization: "authorized" });
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_record_commit"]);
+
+    git("add", "note.txt");
+    git("commit", "-qm", "role views commit");
+    store.recordCommit({ workflow_id: id, capability: caps.committer, expected_version: 6, commit_hash: git("rev-parse", "HEAD") });
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("role views exclude capabilities, hashes, and compatibility fields in serialized output", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "role view secrets" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    const views = [
+      store.get(id, "parent", caps.parent),
+      store.get(id, "implementer", caps.implementer),
+      store.get(id, "reviewer", caps.reviewer),
+      store.get(id, "committer", caps.committer),
+    ];
+    for (const view of views) {
+      const serialized = JSON.stringify(view);
+      assert.equal(serialized.includes("legacy_evidence"), false);
+      for (const token of Object.values(caps)) {
+        assert.equal(serialized.includes(token), false, `view contains capability ${token}`);
+      }
+      assert.equal("capability" in view, false);
+      assert.deepEqual(view.permitted_next_actions, [...view.permitted_next_actions].sort());
+    }
+    for (const key of [
+      "implementation_changed_paths",
+      "implementation_acceptance_evidence",
+      "implementation_validation_evidence",
+      "authorized_optional_ids",
+      "user_authorization_summary",
+      "legacy_evidence",
+    ]) {
+      assert.equal(key in views[0], false, `parent view exposes ${key}`);
+    }
+    assert.equal("initial_receipt" in views[2], false);
+    assert.equal("initial_receipt" in views[3], false);
+    assert.equal("commit_authorization" in views[1], false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("restart preserves role view versions and projections", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, { objective: "restart views" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    store.close();
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+      const view = reopened.get(id, role, caps[role]);
+      assert.equal(view.workflow_id, id);
+      assert.equal(view.version, 1);
+      assert.equal(view.phase, "REVIEWING");
+      assert.deepEqual(view.permitted_next_actions, [...view.permitted_next_actions].sort());
+    }
+    reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("permittedNextActions and roleView are pure and follow the role and phase matrix", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "pure actions" });
+    const id = created.workflow.workflow_id;
+    const raw = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json);
+    const before = JSON.stringify(raw);
+    assert.deepEqual(permittedNextActions(raw, "implementer"), ["workflow_submit_implementation"]);
+    assert.deepEqual(permittedNextActions(raw, "parent"), []);
+    assert.deepEqual(permittedNextActions(raw, "reviewer"), []);
+    const view = roleView(raw, "implementer");
+    assert.equal(JSON.stringify(raw), before);
+    assert.deepEqual(view.permitted_next_actions, ["workflow_submit_implementation"]);
+    assert.equal("legacy_evidence" in view, false);
+    assert.equal("capability" in view, false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("cross-role tokens are denied on role views", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "cross role" });
+    const id = created.workflow.workflow_id;
+    const roles = ["parent", "implementer", "reviewer", "committer"];
+    for (const actor of roles) {
+      for (const token of roles) {
+        if (actor === token) continue;
+        assert.equal(errorCategory(() => store.get(id, actor, created.capabilities[token])), "ERROR_CAPABILITY_DENIED");
+      }
+    }
+    store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

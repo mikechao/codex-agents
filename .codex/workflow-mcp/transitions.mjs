@@ -9,6 +9,7 @@ import {
   repairCycle,
   resolutionMap,
   revision,
+  role,
   safeObject,
   stringList,
   userAuthorization,
@@ -81,6 +82,139 @@ function ensurePhase(state, ...allowed) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+const ROLE_VIEW_COMMON = [
+  "workflow_id",
+  "schema_version",
+  "version",
+  "workflow_type",
+  "phase",
+  "objective",
+  "approved_paths",
+  "repair_cycle",
+  "max_repair_cycles",
+  "review_target",
+];
+
+const TEMPORARY_COMPATIBILITY_KEYS = [
+  "implementation_changed_paths",
+  "implementation_acceptance_evidence",
+  "implementation_validation_evidence",
+  "authorized_optional_ids",
+  "user_authorization_summary",
+];
+
+const ROLE_VIEW_EXTRA = {
+  implementer: [
+    "acceptance_criteria",
+    "validation_requirements",
+    "initial_receipt",
+    "dirty_baseline_paths",
+    "linked_findings",
+    "remediation_context",
+    "implementation_summary",
+    "implementation_status",
+    "implementation_receipt",
+    "implementation_known_failures",
+    "agent_touched_paths",
+    "scope_changed_paths",
+    "acceptance_results",
+    "validation_results",
+    "finding_resolution_map",
+    "blocking_findings",
+    "repair_authorized_ids",
+    "stop_context",
+    "recovery_context",
+  ],
+  reviewer: [
+    "acceptance_criteria",
+    "validation_requirements",
+    "dirty_baseline_paths",
+    "implementation_summary",
+    "implementation_status",
+    "implementation_receipt",
+    "implementation_known_failures",
+    "agent_touched_paths",
+    "scope_changed_paths",
+    "acceptance_results",
+    "validation_results",
+    "finding_resolution_map",
+    "blocking_findings",
+    "optional_findings",
+    "prior_finding_classifications",
+    "concern_acceptance",
+    "review_receipt",
+    "stop_context",
+    "recovery_context",
+  ],
+  committer: [
+    "acceptance_criteria",
+    "validation_requirements",
+    "dirty_baseline_paths",
+    "agent_touched_paths",
+    "scope_changed_paths",
+    "implementation_summary",
+    "implementation_status",
+    "implementation_receipt",
+    "implementation_known_failures",
+    "acceptance_results",
+    "validation_results",
+    "blocking_findings",
+    "optional_findings",
+    "prior_finding_classifications",
+    "concern_acceptance",
+    "review_receipt",
+    "commit_authorization",
+    "commit_preparation",
+    "commit_result",
+    "stop_context",
+    "recovery_context",
+  ],
+};
+
+const ACTION_MATRIX = {
+  implementer: {
+    IMPLEMENTING: ["workflow_submit_implementation"],
+    REPAIRING: ["workflow_submit_implementation"],
+  },
+  reviewer: {
+    REVIEWING: ["workflow_submit_review"],
+  },
+  parent: {
+    REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_blocked"],
+    STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_optional_followup"],
+  },
+  committer: {
+    COMMIT_AUTHORIZED: ["workflow_record_commit"],
+  },
+};
+
+export function permittedNextActions(state, actorRole) {
+  role(actorRole);
+  return [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])].sort();
+}
+
+export function roleView(state, actorRole) {
+  role(actorRole);
+  const view = {};
+  for (const key of ROLE_VIEW_COMMON) {
+    if (key in state) view[key] = clone(state[key]);
+  }
+  view.permitted_next_actions = permittedNextActions(state, actorRole);
+  if (actorRole === "parent") {
+    for (const key of Object.keys(state)) {
+      if (ROLE_VIEW_COMMON.includes(key)) continue;
+      if (key === "legacy_evidence") continue;
+      if (TEMPORARY_COMPATIBILITY_KEYS.includes(key)) continue;
+      view[key] = clone(state[key]);
+    }
+  } else {
+    for (const key of ROLE_VIEW_EXTRA[actorRole]) {
+      if (key in state) view[key] = clone(state[key]);
+    }
+  }
+  return view;
 }
 
 function baseState({ objective, approvedPaths, baseHead, maxRepairCycles, parentWorkflowId = null }) {

@@ -381,7 +381,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='create|contract|criteria|validation|baseline|restart' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** every new change workflow contains a complete stable handoff.
 
-- [ ] **MCP-3.2 — Add least-authority role views and actions**
+- [x] **MCP-3.2 — Add least-authority role views and actions**
   - **Prerequisites/commit:** MCP-3.1; `feat(workflow): return role-specific workflow views`.
   - **Owned:** `.codex/workflow-mcp/store.mjs`, `.codex/workflow-mcp/transitions.mjs`,
     `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/tests/workflow.node.mjs`,
@@ -883,6 +883,101 @@ Pre-existing changes preserved:
 
 Plan deviations:
 - none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-3.2 — Add least-authority role views and actions
+
+DONE
+
+Task: MCP-3.2
+Outcome: `workflow_get`, `workflow_create`, and every mutation result now return role-scoped
+least-authority projections. All views start with the common dispatch fields (`workflow_id`,
+`schema_version`, `version`, `workflow_type`, `phase`, `objective`, `approved_paths`,
+`repair_cycle`, `max_repair_cycles`, `review_target`) plus sorted `permitted_next_actions`
+computed by the pure `permittedNextActions(state, role)`; the parent additionally gets every
+persisted field except `legacy_evidence` and the temporary compatibility aliases, the implementer
+gets its handoff fields (contracts, initial receipt, dirty baseline, remediation, final
+implementation fields, derived paths, result arrays, resolution map, blockers, authorized repair
+IDs, stop/recovery context), the reviewer gets criteria/validations plus review evidence but omits
+the initial receipt, and the committer gets criteria/validations plus derived paths and commit
+authorization/preparation/result but omits the initial receipt. No view exposes capabilities,
+hashes, audits, `legacy_evidence`, or temporary compatibility keys, and there is no raw-state
+public path.
+
+Files changed:
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `.codex/workflow-mcp/tests/migration.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Implemented the exact role matrix and pure `permittedNextActions(state, role)` in
+  `transitions.mjs`: implementer gets `workflow_submit_implementation` in IMPLEMENTING/REPAIRING;
+  reviewer gets `workflow_submit_review` in REVIEWING; parent gets
+  `workflow_authorize_repair`/`workflow_finalize_blocked` in REPAIR_REQUIRED and
+  `workflow_authorize_commit`/`workflow_create_optional_followup` in STOPPED_APPROVED; committer
+  gets `workflow_record_commit` in COMMIT_AUTHORIZED. Actions are always returned sorted; the
+  function is pure (unit-tested to leave its state input byte-identical).
+- Added pure `roleView(state, role)` returning the common dispatch fields first, then
+  `permitted_next_actions`, then role-specific fields. The parent view is every persisted key
+  except `legacy_evidence` and the five temporary compatibility aliases; implementer/reviewer/
+  committer views use the exact field lists from the plan (reviewer and committer omit
+  `initial_receipt`; committer omits `finding_resolution_map`; implementer omits review/commit
+  fields).
+- `workflow_create` returns the parent projection plus capabilities; `workflow_get` returns the
+  authenticated role projection only; audit remains a separate `workflow_get_audit` path. Mutation
+  results (`submitImplementation`, `submitReview`, `authorizeRepair`, `finalizeBlocked`,
+  `authorizeCommit`, `recordCommit`, `createOptionalFollowup`) now return the acting role's
+  projection, so no raw-state value escapes the store.
+- No view includes capabilities, hashes, audit data, `legacy_evidence`, or temporary compatibility
+  keys; `legacy_v1` and `base_head` remain visible to the parent.
+- Adapted the digest-chain, creation-key, optional-follow-up, and migration assertions to compare
+  full-state digests and temporary keys against the persisted `state_json` row rather than a
+  projection, preserving the original intent of each test. Cross-role token denial remains
+  enforced before any projection is built.
+
+Tests added or updated:
+- New `workflow.node.mjs` "role views expose exact projection keys and sorted permitted actions":
+  exact key arrays per role at a fresh workflow plus the sorted action list at IMPLEMENTING,
+  REVIEWING, REPAIR_REQUIRED, REPAIRING, STOPPED_APPROVED, COMMIT_AUTHORIZED, and COMMITTED.
+- New "role views exclude capabilities, hashes, and compatibility fields in serialized output":
+  no capability token, `legacy_evidence`, or temp alias in any serialized view; reviewer/committer
+  omit `initial_receipt`; implementer omits `commit_authorization`; actions always sorted.
+- New "restart preserves role view versions and projections": reopen retains version 1 and
+  REVIEWING for every role view.
+- New "permittedNextActions and roleView are pure and follow the role and phase matrix": input
+  state byte-identical after calls, expected actions per role.
+- New "cross-role tokens are denied on role views": exhaustive 4x4 cross-role
+  `ERROR_CAPABILITY_DENIED`.
+- New `protocol.node.mjs` "role view projection over STDIO returns only role data without
+  capabilities": real STDIO `workflow_get` per role, exact present/absent fields, sorted actions,
+  no capability or `legacy_evidence` text in serialized views, and cross-role token denial; the
+  existing create call now asserts `created.workflow.permitted_next_actions` is `[]`.
+- Updated existing creation/digest/follow-up/migration tests to assert excluded fields are absent
+  from views and full-state data via the persisted row, preserving their original coverage.
+
+Validation:
+- `node --test --test-name-pattern='role view|projection|permitted|capabil' .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 8/8.
+- `pnpm test:workflow-mcp`: pass, 43/43.
+- `pnpm test`: pass, 62/62 (19 agents + 43 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the seven owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- Minor: the plan's Owned list omits `.codex/workflow-mcp/tests/migration.node.mjs`, but the
+  role-view behavior (projections, excluded temporary aliases, added `permitted_next_actions`)
+  necessarily changes what `store.get` returns, so its raw-state/digest assertions cannot hold.
+  Per parent decision, migration assertions were adapted to assert the parent projection and to
+  verify full-state fields/digests against the persisted row. No protocol or architecture decision
+  was invented; all behavior follows the plan's role matrix.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.
