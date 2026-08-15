@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { safePaths } from "../change-receipt.mjs";
 
 const utility = resolve(import.meta.dirname, "..", "change-receipt.mjs");
 
@@ -108,6 +109,38 @@ test("handles symlinks and changes to their link targets", { skip: process.platf
     assert.equal(changed.paths[0].state, "modified");
     assert.notEqual(changed.paths[0].digest, original.paths[0].digest);
   });
+});
+
+test("rejects a path nested under an escaping symlink parent regardless of leaf existence", { skip: process.platform === "win32" }, () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "base.txt"), "base\n");
+    commit(root);
+    const outside = mkdtempSync(join(tmpdir(), "change-receipt-outside-"));
+    try {
+      writeFileSync(join(outside, "present.txt"), "present\n");
+      symlinkSync(outside, join(root, "escape"));
+      for (const path of ["escape/present.txt", "escape/missing.txt"]) {
+        const result = run(root, [path]);
+        assert.notEqual(result.status, 0, path);
+        assert.equal(result.stderr, "ERROR_UNSAFE_PATH", path);
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("validates path safety independently of repository inspection", () => {
+  const root = mkdtempSync(join(tmpdir(), "change-receipt-safety-"));
+  try {
+    assert.deepEqual(safePaths(root, ["b/c", "a", "d"]), ["a", "b/c", "d"]);
+    assert.throws(() => safePaths(root, []), { message: "ERROR_EMPTY_PATHS" });
+    assert.throws(() => safePaths(root, ["../outside.txt"]), { message: "ERROR_UNSAFE_PATH" });
+    assert.throws(() => safePaths(root, [resolve(root, "note.txt")]), { message: "ERROR_UNSAFE_PATH" });
+    assert.throws(() => safePaths(root, ["a", "./a"]), { message: "ERROR_DUPLICATE_PATH" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("sorts paths and is deterministic regardless of argument order", () => {

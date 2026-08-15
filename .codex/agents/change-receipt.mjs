@@ -87,6 +87,42 @@ function normalizePath(root, input) {
   return normalized.split(sep).join("/");
 }
 
+function assertSafeParent(root, path) {
+  const absolute = resolve(root, path);
+  try {
+    const parent = realpathSync(dirname(absolute));
+    const parentRelative = relative(realpathSync(root), parent);
+    if (
+      parentRelative === ".." ||
+      parentRelative.startsWith(`..${sep}`) ||
+      isAbsolute(parentRelative)
+    ) {
+      throw new Error("ERROR_UNSAFE_PATH");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "ERROR_UNSAFE_PATH") throw error;
+    if (!(error && typeof error === "object" && error.code === "ENOENT")) {
+      throw new Error("ERROR_PATH_ACCESS");
+    }
+  }
+}
+
+export function safePaths(root, inputs) {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new Error("ERROR_EMPTY_PATHS");
+  }
+  const normalized = inputs.map((input) => normalizePath(root, input));
+  const unique = new Set(normalized);
+  if (unique.size !== normalized.length) {
+    throw new Error("ERROR_DUPLICATE_PATH");
+  }
+  const approvedPaths = [...unique].sort();
+  for (const path of approvedPaths) {
+    assertSafeParent(root, path);
+  }
+  return approvedPaths;
+}
+
 function headEntry(root, path) {
   let output;
   try {
@@ -125,22 +161,6 @@ function digest(value) {
 
 function currentMetadata(root, path, head) {
   const absolute = resolve(root, path);
-  try {
-    const parent = realpathSync(dirname(absolute));
-    const parentRelative = relative(root, parent);
-    if (
-      parentRelative === ".." ||
-      parentRelative.startsWith(`..${sep}`) ||
-      isAbsolute(parentRelative)
-    ) {
-      throw new Error("ERROR_UNSAFE_PATH");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message === "ERROR_UNSAFE_PATH") throw error;
-    if (!(error && typeof error === "object" && error.code === "ENOENT")) {
-      throw new Error("ERROR_PATH_ACCESS");
-    }
-  }
   let stat;
   try {
     stat = lstatSync(absolute);
@@ -206,12 +226,7 @@ export function createReceipt(inputs, cwd = process.cwd()) {
 
 function createReceiptAtRoot(inputs, root) {
   const headRevision = requireHead(root);
-  const normalized = inputs.map((input) => normalizePath(root, input));
-  const unique = new Set(normalized);
-  if (unique.size !== normalized.length) {
-    throw new Error("ERROR_DUPLICATE_PATH");
-  }
-  const approvedPaths = [...unique].sort();
+  const approvedPaths = safePaths(root, inputs);
   const paths = approvedPaths.map((path) => {
     const head = headEntry(root, path);
     let current;
@@ -226,10 +241,6 @@ function createReceiptAtRoot(inputs, root) {
     if (!head && current.kind === "missing") {
       throw new Error("ERROR_UNTRACKED_PATH");
     }
-    if (head && current.state === "deleted") {
-      return current;
-    }
-    if (!head) return current;
     return current;
   });
 

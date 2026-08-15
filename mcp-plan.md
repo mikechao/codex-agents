@@ -285,7 +285,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
 
 ### Receipt and storage foundation
 
-- [ ] **MCP-1.1 — Separate receipt path safety from inspection**
+- [x] **MCP-1.1 — Separate receipt path safety from inspection**
   - **Prerequisites/commit:** none; `refactor(receipts): separate path safety from inspection`.
   - **Owned:** `.codex/agents/change-receipt.mjs`, `.codex/agents/tests/change-receipt.node.mjs`.
   - **Implement:** split lexical normalization from filesystem/Git metadata inspection. Lexical
@@ -583,6 +583,47 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
     then record only date, model, scenario, outcome, and observed evidence.
   - **Focused:** `node --test .codex/workflow-mcp/tests/protocol-v2.node.mjs .codex/workflow-mcp/tests/migration.node.mjs && pnpm test:agents && pnpm test:workflow-mcp`.
   - **Done:** public protocol, compatibility, denial, restart/shutdown, and cleanliness are covered.
+
+## Done Report
+
+### MCP-1.1 — Separate receipt path safety from inspection
+
+DONE
+
+Task: MCP-1.1
+Outcome: Lexical path normalization and symlink-parent safety are split from filesystem/Git metadata inspection; path safety is now independently testable with byte-compatible v1 receipts.
+
+Files changed:
+- `.codex/agents/change-receipt.mjs`
+- `.codex/agents/tests/change-receipt.node.mjs`
+
+Requirements completed:
+- Split lexical normalization from inspection: `normalizePath` (pure lexical) plus the extracted `assertSafeParent` symlink-parent check now live in an exported `safePaths(root, inputs)` step; `headEntry`/`currentMetadata` no longer perform any path-safety checks. `createReceiptAtRoot` routes all inputs through `safePaths` before inspection.
+- Lexical validation runs first: within `safePaths`, lexical `normalizePath` runs for all inputs before the filesystem `assertSafeParent` checks, and the whole safety step precedes `headEntry`/metadata inspection.
+- Preserved `createReceipt(inputs, cwd)`, CLI, JSON, and schema_version 1. A/B comparison against the committed HEAD version produced byte-identical receipts across modified/unchanged/deleted/added/symlink paths.
+- Did not add absent mode; symlink-parent escape check preserved in full (rejects both existing and nonexistent leaves under an escaping parent with `ERROR_UNSAFE_PATH`).
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New: "rejects a path nested under an escaping symlink parent regardless of leaf existence" — asserts `escape/present.txt` and `escape/missing.txt` both return `ERROR_UNSAFE_PATH` (not an existence-dependent error).
+- New: "validates path safety independently of repository inspection" — exercises exported `safePaths` directly (normalization/sort, empty, unsafe, absolute, duplicate) with no git repo.
+- All 11 existing cases kept unchanged and passing.
+
+Validation:
+- `node --test .codex/agents/tests/change-receipt.node.mjs`: pass, 13/13.
+- `pnpm test`: pass, 28/28 (13 receipt + 15 workflow/protocol).
+- `pnpm test:agents`: pass, 13/13; `pnpm test:workflow-mcp`: pass, 15/15.
+- `git diff --check`: pass.
+- `git status --short`: only the two owned files.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- Minor: the symlink-parent check now compares `relative(realpathSync(root), parent)` instead of `relative(root, parent)`. In the receipt flow `root` is git's canonical toplevel (verified `/private/var`), so v1 output is byte-identical; the canonical base makes the exported `safePaths` correct for any caller-supplied root, which the task's independent-testability requirement needs.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
 
 ## Final acceptance gate
 
