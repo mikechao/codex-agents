@@ -62,8 +62,9 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     const authorized = await call("workflow_authorize_commit", { workflow_id: base.workflow_id, capability: created.capabilities.parent, expected_version: 5, user_authorization: "protocol test commit" });
     assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
     git("add", "note.txt");
+    const preparedCommit = await call("workflow_prepare_commit", { workflow_id: base.workflow_id, capability: created.capabilities.committer, expected_version: 6 });
     git("commit", "-qm", "protocol change");
-    const committed = await call("workflow_record_commit", { workflow_id: base.workflow_id, capability: created.capabilities.committer, expected_version: 6, commit_hash: git("rev-parse", "HEAD") });
+    const committed = await call("workflow_submit_commit_result", { workflow_id: base.workflow_id, capability: created.capabilities.committer, expected_version: 7, attempt_id: preparedCommit.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
     assert.equal(committed.phase, "COMMITTED");
     await client.close();
     await transport.close();
@@ -786,7 +787,7 @@ test("not committed failure and retry over STDIO", async () => {
     assert.equal(retried.recovery_context.kind, "commit");
     assert.equal(retried.recovery_context.context, "hook fixed");
     assert.equal(retried.commit_authorization.user_authorization, "retry authorized");
-    assert.deepEqual((await call("workflow_get", { workflow_id: created.workflow_id, role: "committer", capability: caps.committer })).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    assert.deepEqual((await call("workflow_get", { workflow_id: created.workflow_id, role: "committer", capability: caps.committer })).permitted_next_actions, ["workflow_prepare_commit"]);
     const audit = await call("workflow_get_audit", { workflow_id: created.workflow_id, role: "parent", capability: caps.parent });
     const retryEvent = audit[audit.length - 1];
     assert.equal(retryEvent.event_type, "COMMIT_RETRY_AUTHORIZED");
@@ -794,6 +795,89 @@ test("not committed failure and retry over STDIO", async () => {
     assert.equal(retryEvent.summary.phase_after, "COMMIT_AUTHORIZED");
     assert.equal(retryEvent.summary.outcome, "retry");
     assert.equal(JSON.stringify(audit).includes("pre-commit hook blocked"), false);
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("commit mismatch over STDIO stops terminally and leaves no retry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-mismatch-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const receipt = () => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+
+    const createdResult = await call("workflow_create", { workflow_type: "change", objective: "mismatch protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    const created = createdResult.workflow;
+    const caps = createdResult.capabilities;
+    await call("workflow_submit_implementation", { workflow_id: created.workflow_id, capability: caps.implementer, expected_version: 0, status: "DONE", summary: "done", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt(), known_failures: [], finding_resolution_map: {} });
+    writeFileSync(join(root, "note.txt"), "after\n");
+    const target = { review_mode: "working_tree", base_revision: created.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true };
+    const approved = await call("workflow_submit_review", { workflow_id: created.workflow_id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(), review_target: target, prior_finding_classifications: {} });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    await call("workflow_authorize_commit", { workflow_id: created.workflow_id, capability: caps.parent, expected_version: 2, user_authorization: "mismatch authorized" });
+    git("add", "note.txt");
+    const prepared = await call("workflow_prepare_commit", { workflow_id: created.workflow_id, capability: caps.committer, expected_version: 3 });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
+    git("commit", "-qm", "moved head");
+    const mismatched = await call("workflow_submit_commit_result", { workflow_id: created.workflow_id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: created.base_head, failure_summary: null });
+    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.deepEqual(mismatched.commit_result, { outcome: "mismatch", mismatch_category: "HEAD_CHANGED" });
+    assert.deepEqual((await call("workflow_get", { workflow_id: created.workflow_id, role: "parent", capability: caps.parent })).permitted_next_actions, []);
+    const denied = await client.callTool({ name: "workflow_retry_commit", arguments: { workflow_id: created.workflow_id, capability: caps.parent, expected_version: 5, retry_context: "x" } });
+    assert.equal(denied.isError, true);
+    assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_INVALID_TRANSITION");
+    const audit = await call("workflow_get_audit", { workflow_id: created.workflow_id, role: "parent", capability: caps.parent });
+    const resultEvent = audit[audit.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");
+    assert.equal(resultEvent.summary.phase_after, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(resultEvent.summary.outcome, "mismatch");
+    assert.equal(JSON.stringify(audit).includes("HEAD_CHANGED"), false);
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("v2 workflows deny legacy commit recording over STDIO", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-recorddeny-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const receipt = () => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+
+    const createdResult = await call("workflow_create", { workflow_type: "change", objective: "record deny protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    const created = createdResult.workflow;
+    const caps = createdResult.capabilities;
+    await call("workflow_submit_implementation", { workflow_id: created.workflow_id, capability: caps.implementer, expected_version: 0, status: "DONE", summary: "done", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt(), known_failures: [], finding_resolution_map: {} });
+    writeFileSync(join(root, "note.txt"), "after\n");
+    const target = { review_mode: "working_tree", base_revision: created.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true };
+    await call("workflow_submit_review", { workflow_id: created.workflow_id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(), review_target: target, prior_finding_classifications: {} });
+    await call("workflow_authorize_commit", { workflow_id: created.workflow_id, capability: caps.parent, expected_version: 2, user_authorization: "record deny authorized" });
+    const denied = await client.callTool({ name: "workflow_record_commit", arguments: { workflow_id: created.workflow_id, capability: caps.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") } });
+    assert.equal(denied.isError, true);
+    assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_LEGACY_WORKFLOW");
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }

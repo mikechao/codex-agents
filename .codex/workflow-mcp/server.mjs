@@ -460,7 +460,7 @@ export const tools = [
   {
     name: "workflow_submit_commit_result",
     description:
-      "Submit the outcome of an external commit attempt; a verified commit enters COMMITTED and an unchanged-HEAD failure enters a retryable stop.",
+      "Submit the outcome of an external commit attempt; a verified commit enters COMMITTED, an unchanged-HEAD failure enters a retryable stop, and any verification mismatch enters a terminal stop.",
     inputSchema: schema(
       {
         ...common.properties,
@@ -510,7 +510,8 @@ export const tools = [
   },
   {
     name: "workflow_record_commit",
-    description: "Record a committer Git result after verifying current HEAD and reviewed content.",
+    description:
+      "Migrated-v1 compatibility: record a legacy committer Git result after verifying current HEAD and reviewed content; rejected for new v2 workflows.",
     inputSchema: schema(
       { ...common.properties, commit_hash: { type: "string", pattern: "^[0-9a-f]{40}$" } },
       [...common.required, "commit_hash"],

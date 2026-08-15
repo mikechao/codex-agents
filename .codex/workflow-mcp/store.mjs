@@ -18,6 +18,7 @@ import {
   acceptConcerns,
   authorizeCommit,
   authorizeRepair,
+  commitMismatch,
   createState,
   dirtyBaselinePaths,
   finalizeRepairExhausted,
@@ -336,12 +337,13 @@ export class WorkflowStore {
         )
         .run(nextVersion, JSON.stringify(next), objectDigest(next), now, workflowId, expected);
       if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+      const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
       this.#audit(
         workflowId,
         nextVersion,
         eventType,
         actorRole,
-        auditEnvelope(current, next, row.state_digest, { outcome }),
+        auditEnvelope(current, next, row.state_digest, { outcome: resolvedOutcome }),
       );
       this.db.exec("COMMIT");
       return roleView(next, actorRole);
@@ -524,10 +526,16 @@ export class WorkflowStore {
       input.expected_version,
       "COMMIT_RECORDED",
       (state) => {
+        if (state.legacy_v1 !== true) {
+          fail("ERROR_LEGACY_WORKFLOW", "workflow_record_commit is only for migrated workflows");
+        }
+        if (state.phase !== "COMMIT_AUTHORIZED") {
+          fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
+        }
         const evidence = verifyCommit(this.root, state, input.commit_hash);
         return recordCommit(state, evidence, input);
       },
-      "committed",
+      (next) => next.commit_result.outcome,
     );
   }
 
@@ -569,10 +577,11 @@ export class WorkflowStore {
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
         const next = submitCommitResult(state, input);
-        verifyCommitResult(this.root, state, input);
+        const mismatch = verifyCommitResult(this.root, state, input);
+        if (mismatch) return commitMismatch(state, mismatch);
         return next;
       },
-      input.outcome,
+      (next) => next.commit_result.outcome,
     );
   }
 

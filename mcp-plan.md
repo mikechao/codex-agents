@@ -521,7 +521,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='commit result|committed|not.committed|retry|hook' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** unchanged-HEAD failures are auditable and parent-retryable.
 
-- [ ] **MCP-7.3 — Make mismatches terminal and retain legacy recording**
+- [x] **MCP-7.3 — Make mismatches terminal and retain legacy recording**
   - **Prerequisites/commit:** MCP-7.2; `feat(workflow): stop terminally on commit mismatch`.
   - **Owned:** `.codex/workflow-mcp/git.mjs`, `.codex/workflow-mcp/server.mjs`,
     `.codex/workflow-mcp/store.mjs`, `.codex/workflow-mcp/transitions.mjs`,
@@ -1753,6 +1753,127 @@ Pre-existing changes preserved:
 
 Plan deviations:
 - none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-7.3 — Make mismatches terminal and retain legacy recording
+
+DONE
+
+Task: MCP-7.3
+Outcome: Every external commit attempt now ends committed, safely retryable, or unambiguously terminal.
+Any verification failure of a `workflow_submit_commit_result` claim (changed HEAD after a
+`not_committed` claim, or wrong HEAD/parent/tree/paths on a `committed` claim) persists the exact
+deterministic result `{outcome:"mismatch",mismatch_category}` and enters the terminal
+`STOPPED_COMMIT_MISMATCH` phase instead of throwing. Mismatch category priority is `HEAD_CHANGED`,
+then `PARENT_MISMATCH`, then `TREE_MISMATCH`, then `PATH_MISMATCH`. `workflow_record_commit` is now
+restricted to migrated `legacy_v1:true` rows already in `COMMIT_AUTHORIZED`; new v2 workflows reject
+it with `ERROR_LEGACY_WORKFLOW`, and it is dropped from the committer action list for `legacy_v1:false`
+workflows. Migrated legacy verification success commits into `COMMITTED`; failure transitions to the
+same terminal mismatch rather than throwing and leaving authorization ambiguous. No Git stderr or
+caller text is ever stored or audited.
+
+Files changed:
+- `.codex/workflow-mcp/git.mjs`
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- All mismatch branches/categories and terminal stop: `verifyPreparedCommit`,
+  `verifyCommitResult`, and the legacy `verifyCommit` in `git.mjs` now return a mismatch category (or
+  null on success) instead of throwing `ERROR_COMMIT_MISMATCH`; the store routes every mismatch to
+  the new `commitMismatch` transition (v2 submit path) or the `recordCommit` mismatch branch (legacy
+  path), both persisting `commit_result:{outcome:"mismatch",mismatch_category}` and the terminal
+  `STOPPED_COMMIT_MISMATCH` phase. Check ordering enforces the documented priority (`HEAD_CHANGED`,
+  `PARENT_MISMATCH`, `TREE_MISMATCH`, `PATH_MISMATCH`). `STOPPED_COMMIT_MISMATCH` is added to
+  `PHASES`; every role has empty `permitted_next_actions` there and retry/prepare/result are denied
+  with `ERROR_INVALID_TRANSITION` (prepare surfaces `ERROR_STALE_RECEIPT` from its receipt gate, the
+  same pattern as range denial).
+- Store no Git stderr/caller text: mismatch state stores only the four token categories; audit
+  outcome is the `mismatch` token; no failure summary, git stderr, or caller text appears in state
+  or serialized audit (asserted in tests).
+- `workflow_record_commit` restricted: the store gates `legacy_v1:true` before any Git verification
+  and `permittedNextActions` drops `workflow_record_commit` from the committer at `COMMIT_AUTHORIZED`
+  for `legacy_v1:false` rows; new v2 calls return `ERROR_LEGACY_WORKFLOW` with no mutation. Migrated
+  rows already in `COMMIT_AUTHORIZED` still list `workflow_prepare_commit` and
+  `workflow_record_commit`.
+- Legacy verification success commits: `recordCommit` now persists the normative
+  `{outcome:"committed",commit_hash,failure_summary:null}` result and enters `COMMITTED` for a
+  verified migrated commit; failure transitions to the terminal mismatch result instead of throwing.
+- New v2 phases/actions/tools stay consistent: `workflow_submit_commit_result` and
+  `workflow_record_commit` tool descriptions updated to describe the terminal mismatch and the
+  migrated-v1 compatibility restriction; `#mutate` now resolves the audit outcome from the
+  persisted `commit_result.outcome` so mismatch events carry `outcome:"mismatch"`.
+- All mutations remain transactional, version-checked, capability-checked, and audit-safe; no new
+  dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New "new v2 workflows deny legacy commit recording without mutation": `ERROR_LEGACY_WORKFLOW`,
+  version/audit unchanged, and the committer action list is exactly
+  `["workflow_prepare_commit"]` for a v2 workflow.
+- New "commit result verification mismatches stop terminally with deterministic categories": four
+  prepared workflows produce `HEAD_CHANGED` (claim a stale hash), `PARENT_MISMATCH` (claim an extra
+  empty commit whose parent is not the prepared head), `TREE_MISMATCH` (committed content differs),
+  and `PATH_MISMATCH` (tampered `expected_paths`), each entering `STOPPED_COMMIT_MISMATCH` with the
+  exact `{outcome:"mismatch",mismatch_category}` result and no `failure_summary`.
+- New "not committed claim after a changed HEAD enters a terminal mismatch": changed HEAD makes a
+  `not_committed` claim terminate as `HEAD_CHANGED`; the failure text is absent from audit.
+- New "hook-created unexpected commit ends in a terminal mismatch": a guarded `post-commit` hook
+  that creates an extra empty commit yields a `PARENT_MISMATCH` terminal stop; no hook text leaks.
+- New "commit mismatch stops are terminal and cannot retry or resume": empty actions for all four
+  roles, retry/result denied (`ERROR_INVALID_TRANSITION`), preparation denied, preparation retained,
+  exact `COMMIT_RESULT_SUBMITTED` envelope (phase pair, outcome `mismatch`, null link), and no
+  content text in audit.
+- New "migrated legacy commit recording succeeds into COMMITTED": a v1 `COMMIT_AUTHORIZED` fixture
+  migrates, lists `workflow_record_commit`, and a verified commit records the normative committed
+  result with the exact `COMMIT_RECORDED` envelope and no hash in audit.
+- New "migrated legacy commit recording failure stops terminally as a mismatch": a committed
+  content mismatch on a migrated row terminates as `TREE_MISMATCH` with empty actions and no
+  category/text in audit.
+- New `protocol.node.mjs` "commit mismatch over STDIO stops terminally and leaves no retry": real
+  transport create/implement/review/authorize/stage/prepare → moved HEAD → `HEAD_CHANGED` terminal,
+  empty parent actions, retry denial, and sanitized audit outcome `mismatch`.
+- New `protocol.node.mjs` "v2 workflows deny legacy commit recording over STDIO": real transport
+  `workflow_record_commit` on a new v2 workflow returns `ERROR_LEGACY_WORKFLOW`.
+- Updated existing tests that used the now-v2-denied `workflow_record_commit` to the normative
+  prepare → submit-result flow: "approved receipt gates commit and commit evidence", "role views
+  expose exact projection keys and sorted permitted actions", "terminals cannot resume
+  implementation or accept concerns", the STDIO protocol-clean flow, and the migrated
+  success test's action list.
+- Updated existing committer action assertions at `COMMIT_AUTHORIZED` for v2 workflows to
+  `["workflow_prepare_commit"]`: "role views expose exact projection keys", "commit preparation
+  succeeds across modify, add, delete, and mode", "retry clears the attempt and result", and the
+  STDIO "not committed failure and retry" flow.
+- Updated "rejects stale review and committed digest mismatches without mutation" (renamed to
+  "rejects stale review and denies v2 legacy commit recording without mutation") to assert
+  `ERROR_LEGACY_WORKFLOW` for the new v2 `recordCommit` call with version/audit unchanged.
+- All other existing tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='mismatch|legacy|record.commit|terminal' .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 15/15.
+- `pnpm test:workflow-mcp`: pass, 116/116.
+- `pnpm test`: pass, 135/135 (19 agents + 116 workflow/protocol/migration/git).
+- `git diff --check`: pass.
+- `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- Minor: for a `workflow_record_commit` on a new v2 workflow, the legacy gate runs before any Git
+  verification so `ERROR_LEGACY_WORKFLOW` is returned deterministically; the legacy success
+  `commit_result` is normalized to the plan's committed shape
+  `{outcome:"committed",commit_hash,failure_summary:null}` (the v1 row stored a different ad hoc
+  shape) so success and mismatch results share one schema as the plan specifies.
+- Minor: `store.prepareCommit` keeps running `prepareCommitReceipt` before the phase gate (the
+  existing range-denial pattern), so a mismatch stop rejects preparation with `ERROR_STALE_RECEIPT`
+  rather than `ERROR_INVALID_TRANSITION`; retry and result submission are rejected with
+  `ERROR_INVALID_TRANSITION` as specified.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.

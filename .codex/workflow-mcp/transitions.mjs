@@ -16,7 +16,6 @@ import {
   resolutionMap,
   revision,
   role,
-  safeObject,
   stringList,
   userAuthorization,
 } from "./validation.mjs";
@@ -41,8 +40,16 @@ export const PHASES = [
   "COMMIT_AUTHORIZED",
   "COMMIT_PREPARED",
   "STOPPED_NOT_COMMITTED",
+  "STOPPED_COMMIT_MISMATCH",
   "COMMITTED",
 ];
+
+export const MISMATCH_CATEGORIES = new Set([
+  "HEAD_CHANGED",
+  "PARENT_MISMATCH",
+  "TREE_MISMATCH",
+  "PATH_MISMATCH",
+]);
 
 const V1_PHASES = [
   "IMPLEMENTING",
@@ -230,6 +237,13 @@ export function permittedNextActions(state, actorRole) {
     state.review_target?.review_mode !== "working_tree"
   ) {
     actions = actions.filter((action) => action !== "workflow_authorize_commit");
+  }
+  if (
+    actorRole === "committer" &&
+    state.phase === "COMMIT_AUTHORIZED" &&
+    state.legacy_v1 !== true
+  ) {
+    actions = actions.filter((action) => action !== "workflow_record_commit");
   }
   return actions.sort();
 }
@@ -770,16 +784,41 @@ export function authorizeCommit(state, authorization) {
   return next;
 }
 
-export function recordCommit(state, result, input) {
+export function recordCommit(state, evidence, input) {
   exactKeys(
     input,
     ["workflow_id", "capability", "expected_version", "commit_hash"],
     "commit record",
   );
   ensurePhase(state, "COMMIT_AUTHORIZED");
+  if (state.legacy_v1 !== true) {
+    fail("ERROR_LEGACY_WORKFLOW", "commit recording is only for migrated workflows");
+  }
   const next = clone(state);
-  next.commit_result = safeObject(result, "commit_result", 20);
+  if (evidence.mismatch) {
+    if (!MISMATCH_CATEGORIES.has(evidence.mismatch)) {
+      fail("ERROR_STATE_CORRUPT", "mismatch category is invalid");
+    }
+    next.commit_result = { outcome: "mismatch", mismatch_category: evidence.mismatch };
+    next.phase = "STOPPED_COMMIT_MISMATCH";
+    return next;
+  }
+  next.commit_result = {
+    outcome: "committed",
+    commit_hash: evidence.commit_hash,
+    failure_summary: null,
+  };
   next.phase = "COMMITTED";
+  return next;
+}
+
+export function commitMismatch(state, category) {
+  if (!MISMATCH_CATEGORIES.has(category)) {
+    fail("ERROR_STATE_CORRUPT", "mismatch category is invalid");
+  }
+  const next = clone(state);
+  next.commit_result = { outcome: "mismatch", mismatch_category: category };
+  next.phase = "STOPPED_COMMIT_MISMATCH";
   return next;
 }
 

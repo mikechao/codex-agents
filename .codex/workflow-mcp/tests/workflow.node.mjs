@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, cpSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { WorkflowError } from "../errors.mjs";
 import { resolveStatePath, WorkflowStore } from "../store.mjs";
 import { permittedNextActions, roleView } from "../transitions.mjs";
-import { objectDigest } from "../validation.mjs";
+import { hashCapability, issueCapability, objectDigest } from "../validation.mjs";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "workflow-state-"));
@@ -201,9 +203,11 @@ test("approved receipt gates commit and commit evidence", () => {
     const authorized = store.authorizeCommit({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, user_authorization: "user requested commit" });
     assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
     git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.committer, expected_version: 3 });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
     git("commit", "-qm", "fixture change");
     const hash = git("rev-parse", "HEAD");
-    const committed = store.recordCommit({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.committer, expected_version: 3, commit_hash: hash });
+    const committed = store.submitCommitResult({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: hash, failure_summary: null });
     assert.equal(committed.phase, "COMMITTED");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -370,7 +374,7 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("rejects stale review and committed digest mismatches without mutation", () => {
+test("rejects stale review and denies v2 legacy commit recording without mutation", () => {
   const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
@@ -391,7 +395,7 @@ test("rejects stale review and committed digest mismatches without mutation", ()
     git("commit", "-qm", "tampered");
     const commitBefore = store.get(created.workflow.workflow_id, "parent", created.capabilities.parent);
     const commitAuditBefore = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length;
-    assert.equal(errorCategory(() => store.recordCommit({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") })), "ERROR_COMMIT_MISMATCH");
+    assert.equal(errorCategory(() => store.recordCommit({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") })), "ERROR_LEGACY_WORKFLOW");
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, commitBefore.version);
     assert.equal(store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length, commitAuditBefore);
     assert.equal(approved.phase, "STOPPED_APPROVED");
@@ -1020,11 +1024,12 @@ test("role views expose exact projection keys and sorted permitted actions", () 
     assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_linked_followup"]);
 
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, user_authorization: "authorized" });
-    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit"]);
 
     git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 6 });
     git("commit", "-qm", "role views commit");
-    store.recordCommit({ workflow_id: id, capability: caps.committer, expected_version: 6, commit_hash: git("rev-parse", "HEAD") });
+    store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 7, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
     assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -1513,10 +1518,11 @@ test("terminals cannot resume implementation or accept concerns", () => {
     review(store, created, root, 1, "APPROVED", [], []);
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
     git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
     git("commit", "-qm", "terminal");
-    store.recordCommit({ workflow_id: id, capability: caps.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") });
-    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 4, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
-    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 4, user_authorization: "x" })), "ERROR_INVALID_TRANSITION");
+    store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 5, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 5, user_authorization: "x" })), "ERROR_INVALID_TRANSITION");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -2185,7 +2191,7 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
     const wtTarget = { review_mode: "working_tree", base_revision: created.workflow.base_head, head_revision: null, approved_paths: approved, include_staged: true, include_unstaged: true, include_untracked: true };
     store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: wtTarget, prior_finding_classifications: {} });
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "prepare authorized" });
-    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit"]);
     git("add", "mod.txt");
     git("add", "add.txt");
     git("add", "del.txt");
@@ -2496,7 +2502,7 @@ test("retry clears the attempt and result and permits preparation again", () => 
     assert.equal(retried.recovery_context.kind, "commit");
     assert.equal(retried.recovery_context.context, "hook fixed");
     assert.match(retried.recovery_context.recovered_at, /^[0-9]{4}-/u);
-    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit"]);
     const events = store.audit(id, "parent", caps.parent);
     const retryEvent = events[events.length - 1];
     assert.equal(retryEvent.event_type, "COMMIT_RETRY_AUTHORIZED");
@@ -2530,6 +2536,288 @@ test("committed results are terminal and cannot retry", () => {
     assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, retry_context: "x" })), "ERROR_INVALID_TRANSITION");
     assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 5, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: hash, failure_summary: null })), "ERROR_INVALID_TRANSITION");
     assert.equal(store.get(id, "parent", caps.parent).version, 5);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function insertV1Workflow(path, state) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE workflows (
+      workflow_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      parent_capability_hash TEXT NOT NULL,
+      implementer_capability_hash TEXT NOT NULL,
+      reviewer_capability_hash TEXT NOT NULL,
+      committer_capability_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE audit_events (
+      event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      summary_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
+    );
+    CREATE INDEX audit_events_workflow ON audit_events(workflow_id, event_id);
+  `);
+  const caps = {
+    parent: issueCapability(),
+    implementer: issueCapability(),
+    reviewer: issueCapability(),
+    committer: issueCapability(),
+  };
+  db.prepare(
+    "INSERT INTO workflows (workflow_id, version, state_json, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    state.workflow_id,
+    state.version,
+    JSON.stringify(state),
+    hashCapability(caps.parent),
+    hashCapability(caps.implementer),
+    hashCapability(caps.reviewer),
+    hashCapability(caps.committer),
+    "2024-01-01T00:00:00.000Z",
+    "2024-01-01T00:00:00.000Z",
+  );
+  db.close();
+  return caps;
+}
+
+function v1AuthorizedState(root, git, overrides = {}) {
+  const base = git("rev-parse", "HEAD");
+  writeFileSync(join(root, "note.txt"), "after\n");
+  const reviewReceipt = JSON.parse(
+    execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }),
+  );
+  return {
+    schema_version: 1,
+    version: 0,
+    workflow_id: randomUUID(),
+    phase: "COMMIT_AUTHORIZED",
+    objective: "legacy objective",
+    base_head: base,
+    approved_paths: ["note.txt"],
+    repair_cycle: 0,
+    max_repair_cycles: 2,
+    parent_workflow_id: null,
+    implementation_summary: null,
+    implementation_status: null,
+    implementation_changed_paths: ["note.txt"],
+    implementation_acceptance_evidence: [],
+    implementation_validation_evidence: [],
+    implementation_receipt: null,
+    implementation_known_failures: [],
+    finding_resolution_map: {},
+    prior_finding_classifications: {},
+    blocking_findings: [],
+    optional_findings: [],
+    review_receipt: reviewReceipt,
+    commit_authorization: { user_authorization: "legacy auth" },
+    commit_result: null,
+    repair_authorized_ids: [],
+    authorized_optional_ids: [],
+    user_authorization_summary: null,
+    ...overrides,
+  };
+}
+
+test("new v2 workflows deny legacy commit recording without mutation", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    const before = store.get(id, "parent", caps.parent);
+    const auditBefore = store.audit(id, "parent", caps.parent).length;
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit"]);
+    assert.equal(errorCategory(() => store.recordCommit({ workflow_id: id, capability: caps.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") })), "ERROR_LEGACY_WORKFLOW");
+    assert.equal(store.get(id, "parent", caps.parent).version, before.version);
+    assert.equal(store.audit(id, "parent", caps.parent).length, auditBefore);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("commit result verification mismatches stop terminally with deterministic categories", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+
+    const headChanged = authorizedWorkflow(store, root, git, { content: "m1\n" });
+    git("add", "note.txt");
+    const preparedHead = store.prepareCommit({ workflow_id: headChanged.id, capability: headChanged.caps.committer, expected_version: 3 });
+    git("commit", "-qm", "moved head");
+    const headResult = store.submitCommitResult({ workflow_id: headChanged.id, capability: headChanged.caps.committer, expected_version: 4, attempt_id: preparedHead.commit_preparation.attempt_id, outcome: "committed", commit_hash: headChanged.created.workflow.base_head, failure_summary: null });
+    assert.equal(headResult.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(headResult.commit_result.mismatch_category, "HEAD_CHANGED");
+
+    const parentMismatch = authorizedWorkflow(store, root, git, { content: "m2\n" });
+    git("add", "note.txt");
+    const preparedParent = store.prepareCommit({ workflow_id: parentMismatch.id, capability: parentMismatch.caps.committer, expected_version: 3 });
+    git("commit", "-qm", "intended commit");
+    git("commit", "--allow-empty", "-qm", "extra commit");
+    const parentResult = store.submitCommitResult({ workflow_id: parentMismatch.id, capability: parentMismatch.caps.committer, expected_version: 4, attempt_id: preparedParent.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(parentResult.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(parentResult.commit_result.mismatch_category, "PARENT_MISMATCH");
+
+    const treeMismatch = authorizedWorkflow(store, root, git, { content: "m3\n" });
+    git("add", "note.txt");
+    const preparedTree = store.prepareCommit({ workflow_id: treeMismatch.id, capability: treeMismatch.caps.committer, expected_version: 3 });
+    writeFileSync(join(root, "note.txt"), "tampered\n");
+    git("add", "note.txt");
+    git("commit", "-qm", "tampered content");
+    const treeResult = store.submitCommitResult({ workflow_id: treeMismatch.id, capability: treeMismatch.caps.committer, expected_version: 4, attempt_id: preparedTree.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(treeResult.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(treeResult.commit_result.mismatch_category, "TREE_MISMATCH");
+
+    const pathMismatch = authorizedWorkflow(store, root, git, { content: "m4\n" });
+    git("add", "note.txt");
+    const preparedPath = store.prepareCommit({ workflow_id: pathMismatch.id, capability: pathMismatch.caps.committer, expected_version: 3 });
+    const tamperedState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(pathMismatch.id).state_json);
+    tamperedState.commit_preparation.expected_paths = ["note.txt", "phantom.txt"];
+    store.db.prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?").run(JSON.stringify(tamperedState), objectDigest(tamperedState), pathMismatch.id);
+    git("commit", "-qm", "path mismatch");
+    const pathResult = store.submitCommitResult({ workflow_id: pathMismatch.id, capability: pathMismatch.caps.committer, expected_version: 4, attempt_id: preparedPath.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(pathResult.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(pathResult.commit_result.mismatch_category, "PATH_MISMATCH");
+
+    for (const result of [headResult, parentResult, treeResult, pathResult]) {
+      assert.deepEqual(result.commit_result, { outcome: "mismatch", mismatch_category: result.commit_result.mismatch_category });
+      assert.equal("failure_summary" in result.commit_result, false);
+    }
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("not committed claim after a changed HEAD enters a terminal mismatch", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    git("commit", "-qm", "unexpected commit");
+    const mismatched = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "not_committed", commit_hash: null, failure_summary: "the commit did not run" });
+    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.deepEqual(mismatched.commit_result, { outcome: "mismatch", mismatch_category: "HEAD_CHANGED" });
+    assert.equal(mismatched.commit_result.failure_summary, undefined);
+    const serialized = JSON.stringify(store.audit(id, "parent", caps.parent));
+    assert.equal(serialized.includes("the commit did not run"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("hook-created unexpected commit ends in a terminal mismatch", () => {
+  const { root, git } = fixture();
+  try {
+    mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+    writeFileSync(join(root, ".git", "hooks", "post-commit"), "#!/bin/sh\nif [ -z \"${HOOK_GUARD:-}\" ]; then\n  export HOOK_GUARD=1\n  git commit --allow-empty --no-verify -m \"hook unexpected commit\"\nfi\n");
+    chmodSync(join(root, ".git", "hooks", "post-commit"), 0o755);
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    git("commit", "-qm", "intended commit");
+    const mismatched = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(mismatched.commit_result.mismatch_category, "PARENT_MISMATCH");
+    assert.equal(JSON.stringify(store.audit(id, "parent", caps.parent)).includes("hook unexpected commit"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("commit mismatch stops are terminal and cannot retry or resume", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    writeFileSync(join(root, "note.txt"), "tampered\n");
+    git("add", "note.txt");
+    git("commit", "-qm", "mismatch");
+    const mismatched = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null });
+    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.deepEqual(mismatched.commit_result, { outcome: "mismatch", mismatch_category: "TREE_MISMATCH" });
+    assert.deepEqual(mismatched.commit_preparation, prepared.commit_preparation);
+    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+      assert.deepEqual(store.get(id, role, caps[role]).permitted_next_actions, []);
+    }
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, retry_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 5 })), "ERROR_STALE_RECEIPT");
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 5, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null })), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, 5);
+    const events = store.audit(id, "parent", caps.parent);
+    const resultEvent = events[events.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");
+    assert.equal(resultEvent.summary.phase_before, "COMMIT_PREPARED");
+    assert.equal(resultEvent.summary.phase_after, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(resultEvent.summary.outcome, "mismatch");
+    assert.equal(resultEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes("tampered"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("migrated legacy commit recording succeeds into COMMITTED", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const state = v1AuthorizedState(root, git);
+    const caps = insertV1Workflow(path, state);
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    assert.deepEqual(store.get(state.workflow_id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    git("add", "note.txt");
+    git("commit", "-qm", "legacy change");
+    const hash = git("rev-parse", "HEAD");
+    const committed = store.recordCommit({ workflow_id: state.workflow_id, capability: caps.committer, expected_version: 1, commit_hash: hash });
+    assert.equal(committed.phase, "COMMITTED");
+    assert.equal(committed.version, 2);
+    assert.deepEqual(committed.commit_result, { outcome: "committed", commit_hash: hash, failure_summary: null });
+    assert.deepEqual(committed.commit_authorization, { user_authorization: "legacy auth" });
+    assert.deepEqual(store.get(state.workflow_id, "committer", caps.committer).permitted_next_actions, []);
+    const events = store.audit(state.workflow_id, "parent", caps.parent);
+    const resultEvent = events[events.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RECORDED");
+    assert.equal(resultEvent.summary.phase_before, "COMMIT_AUTHORIZED");
+    assert.equal(resultEvent.summary.phase_after, "COMMITTED");
+    assert.equal(resultEvent.summary.outcome, "committed");
+    assert.equal(resultEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes(hash), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("migrated legacy commit recording failure stops terminally as a mismatch", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const state = v1AuthorizedState(root, git);
+    const caps = insertV1Workflow(path, state);
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    writeFileSync(join(root, "note.txt"), "tampered\n");
+    git("add", "note.txt");
+    git("commit", "-qm", "tampered legacy commit");
+    const mismatched = store.recordCommit({ workflow_id: state.workflow_id, capability: caps.committer, expected_version: 1, commit_hash: git("rev-parse", "HEAD") });
+    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
+    assert.deepEqual(mismatched.commit_result, { outcome: "mismatch", mismatch_category: "TREE_MISMATCH" });
+    assert.equal("failure_summary" in mismatched.commit_result, false);
+    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+      assert.deepEqual(store.get(state.workflow_id, role, caps[role]).permitted_next_actions, []);
+    }
+    const events = store.audit(state.workflow_id, "parent", caps.parent);
+    const resultEvent = events[events.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RECORDED");
+    assert.equal(resultEvent.summary.phase_before, "COMMIT_AUTHORIZED");
+    assert.equal(resultEvent.summary.phase_after, "STOPPED_COMMIT_MISMATCH");
+    assert.equal(resultEvent.summary.outcome, "mismatch");
+    assert.equal(resultEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes("tampered"), false);
+    assert.equal(JSON.stringify(events).includes("TREE_MISMATCH"), false);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
