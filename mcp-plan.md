@@ -470,7 +470,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='inconclusive|resume.review|repair.exhaust|terminal' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** inconclusive reviews recover, while exhausted blockers stop distinctly and terminally.
 
-- [ ] **MCP-6.1 — Replace optional children with linked finding follow-ups**
+- [x] **MCP-6.1 — Replace optional children with linked finding follow-ups**
   - **Prerequisites/commit:** MCP-5.3; `feat(workflow): preserve findings in linked follow-ups`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/validation.mjs`,
@@ -1418,6 +1418,120 @@ Validation:
 - `pnpm test`: pass, 101/101 (19 agents + 82 workflow/protocol/migration).
 - `git diff --check`: pass.
 - `git status --short`: only the five owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-6.1 — Replace optional children with linked finding follow-ups
+
+DONE
+
+Task: MCP-6.1
+Outcome: `workflow_create_optional_followup` is removed and replaced by the normative
+`workflow_create_linked_followup`. The parent can now create, from either a `STOPPED_APPROVED` or the
+terminal `STOPPED_REPAIR_EXHAUSTED` source, a fresh-HEAD working-tree `change` child (version 0) that
+copies the exact full finding objects, `source_workflow_id`/`parent_workflow_id` links, and the exact
+remediation context `{policy:"explicitly_authorized", authorized_finding_ids, repair_cycle:0,
+user_authorization}`, with caller contracts assigned fresh AC/VAL IDs and a server-computed
+absent-aware initial receipt. Both rows and both audits commit atomically; the child event
+`WORKFLOW_CREATED` links the source and the parent event `LINKED_FOLLOWUP_CREATED` links the child,
+with neither audit envelope leaking finding or authorization text. The final optional-follow-up
+aliases `authorized_optional_ids` and `user_authorization_summary` are removed from every
+`legacy_v1:false` state. The injected-failure option is renamed `faultAfterLinkedChildInsert` and
+now fires after both audits are written, so rollback provably removes both rows and both audit rows.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/validation.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- `workflow_create_optional_followup` removed: the tool, its schema (including `base_head` and
+  `optional_finding_ids`), the server dispatch case, and the `createOptionalFollowup` store method
+  are gone; `optionalFollowupInput` is replaced by `linkedFollowupInput`.
+- Normative `workflow_create_linked_followup` added: tool schema is common + `objective`,
+  `approved_paths`, `acceptance_criteria`, `validation_requirements`, `finding_ids`,
+  `user_authorization`; dispatched to the store's transactional `createLinkedFollowup`.
+- Complete immutable finding copy: `linked_findings` carries the full finding objects for exactly the
+  authorized IDs; `linkedFollowupInput` requires the IDs to be unique, non-empty, known, and all from
+  one bucket (all blocking or all optional), rejecting unknown/duplicate/mixed IDs with
+  `ERROR_INVALID_FOLLOWUP`.
+- Links and remediation context: the child stores `source_workflow_id` and `parent_workflow_id`
+  pointing at the source, `linked_findings`, and the exact
+  `{policy:"explicitly_authorized", authorized_finding_ids, repair_cycle:0, user_authorization}`
+  remediation context; source phases are `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED`
+  (`ERROR_INVALID_TRANSITION` otherwise).
+- Fresh HEAD/receipt/target/contracts: the child is a `change` at current `HEAD` with a fresh
+  working-tree target, server-computed absent-aware initial receipt, derived dirty baseline, cycle 0,
+  inherited max cycles, and caller-ordered AC/VAL contracts; an absent child path produces the
+  normative `{path,state:"absent",kind:"missing"}` receipt entry.
+- Atomic parent/child transaction: one `BEGIN IMMEDIATE` transaction inserts the child row, writes
+  the child `WORKFLOW_CREATED` audit (linked_workflow_id = source), updates the parent version, and
+  writes the parent `LINKED_FOLLOWUP_CREATED` audit (linked_workflow_id = child); the parent changes
+  only `version` and both audits are append-only. The test-only injection is renamed
+  `faultAfterLinkedChildInsert` and placed after both audit writes so an injected rollback removes
+  the child row, the child audit, the parent update, and the parent audit.
+- Sanitized events: neither `WORKFLOW_CREATED` nor `LINKED_FOLLOWUP_CREATED` carries finding or
+  authorization text; serialized envelopes contain only the exact 8 keys with link IDs.
+- Parent actions: `workflow_create_linked_followup` is listed at `STOPPED_APPROVED` (alongside
+  `workflow_authorize_commit`) and `STOPPED_REPAIR_EXHAUSTED` (the sole parent action, so the
+  exhausted stop stays terminal for resume/repair/commit but can spawn a fresh linked child).
+- Optional-follow-up aliases removed from every `legacy_v1:false` state: `baseState` no longer
+  initializes `authorized_optional_ids`/`user_authorization_summary`; `migrateV1State` still emits
+  them for `legacy_v1:true` rows, and the parent-view exclusion list still filters them, so migrated
+  rows and their views are unchanged.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- Updated "optional findings require a fresh linked workflow": linked follow-up from `STOPPED_APPROVED`
+  copies the full optional finding, remediation context, source/parent links, fresh working-tree
+  target, assigned child contracts, and a `WORKFLOW_CREATED`/`LINKED_FOLLOWUP_CREATED` chain whose
+  serialized envelopes contain no finding text; parent unchanged except version.
+- New "linked follow-up copies blocking findings from an exhausted source": child from
+  `STOPPED_REPAIR_EXHAUSTED` carries the exact blocker finding object and remediation context with
+  empty child blocking/optional buckets; parent actions are exactly
+  `["workflow_create_linked_followup"]`.
+- New "linked follow-up rejects unknown, duplicate, and mixed finding IDs and missing auth or bad
+  phase": unknown, duplicate, mixed-bucket, and empty ID sets return `ERROR_INVALID_FOLLOWUP`;
+  missing authorization and empty objective return `ERROR_INVALID_SHAPE`; wrong source phase returns
+  `ERROR_INVALID_TRANSITION`; an extra field returns `ERROR_INVALID_SHAPE`; no mutation on any
+  failure.
+- New "linked follow-up child from a commit-range review source accepts absent child paths": a
+  range-approved source spawns a fresh-HEAD working-tree child whose absent `new/file.txt` path is an
+  absent receipt entry with an empty dirty baseline.
+- Updated "optional follow-up is atomic and audit rows remain append-only": uses
+  `faultAfterLinkedChildInsert` and asserts the injected failure leaves the parent version, all parent
+  audits, the workflow count, and the total audit-event count unchanged.
+- Updated "rejects extra mutation fields", "v2 creation constructs every normative state key" (raw
+  state no longer carries the aliases), the role-view action assertions at `STOPPED_APPROVED`, the
+  range/wt parent-action assertions, and "repair exhaustion is terminal and cannot resume or commit"
+  (parent now lists only `workflow_create_linked_followup` at exhaustion; other roles stay empty).
+- New `protocol.node.mjs` "exact linked follow-up tool schema matches the normative contract": exact
+  properties/required/bounds and absence of `workflow_create_optional_followup`.
+- New `protocol.node.mjs` "linked follow-up over STDIO creates a self-contained child without source
+  capability": real transport approve -> linked follow-up -> child implementer view carries
+  `linked_findings`, remediation context, and contracts with `workflow_submit_implementation` as its
+  only action; parent version increments; audit ends with `LINKED_FOLLOWUP_CREATED` linking the child
+  with no finding text.
+- Updated the existing STDIO range/actions assertion and the exhausted-parent action assertion to
+  `workflow_create_linked_followup`.
+
+Validation:
+- `node --test --test-name-pattern='follow.up|linked|atomic|finding|authorization' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs`: pass, 10/10.
+- `pnpm test:workflow-mcp`: pass, 87/87.
+- `pnpm test`: pass, 106/106 (19 agents + 87 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).

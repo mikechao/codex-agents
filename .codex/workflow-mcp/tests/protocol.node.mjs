@@ -330,6 +330,50 @@ test("resume review and repair exhaustion tool schemas match the normative contr
   assert.equal(tools.some((tool) => tool.name === "workflow_finalize_blocked"), false);
 });
 
+test("exact linked follow-up tool schema matches the normative contract", () => {
+  assert.equal(tools.some((tool) => tool.name === "workflow_create_optional_followup"), false);
+  const linkedTool = tools.find((tool) => tool.name === "workflow_create_linked_followup");
+  assert.ok(linkedTool);
+  const { inputSchema } = linkedTool;
+  assert.equal(inputSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(inputSchema.properties).sort(),
+    [
+      "acceptance_criteria",
+      "approved_paths",
+      "capability",
+      "expected_version",
+      "finding_ids",
+      "objective",
+      "user_authorization",
+      "validation_requirements",
+      "workflow_id",
+    ],
+  );
+  assert.deepEqual(inputSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "objective",
+    "approved_paths",
+    "acceptance_criteria",
+    "validation_requirements",
+    "finding_ids",
+    "user_authorization",
+  ]);
+  assert.equal(inputSchema.properties.objective.minLength, 1);
+  assert.equal(inputSchema.properties.objective.maxLength, 4000);
+  assert.equal(inputSchema.properties.approved_paths.minItems, 1);
+  assert.equal(inputSchema.properties.approved_paths.maxItems, 200);
+  assert.equal(inputSchema.properties.acceptance_criteria.minItems, 1);
+  assert.equal(inputSchema.properties.acceptance_criteria.maxItems, 999);
+  assert.equal(inputSchema.properties.validation_requirements.minItems, 1);
+  assert.equal(inputSchema.properties.validation_requirements.maxItems, 999);
+  assert.equal(inputSchema.properties.finding_ids.minItems, 1);
+  assert.equal(inputSchema.properties.user_authorization.minLength, 1);
+  assert.equal(inputSchema.properties.user_authorization.maxLength, 2000);
+});
+
 test("implementation stops resume and concerns over STDIO", async () => {
   const root = mkdtempSync(join(tmpdir(), "workflow-recover-"));
   const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -421,7 +465,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     const rangeApproved = await call("workflow_submit_review", { workflow_id: range.workflow_id, capability: rangeResult.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: null, review_target: range.review_target, prior_finding_classifications: {} });
     assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
     assert.equal(rangeApproved.review_receipt, null);
-    assert.deepEqual((await call("workflow_get", { workflow_id: range.workflow_id, role: "parent", capability: rangeResult.capabilities.parent })).permitted_next_actions, ["workflow_create_optional_followup"]);
+    assert.deepEqual((await call("workflow_get", { workflow_id: range.workflow_id, role: "parent", capability: rangeResult.capabilities.parent })).permitted_next_actions, ["workflow_create_linked_followup"]);
     const denied = await client.callTool({ name: "workflow_authorize_commit", arguments: { workflow_id: range.workflow_id, capability: rangeResult.capabilities.parent, expected_version: 1, user_authorization: "authorize range review-only" } });
     assert.equal(denied.isError, true);
     assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_COMMIT_NOT_ALLOWED");
@@ -469,10 +513,60 @@ test("review resume and repair exhaustion over STDIO", async () => {
     await call("workflow_submit_review", { workflow_id: chg.workflow_id, capability: chgResult.capabilities.reviewer, expected_version: 1, review_status: "CHANGES_REQUESTED", blocking_findings: [finding], optional_findings: [], review_receipt: null, review_target: chg.review_target, prior_finding_classifications: {} });
     const exhausted = await call("workflow_finalize_repair_exhausted", { workflow_id: chg.workflow_id, capability: chgResult.capabilities.parent, expected_version: 2 });
     assert.equal(exhausted.phase, "STOPPED_REPAIR_EXHAUSTED");
-    assert.deepEqual((await call("workflow_get", { workflow_id: chg.workflow_id, role: "parent", capability: chgResult.capabilities.parent })).permitted_next_actions, []);
+    assert.deepEqual((await call("workflow_get", { workflow_id: chg.workflow_id, role: "parent", capability: chgResult.capabilities.parent })).permitted_next_actions, ["workflow_create_linked_followup"]);
     const resumeDenied = await client.callTool({ name: "workflow_resume_review", arguments: { workflow_id: chg.workflow_id, capability: chgResult.capabilities.parent, expected_version: 3, resume_context: "x" } });
     assert.equal(resumeDenied.isError, true);
     assert.equal(JSON.parse(resumeDenied.content[0].text).category, "ERROR_INVALID_TRANSITION");
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("linked follow-up over STDIO creates a self-contained child without source capability", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-linked-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const receipt = (paths) => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", ...paths], { cwd: root, encoding: "utf8" }));
+
+    const createdResult = await call("workflow_create", { workflow_type: "change", objective: "linked protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    const created = createdResult.workflow;
+    await call("workflow_submit_implementation", { workflow_id: created.workflow_id, capability: createdResult.capabilities.implementer, expected_version: 0, status: "DONE", summary: "done", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt(["note.txt"]), known_failures: [], finding_resolution_map: {} });
+    writeFileSync(join(root, "note.txt"), "after\n");
+    const target = { review_mode: "working_tree", base_revision: created.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true };
+    const optional = { finding_id: "PROTO-LINK", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
+    const approved = await call("workflow_submit_review", { workflow_id: created.workflow_id, capability: createdResult.capabilities.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [optional], review_receipt: receipt(["note.txt"]), review_target: target, prior_finding_classifications: {} });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    assert.deepEqual((await call("workflow_get", { workflow_id: created.workflow_id, role: "parent", capability: createdResult.capabilities.parent })).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_linked_followup"]);
+
+    const linkedResult = await call("workflow_create_linked_followup", { workflow_id: created.workflow_id, capability: createdResult.capabilities.parent, expected_version: 2, objective: "linked child", approved_paths: ["note.txt"], acceptance_criteria: ["child criterion"], validation_requirements: ["child validation"], finding_ids: ["PROTO-LINK"], user_authorization: "user authorized linked follow-up" });
+    const child = linkedResult.workflow;
+    assert.equal(child.phase, "IMPLEMENTING");
+    assert.equal(child.source_workflow_id, created.workflow_id);
+    assert.equal(child.parent_workflow_id, created.workflow_id);
+    const childImplementer = await call("workflow_get", { workflow_id: child.workflow_id, role: "implementer", capability: linkedResult.capabilities.implementer });
+    assert.deepEqual(childImplementer.linked_findings, [optional]);
+    assert.deepEqual(childImplementer.remediation_context, { policy: "explicitly_authorized", authorized_finding_ids: ["PROTO-LINK"], repair_cycle: 0, user_authorization: "user authorized linked follow-up" });
+    assert.deepEqual(childImplementer.acceptance_criteria, [{ criterion_id: "AC-001", description: "child criterion" }]);
+    assert.deepEqual(childImplementer.validation_requirements, [{ validation_id: "VAL-001", description: "child validation" }]);
+    assert.deepEqual(childImplementer.permitted_next_actions, ["workflow_submit_implementation"]);
+    const parentView = await call("workflow_get", { workflow_id: created.workflow_id, role: "parent", capability: createdResult.capabilities.parent });
+    assert.equal(parentView.version, 3);
+    const audit = await call("workflow_get_audit", { workflow_id: created.workflow_id, role: "parent", capability: createdResult.capabilities.parent });
+    assert.equal(audit[audit.length - 1].event_type, "LINKED_FOLLOWUP_CREATED");
+    assert.equal(audit[audit.length - 1].summary.linked_workflow_id, child.workflow_id);
+    assert.equal(JSON.stringify(audit).includes("PROTO-LINK"), false);
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }

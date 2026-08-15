@@ -20,8 +20,9 @@ import {
   dirtyBaselinePaths,
   finalizeRepairExhausted,
   IMPLEMENTATION_STOP_PHASES,
+  linkedFollowupChildState,
+  linkedFollowupInput,
   migrateV1State,
-  optionalFollowupInput,
   rangeDirtyBaselinePaths,
   recordCommit,
   resumeImplementation,
@@ -88,7 +89,7 @@ export class WorkflowStore {
     this.root = realpathSync(options.repositoryRoot ?? repositoryRoot(process.cwd()));
     this.path =
       options.databasePath ?? (process.env.WORKFLOW_MCP_DB_PATH || resolveStatePath(this.root));
-    this.faultAfterChildInsert = options.faultAfterChildInsert === true;
+    this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
     this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(this.path);
@@ -525,7 +526,7 @@ export class WorkflowStore {
     );
   }
 
-  createOptionalFollowup(input) {
+  createLinkedFollowup(input) {
     this.#ensureOpen();
     mutationInput(input);
     expectedVersion(input.expected_version);
@@ -536,26 +537,15 @@ export class WorkflowStore {
       if (row.version !== input.expected_version)
         fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
       const state = parseState(row);
-      const followup = optionalFollowupInput(state, input, this.root, currentHead(this.root));
+      const followup = linkedFollowupInput(state, input, this.root, currentHead(this.root));
       const childId = randomUUID();
-      const childState = createState(
-        {
-          objective: followup.objective,
-          approved_paths: followup.approved_paths,
-          base_head: followup.base_head,
-          max_repair_cycles: followup.max_repair_cycles,
-          parent_workflow_id: followup.parent_workflow_id,
-        },
-        this.root,
-        currentHead(this.root),
-        { internal: true },
-      );
+      const childState = linkedFollowupChildState(followup);
       const childReceipt = createReceipt(this.root, childState.approved_paths, true);
+      if (childReceipt.base_head !== followup.base_head)
+        fail("ERROR_STALE_BASE", "scope base is stale");
       childState.workflow_id = childId;
       childState.initial_receipt = childReceipt;
       childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-      childState.authorized_optional_ids = followup.optional_finding_ids;
-      childState.user_authorization_summary = followup.user_authorization;
       const childCapabilities = {
         parent: issueCapability(),
         implementer: issueCapability(),
@@ -579,8 +569,6 @@ export class WorkflowStore {
           now,
           now,
         );
-      if (this.faultAfterChildInsert)
-        fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
       this.#audit(
         childId,
         0,
@@ -598,10 +586,12 @@ export class WorkflowStore {
       this.#audit(
         input.workflow_id,
         next.version,
-        "OPTIONAL_FOLLOWUP_CREATED",
+        "LINKED_FOLLOWUP_CREATED",
         "parent",
         auditEnvelope(state, next, row.state_digest, { linked_workflow_id: childId }),
       );
+      if (this.faultAfterLinkedChildInsert)
+        fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
       this.db.exec("COMMIT");
       return { workflow: roleView(childState, "parent"), capabilities: childCapabilities };
     } catch (error) {

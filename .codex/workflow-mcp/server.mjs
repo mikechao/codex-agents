@@ -384,28 +384,41 @@ export const tools = [
     },
   },
   {
-    name: "workflow_create_optional_followup",
+    name: "workflow_create_linked_followup",
     description:
-      "Create a fresh linked cycle-0 workflow for explicitly authorized optional findings.",
+      "Create a fresh linked cycle-0 change workflow that copies exact source findings, remediation context, and parent/source links.",
     inputSchema: schema(
       {
         ...common.properties,
         objective: { type: "string", minLength: 1, maxLength: 4000 },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
-        base_head: { type: "string", pattern: "^[0-9a-f]{40}$" },
-        optional_finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
+        acceptance_criteria: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 4000 },
+          minItems: 1,
+          maxItems: 999,
+        },
+        validation_requirements: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 4000 },
+          minItems: 1,
+          maxItems: 999,
+        },
+        finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
         user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
       },
       [
         ...common.required,
         "objective",
         "approved_paths",
-        "optional_finding_ids",
+        "acceptance_criteria",
+        "validation_requirements",
+        "finding_ids",
         "user_authorization",
       ],
     ),
     annotations: {
-      title: "Create optional follow-up",
+      title: "Create linked follow-up",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
@@ -498,8 +511,8 @@ export function createServer(store = openStore()) {
         case "workflow_finalize_repair_exhausted":
           result = store.finalizeRepairExhausted(args);
           break;
-        case "workflow_create_optional_followup":
-          result = store.createOptionalFollowup(args);
+        case "workflow_create_linked_followup":
+          result = store.createLinkedFollowup(args);
           break;
         case "workflow_authorize_commit":
           result = store.authorizeCommit(args);

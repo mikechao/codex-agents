@@ -203,7 +203,8 @@ const ACTION_MATRIX = {
   },
   parent: {
     REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
-    STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_optional_followup"],
+    STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_linked_followup"],
+    STOPPED_REPAIR_EXHAUSTED: ["workflow_create_linked_followup"],
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
@@ -262,6 +263,9 @@ function baseState({
   maxRepairCycles,
   parentWorkflowId = null,
   workflowType = "change",
+  sourceWorkflowId = null,
+  linkedFindings = [],
+  remediationContext = null,
 }) {
   return {
     schema_version: SCHEMA_VERSION,
@@ -289,9 +293,9 @@ function baseState({
     repair_cycle: 0,
     max_repair_cycles: maxRepairCycles,
     parent_workflow_id: parentWorkflowId,
-    source_workflow_id: null,
-    linked_findings: [],
-    remediation_context: null,
+    source_workflow_id: sourceWorkflowId,
+    linked_findings: linkedFindings,
+    remediation_context: remediationContext,
     implementation_summary: null,
     implementation_status: null,
     agent_touched_paths: [],
@@ -312,8 +316,6 @@ function baseState({
     commit_authorization: null,
     commit_preparation: null,
     commit_result: null,
-    authorized_optional_ids: [],
-    user_authorization_summary: null,
   };
 }
 
@@ -775,7 +777,7 @@ export function recordCommit(state, result, input) {
   return next;
 }
 
-export function optionalFollowupInput(state, input, repositoryRoot, currentHead) {
+export function linkedFollowupInput(state, input, repositoryRoot, currentHead) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_FOLLOWUP", "follow-up input is invalid");
   }
@@ -787,35 +789,77 @@ export function optionalFollowupInput(state, input, repositoryRoot, currentHead)
       "expected_version",
       "objective",
       "approved_paths",
-      "optional_finding_ids",
+      "acceptance_criteria",
+      "validation_requirements",
+      "finding_ids",
       "user_authorization",
-      "base_head",
     ],
-    "optional follow-up",
-    ["base_head"],
+    "linked follow-up",
   );
-  ensurePhase(state, "STOPPED_APPROVED");
-  const ids = input.optional_finding_ids;
-  if (!Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length) {
-    fail("ERROR_INVALID_FOLLOWUP", "optional finding IDs are invalid");
+  ensurePhase(state, "STOPPED_APPROVED", "STOPPED_REPAIR_EXHAUSTED");
+  const ids = input.finding_ids;
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => typeof id !== "string" || id.length === 0 || id.length > 80)
+  ) {
+    fail("ERROR_INVALID_FOLLOWUP", "finding IDs are invalid");
   }
-  const optionalIds = new Set(state.optional_findings.map((item) => item.finding_id));
-  if (ids.some((id) => !optionalIds.has(id)))
-    fail("ERROR_INVALID_FOLLOWUP", "finding ID is not optional");
-  const nextInput = {
+  const blocking = new Set(state.blocking_findings.map((finding) => finding.finding_id));
+  const optional = new Set(state.optional_findings.map((finding) => finding.finding_id));
+  const fromBlocking = ids.every((id) => blocking.has(id));
+  const fromOptional = ids.every((id) => optional.has(id));
+  if (fromBlocking === fromOptional) {
+    fail("ERROR_INVALID_FOLLOWUP", "finding IDs must come from one bucket");
+  }
+  const linkedFindings = [...state.blocking_findings, ...state.optional_findings].filter(
+    (finding) => ids.includes(finding.finding_id),
+  );
+  return {
     objective: boundedString(input.objective, "objective"),
     approved_paths: exactPaths(input.approved_paths, repositoryRoot),
-    base_head: revision(input.base_head ?? currentHead, "base_head"),
+    acceptance_criteria: input.acceptance_criteria,
+    validation_requirements: input.validation_requirements,
+    base_head: revision(currentHead, "base_head"),
     max_repair_cycles: state.max_repair_cycles,
     parent_workflow_id: state.workflow_id,
+    source_workflow_id: state.workflow_id,
+    authorized_finding_ids: ids.slice().sort(),
+    linked_findings: linkedFindings,
+    user_authorization: userAuthorization(input.user_authorization),
   };
-  if (nextInput.base_head !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
-  userAuthorization(input.user_authorization);
-  return {
-    ...nextInput,
-    optional_finding_ids: [...ids].sort(),
-    user_authorization: input.user_authorization,
-  };
+}
+
+export function linkedFollowupChildState(followup) {
+  const state = baseState({
+    objective: followup.objective,
+    approvedPaths: followup.approved_paths,
+    baseHead: followup.base_head,
+    maxRepairCycles: followup.max_repair_cycles,
+    parentWorkflowId: followup.parent_workflow_id,
+    sourceWorkflowId: followup.source_workflow_id,
+    linkedFindings: followup.linked_findings,
+    remediationContext: {
+      policy: "explicitly_authorized",
+      authorized_finding_ids: followup.authorized_finding_ids,
+      repair_cycle: 0,
+      user_authorization: followup.user_authorization,
+    },
+  });
+  state.acceptance_criteria = contractList(
+    followup.acceptance_criteria,
+    "acceptance_criteria",
+    "AC",
+    "criterion_id",
+  );
+  state.validation_requirements = contractList(
+    followup.validation_requirements,
+    "validation_requirements",
+    "VAL",
+    "validation_id",
+  );
+  return state;
 }
 
 export function changedReceiptPaths(receipt) {

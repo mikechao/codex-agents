@@ -148,16 +148,43 @@ test("optional findings require a fresh linked workflow", () => {
     const created = create(store, root, git, { objective: "optional" });
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "changed\n");
-    const approved = review(store, created, root, 1, "APPROVED", [], [{ finding_id: "F-3", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
+    const optional = { finding_id: "F-3", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
+    const approved = review(store, created, root, 1, "APPROVED", [], [optional]);
     assert.equal(approved.phase, "STOPPED_APPROVED");
-    const linked = store.createOptionalFollowup({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, objective: "authorized optional", approved_paths: ["note.txt"], optional_finding_ids: ["F-3"], user_authorization: "user approved optional follow-up" });
+    const parentBefore = store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id).state_json;
+    const linked = store.createLinkedFollowup({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, objective: "authorized optional", approved_paths: ["note.txt"], acceptance_criteria: ["child criterion"], validation_requirements: ["child validation"], finding_ids: ["F-3"], user_authorization: "user approved optional follow-up" });
     assert.equal(linked.workflow.phase, "IMPLEMENTING");
+    assert.equal(linked.workflow.workflow_type, "change");
     assert.equal(linked.workflow.repair_cycle, 0);
+    assert.equal(linked.workflow.max_repair_cycles, created.workflow.max_repair_cycles);
     assert.equal(linked.workflow.parent_workflow_id, created.workflow.workflow_id);
+    assert.equal(linked.workflow.source_workflow_id, created.workflow.workflow_id);
+    assert.deepEqual(linked.workflow.review_target, { review_mode: "working_tree", base_revision: created.workflow.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true });
+    assert.deepEqual(linked.workflow.acceptance_criteria, [{ criterion_id: "AC-001", description: "child criterion" }]);
+    assert.deepEqual(linked.workflow.validation_requirements, [{ validation_id: "VAL-001", description: "child validation" }]);
     const childState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(linked.workflow.workflow_id).state_json);
-    assert.deepEqual(childState.authorized_optional_ids, ["F-3"]);
-    assert.equal("authorized_optional_ids" in linked.workflow, false);
+    assert.deepEqual(childState.linked_findings, [optional]);
+    assert.deepEqual(childState.remediation_context, { policy: "explicitly_authorized", authorized_finding_ids: ["F-3"], repair_cycle: 0, user_authorization: "user approved optional follow-up" });
+    assert.equal("authorized_optional_ids" in childState, false);
+    assert.equal("user_authorization_summary" in childState, false);
+    const parentAfter = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id).state_json);
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, 3);
+    const parentBeforeState = JSON.parse(parentBefore);
+    assert.equal(parentBeforeState.version, parentAfter.version - 1);
+    assert.deepEqual({ ...parentAfter, version: parentBeforeState.version }, parentBeforeState);
+    const childImplementer = store.get(linked.workflow.workflow_id, "implementer", linked.capabilities.implementer);
+    assert.deepEqual(childImplementer.linked_findings, [optional]);
+    assert.deepEqual(childImplementer.remediation_context, { policy: "explicitly_authorized", authorized_finding_ids: ["F-3"], repair_cycle: 0, user_authorization: "user approved optional follow-up" });
+    assert.deepEqual(childImplementer.acceptance_criteria, [{ criterion_id: "AC-001", description: "child criterion" }]);
+    assert.deepEqual(childImplementer.permitted_next_actions, ["workflow_submit_implementation"]);
+    const childEvents = store.audit(linked.workflow.workflow_id, "parent", linked.capabilities.parent);
+    assert.equal(childEvents[0].event_type, "WORKFLOW_CREATED");
+    assert.equal(childEvents[0].summary.linked_workflow_id, created.workflow.workflow_id);
+    assert.equal(JSON.stringify(childEvents).includes("F-3"), false);
+    const parentEvents = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent);
+    assert.equal(parentEvents[parentEvents.length - 1].event_type, "LINKED_FOLLOWUP_CREATED");
+    assert.equal(parentEvents[parentEvents.length - 1].summary.linked_workflow_id, linked.workflow.workflow_id);
+    assert.equal(JSON.stringify(parentEvents).includes("F-3"), false);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -223,17 +250,18 @@ test("rejects unsafe scopes, malformed capabilities, and duplicate finding IDs w
 test("optional follow-up is atomic and audit rows remain append-only", () => {
   const { root, git } = fixture();
   try {
-    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite"), faultAfterChildInsert: true });
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite"), faultAfterLinkedChildInsert: true });
     const created = create(store, root, git, { objective: "atomic" });
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "changed\n");
     review(store, created, root, 1, "APPROVED", [], [{ finding_id: "OPT", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
     const before = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent);
-    assert.equal(errorCategory(() => store.createOptionalFollowup({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, objective: "atomic child", approved_paths: ["note.txt"], optional_finding_ids: ["OPT"], user_authorization: "authorized" })), "ERROR_INJECTED_FAILURE");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, objective: "atomic child", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], finding_ids: ["OPT"], user_authorization: "authorized" })), "ERROR_INJECTED_FAILURE");
     const after = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent);
     assert.deepEqual(after, before);
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, 2);
     assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 1);
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count, before.length);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -300,7 +328,7 @@ test("rejects extra mutation fields without changing workflow state", () => {
     review(store, approved, root, 1, "APPROVED", [], [{ finding_id: "OPT-SHAPE", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
     const approvedBefore = store.get(approved.workflow.workflow_id, "parent", approved.capabilities.parent);
     const approvedAudit = store.audit(approved.workflow.workflow_id, "parent", approved.capabilities.parent).length;
-    assert.equal(errorCategory(() => store.createOptionalFollowup({ workflow_id: approved.workflow.workflow_id, capability: approved.capabilities.parent, expected_version: 2, objective: "child", approved_paths: ["note.txt"], optional_finding_ids: ["OPT-SHAPE"], user_authorization: "authorized", extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ workflow_id: approved.workflow.workflow_id, capability: approved.capabilities.parent, expected_version: 2, objective: "child", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], finding_ids: ["OPT-SHAPE"], user_authorization: "authorized", extra: true })), "ERROR_INVALID_SHAPE");
     assert.equal(errorCategory(() => store.authorizeCommit({ workflow_id: approved.workflow.workflow_id, capability: approved.capabilities.parent, expected_version: 2, user_authorization: "authorized", extra: true })), "ERROR_INVALID_SHAPE");
     assert.equal(store.get(approved.workflow.workflow_id, "parent", approved.capabilities.parent).version, approvedBefore.version);
     assert.equal(store.audit(approved.workflow.workflow_id, "parent", approved.capabilities.parent).length, approvedAudit);
@@ -443,8 +471,8 @@ test("v2 creation constructs every normative state key and stores a verified dig
     assert.equal("implementation_changed_paths" in rawState, false);
     assert.equal("implementation_acceptance_evidence" in rawState, false);
     assert.equal("implementation_validation_evidence" in rawState, false);
-    assert.deepEqual(rawState.authorized_optional_ids, []);
-    assert.equal(rawState.user_authorization_summary, null);
+    assert.equal("authorized_optional_ids" in rawState, false);
+    assert.equal("user_authorization_summary" in rawState, false);
     assert.equal(row.state_digest, objectDigest(rawState));
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).phase, "IMPLEMENTING");
     store.close();
@@ -989,7 +1017,7 @@ test("role views expose exact projection keys and sorted permitted actions", () 
     implementation(store, created, root, 3, "repaired", { "ROLE-1": "resolved" });
     writeFileSync(join(root, "note.txt"), "changed\n");
     review(store, created, root, 4, "APPROVED", [], [], { "ROLE-1": "resolved" });
-    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_optional_followup"]);
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_linked_followup"]);
 
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, user_authorization: "authorized" });
     assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_record_commit"]);
@@ -1776,13 +1804,13 @@ test("range workflows reject commit authorization while working-tree review-only
     const wt = create(store, root, git, { objective: "wt commit", workflow_type: "review_only" });
     const wtTarget = workingTarget(wt.workflow.base_head);
     store.submitReview({ workflow_id: wt.workflow.workflow_id, capability: wt.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(root), review_target: wtTarget, prior_finding_classifications: {} });
-    assert.deepEqual(store.get(wt.workflow.workflow_id, "parent", wt.capabilities.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_optional_followup"]);
+    assert.deepEqual(store.get(wt.workflow.workflow_id, "parent", wt.capabilities.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_linked_followup"]);
     const authorized = store.authorizeCommit({ workflow_id: wt.workflow.workflow_id, capability: wt.capabilities.parent, expected_version: 1, user_authorization: "authorized" });
     assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
 
     const range = create(store, root, git, rangeInput(root, git, base, head, { objective: "range commit" }));
     store.submitReview({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: null, review_target: range.workflow.review_target, prior_finding_classifications: {} });
-    assert.deepEqual(store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).permitted_next_actions, ["workflow_create_optional_followup"]);
+    assert.deepEqual(store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).permitted_next_actions, ["workflow_create_linked_followup"]);
     assert.equal(errorCategory(() => store.authorizeCommit({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.parent, expected_version: 1, user_authorization: "authorized" })), "ERROR_COMMIT_NOT_ALLOWED");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -2026,9 +2054,10 @@ test("repair exhaustion is terminal and cannot resume or commit", () => {
     const blocker = { finding_id: "TERM-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
     store.finalizeRepairExhausted({ workflow_id: id, capability: caps.parent, expected_version: 2 });
-    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+    for (const role of ["implementer", "reviewer", "committer"]) {
       assert.deepEqual(store.get(id, role, caps[role]).permitted_next_actions, []);
     }
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_create_linked_followup"]);
     assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 3, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
     assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 3, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
     assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 3, user_authorization: "x" })), "ERROR_INVALID_TRANSITION");
@@ -2036,6 +2065,84 @@ test("repair exhaustion is terminal and cannot resume or commit", () => {
     assert.equal(errorCategory(() => store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 3, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(root), review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} })), "ERROR_INVALID_TRANSITION");
     assert.equal(errorCategory(() => implementation(store, created, root, 3, "attempted")), "ERROR_INVALID_TRANSITION");
     assert.equal(store.get(id, "parent", caps.parent).version, 3);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("linked follow-up copies blocking findings from an exhausted source", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "exhausted source", max_repair_cycles: 0 });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    const blocker = { finding_id: "EXH-SRC", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    store.finalizeRepairExhausted({ workflow_id: id, capability: caps.parent, expected_version: 2 });
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_create_linked_followup"]);
+    const linked = store.createLinkedFollowup({ workflow_id: id, capability: caps.parent, expected_version: 3, objective: "exhausted follow-up", approved_paths: ["note.txt"], acceptance_criteria: ["child criterion"], validation_requirements: ["child validation"], finding_ids: ["EXH-SRC"], user_authorization: "user authorized follow-up" });
+    assert.equal(linked.workflow.phase, "IMPLEMENTING");
+    assert.equal(linked.workflow.repair_cycle, 0);
+    assert.equal(linked.workflow.source_workflow_id, id);
+    assert.equal(linked.workflow.parent_workflow_id, id);
+    const childState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(linked.workflow.workflow_id).state_json);
+    assert.deepEqual(childState.linked_findings, [blocker]);
+    assert.deepEqual(childState.remediation_context, { policy: "explicitly_authorized", authorized_finding_ids: ["EXH-SRC"], repair_cycle: 0, user_authorization: "user authorized follow-up" });
+    assert.deepEqual(childState.blocking_findings, []);
+    assert.deepEqual(childState.optional_findings, []);
+    assert.equal(store.get(id, "parent", caps.parent).version, 4);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and missing auth or bad phase", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "linked shape", max_repair_cycles: 0 });
+    implementation(store, created, root, 0, "implemented");
+    const blocker = { finding_id: "LINK-BLK", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    const optional = { finding_id: "LINK-OPT", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], [optional]);
+    store.finalizeRepairExhausted({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2 });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_create_linked_followup"]);
+    const base = { workflow_id: id, capability: caps.parent, expected_version: 3, objective: "linked", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], user_authorization: "authorized" };
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: ["UNKNOWN"] })), "ERROR_INVALID_FOLLOWUP");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: ["LINK-BLK", "LINK-BLK"] })), "ERROR_INVALID_FOLLOWUP");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: ["LINK-BLK", "LINK-OPT"] })), "ERROR_INVALID_FOLLOWUP");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: [] })), "ERROR_INVALID_FOLLOWUP");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: ["LINK-OPT"], user_authorization: undefined })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ ...base, finding_ids: ["LINK-OPT"], objective: "" })), "ERROR_INVALID_SHAPE");
+    assert.equal(store.get(id, "parent", caps.parent).version, 3);
+    const approving = create(store, root, git, { objective: "linked phase" });
+    implementation(store, approving, root, 0, "implemented");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ workflow_id: approving.workflow.workflow_id, capability: approving.capabilities.parent, expected_version: 1, objective: "linked", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], finding_ids: ["X"], user_authorization: "authorized" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.createLinkedFollowup({ workflow_id: approving.workflow.workflow_id, capability: approving.capabilities.parent, expected_version: 1, objective: "linked", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], finding_ids: ["X"], user_authorization: "authorized", extra: true })), "ERROR_INVALID_SHAPE");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("linked follow-up child from a commit-range review source accepts absent child paths", () => {
+  const { root, git, base, head } = rangeFixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const range = create(store, root, git, rangeInput(root, git, base, head, { objective: "range linked" }));
+    const optional = { finding_id: "RANGE-OPT", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
+    store.submitReview({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [optional], review_receipt: null, review_target: range.workflow.review_target, prior_finding_classifications: {} });
+    assert.deepEqual(store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).permitted_next_actions, ["workflow_create_linked_followup"]);
+    const linked = store.createLinkedFollowup({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.parent, expected_version: 1, objective: "range child", approved_paths: ["new/file.txt", "note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], finding_ids: ["RANGE-OPT"], user_authorization: "authorized" });
+    assert.equal(linked.workflow.phase, "IMPLEMENTING");
+    assert.equal(linked.workflow.source_workflow_id, range.workflow.workflow_id);
+    assert.deepEqual(linked.workflow.review_target.review_mode, "working_tree");
+    const childState = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(linked.workflow.workflow_id).state_json);
+    const absentEntry = childState.initial_receipt.paths.find((entry) => entry.path === "new/file.txt");
+    assert.deepEqual(absentEntry, { path: "new/file.txt", state: "absent", kind: "missing" });
+    assert.deepEqual(childState.dirty_baseline_paths, []);
+    assert.deepEqual(childState.remediation_context, { policy: "explicitly_authorized", authorized_finding_ids: ["RANGE-OPT"], repair_cycle: 0, user_authorization: "authorized" });
+    assert.equal(store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).version, 2);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
