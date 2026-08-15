@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fail } from "./errors.mjs";
 import {
   ACCEPTANCE_STATUSES,
@@ -9,6 +10,7 @@ import {
   exactKeys,
   exactPaths,
   findings,
+  objectDigest,
   optionalText,
   repairCycle,
   resolutionMap,
@@ -37,6 +39,7 @@ export const PHASES = [
   "STOPPED_IMPLEMENTATION_BLOCKED",
   "STOPPED_REPAIR_EXHAUSTED",
   "COMMIT_AUTHORIZED",
+  "COMMIT_PREPARED",
   "COMMITTED",
 ];
 
@@ -211,7 +214,7 @@ const ACTION_MATRIX = {
     STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
   },
   committer: {
-    COMMIT_AUTHORIZED: ["workflow_record_commit"],
+    COMMIT_AUTHORIZED: ["workflow_prepare_commit", "workflow_record_commit"],
   },
 };
 
@@ -774,6 +777,22 @@ export function recordCommit(state, result, input) {
   const next = clone(state);
   next.commit_result = safeObject(result, "commit_result", 20);
   next.phase = "COMMITTED";
+  return next;
+}
+
+export function prepareCommit(state, input, evidence) {
+  exactKeys(input, ["workflow_id", "capability", "expected_version"], "commit preparation");
+  ensurePhase(state, "COMMIT_AUTHORIZED");
+  const next = clone(state);
+  next.commit_preparation = {
+    attempt_id: randomUUID(),
+    prepared_head: evidence.prepared_head,
+    prepared_tree: evidence.prepared_tree,
+    expected_paths: evidence.expected_paths,
+    review_receipt_digest: objectDigest(state.review_receipt),
+    prepared_at: new Date().toISOString(),
+  };
+  next.phase = "COMMIT_PREPARED";
   return next;
 }
 

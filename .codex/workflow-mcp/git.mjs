@@ -239,3 +239,88 @@ export function verifyCommit(root, state, commitHash) {
   }
   return { commit_hash: commitHash, parent: state.base_head, changed_paths: [...changed].sort() };
 }
+
+export function stagedPaths(root) {
+  const output = git(root, ["diff", "--cached", "--name-only", "-z"]);
+  return output.split("\0").filter((path) => path.length > 0).sort();
+}
+
+export function stagedEntries(root) {
+  const output = git(root, ["ls-files", "--stage", "-z"]);
+  const entries = new Map();
+  for (const record of output.split("\0")) {
+    if (!record) continue;
+    const separator = record.indexOf("\t");
+    if (separator < 0) continue;
+    const fields = record.slice(0, separator).split(" ");
+    if (fields.length !== 3 || fields[2] !== "0") continue;
+    entries.set(record.slice(separator + 1), { mode: normalizeMode(fields[0]), object: fields[1] });
+  }
+  return entries;
+}
+
+export function approvedResidue(root, approvedPaths, staged) {
+  const approved = new Set(approvedPaths);
+  const stagedSet = new Set(staged);
+  const output = git(root, ["status", "--porcelain", "-z"]);
+  const residue = new Set();
+  for (const record of output.split("\0")) {
+    if (record.length < 3) continue;
+    const path = record.slice(3);
+    if (!approved.has(path)) continue;
+    const indexStatus = record[0];
+    const worktreeStatus = record[1];
+    if (indexStatus === "?" && worktreeStatus === "?") {
+      residue.add(path);
+    } else if (!stagedSet.has(path)) {
+      residue.add(path);
+    }
+  }
+  return [...residue].sort();
+}
+
+export function writeTree(root) {
+  const tree = git(root, ["write-tree"]).trim();
+  if (!/^[0-9a-f]{40}$/u.test(tree)) fail("ERROR_GIT", "tree write failed");
+  return tree;
+}
+
+export function prepareCommitReceipt(root, state) {
+  if (state.review_target?.review_mode !== "working_tree") {
+    fail("ERROR_COMMIT_NOT_ALLOWED", "commit preparation requires a working-tree review");
+  }
+  if (!state.commit_authorization) {
+    fail("ERROR_STALE_RECEIPT", "commit is not authorized");
+  }
+  const fresh = verifyReviewReceipt(root, state.review_receipt, state.approved_paths, state.base_head);
+  const expectedPaths = state.review_receipt.paths
+    .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
+    .map((entry) => entry.path)
+    .sort();
+  const staged = stagedPaths(root);
+  if (staged.length === 0) fail("ERROR_STAGED_SCOPE", "no paths are staged");
+  if (staged.length !== expectedPaths.length || staged.some((path, index) => path !== expectedPaths[index])) {
+    fail("ERROR_STAGED_SCOPE", "staged scope does not match the review receipt");
+  }
+  if (approvedResidue(root, state.approved_paths, staged).length > 0) {
+    fail("ERROR_STAGED_SCOPE", "approved paths have unstaged or untracked residue");
+  }
+  const entries = stagedEntries(root);
+  for (const entry of state.review_receipt.paths) {
+    if (entry.state === "deleted") {
+      if (entries.has(entry.path)) fail("ERROR_STAGED_CONTENT", "deleted path is still staged");
+      continue;
+    }
+    if (entry.state !== "added" && entry.state !== "modified") continue;
+    const stagedEntry = entries.get(entry.path);
+    if (!stagedEntry) fail("ERROR_STAGED_CONTENT", "changed path is not staged");
+    if (stagedEntry.mode !== entry.mode || blobDigest(root, stagedEntry.object) !== entry.digest) {
+      fail("ERROR_STAGED_CONTENT", "staged content does not match the review receipt");
+    }
+  }
+  return {
+    prepared_head: fresh.base_head,
+    prepared_tree: writeTree(root),
+    expected_paths: expectedPaths,
+  };
+}

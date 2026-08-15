@@ -445,6 +445,19 @@ export const tools = [
     },
   },
   {
+    name: "workflow_prepare_commit",
+    description:
+      "Verify the fully staged index against the authorized review receipt and prepare a commit binding the exact HEAD, tree, paths, and receipt.",
+    inputSchema: schema(common.properties, common.required),
+    annotations: {
+      title: "Prepare commit",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_record_commit",
     description: "Record a committer Git result after verifying current HEAD and reviewed content.",
     inputSchema: schema(
@@ -516,6 +529,9 @@ export function createServer(store = openStore()) {
           break;
         case "workflow_authorize_commit":
           result = store.authorizeCommit(args);
+          break;
+        case "workflow_prepare_commit":
+          result = store.prepareCommit(args);
           break;
         case "workflow_record_commit":
           result = store.recordCommit(args);

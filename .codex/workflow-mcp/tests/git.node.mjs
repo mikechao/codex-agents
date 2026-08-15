@@ -1,14 +1,23 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { WorkflowError } from "../errors.mjs";
-import { reviewRange, verifyRange, verifyRevision } from "../git.mjs";
+import {
+  approvedResidue,
+  prepareCommitReceipt,
+  reviewRange,
+  stagedEntries,
+  stagedPaths,
+  verifyRange,
+  verifyRevision,
+  writeTree,
+} from "../git.mjs";
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "workflow-git-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workflow-git-")));
   const git = (...args) =>
     execFileSync("git", ["-C", root, ...args], {
       encoding: "utf8",
@@ -233,6 +242,149 @@ test("reviewRange rejects directory and submodule paths", () => {
     } finally {
       rmSync(subrepo, { recursive: true, force: true });
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stagedPaths and stagedEntries reflect the full index and staged content", () => {
+  const { root, git, write } = fixture();
+  try {
+    write("mod.txt", "v1\n");
+    write("del.txt", "gone\n");
+    write("mode.txt", "run\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    write("mod.txt", "v2\n");
+    write("add.txt", "new\n");
+    git("rm", "-q", "del.txt");
+    git("add", "mod.txt");
+    git("add", "add.txt");
+    assert.deepEqual(stagedPaths(root), ["add.txt", "del.txt", "mod.txt"]);
+    const entries = stagedEntries(root);
+    assert.equal(entries.has("add.txt"), true);
+    assert.equal(entries.has("mod.txt"), true);
+    assert.equal(entries.has("del.txt"), false);
+    assert.equal(entries.get("mod.txt").mode, "100644");
+    assert.match(entries.get("mod.txt").object, /^[0-9a-f]{40}$/u);
+    git("update-index", "--chmod=+x", "mod.txt");
+    assert.equal(stagedEntries(root).get("mod.txt").mode, "100755");
+    git("commit", "-qm", "second");
+    assert.deepEqual(stagedPaths(root), []);
+    assert.deepEqual([...stagedEntries(root).keys()].sort(), ["add.txt", "mod.txt", "mode.txt"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("approvedResidue flags untracked and unstaged approved paths only", () => {
+  const { root, git, write } = fixture();
+  try {
+    write("a.txt", "a1\n");
+    write("b.txt", "b1\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    write("a.txt", "a2\n");
+    write("b.txt", "b2\n");
+    write("c.txt", "new\n");
+    git("add", "a.txt");
+    assert.deepEqual(
+      approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)),
+      ["b.txt", "c.txt"],
+    );
+    git("add", "b.txt");
+    git("add", "c.txt");
+    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)), []);
+    write("stray.txt", "x\n");
+    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("writeTree returns the current index tree without altering Git state", () => {
+  const { root, git, write } = fixture();
+  try {
+    write("a.txt", "a\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    write("a.txt", "b\n");
+    git("add", "a.txt");
+    const beforeHead = git("rev-parse", "HEAD");
+    const beforeStatus = git("status", "--porcelain");
+    const tree = writeTree(root);
+    assert.match(tree, /^[0-9a-f]{40}$/u);
+    assert.equal(git("cat-file", "-t", tree), "tree");
+    assert.equal(git("rev-parse", "HEAD"), beforeHead);
+    assert.equal(git("status", "--porcelain"), beforeStatus);
+    assert.equal(git("diff", "--cached", "--name-only"), "a.txt");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged content", () => {
+  const { root, git, write } = fixture();
+  try {
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(
+      join(process.cwd(), ".codex", "agents", "change-receipt.mjs"),
+      join(root, ".codex", "agents", "change-receipt.mjs"),
+    );
+    write("note.txt", "v1\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    const receiptFor = () =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"],
+          { cwd: root, encoding: "utf8" },
+        ),
+      );
+    write("note.txt", "v2\n");
+    const receipt = receiptFor();
+    const state = {
+      review_target: { review_mode: "working_tree" },
+      commit_authorization: { user_authorization: "authorized" },
+      base_head: base,
+      approved_paths: ["note.txt"],
+      review_receipt: receipt,
+    };
+    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_SCOPE");
+    git("add", "note.txt");
+    const prepared = prepareCommitReceipt(root, state);
+    assert.equal(prepared.prepared_head, base);
+    assert.match(prepared.prepared_tree, /^[0-9a-f]{40}$/u);
+    assert.deepEqual(prepared.expected_paths, ["note.txt"]);
+
+    const blob = execFileSync("git", ["-C", root, "hash-object", "-w", "--stdin"], {
+      input: "v3\n",
+      encoding: "utf8",
+    }).trim();
+    git("update-index", "--cacheinfo", "100644", blob, "note.txt");
+    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_CONTENT");
+
+    git("add", "note.txt");
+    git("update-index", "--chmod=+x", "note.txt");
+    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_CONTENT");
+
+    git("update-index", "--chmod=-x", "note.txt");
+    write("note.txt", "v3\n");
+    git("add", "note.txt");
+    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STALE_RECEIPT");
+
+    assert.equal(
+      errorCategory(() =>
+        prepareCommitReceipt(root, { ...state, review_target: { review_mode: "commit_range" } }),
+      ),
+      "ERROR_COMMIT_NOT_ALLOWED",
+    );
+    assert.equal(
+      errorCategory(() => prepareCommitReceipt(root, { ...state, commit_authorization: null })),
+      "ERROR_STALE_RECEIPT",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

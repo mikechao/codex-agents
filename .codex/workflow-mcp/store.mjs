@@ -7,6 +7,7 @@ import { fail } from "./errors.mjs";
 import {
   createReceipt,
   currentHead,
+  prepareCommitReceipt,
   repositoryRoot,
   reviewRange,
   verifyCommit,
@@ -23,6 +24,7 @@ import {
   linkedFollowupChildState,
   linkedFollowupInput,
   migrateV1State,
+  prepareCommit,
   rangeDirtyBaselinePaths,
   recordCommit,
   resumeImplementation,
@@ -523,6 +525,21 @@ export class WorkflowStore {
         return recordCommit(state, evidence, input);
       },
       "committed",
+    );
+  }
+
+  prepareCommit(input) {
+    mutationInput(input);
+    return this.#mutate(
+      input.workflow_id,
+      "committer",
+      input.capability,
+      input.expected_version,
+      "COMMIT_PREPARED",
+      (state) => {
+        const evidence = prepareCommitReceipt(this.root, state);
+        return prepareCommit(state, input, evidence);
+      },
     );
   }
 

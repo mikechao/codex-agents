@@ -489,7 +489,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
 
 ### Two-phase external commit
 
-- [ ] **MCP-7.1 — Verify staged state and prepare a commit**
+- [x] **MCP-7.1 — Verify staged state and prepare a commit**
   - **Prerequisites/commit:** MCP-6.1; `feat(workflow): prepare receipt-gated commits`.
   - **Owned:** `.codex/workflow-mcp/git.mjs`, `.codex/workflow-mcp/server.mjs`,
     `.codex/workflow-mcp/store.mjs`, `.codex/workflow-mcp/transitions.mjs`,
@@ -1532,6 +1532,113 @@ Validation:
 - `pnpm test`: pass, 106/106 (19 agents + 87 workflow/protocol/migration).
 - `git diff --check`: pass.
 - `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-7.1 — Verify staged state and prepare a commit
+
+DONE
+
+Task: MCP-7.1
+Outcome: `workflow_prepare_commit` now verifies the fully staged index against the authorized
+working-tree review receipt and binds an exact preparation (`{attempt_id, prepared_head,
+prepared_tree, expected_paths, review_receipt_digest, prepared_at}`) using `git write-tree`,
+transitioning COMMIT_AUTHORIZED to the new COMMIT_PREPARED phase (temporarily terminal; results are
+not submitted until MCP-7.2). New `git.mjs` helpers expose global staged paths, the full staged
+index entries, approved-path cleanliness, and write-tree. The server verifies HEAD/base, a fresh
+receipt, nonempty staging, global staged scope equality with the receipt changed paths, no approved
+unstaged/untracked residue, and staged modes/digests/existence against the receipt, failing with
+`ERROR_STALE_RECEIPT`, `ERROR_STAGED_SCOPE`, or `ERROR_STAGED_CONTENT` without mutation. Range
+workflows are denied with `ERROR_COMMIT_NOT_ALLOWED`, and prepare runs no hooks and leaves Git state
+untouched.
+
+Files changed:
+- `.codex/workflow-mcp/git.mjs`
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/git.node.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- New `git.mjs` helpers: `stagedPaths` (global `git diff --cached --name-only -z` set),
+  `stagedEntries` (full index via `git ls-files --stage -z`, mapped to normalized mode + object),
+  `approvedResidue` (`git status --porcelain -z`, flagging untracked approved paths and approved
+  paths with changes outside the staged set), `writeTree` (`git write-tree`), and the read-only
+  `prepareCommitReceipt(root, state)` that performs every prepare check and returns
+  `{prepared_head, prepared_tree, expected_paths}`. All git invocations stay on stderr-suppressed
+  read-only commands plus the documented `write-tree`, so no hook runs and no index/worktree/HEAD
+  change occurs.
+- Normative `workflow_prepare_commit` tool added (committer, schema = common only:
+  `workflow_id`/`capability`/`expected_version`), dispatched in the server, and implemented in the
+  store through the transactional `#mutate` (`COMMIT_PREPARED`, outcome null). The store runs
+  `prepareCommitReceipt` inside the immediate transaction, so every failure rolls back with no
+  version or audit change.
+- `COMMIT_PREPARED` added to `PHASES`; `permittedNextActions` now lists
+  `["workflow_prepare_commit", "workflow_record_commit"]` for the committer at COMMIT_AUTHORIZED and
+  `[]` at COMMIT_PREPARED (temporarily terminal, as required; `workflow_record_commit` stays until
+  MCP-7.3 restricts it to migrated legacy rows).
+- `prepareCommit` transition persists the exact preparation object: `attempt_id` (UUID),
+  `prepared_head` (current HEAD), `prepared_tree` (`write-tree`), `expected_paths` (sorted receipt
+  added/modified/deleted paths), `review_receipt_digest` (`objectDigest` of the review receipt), and
+  `prepared_at` (ISO), then sets phase COMMIT_PREPARED.
+- Enforced eligible working-tree authorization: `prepareCommitReceipt` rejects non-working-tree
+  targets with `ERROR_COMMIT_NOT_ALLOWED` and a missing `commit_authorization` with
+  `ERROR_STALE_RECEIPT`, and `verifyReviewReceipt` re-checks HEAD/base and a fresh absent-aware-safe
+  receipt (`ERROR_STALE_RECEIPT` on changed HEAD or diverged worktree). Empty staging and
+  staged-set/residue mismatches fail `ERROR_STAGED_SCOPE`; staged mode/digest/existence mismatches
+  fail `ERROR_STAGED_CONTENT`.
+- No new dependencies; server remains silent on stdout; no non-owned files touched.
+
+Tests added or updated:
+- New `git.node.mjs` "stagedPaths and stagedEntries reflect the full index and staged content":
+  add/modify/delete staging, mode change via `--chmod=+x`, empty staged set after a clean commit.
+- New "approvedResidue flags untracked and unstaged approved paths only": unstaged/untracked
+  approved paths flagged, unrelated untracked files ignored, clean state empty.
+- New "writeTree returns the current index tree without altering Git state": HEAD, status, and
+  staged set byte-identical after `write-tree`.
+- New "prepareCommitReceipt verifies receipt, staged scope, residue, and staged content": success,
+  empty staging (`ERROR_STAGED_SCOPE`), index content tamper (`ERROR_STAGED_CONTENT`), index mode
+  tamper (`ERROR_STAGED_CONTENT`), stale worktree (`ERROR_STALE_RECEIPT`), range
+  (`ERROR_COMMIT_NOT_ALLOWED`), missing authorization (`ERROR_STALE_RECEIPT`).
+- Updated `workflow.node.mjs` committer action assertion at COMMIT_AUTHORIZED to
+  `["workflow_prepare_commit", "workflow_record_commit"]`.
+- New "commit preparation succeeds across modify, add, delete, and mode and persists exact fields":
+  staged modify/add/delete/mode-change all pass; exact `commit_preparation` fields; committer action
+  list empties at COMMIT_PREPARED; HEAD/tree/staged set untouched; exact `COMMIT_PREPARED` audit
+  envelope (phases, null outcome/link); restart persists preparation.
+- New "commit preparation rejects empty, partial, extra, and untracked staging without mutation":
+  empty, partial, extra-unrelated, and untracked-approved staging all return `ERROR_STAGED_SCOPE`
+  with version and audit count unchanged.
+- New "commit preparation rejects stale receipts, content and mode mismatches, and changed HEAD
+  without mutation": diverged worktree `ERROR_STALE_RECEIPT`; index blob tamper and index mode tamper
+  `ERROR_STAGED_CONTENT`; post-authorization commit `ERROR_STALE_RECEIPT`; all roll back.
+- New "commit preparation rejects range workflows without mutation": range approved workflow returns
+  `ERROR_COMMIT_NOT_ALLOWED` with version/audit unchanged.
+- New "commit preparation executes no hooks and leaves Git state untouched": a `pre-commit` hook that
+  would create a marker file never runs; HEAD, log, and porcelain status byte-identical.
+- New `protocol.node.mjs` "exact prepare commit tool schema matches the normative contract": exact
+  common-only properties/required, `expected_version` minimum 0, non-destructive annotation.
+- New "commit preparation over STDIO verifies the staged index and binds the authorized receipt":
+  real transport create/implement/review/authorize/stage/prepare, exact preparation fields, HEAD and
+  tree untouched, empty committer actions at COMMIT_PREPARED, and cross-role
+  `ERROR_CAPABILITY_DENIED` on prepare.
+
+Validation:
+- `node --test --test-name-pattern='stage|prepare|receipt|tree|commit authorization' .codex/workflow-mcp/tests/git.node.mjs .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 23/23.
+- `pnpm test:workflow-mcp`: pass, 98/98.
+- `pnpm test`: pass, 117/117 (19 agents + 98 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the seven owned files plus the requested `mcp-plan.md` update.
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).
