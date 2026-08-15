@@ -20,6 +20,8 @@ const FINDING_KEYS = [
   "missing_or_inadequate_test",
 ];
 export const RESOLUTION_STATUSES = new Set(["resolved", "still_present", "superseded"]);
+export const ACCEPTANCE_STATUSES = new Set(["satisfied", "not_satisfied"]);
+export const VALIDATION_STATUSES = new Set(["passed", "failed", "not_run"]);
 
 export const ROLES = ["parent", "implementer", "reviewer", "committer"];
 
@@ -38,6 +40,29 @@ export function contractList(value, name, idPrefix, idField) {
     [idField]: `${idPrefix}-${String(index + 1).padStart(3, "0")}`,
     description: boundedString(description, `${name} description`),
   }));
+}
+
+export function evidenceResults(value, name, contracts, idField, statuses) {
+  if (!Array.isArray(value) || value.length !== contracts.length) {
+    fail("ERROR_INVALID_IMPLEMENTATION", `${name} results are invalid`);
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      fail("ERROR_INVALID_IMPLEMENTATION", `${name} result ${index} is invalid`);
+    }
+    exactKeys(item, [idField, "status", "evidence"], `${name} result`);
+    if (item[idField] !== contracts[index][idField]) {
+      fail("ERROR_INVALID_IMPLEMENTATION", `${name} ID is not in contract order`);
+    }
+    if (!statuses.has(item.status)) {
+      fail("ERROR_INVALID_IMPLEMENTATION", `${name} status is invalid`);
+    }
+    return {
+      [idField]: item[idField],
+      status: item.status,
+      evidence: boundedString(item.evidence, `${name} evidence`, MAX_DETAIL),
+    };
+  });
 }
 
 function optionalString(value, name, max = MAX_DETAIL) {

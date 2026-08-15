@@ -1,7 +1,11 @@
 import { fail } from "./errors.mjs";
 import {
+  ACCEPTANCE_STATUSES,
+  VALIDATION_STATUSES,
   boundedString,
+  canonicalJson,
   contractList,
+  evidenceResults,
   exactKeys,
   exactPaths,
   findings,
@@ -267,9 +271,6 @@ function baseState({ objective, approvedPaths, baseHead, maxRepairCycles, parent
     commit_authorization: null,
     commit_preparation: null,
     commit_result: null,
-    implementation_changed_paths: [],
-    implementation_acceptance_evidence: [],
-    implementation_validation_evidence: [],
     authorized_optional_ids: [],
     user_authorization_summary: null,
   };
@@ -387,9 +388,12 @@ export function createState(input, repositoryRoot, currentHead, options = {}) {
   return state;
 }
 
-export function submitImplementation(state, input, repositoryRoot) {
+export function submitImplementation(state, input, repositoryRoot, freshReceipt) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_SHAPE", "implementation input is invalid");
+  }
+  if (state.legacy_v1 === true) {
+    fail("ERROR_LEGACY_WORKFLOW", "migrated workflows cannot submit implementation");
   }
   exactKeys(
     input,
@@ -399,9 +403,9 @@ export function submitImplementation(state, input, repositoryRoot) {
       "expected_version",
       "status",
       "summary",
-      "changed_paths",
-      "acceptance_evidence",
-      "validation_evidence",
+      "agent_touched_paths",
+      "acceptance_results",
+      "validation_results",
       "implementation_receipt",
       "known_failures",
       "finding_resolution_map",
@@ -416,35 +420,53 @@ export function submitImplementation(state, input, repositoryRoot) {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
     fail("ERROR_INVALID_IMPLEMENTATION", "implementation receipt is required");
   }
-  const changedPaths = exactPaths(input.changed_paths, repositoryRoot, true);
-  const acceptanceEvidence = stringList(input.acceptance_evidence, "acceptance_evidence");
-  const validationEvidence = stringList(input.validation_evidence, "validation_evidence");
+  const touchedPaths = exactPaths(input.agent_touched_paths, repositoryRoot, true);
+  const approved = new Set(state.approved_paths);
+  if (touchedPaths.some((path) => !approved.has(path))) {
+    fail("ERROR_INVALID_IMPLEMENTATION", "touched path is not in approved scope");
+  }
+  const acceptanceResults = evidenceResults(
+    input.acceptance_results,
+    "acceptance",
+    state.acceptance_criteria,
+    "criterion_id",
+    ACCEPTANCE_STATUSES,
+  );
+  const validationResults = evidenceResults(
+    input.validation_results,
+    "validation",
+    state.validation_requirements,
+    "validation_id",
+    VALIDATION_STATUSES,
+  );
   const knownFailures = stringList(input.known_failures, "known_failures");
   const priorIds = state.blocking_findings.map((finding) => finding.finding_id);
-  const resolution = resolutionMap(
-    input.finding_resolution_map,
-    priorIds,
-    "finding_resolution_map",
-  );
+  const resolution = resolutionMap(input.finding_resolution_map, priorIds, "finding_resolution_map");
   if (state.phase === "IMPLEMENTING" && Object.keys(resolution).length > 0) {
     fail("ERROR_INVALID_FINDING", "initial implementation has prior resolutions");
-  }
-  if (
-    input.status === "DONE" &&
-    (acceptanceEvidence.length === 0 || validationEvidence.length === 0)
-  ) {
-    fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires evidence");
   }
   const next = clone(state);
   next.implementation_summary = boundedString(input.summary, "summary", 4000);
   next.implementation_status = input.status;
-  next.implementation_changed_paths = changedPaths;
-  next.implementation_acceptance_evidence = acceptanceEvidence;
-  next.implementation_validation_evidence = validationEvidence;
-  next.implementation_receipt = JSON.parse(JSON.stringify(receipt));
+  next.agent_touched_paths = touchedPaths;
+  next.acceptance_results = acceptanceResults;
+  next.validation_results = validationResults;
+  next.implementation_receipt = JSON.parse(JSON.stringify(freshReceipt ?? receipt));
   next.implementation_known_failures = knownFailures;
   next.finding_resolution_map = resolution;
-  if (input.status === "DONE") next.phase = "REVIEWING";
+  next.scope_changed_paths = scopeChangedPaths(state.initial_receipt, next.implementation_receipt);
+  if (input.status === "DONE") {
+    if (acceptanceResults.some((item) => item.status !== "satisfied")) {
+      fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires satisfied criteria");
+    }
+    if (validationResults.some((item) => item.status !== "passed")) {
+      fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires passed validations");
+    }
+    if (knownFailures.length > 0) {
+      fail("ERROR_INVALID_IMPLEMENTATION", "done implementation has known failures");
+    }
+    next.phase = "REVIEWING";
+  }
   if (input.status === "DONE_WITH_CONCERNS") next.phase = "STOPPED_CONCERNS";
   if (input.status === "NEEDS_CONTEXT") next.phase = "STOPPED_NEEDS_CONTEXT";
   if (input.status === "BLOCKED") next.phase = "STOPPED_BLOCKED";
@@ -659,6 +681,29 @@ export function dirtyBaselinePaths(receipt) {
     .filter((item) => ["added", "modified", "deleted"].includes(item.state))
     .map((item) => item.path)
     .sort();
+}
+
+export function scopeChangedPaths(initialReceipt, finalReceipt) {
+  if (
+    !initialReceipt ||
+    !Array.isArray(initialReceipt.paths) ||
+    !finalReceipt ||
+    !Array.isArray(finalReceipt.paths)
+  ) {
+    fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+  }
+  const initialByPath = new Map(initialReceipt.paths.map((entry) => [entry.path, entry]));
+  const finalByPath = new Map(finalReceipt.paths.map((entry) => [entry.path, entry]));
+  const changed = [];
+  for (const entry of initialReceipt.paths) {
+    const initialEntry = initialByPath.get(entry.path);
+    const finalEntry = finalByPath.get(entry.path);
+    if (!initialEntry || !finalEntry) fail("ERROR_STATE_CORRUPT", "receipt scope is invalid");
+    const { state: _initialState, ...initialRest } = initialEntry;
+    const { state: _finalState, ...finalRest } = finalEntry;
+    if (canonicalJson(initialRest) !== canonicalJson(finalRest)) changed.push(entry.path);
+  }
+  return changed.sort();
 }
 
 function corrupt() {

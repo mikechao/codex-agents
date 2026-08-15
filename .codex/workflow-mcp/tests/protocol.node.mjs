@@ -44,7 +44,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
     const base = created.workflow;
     const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
-    const implemented = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 0, status: "DONE", summary: "implemented", changed_paths: [], acceptance_evidence: ["accepted"], validation_evidence: ["validated"], implementation_receipt: initialReceipt, known_failures: [], finding_resolution_map: {} });
+    const implemented = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 0, status: "DONE", summary: "implemented", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: initialReceipt, known_failures: [], finding_resolution_map: {} });
     assert.equal(implemented.phase, "REVIEWING");
     writeFileSync(join(root, "note.txt"), "after\n");
     const target = { review_mode: "working_tree", base_revision: base.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true };
@@ -54,7 +54,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     const repairing = await call("workflow_authorize_repair", { workflow_id: base.workflow_id, capability: created.capabilities.parent, expected_version: 2, finding_ids: ["PROTO-1"] });
     assert.equal(repairing.phase, "REPAIRING");
     const receipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
-    const repaired = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 3, status: "DONE", summary: "repaired", changed_paths: ["note.txt"], acceptance_evidence: ["repaired"], validation_evidence: ["validated"], implementation_receipt: receipt, known_failures: [], finding_resolution_map: { "PROTO-1": "resolved" } });
+    const repaired = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 3, status: "DONE", summary: "repaired", agent_touched_paths: ["note.txt"], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "repaired" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt, known_failures: [], finding_resolution_map: { "PROTO-1": "resolved" } });
     assert.equal(repaired.phase, "REVIEWING");
     const approved = await call("workflow_submit_review", { workflow_id: base.workflow_id, capability: created.capabilities.reviewer, expected_version: 4, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt, review_target: target, prior_finding_classifications: { "PROTO-1": "resolved" } });
     assert.equal(approved.phase, "STOPPED_APPROVED");
@@ -204,4 +204,58 @@ test("exact create tool schema matches the normative contract", () => {
   assert.equal(range.properties.include_staged.const, false);
   assert.equal(range.properties.include_unstaged.const, false);
   assert.equal(range.properties.include_untracked.const, false);
+});
+
+test("exact implementation tool schema matches the normative contract", () => {
+  const submitTool = tools.find((tool) => tool.name === "workflow_submit_implementation");
+  assert.ok(submitTool);
+  const { inputSchema } = submitTool;
+  assert.equal(inputSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(inputSchema.properties).sort(),
+    [
+      "acceptance_results",
+      "agent_touched_paths",
+      "capability",
+      "expected_version",
+      "finding_resolution_map",
+      "implementation_receipt",
+      "known_failures",
+      "status",
+      "summary",
+      "validation_results",
+      "workflow_id",
+    ],
+  );
+  assert.deepEqual(inputSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "status",
+    "summary",
+    "agent_touched_paths",
+    "acceptance_results",
+    "validation_results",
+    "implementation_receipt",
+    "known_failures",
+    "finding_resolution_map",
+  ]);
+  assert.deepEqual(inputSchema.properties.status.enum, [
+    "DONE",
+    "DONE_WITH_CONCERNS",
+    "NEEDS_CONTEXT",
+    "BLOCKED",
+  ]);
+  assert.deepEqual(inputSchema.properties.agent_touched_paths.maxItems, 200);
+  const acceptanceItem = inputSchema.properties.acceptance_results.items;
+  assert.equal(acceptanceItem.additionalProperties, false);
+  assert.deepEqual(acceptanceItem.properties.status.enum, ["satisfied", "not_satisfied"]);
+  assert.equal(acceptanceItem.properties.evidence.maxLength, 2000);
+  const validationItem = inputSchema.properties.validation_results.items;
+  assert.equal(validationItem.additionalProperties, false);
+  assert.deepEqual(validationItem.properties.status.enum, ["passed", "failed", "not_run"]);
+  assert.equal(validationItem.properties.evidence.maxLength, 2000);
+  assert.equal("changed_paths" in inputSchema.properties, false);
+  assert.equal("acceptance_evidence" in inputSchema.properties, false);
+  assert.equal("validation_evidence" in inputSchema.properties, false);
 });

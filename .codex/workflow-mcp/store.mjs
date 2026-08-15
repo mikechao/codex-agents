@@ -14,7 +14,6 @@ import {
 import {
   authorizeCommit,
   authorizeRepair,
-  changedReceiptPaths,
   createState,
   dirtyBaselinePaths,
   finalizeBlocked,
@@ -343,17 +342,14 @@ export class WorkflowStore {
       input.expected_version,
       "IMPLEMENTATION_SUBMITTED",
       (state) => {
-        const currentReceipt = verifyReviewReceipt(
-          this.root,
-          input.implementation_receipt,
-          state.approved_paths,
-          state.base_head,
-        );
-        const changedPaths = changedReceiptPaths(currentReceipt);
-        if (JSON.stringify(changedPaths) !== JSON.stringify(input.changed_paths)) {
-          fail("ERROR_INVALID_IMPLEMENTATION", "changed paths do not match receipt");
+        const currentReceipt = createReceipt(this.root, state.approved_paths, true);
+        if (currentReceipt.base_head !== state.base_head) {
+          fail("ERROR_STALE_RECEIPT", "implementation receipt base is stale");
         }
-        return submitImplementation(state, input, this.root);
+        if (canonicalJson(currentReceipt) !== canonicalJson(input.implementation_receipt)) {
+          fail("ERROR_STALE_RECEIPT", "implementation receipt is stale");
+        }
+        return submitImplementation(state, input, this.root, currentReceipt);
       },
     );
   }

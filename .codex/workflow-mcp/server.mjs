@@ -196,7 +196,7 @@ export const tools = [
   {
     name: "workflow_submit_implementation",
     description:
-      "Submit implementation evidence and advance IMPLEMENTING or REPAIRING to REVIEWING.",
+      "Submit complete ID-addressed implementation evidence; DONE advances IMPLEMENTING or REPAIRING to REVIEWING.",
     inputSchema: schema(
       {
         ...common.properties,
@@ -205,16 +205,37 @@ export const tools = [
           enum: ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"],
         },
         summary: { type: "string", minLength: 1, maxLength: 4000 },
-        changed_paths: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 200 },
-        acceptance_evidence: {
+        agent_touched_paths: {
           type: "array",
-          items: { type: "string", minLength: 1, maxLength: 2000 },
-          maxItems: 50,
+          items: { type: "string" },
+          minItems: 0,
+          maxItems: 200,
         },
-        validation_evidence: {
+        acceptance_results: {
           type: "array",
-          items: { type: "string", minLength: 1, maxLength: 2000 },
-          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              criterion_id: { type: "string" },
+              status: { type: "string", enum: ["satisfied", "not_satisfied"] },
+              evidence: { type: "string", minLength: 1, maxLength: 2000 },
+            },
+            required: ["criterion_id", "status", "evidence"],
+            additionalProperties: false,
+          },
+        },
+        validation_results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              validation_id: { type: "string" },
+              status: { type: "string", enum: ["passed", "failed", "not_run"] },
+              evidence: { type: "string", minLength: 1, maxLength: 2000 },
+            },
+            required: ["validation_id", "status", "evidence"],
+            additionalProperties: false,
+          },
         },
         implementation_receipt: { type: "object" },
         known_failures: {
@@ -228,9 +249,9 @@ export const tools = [
         ...common.required,
         "status",
         "summary",
-        "changed_paths",
-        "acceptance_evidence",
-        "validation_evidence",
+        "agent_touched_paths",
+        "acceptance_results",
+        "validation_results",
         "implementation_receipt",
         "known_failures",
         "finding_resolution_map",

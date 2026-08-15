@@ -394,7 +394,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='role view|projection|permitted|capabil' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** each role receives all and only its authoritative dispatch data.
 
-- [ ] **MCP-4.1 — Enforce ID-addressed implementation evidence**
+- [x] **MCP-4.1 — Enforce ID-addressed implementation evidence**
   - **Prerequisites/commit:** MCP-3.2; `feat(workflow): enforce complete implementation evidence`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/validation.mjs`,
@@ -978,6 +978,106 @@ Plan deviations:
   Per parent decision, migration assertions were adapted to assert the parent projection and to
   verify full-state fields/digests against the persisted row. No protocol or architecture decision
   was invented; all behavior follows the plan's role matrix.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-4.1 — Enforce ID-addressed implementation evidence
+
+DONE
+
+Task: MCP-4.1
+Outcome: `workflow_submit_implementation` now accepts only the normative ID-addressed evidence schema
+(`agent_touched_paths`, `acceptance_results`, `validation_results` instead of the v1
+`changed_paths`/`acceptance_evidence`/`validation_evidence`), the server recomputes a fresh
+absent-aware receipt over the exact approved scope and derives `scope_changed_paths` from baseline
+comparison, and only complete evidence (every criterion satisfied, every validation passed, no known
+failures) advances to REVIEWING. Migrated rows with empty contracts cannot submit and return
+`ERROR_LEGACY_WORKFLOW`; the submission compatibility aliases are removed from every
+`legacy_v1:false` state.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/validation.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- v1 submission fields replaced with normative evidence: the tool schema and the transition now
+  require exactly `status`, `summary`, `agent_touched_paths`, `acceptance_results`,
+  `validation_results`, `implementation_receipt`, `known_failures`, and `finding_resolution_map`;
+  `changed_paths`/`acceptance_evidence`/`validation_evidence` are gone from schema and transition.
+- Exact ID/status validation: new `evidenceResults` requires every contract ID exactly once in
+  contract order with a status in `satisfied|not_satisfied` (acceptance) or `passed|failed|not_run`
+  (validation); missing, duplicate, unknown, reordered, or invalid-status results are rejected with
+  `ERROR_INVALID_IMPLEMENTATION`.
+- Fresh absent-aware receipt: `store.submitImplementation` recomputes the receipt with
+  `createReceipt(root, approved_paths, true)` and rejects a submitted receipt that does not
+  canonically equal it, or whose `base_head` differs from the workflow base, with
+  `ERROR_STALE_RECEIPT` before any mutation; the server-computed receipt is what gets persisted.
+- Baseline comparison: `scopeChangedPaths` compares final to initial receipt entries after removing
+  only `state`, so existence/kind/mode/digest differences mark a path changed. An unchanged dirty
+  baseline path is not attributed, while absent-to-added is.
+- Separate touched paths: `agent_touched_paths` is a sorted self-report validated as a subset of the
+  approved scope; derived `scope_changed_paths` is computed independently from the receipts, so the
+  self-report cannot control it.
+- DONE gates: `DONE` requires every acceptance result `satisfied`, every validation result `passed`,
+  and zero known failures, then enters REVIEWING; other statuses keep their existing stops
+  (`STOPPED_CONCERNS`, `STOPPED_NEEDS_CONTEXT`, `STOPPED_BLOCKED`) without entering review.
+- Legacy gate: `submitImplementation` fails with `ERROR_LEGACY_WORKFLOW` for any `legacy_v1:true`
+  row, so an active migrated implementation must be replaced by a newly created v2 workflow;
+  migrated rows beyond implementation remain readable and keep using operations valid for their
+  current phase, and migration still emits the temporary compatibility keys for those rows.
+- Compatibility key cutover: the submission aliases (`implementation_changed_paths`,
+  `implementation_acceptance_evidence`, `implementation_validation_evidence`) are removed from every
+  `legacy_v1:false` state skeleton; `authorized_optional_ids`/`user_authorization_summary` remain
+  until MCP-6.1.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "implementation evidence requires exact contract IDs in contract order":
+  missing, duplicate, unknown, reordered, and invalid-status acceptance/validation results all
+  return `ERROR_INVALID_IMPLEMENTATION` with no version or audit mutation, then a valid submission
+  reaches REVIEWING.
+- New "every implementation status persists and advances or stops explicitly": DONE->REVIEWING,
+  DONE_WITH_CONCERNS->STOPPED_CONCERNS, NEEDS_CONTEXT->STOPPED_NEEDS_CONTEXT,
+  BLOCKED->STOPPED_BLOCKED; summary, status, results, touched paths, and the server-computed receipt
+  persist across reopen.
+- New "failed and not-run validation, unsatisfied criteria, and known failures block DONE": all four
+  gate failures return `ERROR_INVALID_IMPLEMENTATION` with version 0, then DONE succeeds.
+- New "agent touched paths must be a subset of the approved scope": out-of-scope touched paths are
+  rejected without mutation; in-scope touched paths are persisted sorted.
+- New "derives scope changes from baseline receipt comparison and ignores self-reported touched
+  paths": an unchanged dirty baseline is not attributed (`scope_changed_paths: []`), absent-to-added
+  is included with an empty self-report, and the derived scope is server-controlled regardless of the
+  touched claim.
+- New "stale implementation receipt is rejected and restart preserves submission evidence": a stale
+  receipt returns `ERROR_STALE_RECEIPT` with no mutation; the fresh submission persists results and
+  the absent-aware receipt across reopen.
+- New "migrated workflows with empty contracts cannot submit implementation": a `legacy_v1:true`
+  row returns `ERROR_LEGACY_WORKFLOW` with no mutation.
+- New `protocol.node.mjs` "exact implementation tool schema matches the normative contract": exact
+  properties/required, status enums, evidence bounds, and absence of the removed v1 fields.
+- Updated the store-level `implementation()` helper and all existing callers to the normative schema;
+  updated the v2-state-key and digest-tampering assertions to the new submission fields and to the
+  absence of the submission compatibility aliases in `legacy_v1:false` raw state.
+- All 43 pre-existing workflow/protocol tests and all migration tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='implementation|criterion|validation|touched|baseline|receipt' .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 15/15.
+- `pnpm test:workflow-mcp`: pass, 51/51.
+- `pnpm test`: pass, 70/70 (19 agents + 51 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- none.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.

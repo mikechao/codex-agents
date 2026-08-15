@@ -27,18 +27,22 @@ function receipt(root) {
   return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 }
 
-function implementation(store, created, root, version, summary, resolution = {}, status = "DONE") {
+function absentReceipt(root, paths) {
+  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--allow-absent", "--", ...paths], { cwd: root, encoding: "utf8" }));
+}
+
+function implementation(store, created, root, version, summary, resolution = {}, status = "DONE", options = {}) {
   return store.submitImplementation({
     workflow_id: created.workflow.workflow_id,
     capability: created.capabilities.implementer,
     expected_version: version,
     status,
     summary,
-    changed_paths: receipt(root).paths.filter((entry) => entry.state !== "unchanged").map((entry) => entry.path),
-    acceptance_evidence: status === "DONE" ? ["acceptance evidence"] : [],
-    validation_evidence: status === "DONE" ? ["validation evidence"] : [],
-    implementation_receipt: receipt(root),
-    known_failures: [],
+    agent_touched_paths: options.touched ?? [],
+    acceptance_results: created.workflow.acceptance_criteria.map(({ criterion_id }) => ({ criterion_id, status: options.criterionStatus ?? "satisfied", evidence: "acceptance evidence" })),
+    validation_results: created.workflow.validation_requirements.map(({ validation_id }) => ({ validation_id, status: options.validationStatus ?? "passed", evidence: "validation evidence" })),
+    implementation_receipt: options.receipt ?? receipt(root),
+    known_failures: options.knownFailures ?? [],
     finding_resolution_map: resolution,
   });
 }
@@ -436,9 +440,9 @@ test("v2 creation constructs every normative state key and stores a verified dig
     }
     const row = store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id);
     const rawState = JSON.parse(row.state_json);
-    assert.deepEqual(rawState.implementation_changed_paths, []);
-    assert.deepEqual(rawState.implementation_acceptance_evidence, []);
-    assert.deepEqual(rawState.implementation_validation_evidence, []);
+    assert.equal("implementation_changed_paths" in rawState, false);
+    assert.equal("implementation_acceptance_evidence" in rawState, false);
+    assert.equal("implementation_validation_evidence" in rawState, false);
     assert.deepEqual(rawState.authorized_optional_ids, []);
     assert.equal(rawState.user_authorization_summary, null);
     assert.equal(row.state_digest, objectDigest(rawState));
@@ -470,7 +474,7 @@ test("rejects digest and JSON tampering and preserves state on failed mutation",
     const id = created.workflow.workflow_id;
     const read = () => store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(id);
     const original = read();
-    const submit = (expected_version) => store.submitImplementation({ workflow_id: id, capability: created.capabilities.implementer, expected_version, status: "DONE", summary: "x", changed_paths: [], acceptance_evidence: ["e"], validation_evidence: ["v"], implementation_receipt: receipt(root), known_failures: [], finding_resolution_map: {} });
+    const submit = (expected_version) => store.submitImplementation({ workflow_id: id, capability: created.capabilities.implementer, expected_version, status: "DONE", summary: "x", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "e" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "v" }], implementation_receipt: receipt(root), known_failures: [], finding_resolution_map: {} });
 
     const tamperedState = JSON.parse(original.state_json);
     tamperedState.objective = "tampered";
@@ -1094,6 +1098,277 @@ test("cross-role tokens are denied on role views", () => {
         assert.equal(errorCategory(() => store.get(id, actor, created.capabilities[token])), "ERROR_CAPABILITY_DENIED");
       }
     }
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("implementation evidence requires exact contract IDs in contract order", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, {
+      acceptance_criteria: ["alpha", "beta"],
+      validation_requirements: ["lint", "unit"],
+    });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const submit = (acceptance, validation) => store.submitImplementation({
+      workflow_id: id,
+      capability: caps.implementer,
+      expected_version: 0,
+      status: "DONE",
+      summary: "evidence",
+      agent_touched_paths: [],
+      acceptance_results: acceptance,
+      validation_results: validation,
+      implementation_receipt: receipt(root),
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    const validAcceptance = [
+      { criterion_id: "AC-001", status: "satisfied", evidence: "a" },
+      { criterion_id: "AC-002", status: "satisfied", evidence: "a" },
+    ];
+    const validValidation = [
+      { validation_id: "VAL-001", status: "passed", evidence: "v" },
+      { validation_id: "VAL-002", status: "passed", evidence: "v" },
+    ];
+    const invalidAcceptance = [
+      [{ criterion_id: "AC-001", status: "satisfied", evidence: "a" }],
+      [
+        { criterion_id: "AC-001", status: "satisfied", evidence: "a" },
+        { criterion_id: "AC-001", status: "satisfied", evidence: "a" },
+      ],
+      [
+        { criterion_id: "AC-001", status: "satisfied", evidence: "a" },
+        { criterion_id: "AC-999", status: "satisfied", evidence: "a" },
+      ],
+      [
+        { criterion_id: "AC-002", status: "satisfied", evidence: "a" },
+        { criterion_id: "AC-001", status: "satisfied", evidence: "a" },
+      ],
+      [
+        { criterion_id: "AC-001", status: "bad", evidence: "a" },
+        { criterion_id: "AC-002", status: "satisfied", evidence: "a" },
+      ],
+    ];
+    for (const acceptance of invalidAcceptance) {
+      assert.equal(errorCategory(() => submit(acceptance, validValidation)), "ERROR_INVALID_IMPLEMENTATION");
+    }
+    assert.equal(errorCategory(() => submit(validAcceptance, [])), "ERROR_INVALID_IMPLEMENTATION");
+    assert.equal(
+      errorCategory(() =>
+        submit(validAcceptance, [
+          { validation_id: "VAL-002", status: "passed", evidence: "v" },
+          { validation_id: "VAL-001", status: "passed", evidence: "v" },
+        ]),
+      ),
+      "ERROR_INVALID_IMPLEMENTATION",
+    );
+    assert.equal(store.get(id, "parent", caps.parent).version, 0);
+    assert.equal(store.audit(id, "parent", caps.parent).length, 1);
+    const done = submit(validAcceptance, validValidation);
+    assert.equal(done.phase, "REVIEWING");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("every implementation status persists and advances or stops explicitly", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const results = {
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "a" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "v" }],
+    };
+    const submit = (created, status, options = {}) => store.submitImplementation({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capabilities.implementer,
+      expected_version: 0,
+      status,
+      summary: `summary ${status}`,
+      agent_touched_paths: ["note.txt"],
+      acceptance_results: results.acceptance_results,
+      validation_results: results.validation_results,
+      implementation_receipt: receipt(root),
+      known_failures: options.knownFailures ?? [],
+      finding_resolution_map: {},
+    });
+    const statuses = [
+      ["DONE", "REVIEWING"],
+      ["DONE_WITH_CONCERNS", "STOPPED_CONCERNS"],
+      ["NEEDS_CONTEXT", "STOPPED_NEEDS_CONTEXT"],
+      ["BLOCKED", "STOPPED_BLOCKED"],
+    ];
+    const ids = [];
+    for (const [status, phase] of statuses) {
+      const created = create(store, root, git, { objective: `status ${status}`, acceptance_criteria: ["c"], validation_requirements: ["v"] });
+      ids.push({ id: created.workflow.workflow_id, caps: created.capabilities });
+      const result = submit(created, status, { knownFailures: status === "DONE_WITH_CONCERNS" ? ["flaky"] : [] });
+      assert.equal(result.phase, phase);
+      assert.equal(result.implementation_status, status);
+      assert.equal(result.implementation_summary, `summary ${status}`);
+      assert.deepEqual(result.agent_touched_paths, ["note.txt"]);
+      assert.deepEqual(result.acceptance_results, results.acceptance_results);
+      assert.deepEqual(result.validation_results, results.validation_results);
+    }
+    const [done] = ids;
+    store.close();
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const persisted = reopened.get(done.id, "implementer", done.caps.implementer);
+    assert.equal(persisted.phase, "REVIEWING");
+    assert.equal(persisted.implementation_status, "DONE");
+    assert.equal(persisted.implementation_summary, "summary DONE");
+    assert.deepEqual(persisted.acceptance_results, results.acceptance_results);
+    assert.deepEqual(persisted.validation_results, results.validation_results);
+    assert.deepEqual(persisted.implementation_receipt, absentReceipt(root, ["note.txt"]));
+    reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("failed and not-run validation, unsatisfied criteria, and known failures block DONE", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "done gates" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const attempts = [
+      { criterionStatus: "not_satisfied", validationStatus: "passed", knownFailures: [] },
+      { criterionStatus: "satisfied", validationStatus: "failed", knownFailures: [] },
+      { criterionStatus: "satisfied", validationStatus: "not_run", knownFailures: [] },
+      { criterionStatus: "satisfied", validationStatus: "passed", knownFailures: ["flaky"] },
+    ];
+    for (const attempt of attempts) {
+      assert.equal(
+        errorCategory(() =>
+          implementation(store, created, root, 0, "blocked", {}, "DONE", {
+            criterionStatus: attempt.criterionStatus,
+            validationStatus: attempt.validationStatus,
+            knownFailures: attempt.knownFailures,
+          }),
+        ),
+        "ERROR_INVALID_IMPLEMENTATION",
+      );
+      assert.equal(store.get(id, "parent", caps.parent).version, 0);
+    }
+    const done = implementation(store, created, root, 0, "complete");
+    assert.equal(done.phase, "REVIEWING");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("agent touched paths must be a subset of the approved scope", () => {
+  const { root, git } = fixture();
+  try {
+    writeFileSync(join(root, "note.txt"), "modified\n");
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "touched scope", approved_paths: ["note.txt"] });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    assert.equal(
+      errorCategory(() => implementation(store, created, root, 0, "touched", {}, "DONE", { touched: ["other.txt"] })),
+      "ERROR_INVALID_IMPLEMENTATION",
+    );
+    assert.equal(store.get(id, "parent", caps.parent).version, 0);
+    const done = implementation(store, created, root, 0, "touched", {}, "DONE", { touched: ["note.txt"] });
+    assert.equal(done.phase, "REVIEWING");
+    assert.deepEqual(done.agent_touched_paths, ["note.txt"]);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("derives scope changes from baseline receipt comparison and ignores self-reported touched paths", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    writeFileSync(join(root, "note.txt"), "modified\n");
+    const baseline = create(store, root, git, { objective: "dirty baseline", approved_paths: ["note.txt"] });
+    assert.deepEqual(baseline.workflow.dirty_baseline_paths, ["note.txt"]);
+    const unchanged = implementation(store, baseline, root, 0, "unchanged baseline");
+    assert.equal(unchanged.phase, "REVIEWING");
+    assert.deepEqual(unchanged.scope_changed_paths, []);
+
+    mkdirSync(join(root, "new"), { recursive: true });
+    const planned = create(store, root, git, { objective: "absent to added", approved_paths: ["new/file.txt"] });
+    assert.deepEqual(planned.workflow.initial_receipt.paths, [
+      { path: "new/file.txt", state: "absent", kind: "missing" },
+    ]);
+    assert.deepEqual(planned.workflow.dirty_baseline_paths, []);
+    writeFileSync(join(root, "new", "file.txt"), "content\n");
+    const added = implementation(store, planned, root, 0, "added", {}, "DONE", {
+      touched: [],
+      receipt: absentReceipt(root, ["new/file.txt"]),
+    });
+    assert.equal(added.phase, "REVIEWING");
+    assert.deepEqual(added.agent_touched_paths, []);
+    assert.deepEqual(added.scope_changed_paths, ["new/file.txt"]);
+
+    const claimed = create(store, root, git, { objective: "claimed", approved_paths: ["note.txt", "new/file.txt"] });
+    assert.deepEqual(claimed.workflow.dirty_baseline_paths, ["new/file.txt", "note.txt"]);
+    writeFileSync(join(root, "new", "file.txt"), "more\n");
+    const claimedResult = implementation(store, claimed, root, 0, "claimed", {}, "DONE", {
+      touched: [],
+      receipt: absentReceipt(root, ["note.txt", "new/file.txt"]),
+    });
+    assert.equal(claimedResult.phase, "REVIEWING");
+    assert.deepEqual(claimedResult.agent_touched_paths, []);
+    assert.deepEqual(claimedResult.scope_changed_paths, ["new/file.txt"]);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stale implementation receipt is rejected and restart preserves submission evidence", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, { objective: "stale receipt" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const stale = receipt(root);
+    writeFileSync(join(root, "note.txt"), "changed after receipt\n");
+    assert.equal(errorCategory(() => implementation(store, created, root, 0, "stale", {}, "DONE", { receipt: stale })), "ERROR_STALE_RECEIPT");
+    assert.equal(store.get(id, "parent", caps.parent).version, 0);
+    const done = implementation(store, created, root, 0, "complete");
+    assert.equal(done.phase, "REVIEWING");
+    store.close();
+
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const persisted = reopened.get(id, "implementer", caps.implementer);
+    assert.equal(persisted.phase, "REVIEWING");
+    assert.equal(persisted.implementation_status, "DONE");
+    assert.deepEqual(persisted.acceptance_results, [
+      { criterion_id: "AC-001", status: "satisfied", evidence: "acceptance evidence" },
+    ]);
+    assert.deepEqual(persisted.validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "validation evidence" },
+    ]);
+    assert.deepEqual(persisted.implementation_receipt, absentReceipt(root, ["note.txt"]));
+    reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("migrated workflows with empty contracts cannot submit implementation", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "legacy gate" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const raw = JSON.parse(store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json);
+    raw.legacy_v1 = true;
+    raw.acceptance_criteria = [];
+    raw.validation_requirements = [];
+    raw.implementation_changed_paths = [];
+    raw.implementation_acceptance_evidence = [];
+    raw.implementation_validation_evidence = [];
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(raw), objectDigest(raw), id);
+    assert.equal(errorCategory(() => implementation(store, created, root, 0, "legacy")), "ERROR_LEGACY_WORKFLOW");
+    assert.equal(store.get(id, "parent", caps.parent).version, 0);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
