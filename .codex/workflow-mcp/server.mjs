@@ -116,7 +116,7 @@ export const tools = [
   {
     name: "workflow_create",
     description:
-      "Create an IMPLEMENTING change workflow and return the parent view plus one-time role capabilities.",
+      "Create a change or review-only workflow and return the parent view plus one-time role capabilities.",
     inputSchema: schema(
       {
         workflow_type: { type: "string", enum: ["change", "review_only"] },
@@ -131,7 +131,7 @@ export const tools = [
         validation_requirements: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 4000 },
-          minItems: 1,
+          minItems: 0,
           maxItems: 999,
         },
         review_target: createReviewTargetSchema,
@@ -314,7 +314,7 @@ export const tools = [
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
         review_receipt: { type: ["object", "null"] },
-        review_target: workingTreeReviewTargetSchema,
+        review_target: createReviewTargetSchema,
         prior_finding_classifications: resolutionMapSchema,
       },
       [

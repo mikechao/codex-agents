@@ -185,7 +185,7 @@ test("exact create tool schema matches the normative contract", () => {
   assert.equal(inputSchema.properties.approved_paths.maxItems, 200);
   assert.equal(inputSchema.properties.acceptance_criteria.minItems, 1);
   assert.equal(inputSchema.properties.acceptance_criteria.maxItems, 999);
-  assert.equal(inputSchema.properties.validation_requirements.minItems, 1);
+  assert.equal(inputSchema.properties.validation_requirements.minItems, 0);
   assert.equal(inputSchema.properties.validation_requirements.maxItems, 999);
   assert.equal(inputSchema.properties.max_repair_cycles.minimum, 0);
   assert.equal(inputSchema.properties.max_repair_cycles.maximum, 2);
@@ -340,6 +340,57 @@ test("implementation stops resume and concerns over STDIO", async () => {
 
     const reviewed = await call("workflow_submit_review", { workflow_id: base.workflow_id, capability: created.capabilities.reviewer, expected_version: 4, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: initialReceipt, review_target: { review_mode: "working_tree", base_revision: base.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true }, prior_finding_classifications: {} });
     assert.equal(reviewed.phase, "STOPPED_APPROVED");
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review-only workflows over STDIO cover working-tree approval and range commit denial", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-reviewonly-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const receipt = (paths) => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", ...paths], { cwd: root, encoding: "utf8" }));
+
+    const wtResult = await call("workflow_create", { workflow_type: "review_only", objective: "working-tree review only", approved_paths: ["note.txt"], acceptance_criteria: ["review criterion"], validation_requirements: [], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    assert.equal(wtResult.workflow.phase, "REVIEWING");
+    assert.equal(wtResult.workflow.workflow_type, "review_only");
+    assert.deepEqual(wtResult.workflow.permitted_next_actions, []);
+    const wt = wtResult.workflow;
+    const wtTarget = wt.review_target;
+    assert.deepEqual((await call("workflow_get", { workflow_id: wt.workflow_id, role: "reviewer", capability: wtResult.capabilities.reviewer })).permitted_next_actions, ["workflow_submit_review"]);
+    const wtApproved = await call("workflow_submit_review", { workflow_id: wt.workflow_id, capability: wtResult.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(["note.txt"]), review_target: wtTarget, prior_finding_classifications: {} });
+    assert.equal(wtApproved.phase, "STOPPED_APPROVED");
+    const wtAuthorized = await call("workflow_authorize_commit", { workflow_id: wt.workflow_id, capability: wtResult.capabilities.parent, expected_version: 1, user_authorization: "authorize working-tree review-only" });
+    assert.equal(wtAuthorized.phase, "COMMIT_AUTHORIZED");
+
+    writeFileSync(join(root, "added.txt"), "added\n");
+    git("add", "added.txt");
+    git("commit", "-qm", "range head");
+    const base = git("rev-parse", "HEAD~1");
+    const head = git("rev-parse", "HEAD");
+    const rangeResult = await call("workflow_create", { workflow_type: "review_only", objective: "range review only", approved_paths: ["added.txt", "note.txt"], acceptance_criteria: ["review criterion"], validation_requirements: [], review_target: { review_mode: "commit_range", base_revision: base, head_revision: head, approved_paths: ["added.txt", "note.txt"], include_staged: false, include_unstaged: false, include_untracked: false } });
+    assert.equal(rangeResult.workflow.phase, "REVIEWING");
+    assert.equal(rangeResult.workflow.initial_receipt, null);
+    const range = rangeResult.workflow;
+    const rangeApproved = await call("workflow_submit_review", { workflow_id: range.workflow_id, capability: rangeResult.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: null, review_target: range.review_target, prior_finding_classifications: {} });
+    assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
+    assert.equal(rangeApproved.review_receipt, null);
+    assert.deepEqual((await call("workflow_get", { workflow_id: range.workflow_id, role: "parent", capability: rangeResult.capabilities.parent })).permitted_next_actions, ["workflow_create_optional_followup"]);
+    const denied = await client.callTool({ name: "workflow_authorize_commit", arguments: { workflow_id: range.workflow_id, capability: rangeResult.capabilities.parent, expected_version: 1, user_authorization: "authorize range review-only" } });
+    assert.equal(denied.isError, true);
+    assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_COMMIT_NOT_ALLOWED");
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }

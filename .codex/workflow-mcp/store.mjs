@@ -8,6 +8,7 @@ import {
   createReceipt,
   currentHead,
   repositoryRoot,
+  reviewRange,
   verifyCommit,
   verifyReviewReceipt,
 } from "./git.mjs";
@@ -21,6 +22,7 @@ import {
   IMPLEMENTATION_STOP_PHASES,
   migrateV1State,
   optionalFollowupInput,
+  rangeDirtyBaselinePaths,
   recordCommit,
   resumeImplementation,
   roleView,
@@ -238,11 +240,17 @@ export class WorkflowStore {
     const head = currentHead(this.root);
     const workflowId = randomUUID();
     const state = createState(input, this.root, head);
-    const initialReceipt = createReceipt(this.root, state.approved_paths, true);
-    if (initialReceipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
+    if (state.review_target.review_mode === "working_tree") {
+      const initialReceipt = createReceipt(this.root, state.approved_paths, true);
+      if (initialReceipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
+      state.initial_receipt = initialReceipt;
+      state.dirty_baseline_paths = dirtyBaselinePaths(initialReceipt);
+    } else {
+      const range = reviewRange(this.root, state.review_target);
+      state.initial_receipt = null;
+      state.dirty_baseline_paths = rangeDirtyBaselinePaths(range);
+    }
     state.workflow_id = workflowId;
-    state.initial_receipt = initialReceipt;
-    state.dirty_baseline_paths = dirtyBaselinePaths(initialReceipt);
     const capabilities = {
       parent: issueCapability(),
       implementer: issueCapability(),
@@ -408,28 +416,28 @@ export class WorkflowStore {
           ],
           "review_target",
         );
-        const targetPaths = exactPaths(target.approved_paths, this.root);
-        if (
-          target.review_mode !== "working_tree" ||
-          target.base_revision !== state.base_head ||
-          target.head_revision !== null ||
-          JSON.stringify(targetPaths) !== JSON.stringify(state.approved_paths) ||
-          target.include_staged !== true ||
-          target.include_unstaged !== true ||
-          target.include_untracked !== true
-        ) {
+        const normalized = {
+          ...target,
+          approved_paths: exactPaths(target.approved_paths, this.root),
+        };
+        if (canonicalJson(normalized) !== canonicalJson(state.review_target)) {
           fail("ERROR_INVALID_REVIEW", "review target is incomplete or stale");
         }
         const next = submitReview(state, input);
         if (input.review_status === "APPROVED") {
-          if (!input.review_receipt)
-            fail("ERROR_STALE_RECEIPT", "approved review requires receipt");
-          verifyReviewReceipt(
-            this.root,
-            input.review_receipt,
-            state.approved_paths,
-            state.base_head,
-          );
+          if (state.review_target.review_mode === "working_tree") {
+            if (!input.review_receipt)
+              fail("ERROR_STALE_RECEIPT", "approved review requires receipt");
+            verifyReviewReceipt(
+              this.root,
+              input.review_receipt,
+              state.approved_paths,
+              state.base_head,
+            );
+          } else {
+            if (input.review_receipt !== null)
+              fail("ERROR_INVALID_REVIEW", "range approval cannot include receipt");
+          }
         } else if (input.review_receipt !== undefined && input.review_receipt !== null) {
           fail("ERROR_INVALID_REVIEW", "only approved review may include receipt");
         }
@@ -473,6 +481,9 @@ export class WorkflowStore {
       input.expected_version,
       "COMMIT_AUTHORIZED",
       (state) => {
+        if (state.review_target.review_mode !== "working_tree") {
+          fail("ERROR_COMMIT_NOT_ALLOWED", "commit authorization requires a working-tree review");
+        }
         if (!state.review_receipt) fail("ERROR_STALE_RECEIPT", "review receipt is missing");
         verifyReviewReceipt(this.root, state.review_receipt, state.approved_paths, state.base_head);
         return authorizeCommit(state, input);

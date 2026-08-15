@@ -114,6 +114,18 @@ const TEMPORARY_COMPATIBILITY_KEYS = [
   "user_authorization_summary",
 ];
 
+const REVIEWER_IMPLEMENTER_HANDOFF = [
+  "implementation_summary",
+  "implementation_status",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "acceptance_results",
+  "validation_results",
+  "finding_resolution_map",
+];
+
 const ROLE_VIEW_EXTRA = {
   implementer: [
     "acceptance_criteria",
@@ -204,7 +216,15 @@ const ACTION_MATRIX = {
 
 export function permittedNextActions(state, actorRole) {
   role(actorRole);
-  return [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])].sort();
+  let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
+  if (
+    actorRole === "parent" &&
+    state.phase === "STOPPED_APPROVED" &&
+    state.review_target?.review_mode !== "working_tree"
+  ) {
+    actions = actions.filter((action) => action !== "workflow_authorize_commit");
+  }
+  return actions.sort();
 }
 
 export function roleView(state, actorRole) {
@@ -222,21 +242,34 @@ export function roleView(state, actorRole) {
       view[key] = clone(state[key]);
     }
   } else {
-    for (const key of ROLE_VIEW_EXTRA[actorRole]) {
+    const extra =
+      actorRole === "reviewer" && state.workflow_type === "review_only"
+        ? ROLE_VIEW_EXTRA[actorRole].filter(
+            (key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key),
+          )
+        : ROLE_VIEW_EXTRA[actorRole];
+    for (const key of extra) {
       if (key in state) view[key] = clone(state[key]);
     }
   }
   return view;
 }
 
-function baseState({ objective, approvedPaths, baseHead, maxRepairCycles, parentWorkflowId = null }) {
+function baseState({
+  objective,
+  approvedPaths,
+  baseHead,
+  maxRepairCycles,
+  parentWorkflowId = null,
+  workflowType = "change",
+}) {
   return {
     schema_version: SCHEMA_VERSION,
     version: 0,
     workflow_id: null,
-    workflow_type: "change",
+    workflow_type: workflowType,
     legacy_v1: false,
-    phase: "IMPLEMENTING",
+    phase: workflowType === "review_only" ? "REVIEWING" : "IMPLEMENTING",
     objective,
     base_head: baseHead,
     approved_paths: approvedPaths,
@@ -284,7 +317,7 @@ function baseState({ objective, approvedPaths, baseHead, maxRepairCycles, parent
   };
 }
 
-function reviewTarget(value, approvedPaths, repositoryRoot, currentHead) {
+function reviewTarget(value, approvedPaths, repositoryRoot, currentHead, workflowType) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     fail("ERROR_INVALID_SHAPE", "review target is invalid");
   }
@@ -301,30 +334,57 @@ function reviewTarget(value, approvedPaths, repositoryRoot, currentHead) {
     ],
     "review target",
   );
-  if (value.review_mode !== "working_tree") {
-    fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "review mode is not supported");
-  }
-  const baseRevision = revision(value.base_revision, "base_revision");
-  if (baseRevision !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
-  if (value.head_revision !== null) {
-    fail("ERROR_INVALID_SHAPE", "working-tree head revision is invalid");
-  }
   const targetPaths = exactPaths(value.approved_paths, repositoryRoot);
   if (JSON.stringify(targetPaths) !== JSON.stringify(approvedPaths)) {
     fail("ERROR_INVALID_SHAPE", "review target paths do not match approved paths");
   }
-  if (value.include_staged !== true || value.include_unstaged !== true || value.include_untracked !== true) {
-    fail("ERROR_INVALID_SHAPE", "working-tree include flags are invalid");
+  if (value.review_mode === "working_tree") {
+    const baseRevision = revision(value.base_revision, "base_revision");
+    if (baseRevision !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
+    if (value.head_revision !== null) {
+      fail("ERROR_INVALID_SHAPE", "working-tree head revision is invalid");
+    }
+    if (
+      value.include_staged !== true ||
+      value.include_unstaged !== true ||
+      value.include_untracked !== true
+    ) {
+      fail("ERROR_INVALID_SHAPE", "working-tree include flags are invalid");
+    }
+    return {
+      review_mode: "working_tree",
+      base_revision: baseRevision,
+      head_revision: null,
+      approved_paths: targetPaths,
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    };
   }
-  return {
-    review_mode: "working_tree",
-    base_revision: baseRevision,
-    head_revision: null,
-    approved_paths: targetPaths,
-    include_staged: true,
-    include_unstaged: true,
-    include_untracked: true,
-  };
+  if (value.review_mode === "commit_range") {
+    if (workflowType !== "review_only") {
+      fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "commit ranges require review-only workflows");
+    }
+    const baseRevision = revision(value.base_revision, "base_revision");
+    const headRevision = revision(value.head_revision, "head_revision");
+    if (
+      value.include_staged !== false ||
+      value.include_unstaged !== false ||
+      value.include_untracked !== false
+    ) {
+      fail("ERROR_INVALID_SHAPE", "commit-range include flags are invalid");
+    }
+    return {
+      review_mode: "commit_range",
+      base_revision: baseRevision,
+      head_revision: headRevision,
+      approved_paths: targetPaths,
+      include_staged: false,
+      include_unstaged: false,
+      include_untracked: false,
+    };
+  }
+  fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "review mode is not supported");
 }
 
 export function createState(input, repositoryRoot, currentHead, options = {}) {
@@ -366,12 +426,18 @@ export function createState(input, repositoryRoot, currentHead, options = {}) {
     "workflow create",
     ["max_repair_cycles"],
   );
-  if (input.workflow_type !== "change") {
+  if (input.workflow_type !== "change" && input.workflow_type !== "review_only") {
     fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "workflow type is not supported");
   }
   const objective = boundedString(input.objective, "objective");
   const approvedPaths = exactPaths(input.approved_paths, repositoryRoot);
-  const target = reviewTarget(input.review_target, approvedPaths, repositoryRoot, currentHead);
+  const target = reviewTarget(
+    input.review_target,
+    approvedPaths,
+    repositoryRoot,
+    currentHead,
+    input.workflow_type,
+  );
   const maxRepairCycles = input.max_repair_cycles ?? 2;
   repairCycle(maxRepairCycles);
   const state = baseState({
@@ -379,6 +445,7 @@ export function createState(input, repositoryRoot, currentHead, options = {}) {
     approvedPaths,
     baseHead: target.base_revision,
     maxRepairCycles,
+    workflowType: input.workflow_type,
   });
   state.acceptance_criteria = contractList(
     input.acceptance_criteria,
@@ -386,12 +453,10 @@ export function createState(input, repositoryRoot, currentHead, options = {}) {
     "AC",
     "criterion_id",
   );
-  state.validation_requirements = contractList(
-    input.validation_requirements,
-    "validation_requirements",
-    "VAL",
-    "validation_id",
-  );
+  state.validation_requirements =
+    input.workflow_type === "review_only"
+      ? contractList(input.validation_requirements, "validation_requirements", "VAL", "validation_id", true)
+      : contractList(input.validation_requirements, "validation_requirements", "VAL", "validation_id");
   state.review_target = target;
   return state;
 }
@@ -737,6 +802,14 @@ export function dirtyBaselinePaths(receipt) {
   if (!receipt || !Array.isArray(receipt.paths)) return [];
   return receipt.paths
     .filter((item) => ["added", "modified", "deleted"].includes(item.state))
+    .map((item) => item.path)
+    .sort();
+}
+
+export function rangeDirtyBaselinePaths(range) {
+  if (!range || !Array.isArray(range.paths)) return [];
+  return range.paths
+    .filter((item) => ["added", "modified", "deleted"].includes(item.kind))
     .map((item) => item.path)
     .sort();
 }

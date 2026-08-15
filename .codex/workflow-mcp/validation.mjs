@@ -32,8 +32,8 @@ export function boundedString(value, name, max = MAX_TEXT) {
   return value;
 }
 
-export function contractList(value, name, idPrefix, idField) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CONTRACTS) {
+export function contractList(value, name, idPrefix, idField, allowEmpty = false) {
+  if (!Array.isArray(value) || (value.length === 0 && !allowEmpty) || value.length > MAX_CONTRACTS) {
     fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
   }
   return value.map((description, index) => ({

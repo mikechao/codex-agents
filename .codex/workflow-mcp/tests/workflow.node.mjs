@@ -69,7 +69,7 @@ function errorCategory(callback) {
 function createInput(root, git, options = {}) {
   const approvedPaths = options.approved_paths ?? ["note.txt"];
   return {
-    workflow_type: "change",
+    workflow_type: options.workflow_type ?? "change",
     objective: options.objective ?? "test workflow",
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
@@ -696,17 +696,16 @@ test("create rejects empty and oversized contract lists", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("create rejects unknown fields and unsupported type and target mismatches", () => {
+test("create rejects unknown fields and invalid target combinations", () => {
   const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
     const head = git("rev-parse", "HEAD");
     const base = createInput(root, git, { objective: "shape" });
     assert.equal(errorCategory(() => store.create({ ...base, extra: true })), "ERROR_INVALID_SHAPE");
-    assert.equal(
-      errorCategory(() => store.create({ ...base, workflow_type: "review_only" })),
-      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
-    );
+    const reviewOnly = store.create(createInput(root, git, { objective: "shape", workflow_type: "review_only" }));
+    assert.equal(reviewOnly.workflow.phase, "REVIEWING");
+    assert.equal(reviewOnly.workflow.workflow_type, "review_only");
     assert.equal(
       errorCategory(() =>
         store.create(
@@ -1610,5 +1609,270 @@ test("parent gets resume and concern acceptance actions at implementation stops"
     implementation(store, concerns, root, 0, "concerns", {}, "DONE_WITH_CONCERNS", { knownFailures: ["flaky"] });
     assert.deepEqual(store.get(concerns.workflow.workflow_id, "parent", concerns.capabilities.parent).permitted_next_actions, ["workflow_accept_concerns"]);
     store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function rangeFixture() {
+  const { root, git } = fixture();
+  mkdirSync(join(root, "dir"));
+  writeFileSync(join(root, "dir", "f.txt"), "f\n");
+  writeFileSync(join(root, "added.txt"), "added\n");
+  git("add", "-A");
+  git("commit", "-qm", "range head");
+  return { root, git, base: git("rev-parse", "HEAD~1"), head: git("rev-parse", "HEAD") };
+}
+
+function rangeInput(root, git, base, head, options = {}) {
+  const paths = options.approved_paths ?? ["added.txt", "note.txt"];
+  return createInput(root, git, {
+    objective: options.objective ?? "range review",
+    workflow_type: "review_only",
+    approved_paths: paths,
+    validation_requirements: [],
+    review_target: {
+      review_mode: "commit_range",
+      base_revision: base,
+      head_revision: head,
+      approved_paths: paths,
+      include_staged: false,
+      include_unstaged: false,
+      include_untracked: false,
+    },
+  });
+}
+
+function workingTarget(baseHead, paths = ["note.txt"]) {
+  return {
+    review_mode: "working_tree",
+    base_revision: baseHead,
+    head_revision: null,
+    approved_paths: paths,
+    include_staged: true,
+    include_unstaged: true,
+    include_untracked: true,
+  };
+}
+
+test("review-only working-tree workflow starts reviewing with an initial receipt", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "review only working tree", workflow_type: "review_only" });
+    assert.equal(created.workflow.workflow_type, "review_only");
+    assert.equal(created.workflow.phase, "REVIEWING");
+    assert.deepEqual(created.workflow.initial_receipt, receipt(root));
+    assert.deepEqual(created.workflow.dirty_baseline_paths, []);
+    assert.equal(created.workflow.implementation_summary, null);
+    assert.deepEqual(store.get(created.workflow.workflow_id, "reviewer", created.capabilities.reviewer).permitted_next_actions, ["workflow_submit_review"]);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review-only commit-range workflow stores null receipt and range-derived dirty baseline", () => {
+  const { root, git, base, head } = rangeFixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, rangeInput(root, git, base, head));
+    assert.equal(created.workflow.workflow_type, "review_only");
+    assert.equal(created.workflow.phase, "REVIEWING");
+    assert.equal(created.workflow.initial_receipt, null);
+    assert.equal(created.workflow.base_head, base);
+    assert.deepEqual(created.workflow.dirty_baseline_paths, ["added.txt"]);
+    assert.deepEqual(created.workflow.review_target, {
+      review_mode: "commit_range",
+      base_revision: base,
+      head_revision: head,
+      approved_paths: ["added.txt", "note.txt"],
+      include_staged: false,
+      include_unstaged: false,
+      include_untracked: false,
+    });
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review-only creation rejects bad flags, revisions, paths, and ancestry", () => {
+  const { root, git, base, head } = rangeFixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const bad = (review_target, options = {}) =>
+      store.create(
+        createInput(root, git, {
+          objective: "bad range",
+          workflow_type: "review_only",
+          approved_paths: review_target.approved_paths,
+          validation_requirements: [],
+          review_target,
+          ...options,
+        }),
+      );
+    const range = (overrides = {}, paths = ["added.txt", "note.txt"]) => ({
+      review_mode: "commit_range",
+      base_revision: base,
+      head_revision: head,
+      approved_paths: paths,
+      include_staged: false,
+      include_unstaged: false,
+      include_untracked: false,
+      ...overrides,
+    });
+    assert.equal(errorCategory(() => bad(range({ base_revision: head, head_revision: base }))), "ERROR_NON_ANCESTOR");
+    assert.equal(errorCategory(() => bad(range({ base_revision: "0".repeat(40) }))), "ERROR_INVALID_REVISION");
+    assert.equal(errorCategory(() => bad(range({ base_revision: head, head_revision: head }))), "ERROR_INVALID_REVISION");
+    assert.equal(errorCategory(() => bad(range({ include_staged: true }))), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => bad(range({}, ["dir"]))), "ERROR_INVALID_REVIEW_PATH");
+    assert.equal(errorCategory(() => bad(range({}, ["nope.txt"]))), "ERROR_INVALID_REVIEW_PATH");
+    const wt = createInput(root, git, { objective: "bad wt", workflow_type: "review_only" });
+    wt.review_target.include_untracked = false;
+    assert.equal(errorCategory(() => store.create(wt)), "ERROR_INVALID_SHAPE");
+    const rangeTarget = range();
+    const change = createInput(root, git, { objective: "change range", approved_paths: rangeTarget.approved_paths, review_target: rangeTarget });
+    assert.equal(errorCategory(() => store.create(change)), "ERROR_UNSUPPORTED_WORKFLOW_TYPE");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("working-tree approval requires a receipt and range approval rejects receipts", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const wt = create(store, root, git, { objective: "wt receipt", workflow_type: "review_only" });
+    const wtTarget = workingTarget(wt.workflow.base_head);
+    const submit = (workflow, capability, target, receiptValue, version = 0) =>
+      store.submitReview({
+        workflow_id: workflow.workflow_id,
+        capability,
+        expected_version: version,
+        review_status: "APPROVED",
+        blocking_findings: [],
+        optional_findings: [],
+        review_receipt: receiptValue,
+        review_target: target,
+        prior_finding_classifications: {},
+      });
+    assert.equal(errorCategory(() => submit(wt.workflow, wt.capabilities.reviewer, wtTarget, null)), "ERROR_STALE_RECEIPT");
+    const wtApproved = submit(wt.workflow, wt.capabilities.reviewer, wtTarget, receipt(root));
+    assert.equal(wtApproved.phase, "STOPPED_APPROVED");
+
+    writeFileSync(join(root, "added.txt"), "added\n");
+    git("add", "added.txt");
+    git("commit", "-qm", "range head");
+    const base = git("rev-parse", "HEAD~1");
+    const head = git("rev-parse", "HEAD");
+    const range = create(store, root, git, rangeInput(root, git, base, head, { objective: "range receipt" }));
+    const rangeTarget = range.workflow.review_target;
+    assert.equal(errorCategory(() => submit(range.workflow, range.capabilities.reviewer, rangeTarget, receipt(root))), "ERROR_INVALID_REVIEW");
+    const rangeApproved = submit(range.workflow, range.capabilities.reviewer, rangeTarget, null);
+    assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
+    assert.equal(rangeApproved.review_receipt, null);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("range workflows reject commit authorization while working-tree review-only allows it", () => {
+  const { root, git, base, head } = rangeFixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const wt = create(store, root, git, { objective: "wt commit", workflow_type: "review_only" });
+    const wtTarget = workingTarget(wt.workflow.base_head);
+    store.submitReview({ workflow_id: wt.workflow.workflow_id, capability: wt.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(root), review_target: wtTarget, prior_finding_classifications: {} });
+    assert.deepEqual(store.get(wt.workflow.workflow_id, "parent", wt.capabilities.parent).permitted_next_actions, ["workflow_authorize_commit", "workflow_create_optional_followup"]);
+    const authorized = store.authorizeCommit({ workflow_id: wt.workflow.workflow_id, capability: wt.capabilities.parent, expected_version: 1, user_authorization: "authorized" });
+    assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
+
+    const range = create(store, root, git, rangeInput(root, git, base, head, { objective: "range commit" }));
+    store.submitReview({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.reviewer, expected_version: 0, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: null, review_target: range.workflow.review_target, prior_finding_classifications: {} });
+    assert.deepEqual(store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).permitted_next_actions, ["workflow_create_optional_followup"]);
+    assert.equal(errorCategory(() => store.authorizeCommit({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.parent, expected_version: 1, user_authorization: "authorized" })), "ERROR_COMMIT_NOT_ALLOWED");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("reviewer views omit nonexistent implementer handoff for review-only workflows", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "review only view", workflow_type: "review_only" });
+    const reviewer = store.get(created.workflow.workflow_id, "reviewer", created.capabilities.reviewer);
+    assert.equal("initial_receipt" in reviewer, false);
+    for (const key of [
+      "implementation_summary",
+      "implementation_status",
+      "implementation_receipt",
+      "implementation_known_failures",
+      "agent_touched_paths",
+      "scope_changed_paths",
+      "acceptance_results",
+      "validation_results",
+      "finding_resolution_map",
+    ]) {
+      assert.equal(key in reviewer, false, `reviewer view exposes ${key}`);
+    }
+    for (const key of [
+      "acceptance_criteria",
+      "validation_requirements",
+      "dirty_baseline_paths",
+      "blocking_findings",
+      "optional_findings",
+      "prior_finding_classifications",
+      "review_receipt",
+      "stop_context",
+      "recovery_context",
+    ]) {
+      assert.equal(key in reviewer, true, `reviewer view omits ${key}`);
+    }
+    const change = create(store, root, git, { objective: "change view" });
+    implementation(store, change, root, 0, "implemented");
+    assert.equal("implementation_summary" in store.get(change.workflow.workflow_id, "reviewer", change.capabilities.reviewer), true);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review submission requires canonical target equality and rejects stale receipts", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "target equality", workflow_type: "review_only" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const correct = workingTarget(created.workflow.base_head);
+    const submit = (target) =>
+      store.submitReview({
+        workflow_id: id,
+        capability: caps.reviewer,
+        expected_version: 0,
+        review_status: "INCONCLUSIVE",
+        blocking_findings: [],
+        optional_findings: [],
+        review_receipt: null,
+        review_target: target,
+        prior_finding_classifications: {},
+      });
+    const before = store.get(id, "parent", caps.parent).version;
+    assert.equal(errorCategory(() => submit({ ...correct, head_revision: created.workflow.base_head })), "ERROR_INVALID_REVIEW");
+    assert.equal(errorCategory(() => submit({ ...correct, include_untracked: false })), "ERROR_INVALID_REVIEW");
+    assert.equal(errorCategory(() => submit({ ...correct, approved_paths: ["other.txt"] })), "ERROR_INVALID_REVIEW");
+    assert.equal(store.get(id, "parent", caps.parent).version, before);
+    assert.equal(submit(correct).phase, "STOPPED_INCONCLUSIVE");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review-only restart preserves phase, receipt, and permitted actions", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, { objective: "restart review only", workflow_type: "review_only" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    store.close();
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const parent = reopened.get(id, "parent", caps.parent);
+    assert.equal(parent.phase, "REVIEWING");
+    assert.equal(parent.workflow_type, "review_only");
+    assert.deepEqual(parent.initial_receipt, created.workflow.initial_receipt);
+    assert.deepEqual(reopened.get(id, "reviewer", caps.reviewer).permitted_next_actions, ["workflow_submit_review"]);
+    reopened.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

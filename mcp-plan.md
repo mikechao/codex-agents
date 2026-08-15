@@ -441,7 +441,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test .codex/workflow-mcp/tests/git.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** historical targets validate without current-filesystem dependence.
 
-- [ ] **MCP-5.2 — Enable review-only working-tree and range workflows**
+- [x] **MCP-5.2 — Enable review-only working-tree and range workflows**
   - **Prerequisites/commit:** MCP-5.1; `feat(workflow): support standalone review workflows`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/validation.mjs`,
@@ -1222,6 +1222,119 @@ Pre-existing changes preserved:
 
 Plan deviations:
 - Minor: an equal base/head range is rejected as `ERROR_INVALID_REVISION` rather than `ERROR_NON_ANCESTOR`, because a commit is its own ancestor (`merge-base --is-ancestor` succeeds) and the plan maps only invalid/non-commit IDs, ancestry, and endpoint/path errors; the distinctness requirement is treated as a range validity error.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-5.2 — Enable review-only working-tree and range workflows
+
+DONE
+
+Task: MCP-5.2
+Outcome: Both normative standalone-review cases now create valid workflows: `review_only` with a
+working-tree target starts `REVIEWING` and persists a server-computed absent-aware `initial_receipt`
+plus receipt-derived `dirty_baseline_paths`; `review_only` with a `commit_range` target starts
+`REVIEWING`, validates the range via `reviewRange` (revisions, ancestry, blob endpoints), stores a
+null `initial_receipt`, and derives `dirty_baseline_paths` from the range's added/modified/deleted
+kinds. `change` still permits only working-tree. Review submission requires canonical submitted-target
+equality with the persisted target, working-tree approval requires a fresh receipt while commit-range
+approval requires a null receipt, and `workflow_authorize_commit` rejects range workflows with
+`ERROR_COMMIT_NOT_ALLOWED` (and omits that action from the range parent's permitted actions). Reviewer
+views for `review_only` workflows omit the nonexistent implementer handoff without synthesizing one.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/validation.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Review-only creation enabled: `createState` now accepts `workflow_type` `change` or `review_only`;
+  `review_only` starts `REVIEWING` (via `baseState` workflowType), `change` stays `IMPLEMENTING`.
+  `reviewTarget` handles both `working_tree` (base must equal current HEAD, head null, all include
+  flags true) and `commit_range` (base/head 40-hex revisions, all include flags false), and rejects
+  `change` + `commit_range` with `ERROR_UNSUPPORTED_WORKFLOW_TYPE`.
+- Working-tree stores initial receipt, range stores null: `store.create` branches on
+  `state.review_target.review_mode`; working-tree recomputes the absent-aware receipt and derives
+  `dirty_baseline_paths` as before; commit-range validates through `reviewRange` and stores
+  `initial_receipt: null` with `dirty_baseline_paths` from the range's added/modified/deleted kinds
+  (`rangeDirtyBaselinePaths`). `base_head` is the range base.
+- Canonical submitted target equality: `store.submitReview` normalizes the submitted target
+  (`exactPaths` on approved paths) and requires `canonicalJson` equality with the persisted
+  `state.review_target`, replacing the old working-tree-only structural checks.
+- Working approval requires receipt, range approval requires null: working-tree `APPROVED` still
+  requires a fresh verified receipt (`ERROR_STALE_RECEIPT` otherwise); commit-range `APPROVED`
+  rejects any receipt (`ERROR_INVALID_REVIEW`). Non-approved reviews still reject non-null receipts.
+- Range commit authorization rejected: `store.authorizeCommit` fails with `ERROR_COMMIT_NOT_ALLOWED`
+  unless `state.review_target.review_mode` is `working_tree`; `permittedNextActions` drops
+  `workflow_authorize_commit` from the parent at a `STOPPED_APPROVED` commit-range workflow, while a
+  working-tree `review_only` workflow still authorizes commits.
+- Reviewer views omit nonexistent implementer handoff: `roleView` filters the reviewer's
+  implementation-handoff fields (`implementation_summary`/`status`/`receipt`/`known_failures`,
+  `agent_touched_paths`, `scope_changed_paths`, `acceptance_results`, `validation_results`,
+  `finding_resolution_map`) out of `review_only` reviewer views, keeping criteria/validations,
+  `dirty_baseline_paths`, finding buckets, classifications, review receipt, and stop/recovery context;
+  `change` reviewer views are unchanged.
+- Schema: `workflow_create.validation_requirements` minItems lowered to 0 (empty allowed for
+  `review_only`, still required non-empty for `change` via `createState`/`contractList`), and
+  `workflow_submit_review.review_target` now accepts the commit-range target (`createReviewTargetSchema`).
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- Updated `workflow.node.mjs` "create rejects unknown fields and invalid target combinations"
+  (renamed from "unsupported type and target mismatches"): `review_only` + working-tree now creates a
+  `REVIEWING` workflow instead of returning `ERROR_UNSUPPORTED_WORKFLOW_TYPE`; all other rejection
+  cases kept.
+- New "review-only working-tree workflow starts reviewing with an initial receipt": workflow_type
+  `review_only`, phase `REVIEWING`, initial receipt present, empty dirty baseline, reviewer
+  `workflow_submit_review` action, implementation fields null.
+- New "review-only commit-range workflow stores null receipt and range-derived dirty baseline": null
+  `initial_receipt`, `base_head` equals range base, dirty baseline only `added.txt` (unchanged
+  `note.txt` excluded), exact persisted range target.
+- New "review-only creation rejects bad flags, revisions, paths, and ancestry": reversed range
+  `ERROR_NON_ANCESTOR`, unknown revision `ERROR_INVALID_REVISION`, equal range `ERROR_INVALID_REVISION`,
+  include-flag violations `ERROR_INVALID_SHAPE` (both modes), directory and both-endpoints-absent
+  paths `ERROR_INVALID_REVIEW_PATH`, and `change` + `commit_range` `ERROR_UNSUPPORTED_WORKFLOW_TYPE`.
+- New "working-tree approval requires a receipt and range approval rejects receipts": working-tree
+  `APPROVED` without a receipt `ERROR_STALE_RECEIPT`; commit-range `APPROVED` with a receipt
+  `ERROR_INVALID_REVIEW`; both valid approvals reach `STOPPED_APPROVED`, range with null
+  `review_receipt`.
+- New "range workflows reject commit authorization while working-tree review-only allows it":
+  working-tree review-only parent lists `workflow_authorize_commit` and authorizes; range parent
+  lists only `workflow_create_optional_followup` and `workflow_authorize_commit` returns
+  `ERROR_COMMIT_NOT_ALLOWED`.
+- New "reviewer views omit nonexistent implementer handoff for review-only workflows": the nine
+  implementation-handoff keys are absent from a `review_only` reviewer view while criteria,
+  validations, dirty baseline, finding buckets, classifications, review receipt, and stop/recovery
+  context remain; a `change` reviewer view still exposes `implementation_summary`.
+- New "review submission requires canonical target equality and rejects stale receipts": mismatched
+  `head_revision`, include flag, or approved paths all return `ERROR_INVALID_REVIEW` with no mutation,
+  and the exact target accepts.
+- New "review-only restart preserves phase, receipt, and permitted actions": reopen retains
+  `REVIEWING`, `review_only`, the initial receipt, and the reviewer action.
+- New `protocol.node.mjs` "review-only workflows over STDIO cover working-tree approval and range
+  commit denial": real STDIO working-tree review-only create/approve/authorize-commit and
+  commit-range create/approve with a null receipt, parent action list, and `ERROR_COMMIT_NOT_ALLOWED`
+  denial.
+- Updated "exact create tool schema matches the normative contract": `validation_requirements`
+  `minItems` is now 0 to permit empty `review_only` validations.
+- All other existing tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='review.only|commit.range|historical|receipt|authorization' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs`: pass, 17/17.
+- `pnpm test:workflow-mcp`: pass, 76/76.
+- `pnpm test`: pass, 95/95.
+- `git diff --check`: pass.
+- `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.
