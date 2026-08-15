@@ -1,0 +1,8 @@
+# Project-scoped local workflow state server. State is stored outside the repository by default.
+[mcp_servers.workflow_state]
+command = "node"
+args = ["--no-warnings", ".codex/workflow-mcp/server.mjs"]
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+required = false
+default_tools_approval_mode = "prompt"

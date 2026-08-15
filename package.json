@@ -1,0 +1,19 @@
+{
+  "name": "codex-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --no-warnings .codex/workflow-mcp/server.mjs",
+    "test": "node --test .codex/agents/tests/*.node.mjs .codex/workflow-mcp/tests/*.node.mjs",
+    "test:agents": "node --test .codex/agents/tests/*.node.mjs",
+    "test:workflow-mcp": "node --test .codex/workflow-mcp/tests/*.node.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "packageManager": "pnpm@10.30.1"
+}

@@ -1,0 +1,428 @@
+#!/usr/bin/env node
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { fail, safeError } from "./errors.mjs";
+import { openStore } from "./store.mjs";
+
+const instructions =
+  "Authoritative local workflow state for custom agents. Create a workflow, pass only the role capability to each agent, and include expected_version on every mutation. The parent owns user authorization; reviewers do not authorize commits; APPROVED stops optional remediation. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+
+const common = {
+  type: "object",
+  properties: {
+    workflow_id: { type: "string" },
+    capability: { type: "string" },
+    expected_version: { type: "integer", minimum: 0 },
+  },
+  required: ["workflow_id", "capability", "expected_version"],
+  additionalProperties: false,
+};
+
+function schema(properties, required, extra = {}) {
+  return {
+    type: "object",
+    properties: { ...properties },
+    required,
+    additionalProperties: false,
+    ...extra,
+  };
+}
+
+const resolutionMapSchema = {
+  type: "object",
+  additionalProperties: { type: "string", enum: ["resolved", "still_present", "superseded"] },
+};
+
+const findingSchema = {
+  type: "object",
+  properties: {
+    finding_id: { type: "string", minLength: 1, maxLength: 80 },
+    severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
+    blocking: { type: "boolean" },
+    file_and_line: { type: "string", minLength: 1, maxLength: 300 },
+    failure_scenario: { type: "string", minLength: 1, maxLength: 2000 },
+    impact: { type: "string", minLength: 1, maxLength: 2000 },
+    violated_requirement: { type: "string", minLength: 1, maxLength: 2000 },
+    remediation: { type: "string", minLength: 1, maxLength: 2000 },
+    missing_or_inadequate_test: { type: "string", minLength: 1, maxLength: 2000 },
+  },
+  required: [
+    "finding_id",
+    "severity",
+    "blocking",
+    "file_and_line",
+    "failure_scenario",
+    "impact",
+    "violated_requirement",
+    "remediation",
+    "missing_or_inadequate_test",
+  ],
+  additionalProperties: false,
+};
+
+const reviewTargetSchema = {
+  type: "object",
+  properties: {
+    review_mode: { type: "string", enum: ["working_tree"] },
+    base_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
+    head_revision: { type: "null" },
+    approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+    include_staged: { type: "boolean", const: true },
+    include_unstaged: { type: "boolean", const: true },
+    include_untracked: { type: "boolean", const: true },
+  },
+  required: [
+    "review_mode",
+    "base_revision",
+    "head_revision",
+    "approved_paths",
+    "include_staged",
+    "include_unstaged",
+    "include_untracked",
+  ],
+  additionalProperties: false,
+};
+
+const tools = [
+  {
+    name: "workflow_create",
+    description: "Create an IMPLEMENTING workflow and return one-time role capabilities.",
+    inputSchema: schema(
+      {
+        objective: { type: "string", minLength: 1, maxLength: 4000 },
+        approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        base_head: { type: "string", pattern: "^[0-9a-f]{40}$" },
+        max_repair_cycles: { type: "integer", minimum: 0, maximum: 2 },
+      },
+      ["objective", "approved_paths"],
+    ),
+    annotations: {
+      title: "Create workflow",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_get",
+    description: "Read a workflow state; capabilities are never returned.",
+    inputSchema: schema(
+      {
+        workflow_id: { type: "string" },
+        capability: { type: "string" },
+        role: { type: "string", enum: ["parent", "implementer", "reviewer", "committer"] },
+      },
+      ["workflow_id", "capability", "role"],
+    ),
+    annotations: {
+      title: "Get workflow",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_get_audit",
+    description: "Read append-only workflow audit events.",
+    inputSchema: schema(
+      {
+        workflow_id: { type: "string" },
+        capability: { type: "string" },
+        role: { type: "string", enum: ["parent", "implementer", "reviewer", "committer"] },
+      },
+      ["workflow_id", "capability", "role"],
+    ),
+    annotations: {
+      title: "Get workflow audit",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_submit_implementation",
+    description:
+      "Submit implementation evidence and advance IMPLEMENTING or REPAIRING to REVIEWING.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        status: {
+          type: "string",
+          enum: ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"],
+        },
+        summary: { type: "string", minLength: 1, maxLength: 4000 },
+        changed_paths: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 200 },
+        acceptance_evidence: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 2000 },
+          maxItems: 50,
+        },
+        validation_evidence: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 2000 },
+          maxItems: 50,
+        },
+        implementation_receipt: { type: "object" },
+        known_failures: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 2000 },
+          maxItems: 50,
+        },
+        finding_resolution_map: resolutionMapSchema,
+      },
+      [
+        ...common.required,
+        "status",
+        "summary",
+        "changed_paths",
+        "acceptance_evidence",
+        "validation_evidence",
+        "implementation_receipt",
+        "known_failures",
+        "finding_resolution_map",
+      ],
+    ),
+    annotations: {
+      title: "Submit implementation",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_submit_review",
+    description:
+      "Submit reviewer findings; approved working-tree reviews must include a current receipt.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        review_status: { type: "string", enum: ["APPROVED", "CHANGES_REQUESTED", "INCONCLUSIVE"] },
+        blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
+        optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
+        review_receipt: { type: ["object", "null"] },
+        review_target: reviewTargetSchema,
+        prior_finding_classifications: resolutionMapSchema,
+      },
+      [
+        ...common.required,
+        "review_status",
+        "blocking_findings",
+        "optional_findings",
+        "review_receipt",
+        "review_target",
+        "prior_finding_classifications",
+      ],
+    ),
+    annotations: {
+      title: "Submit review",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_authorize_repair",
+    description: "Authorize exact existing blocking finding IDs for the next bounded repair cycle.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
+      },
+      [...common.required, "finding_ids"],
+    ),
+    annotations: {
+      title: "Authorize repair",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_finalize_blocked",
+    description: "Finalize STOPPED_BLOCKED after the maximum repair cycle is exhausted.",
+    inputSchema: schema(common.properties, common.required),
+    annotations: {
+      title: "Finalize blocked",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_create_optional_followup",
+    description:
+      "Create a fresh linked cycle-0 workflow for explicitly authorized optional findings.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        objective: { type: "string", minLength: 1, maxLength: 4000 },
+        approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        base_head: { type: "string", pattern: "^[0-9a-f]{40}$" },
+        optional_finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [
+        ...common.required,
+        "objective",
+        "approved_paths",
+        "optional_finding_ids",
+        "user_authorization",
+      ],
+    ),
+    annotations: {
+      title: "Create optional follow-up",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_authorize_commit",
+    description:
+      "Record separate parent/user commit authorization after receipt freshness verification.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "user_authorization"],
+    ),
+    annotations: {
+      title: "Authorize commit",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_record_commit",
+    description: "Record a committer Git result after verifying current HEAD and reviewed content.",
+    inputSchema: schema(
+      { ...common.properties, commit_hash: { type: "string", pattern: "^[0-9a-f]{40}$" } },
+      [...common.required, "commit_hash"],
+    ),
+    annotations: {
+      title: "Record commit",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+];
+
+function json(value) {
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+function errorResult(error) {
+  const safe = safeError(error);
+  return { isError: true, content: [{ type: "text", text: JSON.stringify(safe) }] };
+}
+
+export function createServer(store = openStore()) {
+  const server = new Server(
+    { name: "workflow-state", version: "1.0.0" },
+    { capabilities: { tools: {} }, instructions },
+  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    try {
+      const args = request.params.arguments ?? {};
+      let result;
+      switch (request.params.name) {
+        case "workflow_create":
+          result = store.create(args);
+          break;
+        case "workflow_get":
+          result = store.get(args.workflow_id, args.role, args.capability);
+          break;
+        case "workflow_get_audit":
+          result = store.audit(args.workflow_id, args.role, args.capability);
+          break;
+        case "workflow_submit_implementation":
+          result = store.submitImplementation(args);
+          break;
+        case "workflow_submit_review":
+          result = store.submitReview(args);
+          break;
+        case "workflow_authorize_repair":
+          result = store.authorizeRepair(args);
+          break;
+        case "workflow_finalize_blocked":
+          result = store.finalizeBlocked(args);
+          break;
+        case "workflow_create_optional_followup":
+          result = store.createOptionalFollowup(args);
+          break;
+        case "workflow_authorize_commit":
+          result = store.authorizeCommit(args);
+          break;
+        case "workflow_record_commit":
+          result = store.recordCommit(args);
+          break;
+        default:
+          fail("ERROR_UNKNOWN_TOOL", "tool is not available");
+      }
+      return json(result);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+  return server;
+}
+
+export async function main() {
+  const transport = new StdioServerTransport();
+  let store;
+  let server;
+  let shuttingDown = false;
+  let connected = false;
+  const shutdown = async (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      if (connected && server) await server.close();
+    } catch {
+      // The transport may already be closed by the client.
+    }
+    try {
+      await transport.close();
+    } catch {
+      // Closing an already-closed STDIO transport is harmless.
+    }
+    store?.close();
+    if (exitCode !== null) process.exitCode = exitCode;
+  };
+  transport.onclose = () => {
+    void shutdown(null);
+  };
+  process.stdin.once("end", () => {
+    void shutdown(null);
+  });
+  process.once("SIGINT", () => {
+    void shutdown(0);
+  });
+  process.once("SIGTERM", () => {
+    void shutdown(0);
+  });
+  store = openStore();
+  server = createServer(store);
+  await server.connect(transport);
+  connected = true;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(() => (process.exitCode = 1));
+}
