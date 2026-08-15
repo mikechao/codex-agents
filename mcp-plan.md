@@ -505,7 +505,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='stage|prepare|receipt|tree|commit authorization' .codex/workflow-mcp/tests/{git,workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** preparation binds authorization to exact HEAD, index tree, paths, and receipt.
 
-- [ ] **MCP-7.2 — Record success and retryable non-commit outcomes**
+- [x] **MCP-7.2 — Record success and retryable non-commit outcomes**
   - **Prerequisites/commit:** MCP-7.1; `feat(workflow): record external commit outcomes`.
   - **Owned:** `.codex/workflow-mcp/git.mjs`, `.codex/workflow-mcp/server.mjs`,
     `.codex/workflow-mcp/store.mjs`, `.codex/workflow-mcp/transitions.mjs`,
@@ -1639,6 +1639,114 @@ Validation:
 - `pnpm test`: pass, 117/117 (19 agents + 98 workflow/protocol/migration).
 - `git diff --check`: pass.
 - `git status --short`: only the seven owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-7.2 — Record success and retryable non-commit outcomes
+
+DONE
+
+Task: MCP-7.2
+Outcome: `workflow_submit_commit_result` now records external commit outcomes against the prepared
+attempt. A claimed `committed` outcome is verified against the current HEAD/hash, one parent equal to
+the prepared head, the prepared tree, and the exact prepared paths before entering the terminal
+`COMMITTED` phase; a claimed `not_committed` outcome with a null hash, a bounded failure summary, and
+an unchanged HEAD enters the retryable `STOPPED_NOT_COMMITTED` stop. The parent can then call
+`workflow_retry_commit` (common + `retry_context`), which clears the attempt and result, preserves
+commit authorization, and returns to `COMMIT_AUTHORIZED` so preparation may run again. Events are
+`COMMIT_RESULT_SUBMITTED` with outcome `committed`/`not_committed` and `COMMIT_RETRY_AUTHORIZED` with
+outcome `retry`, all under the sanitized audit envelope with the failure summary absent from audit.
+
+Files changed:
+- `.codex/workflow-mcp/git.mjs`
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Normative `workflow_submit_commit_result` added (committer): tool schema is common + `attempt_id`
+  (UUID), `outcome` (`committed`|`not_committed`), `commit_hash` (40-hex or null), and
+  `failure_summary` (1..2000 chars or null); dispatched in the server and implemented in the store via
+  the transactional `#mutate` with `COMMIT_RESULT_SUBMITTED` and audit outcome equal to the claimed
+  outcome. `submitCommitResult` in `transitions.mjs` requires phase `COMMIT_PREPARED`, rejects
+  attempt IDs that do not equal `commit_preparation.attempt_id`, and validates the exact field
+  combinations: `committed` requires a 40-hex `commit_hash` and null `failure_summary`, while
+  `not_committed` requires a null `commit_hash` and a non-empty bounded `failure_summary`.
+- Successful verification: the store runs the new `git.mjs` `verifyPreparedCommit` inside the
+  immediate transaction and requires current HEAD to equal the hash, exactly one parent equal to
+  `commit_preparation.prepared_head`, the commit tree to equal `prepared_tree`, and the
+  prepared-head..commit changed paths to exactly equal `expected_paths`; success persists
+  `commit_result:{outcome:"committed",commit_hash,failure_summary:null}` and enters `COMMITTED`.
+  Any verification failure rolls back with `ERROR_COMMIT_MISMATCH` and no state or audit change.
+- Unchanged-HEAD `STOPPED_NOT_COMMITTED`: for a `not_committed` claim the store verifies the current
+  HEAD still equals `prepared_head` (changed HEAD fails `ERROR_COMMIT_MISMATCH`, the MCP-7.3 mismatch
+  branch), then persists `commit_result:{outcome:"not_committed",commit_hash:null,failure_summary}`
+  and enters the retryable `STOPPED_NOT_COMMITTED` stop, which is not terminal.
+- Parent `workflow_retry_commit` (common + `retry_context`): dispatched to the store's transactional
+  `#mutate` with `COMMIT_RETRY_AUTHORIZED` and outcome `retry`; the transition requires phase
+  `STOPPED_NOT_COMMITTED`, clears `commit_preparation` and `commit_result`, preserves
+  `commit_authorization`, restores `COMMIT_AUTHORIZED`, and stores
+  `recovery_context:{kind:"commit",context:retry_context,recovered_at:<ISO>}`.
+- Phase/actions: `STOPPED_NOT_COMMITTED` added to `PHASES`; the committer now gets
+  `workflow_submit_commit_result` at `COMMIT_PREPARED` and the parent gets `workflow_retry_commit` at
+  `STOPPED_NOT_COMMITTED`; `COMMITTED` remains action-empty for every role. The committer view already
+  exposes `commit_preparation`/`commit_result`, so no projection changes were needed.
+- Audit safety: both new events use the exact sanitized envelope; the bounded `failure_summary` and
+  the commit hash are retained in state (`commit_result`) but never appear in serialized audit
+  envelopes, which carry only the `committed`/`not_committed`/`retry` outcome tokens.
+- All mutations remain transactional, version-checked, capability-checked, and audit-safe; no new
+  dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "commit result records a verified single-parent success": modify → stage →
+  prepare → external `git commit` → `submitCommitResult` committed; exact `commit_result`, preserved
+  `commit_preparation`, empty committer actions at `COMMITTED`, exact `COMMIT_RESULT_SUBMITTED`
+  envelope (phases, outcome `committed`, null link, no hash text).
+- New "commit result rejects attempt, field combination, role, version, and phase errors without
+  mutation": missing/extra fields, mismatched `attempt_id` (`ERROR_COMMIT_MISMATCH`), invalid outcome,
+  `committed` with null/non-hex hash or a failure summary, `not_committed` with a hash, null/empty or
+  over-bounded failure summary, wrong role/version/phase, with version and audit count unchanged.
+- New "hook and command failure with unchanged HEAD enters a retryable stop": a rejecting `pre-commit`
+  hook makes `git commit` fail with HEAD unchanged, `not_committed` enters `STOPPED_NOT_COMMITTED`
+  with the exact `commit_result`, the parent action is `["workflow_retry_commit"]`, and the failure
+  text is absent from audit.
+- New "bounded commit failure is retained in state but absent from audit": a 2,000-character bounded
+  failure summary persists in `commit_result` but never appears in serialized audit.
+- New "retry clears the attempt and result and permits preparation again": role/version/missing-extra
+  `retry_context` denials, retry to `COMMIT_AUTHORIZED` with cleared preparation/result, preserved
+  authorization, `kind:"commit"` recovery context, exact `COMMIT_RETRY_AUTHORIZED` envelope (outcome
+  `retry`, no context text), and a re-preparation with a fresh `attempt_id`.
+- New "committed results are terminal and cannot retry": all roles have empty actions at `COMMITTED`,
+  and both retry and a second result submission fail `ERROR_INVALID_TRANSITION`.
+- Updated "commit preparation succeeds across modify, add, delete, and mode" to assert the committer
+  action at `COMMIT_PREPARED` is now `["workflow_submit_commit_result"]`.
+- New `protocol.node.mjs` "exact commit result and retry tool schemas match the normative contract":
+  exact properties/required/bounds for both tools and absence of any legacy fields.
+- New "commit result success over STDIO records a verified external commit": real transport through
+  prepare → external commit → committed result → `COMMITTED`, sanitized audit, and denied retry.
+- New "not committed failure and retry over STDIO": real transport hook-rejected commit → retryable
+  stop → parent retry restoring `COMMIT_AUTHORIZED` with cleared attempt/result and preserved
+  authorization.
+- Updated the existing STDIO prepare test's `COMMIT_PREPARED` committer action to
+  `["workflow_submit_commit_result"]`.
+- All other existing tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='commit result|committed|not.committed|retry|hook' .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 10/10.
+- `pnpm test:workflow-mcp`: pass, 107/107.
+- `pnpm test`: pass, 126/126 (19 agents + 107 workflow/protocol/migration/git).
+- `git diff --check`: pass.
+- `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).

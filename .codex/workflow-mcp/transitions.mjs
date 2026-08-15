@@ -40,6 +40,7 @@ export const PHASES = [
   "STOPPED_REPAIR_EXHAUSTED",
   "COMMIT_AUTHORIZED",
   "COMMIT_PREPARED",
+  "STOPPED_NOT_COMMITTED",
   "COMMITTED",
 ];
 
@@ -212,9 +213,11 @@ const ACTION_MATRIX = {
     STOPPED_NEEDS_CONTEXT: ["workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
     STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
+    STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
   },
   committer: {
     COMMIT_AUTHORIZED: ["workflow_prepare_commit", "workflow_record_commit"],
+    COMMIT_PREPARED: ["workflow_submit_commit_result"],
   },
 };
 
@@ -793,6 +796,83 @@ export function prepareCommit(state, input, evidence) {
     prepared_at: new Date().toISOString(),
   };
   next.phase = "COMMIT_PREPARED";
+  return next;
+}
+
+export function submitCommitResult(state, input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "commit result input is invalid");
+  }
+  exactKeys(
+    input,
+    [
+      "workflow_id",
+      "capability",
+      "expected_version",
+      "attempt_id",
+      "outcome",
+      "commit_hash",
+      "failure_summary",
+    ],
+    "commit result",
+  );
+  ensurePhase(state, "COMMIT_PREPARED");
+  if (state.commit_preparation?.attempt_id !== input.attempt_id) {
+    fail("ERROR_COMMIT_MISMATCH", "attempt ID does not match the prepared attempt");
+  }
+  if (!["committed", "not_committed"].includes(input.outcome)) {
+    fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
+  }
+  const next = clone(state);
+  if (input.outcome === "committed") {
+    if (typeof input.commit_hash !== "string" || !/^[0-9a-f]{40}$/u.test(input.commit_hash)) {
+      fail("ERROR_INVALID_SHAPE", "committed result requires a commit hash");
+    }
+    if (input.failure_summary !== null) {
+      fail("ERROR_INVALID_SHAPE", "committed result cannot include a failure summary");
+    }
+    next.commit_result = {
+      outcome: "committed",
+      commit_hash: input.commit_hash,
+      failure_summary: null,
+    };
+    next.phase = "COMMITTED";
+  } else {
+    if (input.commit_hash !== null) {
+      fail("ERROR_INVALID_SHAPE", "not-committed result cannot include a commit hash");
+    }
+    if (input.failure_summary === null || typeof input.failure_summary !== "string") {
+      fail("ERROR_INVALID_SHAPE", "not-committed result requires a failure summary");
+    }
+    next.commit_result = {
+      outcome: "not_committed",
+      commit_hash: null,
+      failure_summary: boundedString(input.failure_summary, "failure_summary", 2000),
+    };
+    next.phase = "STOPPED_NOT_COMMITTED";
+  }
+  return next;
+}
+
+export function retryCommit(state, input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "commit retry input is invalid");
+  }
+  exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "retry_context"],
+    "commit retry",
+  );
+  ensurePhase(state, "STOPPED_NOT_COMMITTED");
+  const next = clone(state);
+  next.commit_preparation = null;
+  next.commit_result = null;
+  next.phase = "COMMIT_AUTHORIZED";
+  next.recovery_context = {
+    kind: "commit",
+    context: boundedString(input.retry_context, "retry_context", 2000),
+    recovered_at: new Date().toISOString(),
+  };
   return next;
 }
 

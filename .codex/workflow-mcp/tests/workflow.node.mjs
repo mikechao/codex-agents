@@ -2201,7 +2201,7 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
     assert.deepEqual(prepared.commit_preparation.expected_paths, approved);
     assert.equal(prepared.commit_preparation.review_receipt_digest, objectDigest(reviewReceipt));
     assert.match(prepared.commit_preparation.prepared_at, /^[0-9]{4}-/u);
-    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_submit_commit_result"]);
     assert.equal(git("rev-parse", "HEAD"), head);
     assert.equal(git("write-tree"), indexTree);
     assert.deepEqual(git("diff", "--cached", "--name-only").split("\n").filter(Boolean).sort(), approved);
@@ -2337,6 +2337,199 @@ test("commit preparation executes no hooks and leaves Git state untouched", () =
     assert.equal(git("log", "--oneline"), logBefore);
     assert.equal(git("status", "--porcelain"), statusBefore);
     assert.equal(existsSync(join(root, "hook-ran")), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("commit result records a verified single-parent success", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "commit result" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    writeFileSync(join(root, "note.txt"), "v2\n");
+    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} });
+    store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
+    const headBefore = git("rev-parse", "HEAD");
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
+    git("commit", "-qm", "external change");
+    const hash = git("rev-parse", "HEAD");
+    assert.equal(git("rev-parse", "HEAD~1"), headBefore);
+    const committed = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: hash, failure_summary: null });
+    assert.equal(committed.phase, "COMMITTED");
+    assert.equal(committed.version, 5);
+    assert.deepEqual(committed.commit_result, { outcome: "committed", commit_hash: hash, failure_summary: null });
+    assert.deepEqual(committed.commit_preparation, prepared.commit_preparation);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
+    const events = store.audit(id, "parent", caps.parent);
+    const resultEvent = events[events.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");
+    assert.equal(resultEvent.version, 5);
+    assert.equal(resultEvent.summary.phase_before, "COMMIT_PREPARED");
+    assert.equal(resultEvent.summary.phase_after, "COMMITTED");
+    assert.equal(resultEvent.summary.outcome, "committed");
+    assert.equal(resultEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes(hash), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("commit result rejects attempt, field combination, role, version, and phase errors without mutation", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    const attemptId = prepared.commit_preparation.attempt_id;
+    const versionBefore = store.get(id, "parent", caps.parent).version;
+    const auditBefore = store.audit(id, "parent", caps.parent).length;
+    const submit = (overrides) => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: attemptId, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null, ...overrides });
+    const cases = [
+      [{ attempt_id: "0".repeat(36) }, "ERROR_COMMIT_MISMATCH"],
+      [{ outcome: "mismatch" }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "committed", commit_hash: null }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "committed", commit_hash: "xyz" }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "committed", failure_summary: "failed" }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "not_committed", commit_hash: "0".repeat(40) }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "not_committed", failure_summary: null }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "not_committed", failure_summary: "" }, "ERROR_INVALID_SHAPE"],
+      [{ outcome: "not_committed", failure_summary: "x".repeat(2001) }, "ERROR_INVALID_SHAPE"],
+      [{ extra: true }, "ERROR_INVALID_SHAPE"],
+    ];
+    for (const [overrides, expected] of cases) {
+      assert.equal(errorCategory(() => submit(overrides)), expected, JSON.stringify(overrides));
+    }
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.reviewer, expected_version: 4, attempt_id: attemptId, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null })), "ERROR_CAPABILITY_DENIED");
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 3, attempt_id: attemptId, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null })), "ERROR_VERSION_CONFLICT");
+    const fresh = create(store, root, git, { objective: "wrong phase result" });
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: fresh.workflow.workflow_id, capability: fresh.capabilities.committer, expected_version: 0, attempt_id: attemptId, outcome: "committed", commit_hash: git("rev-parse", "HEAD"), failure_summary: null })), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, versionBefore);
+    assert.equal(store.audit(id, "parent", caps.parent).length, auditBefore);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("hook and command failure with unchanged HEAD enters a retryable stop", () => {
+  const { root, git } = fixture();
+  try {
+    mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+    writeFileSync(join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(root, ".git", "hooks", "pre-commit"), 0o755);
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
+    const headBefore = git("rev-parse", "HEAD");
+    let failed = false;
+    try { git("commit", "-qm", "blocked attempt"); } catch { failed = true; }
+    assert.equal(failed, true);
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    const failureSummary = "pre-commit hook rejected the commit";
+    const stopped = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "not_committed", commit_hash: null, failure_summary: failureSummary });
+    assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
+    assert.equal(stopped.version, 5);
+    assert.deepEqual(stopped.commit_result, { outcome: "not_committed", commit_hash: null, failure_summary: failureSummary });
+    assert.deepEqual(stopped.commit_preparation, prepared.commit_preparation);
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_retry_commit"]);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
+    const events = store.audit(id, "parent", caps.parent);
+    const resultEvent = events[events.length - 1];
+    assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");
+    assert.equal(resultEvent.summary.phase_before, "COMMIT_PREPARED");
+    assert.equal(resultEvent.summary.phase_after, "STOPPED_NOT_COMMITTED");
+    assert.equal(resultEvent.summary.outcome, "not_committed");
+    assert.equal(resultEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes(failureSummary), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bounded commit failure is retained in state but absent from audit", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    const failureSummary = "command rejected: " + "x".repeat(1982);
+    assert.equal(failureSummary.length, 2000);
+    const stopped = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "not_committed", commit_hash: null, failure_summary: failureSummary });
+    assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
+    assert.equal(stopped.commit_result.failure_summary, failureSummary);
+    assert.equal(stopped.commit_result.failure_summary.length, 2000);
+    const serializedAudit = JSON.stringify(store.audit(id, "parent", caps.parent));
+    assert.equal(serializedAudit.includes("command rejected"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("retry clears the attempt and result and permits preparation again", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    const stopped = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "not_committed", commit_hash: null, failure_summary: "hook rejected" });
+    assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
+
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.committer, expected_version: 5, retry_context: "x" })), "ERROR_CAPABILITY_DENIED");
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 4, retry_context: "x" })), "ERROR_VERSION_CONFLICT");
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5 })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, retry_context: "x", extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(store.get(id, "parent", caps.parent).version, 5);
+
+    const retried = store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, retry_context: "hook fixed" });
+    assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    assert.equal(retried.version, 6);
+    assert.equal(retried.commit_preparation, null);
+    assert.equal(retried.commit_result, null);
+    assert.deepEqual(retried.commit_authorization, stopped.commit_authorization);
+    assert.equal(retried.recovery_context.kind, "commit");
+    assert.equal(retried.recovery_context.context, "hook fixed");
+    assert.match(retried.recovery_context.recovered_at, /^[0-9]{4}-/u);
+    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, ["workflow_prepare_commit", "workflow_record_commit"]);
+    const events = store.audit(id, "parent", caps.parent);
+    const retryEvent = events[events.length - 1];
+    assert.equal(retryEvent.event_type, "COMMIT_RETRY_AUTHORIZED");
+    assert.equal(retryEvent.summary.phase_before, "STOPPED_NOT_COMMITTED");
+    assert.equal(retryEvent.summary.phase_after, "COMMIT_AUTHORIZED");
+    assert.equal(retryEvent.summary.outcome, "retry");
+    assert.equal(retryEvent.summary.linked_workflow_id, null);
+    assert.equal(JSON.stringify(events).includes("hook fixed"), false);
+
+    const reprepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 6 });
+    assert.equal(reprepared.phase, "COMMIT_PREPARED");
+    assert.notEqual(reprepared.commit_preparation.attempt_id, prepared.commit_preparation.attempt_id);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("committed results are terminal and cannot retry", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const { created, id, caps } = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
+    git("commit", "-qm", "successful commit");
+    const hash = git("rev-parse", "HEAD");
+    const committed = store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 4, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: hash, failure_summary: null });
+    assert.equal(committed.phase, "COMMITTED");
+    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+      assert.deepEqual(store.get(id, role, caps[role]).permitted_next_actions, []);
+    }
+    assert.equal(errorCategory(() => store.retryCommit({ workflow_id: id, capability: caps.parent, expected_version: 5, retry_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.submitCommitResult({ workflow_id: id, capability: caps.committer, expected_version: 5, attempt_id: prepared.commit_preparation.attempt_id, outcome: "committed", commit_hash: hash, failure_summary: null })), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, 5);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -458,6 +458,57 @@ export const tools = [
     },
   },
   {
+    name: "workflow_submit_commit_result",
+    description:
+      "Submit the outcome of an external commit attempt; a verified commit enters COMMITTED and an unchanged-HEAD failure enters a retryable stop.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        attempt_id: { type: "string", pattern: "^[0-9a-f-]{36}$" },
+        outcome: { type: "string", enum: ["committed", "not_committed"] },
+        commit_hash: {
+          oneOf: [{ type: "string", pattern: "^[0-9a-f]{40}$" }, { type: "null" }],
+        },
+        failure_summary: {
+          oneOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }],
+        },
+      },
+      [
+        ...common.required,
+        "attempt_id",
+        "outcome",
+        "commit_hash",
+        "failure_summary",
+      ],
+    ),
+    annotations: {
+      title: "Submit commit result",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_retry_commit",
+    description:
+      "Authorize a retry after an unchanged-HEAD commit failure; clears the attempt and result and returns to commit authorization.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        retry_context: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "retry_context"],
+    ),
+    annotations: {
+      title: "Retry commit",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_record_commit",
     description: "Record a committer Git result after verifying current HEAD and reviewed content.",
     inputSchema: schema(
@@ -532,6 +583,12 @@ export function createServer(store = openStore()) {
           break;
         case "workflow_prepare_commit":
           result = store.prepareCommit(args);
+          break;
+        case "workflow_submit_commit_result":
+          result = store.submitCommitResult(args);
+          break;
+        case "workflow_retry_commit":
+          result = store.retryCommit(args);
           break;
         case "workflow_record_commit":
           result = store.recordCommit(args);

@@ -324,3 +324,72 @@ export function prepareCommitReceipt(root, state) {
     expected_paths: expectedPaths,
   };
 }
+
+function commitChangedPaths(root, fromRevision, toRevision) {
+  const changed = new Set();
+  const diff = git(root, ["diff", "--name-status", "-z", fromRevision, toRevision]);
+  const parts = diff.split("\0");
+  for (let index = 0; index < parts.length; index += 1) {
+    const status = parts[index];
+    if (!status) continue;
+    const path = parts[index + 1];
+    if (!path) fail("ERROR_COMMIT_MISMATCH", "commit path is invalid");
+    changed.add(path);
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const destination = parts[index + 2];
+      if (!destination) fail("ERROR_COMMIT_MISMATCH", "rename path is invalid");
+      changed.add(destination);
+      index += 1;
+    }
+    index += 1;
+  }
+  return [...changed].sort();
+}
+
+export function verifyPreparedCommit(root, state, commitHash) {
+  if (typeof commitHash !== "string" || !/^[0-9a-f]{40}$/u.test(commitHash)) {
+    fail("ERROR_COMMIT_MISMATCH", "commit hash is invalid");
+  }
+  const preparation = state.commit_preparation;
+  if (!preparation || typeof preparation !== "object") {
+    fail("ERROR_COMMIT_MISMATCH", "commit attempt is not prepared");
+  }
+  const head = currentHead(root);
+  if (head !== commitHash) fail("ERROR_COMMIT_MISMATCH", "commit is not current HEAD");
+  const parent = git(root, ["rev-list", "--parents", "-n", "1", commitHash]).trim().split(" ");
+  if (parent.length !== 2) fail("ERROR_COMMIT_MISMATCH", "commit must have one parent");
+  if (parent[1] !== preparation.prepared_head)
+    fail("ERROR_COMMIT_MISMATCH", "commit parent is not the prepared head");
+  const tree = git(root, ["rev-parse", `${commitHash}^{tree}`]).trim();
+  if (tree !== preparation.prepared_tree)
+    fail("ERROR_COMMIT_MISMATCH", "commit tree does not match the prepared tree");
+  const expected = [...preparation.expected_paths].sort();
+  const actual = commitChangedPaths(root, preparation.prepared_head, commitHash);
+  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) {
+    fail("ERROR_COMMIT_MISMATCH", "changed paths do not match the preparation");
+  }
+  return {
+    commit_hash: commitHash,
+    parent: preparation.prepared_head,
+    tree,
+    changed_paths: actual,
+  };
+}
+
+export function verifyCommitResult(root, state, input) {
+  if (input.outcome === "committed") {
+    verifyPreparedCommit(root, state, input.commit_hash);
+    return;
+  }
+  if (input.outcome === "not_committed") {
+    const preparation = state.commit_preparation;
+    if (!preparation || typeof preparation !== "object") {
+      fail("ERROR_COMMIT_MISMATCH", "commit attempt is not prepared");
+    }
+    if (currentHead(root) !== preparation.prepared_head) {
+      fail("ERROR_COMMIT_MISMATCH", "HEAD changed during the commit attempt");
+    }
+    return;
+  }
+  fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
+}

@@ -11,6 +11,7 @@ import {
   repositoryRoot,
   reviewRange,
   verifyCommit,
+  verifyCommitResult,
   verifyReviewReceipt,
 } from "./git.mjs";
 import {
@@ -29,7 +30,9 @@ import {
   recordCommit,
   resumeImplementation,
   resumeReview,
+  retryCommit,
   roleView,
+  submitCommitResult,
   submitImplementation,
   submitReview,
 } from "./transitions.mjs";
@@ -540,6 +543,54 @@ export class WorkflowStore {
         const evidence = prepareCommitReceipt(this.root, state);
         return prepareCommit(state, input, evidence);
       },
+    );
+  }
+
+  submitCommitResult(input) {
+    mutationInput(input);
+    exactKeys(
+      input,
+      [
+        "workflow_id",
+        "capability",
+        "expected_version",
+        "attempt_id",
+        "outcome",
+        "commit_hash",
+        "failure_summary",
+      ],
+      "commit result",
+    );
+    return this.#mutate(
+      input.workflow_id,
+      "committer",
+      input.capability,
+      input.expected_version,
+      "COMMIT_RESULT_SUBMITTED",
+      (state) => {
+        const next = submitCommitResult(state, input);
+        verifyCommitResult(this.root, state, input);
+        return next;
+      },
+      input.outcome,
+    );
+  }
+
+  retryCommit(input) {
+    mutationInput(input);
+    exactKeys(
+      input,
+      ["workflow_id", "capability", "expected_version", "retry_context"],
+      "commit retry",
+    );
+    return this.#mutate(
+      input.workflow_id,
+      "parent",
+      input.capability,
+      input.expected_version,
+      "COMMIT_RETRY_AUTHORIZED",
+      (state) => retryCommit(state, input),
+      "retry",
     );
   }
 
