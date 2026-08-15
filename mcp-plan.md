@@ -311,7 +311,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test .codex/agents/tests/change-receipt.node.mjs && pnpm test:agents`.
   - **Done:** absent support is deterministic and cannot be enabled accidentally.
 
-- [ ] **MCP-2.1 — Add complete v2 state construction and digest storage**
+- [x] **MCP-2.1 — Add complete v2 state construction and digest storage**
   - **Prerequisites/commit:** MCP-1.2; `feat(workflow): add digest-backed v2 state storage`.
   - **Owned:** `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/validation.mjs`,
@@ -661,6 +661,49 @@ Validation:
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-2.1 — Add complete v2 state construction and digest storage
+
+DONE
+
+Task: MCP-2.1
+Outcome: Every newly inserted workflow row is now a complete digest-protected v2 row: `createState` builds the full normative state skeleton (`schema_version: 2`, `workflow_type: "change"`, `legacy_v1: false`, empty contract lists, synthesized working-tree `review_target`, plus every new normative key and the documented temporary compatibility keys), the store persists a server-computed `initial_receipt` and derived `dirty_baseline_paths`, and a `state_digest` column is required on every insert/update and verified on every read.
+
+Files changed:
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+
+Requirements completed:
+- Schema set to 2 (`SCHEMA_VERSION = 2`); `createState` constructs every normative v2 key with its documented empty value and never omits one.
+- The v1 public creation call is adapted internally as a `change`: `workflow_type: "change"`, `acceptance_criteria: []`, `validation_requirements: []`, and a synthesized working-tree `review_target` (`base_revision` = base HEAD, `head_revision: null`, all include flags true) so MCP-3.1 can cut the public schema later.
+- `store.create` (and the linked optional-follow-up child) computes the server receipt, checks `base_head`, and persists it as `initial_receipt`; `dirty_baseline_paths` is derived as the sorted paths in `added`/`modified`/`deleted` (unchanged/absent excluded).
+- Temporary compatibility keys (`implementation_changed_paths`, `implementation_acceptance_evidence`, `implementation_validation_evidence`, `authorized_optional_ids`, `user_authorization_summary`) are initialized exactly as v1 did and are still updated by the untouched v1 `submitImplementation`.
+- `state_digest`: the constructor detects the column with `PRAGMA table_info(workflows)` and runs `ALTER TABLE workflows ADD COLUMN state_digest TEXT` for old DBs; all new inserts/updates set `state_digest = objectDigest(state)`; `#row` verifies the digest on every read. A null-digest row yields `ERROR_MIGRATION_REQUIRED`; a mismatched digest yields `ERROR_STATE_CORRUPT`.
+- Digest verification applies inside the same immediate transactions, so a corrupt or old row aborts reads and mutations without any state or audit change.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New: "v2 creation constructs every normative state key and stores a verified digest" — asserts schema 2, all normative keys/defaults (including synthesized review target, initial receipt, empty contract/result/finding arrays), and that the stored digest equals `objectDigest` of the parsed `state_json`.
+- New: "records dirty baseline paths from the initial receipt" — modified + added paths are included sorted; an unchanged path yields an empty baseline.
+- New: "rejects digest and JSON tampering and preserves state on failed mutation" — tampered `state_json` and tampered digest both yield `ERROR_STATE_CORRUPT`; null digest yields `ERROR_MIGRATION_REQUIRED`; a failed mutation leaves `state_json`/`state_digest` byte-identical; a successful mutation advances the digest and read-back.
+- All 15 existing workflow tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='schema|digest|corrupt' .codex/workflow-mcp/tests/workflow.node.mjs`: pass, 3/3.
+- `pnpm test:workflow-mcp`: pass, 18/18.
+- `pnpm test`: pass, 37/37.
+- `git diff --check`: pass.
+- `git status --short`: only the three owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
 
 Plan deviations:
 - none.

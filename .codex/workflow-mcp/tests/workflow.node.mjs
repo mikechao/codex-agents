@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { WorkflowError } from "../errors.mjs";
 import { resolveStatePath, WorkflowStore } from "../store.mjs";
+import { objectDigest } from "../validation.mjs";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "workflow-state-"));
@@ -334,6 +335,126 @@ test("rejects stale review and committed digest mismatches without mutation", ()
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, commitBefore.version);
     assert.equal(store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length, commitAuditBefore);
     assert.equal(approved.phase, "STOPPED_APPROVED");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("v2 creation constructs every normative state key and stores a verified digest", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "v2 state", approved_paths: ["note.txt"] });
+    const workflow = created.workflow;
+    assert.equal(workflow.schema_version, 2);
+    assert.equal(workflow.version, 0);
+    assert.equal(workflow.workflow_type, "change");
+    assert.equal(workflow.legacy_v1, false);
+    assert.equal(workflow.phase, "IMPLEMENTING");
+    assert.equal(workflow.objective, "v2 state");
+    assert.equal(workflow.base_head, created.workflow.base_head);
+    assert.deepEqual(workflow.approved_paths, ["note.txt"]);
+    assert.deepEqual(workflow.acceptance_criteria, []);
+    assert.deepEqual(workflow.validation_requirements, []);
+    assert.deepEqual(workflow.review_target, {
+      review_mode: "working_tree",
+      base_revision: workflow.base_head,
+      head_revision: null,
+      approved_paths: ["note.txt"],
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    });
+    assert.deepEqual(workflow.initial_receipt, receipt(root));
+    assert.deepEqual(workflow.dirty_baseline_paths, []);
+    assert.equal(workflow.repair_cycle, 0);
+    assert.equal(workflow.max_repair_cycles, 2);
+    assert.equal(workflow.parent_workflow_id, null);
+    assert.equal(workflow.source_workflow_id, null);
+    assert.deepEqual(workflow.linked_findings, []);
+    assert.equal(workflow.remediation_context, null);
+    assert.equal(workflow.implementation_summary, null);
+    assert.equal(workflow.implementation_status, null);
+    assert.deepEqual(workflow.agent_touched_paths, []);
+    assert.deepEqual(workflow.scope_changed_paths, []);
+    assert.deepEqual(workflow.acceptance_results, []);
+    assert.deepEqual(workflow.validation_results, []);
+    assert.equal(workflow.implementation_receipt, null);
+    assert.deepEqual(workflow.implementation_known_failures, []);
+    assert.deepEqual(workflow.finding_resolution_map, {});
+    assert.deepEqual(workflow.prior_finding_classifications, {});
+    assert.deepEqual(workflow.blocking_findings, []);
+    assert.deepEqual(workflow.optional_findings, []);
+    assert.equal(workflow.review_receipt, null);
+    assert.equal(workflow.stop_context, null);
+    assert.equal(workflow.recovery_context, null);
+    assert.deepEqual(workflow.repair_authorized_ids, []);
+    assert.equal(workflow.concern_acceptance, null);
+    assert.equal(workflow.commit_authorization, null);
+    assert.equal(workflow.commit_preparation, null);
+    assert.equal(workflow.commit_result, null);
+    assert.deepEqual(workflow.implementation_changed_paths, []);
+    assert.deepEqual(workflow.implementation_acceptance_evidence, []);
+    assert.deepEqual(workflow.implementation_validation_evidence, []);
+    assert.deepEqual(workflow.authorized_optional_ids, []);
+    assert.equal(workflow.user_authorization_summary, null);
+    const row = store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(created.workflow.workflow_id);
+    assert.equal(row.state_digest, objectDigest(JSON.parse(row.state_json)));
+    assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).phase, "IMPLEMENTING");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("records dirty baseline paths from the initial receipt", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    writeFileSync(join(root, "note.txt"), "modified\n");
+    writeFileSync(join(root, "new.txt"), "added\n");
+    const created = store.create({ objective: "baseline", approved_paths: ["note.txt", "new.txt"] });
+    assert.deepEqual(created.workflow.dirty_baseline_paths, ["new.txt", "note.txt"]);
+    writeFileSync(join(root, "note.txt"), "before\n");
+    const clean = store.create({ objective: "clean", approved_paths: ["note.txt"] });
+    assert.deepEqual(clean.workflow.dirty_baseline_paths, []);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("rejects digest and JSON tampering and preserves state on failed mutation", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "tamper", approved_paths: ["note.txt"] });
+    const id = created.workflow.workflow_id;
+    const read = () => store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(id);
+    const original = read();
+    const submit = (expected_version) => store.submitImplementation({ workflow_id: id, capability: created.capabilities.implementer, expected_version, status: "DONE", summary: "x", changed_paths: [], acceptance_evidence: ["e"], validation_evidence: ["v"], implementation_receipt: receipt(root), known_failures: [], finding_resolution_map: {} });
+
+    const tamperedState = JSON.parse(original.state_json);
+    tamperedState.objective = "tampered";
+    store.db.prepare("UPDATE workflows SET state_json = ? WHERE workflow_id = ?").run(JSON.stringify(tamperedState), id);
+    const tampered = read();
+    assert.equal(errorCategory(() => store.get(id, "parent", created.capabilities.parent)), "ERROR_STATE_CORRUPT");
+    assert.equal(errorCategory(() => submit(0)), "ERROR_STATE_CORRUPT");
+    assert.deepEqual(read(), tampered);
+    store.db.prepare("UPDATE workflows SET state_json = ? WHERE workflow_id = ?").run(original.state_json, id);
+
+    store.db.prepare("UPDATE workflows SET state_digest = ? WHERE workflow_id = ?").run("0".repeat(64), id);
+    assert.equal(errorCategory(() => store.get(id, "parent", created.capabilities.parent)), "ERROR_STATE_CORRUPT");
+    store.db.prepare("UPDATE workflows SET state_digest = ? WHERE workflow_id = ?").run(original.state_digest, id);
+
+    store.db.prepare("UPDATE workflows SET state_digest = NULL WHERE workflow_id = ?").run(id);
+    assert.equal(errorCategory(() => store.get(id, "parent", created.capabilities.parent)), "ERROR_MIGRATION_REQUIRED");
+    store.db.prepare("UPDATE workflows SET state_digest = ? WHERE workflow_id = ?").run(original.state_digest, id);
+    assert.equal(store.get(id, "parent", created.capabilities.parent).phase, "IMPLEMENTING");
+
+    assert.equal(errorCategory(() => submit(99)), "ERROR_VERSION_CONFLICT");
+    assert.deepEqual(read(), original);
+
+    const progressed = submit(0);
+    assert.equal(progressed.phase, "REVIEWING");
+    const after = read();
+    assert.equal(after.state_digest, objectDigest(JSON.parse(after.state_json)));
+    assert.equal(store.get(id, "parent", created.capabilities.parent).phase, "REVIEWING");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

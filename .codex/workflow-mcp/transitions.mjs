@@ -13,7 +13,7 @@ import {
   userAuthorization,
 } from "./validation.mjs";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const PHASES = [
   "IMPLEMENTING",
   "REVIEWING",
@@ -55,18 +55,38 @@ export function createState(input, repositoryRoot, currentHead) {
   return {
     schema_version: SCHEMA_VERSION,
     version: 0,
+    workflow_id: null,
+    workflow_type: "change",
+    legacy_v1: false,
     phase: "IMPLEMENTING",
     objective,
     base_head: baseHead,
     approved_paths: approvedPaths,
+    acceptance_criteria: [],
+    validation_requirements: [],
+    review_target: {
+      review_mode: "working_tree",
+      base_revision: baseHead,
+      head_revision: null,
+      approved_paths: approvedPaths,
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    },
+    initial_receipt: null,
+    dirty_baseline_paths: [],
     repair_cycle: 0,
     max_repair_cycles: maxRepairCycles,
     parent_workflow_id: optionalText(input.parent_workflow_id, "parent_workflow_id", 100),
+    source_workflow_id: null,
+    linked_findings: [],
+    remediation_context: null,
     implementation_summary: null,
     implementation_status: null,
-    implementation_changed_paths: [],
-    implementation_acceptance_evidence: [],
-    implementation_validation_evidence: [],
+    agent_touched_paths: [],
+    scope_changed_paths: [],
+    acceptance_results: [],
+    validation_results: [],
     implementation_receipt: null,
     implementation_known_failures: [],
     finding_resolution_map: {},
@@ -74,9 +94,16 @@ export function createState(input, repositoryRoot, currentHead) {
     blocking_findings: [],
     optional_findings: [],
     review_receipt: null,
-    commit_authorization: null,
-    commit_result: null,
+    stop_context: null,
+    recovery_context: null,
     repair_authorized_ids: [],
+    concern_acceptance: null,
+    commit_authorization: null,
+    commit_preparation: null,
+    commit_result: null,
+    implementation_changed_paths: [],
+    implementation_acceptance_evidence: [],
+    implementation_validation_evidence: [],
     authorized_optional_ids: [],
     user_authorization_summary: null,
   };
@@ -344,6 +371,14 @@ export function changedReceiptPaths(receipt) {
   if (!receipt || !Array.isArray(receipt.paths)) return [];
   return receipt.paths
     .filter((item) => item.state !== "unchanged")
+    .map((item) => item.path)
+    .sort();
+}
+
+export function dirtyBaselinePaths(receipt) {
+  if (!receipt || !Array.isArray(receipt.paths)) return [];
+  return receipt.paths
+    .filter((item) => ["added", "modified", "deleted"].includes(item.state))
     .map((item) => item.path)
     .sort();
 }
