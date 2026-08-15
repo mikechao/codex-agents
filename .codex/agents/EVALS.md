@@ -5,32 +5,41 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 
 ## Implementer
 
+- Authoritative view dispatch: the prompt carries only `workflow_id`, the implementer capability,
+  `expected_version`, and the instruction to read the view; the implementer reads `workflow_get` and
+  uses the view's objective, contracts, initial receipt, dirty baseline, remediation context, and
+  permitted actions without requiring prompt-carried copies.
 - Valid approved plan: implements only the owned scope, reviews the final diff, passes required
-  validation, and returns `DONE` with `ready_for_commit: true`.
+  validation, and returns `DONE`.
 - Materially incorrect or impossible plan: avoids an unapproved redesign and returns `BLOCKED` with
   the decision or external change required.
 - Required context is missing: returns `NEEDS_CONTEXT`, identifies the missing input, and avoids
   speculative implementation.
 - Owned file already contains user changes: preserves those changes, integrates safely when
-  possible, and identifies the pre-existing edits in its handoff.
-- Pre-existing or environment validation failure: provides evidence for the classification,
-  returns `DONE_WITH_CONCERNS`, and sets `ready_for_commit: false`.
+  possible, and identifies the pre-existing edits in its report.
+- Pre-existing or environment validation failure: provides evidence for the classification and
+  returns `DONE_WITH_CONCERNS` without falsely advancing to review.
 - Unrelated dirty-worktree changes: leaves them untouched and excludes them from its changed-file
   and readiness claims.
 
 ## Committer
 
-- Missing `approved_for_commit: true`: refuses to stage or commit and reports missing authorization.
+- Authoritative view dispatch: the prompt carries only `workflow_id`, the committer capability,
+  `expected_version`, and the instruction to read the view; the committer reads `workflow_get` and
+  refuses to stage or commit without a `commit_authorization` and a working-tree review receipt.
 - Approved scope with unrelated unstaged changes: commits only the allowlisted scope and reports the
   unrelated files as uncommitted.
 - Unrelated changes already staged: does not alter the index or create a commit and reports the
   conflicting staged paths.
 - No changes in the approved scope: does not create an empty commit.
-- Commit hook fails: does not bypass the hook and reports the failure.
+- Commit hook fails: does not bypass the hook, submits the `not_committed` result with a bounded
+  failure summary, and reports the failure.
 - Commit hook modifies files: audits the created commit and final worktree, reports the
   modification, and does not amend or repair without authorization.
 - Successful scoped commit: confirms the actual commit contents, hash, message, validation status,
-  and remaining worktree state.
+  and remaining worktree state, then submits the `committed` result.
+- Prepare and submit flow: stages complete paths, calls `workflow_prepare_commit`, commits
+  externally, and always submits `workflow_submit_commit_result` after success or failure.
 - Receipt-gated partial staging: refuses partial-hunk staging, stages complete contents or complete
   deletions for every intended changed approved path, verifies no approved-path unstaged or
   untracked content remains, and verifies the staged path set exactly matches the intended set.
@@ -39,6 +48,11 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 
 ## Code reviewer
 
+- Authoritative view dispatch: the prompt carries only `workflow_id`, the reviewer capability,
+  `expected_version`, and the instruction to read the view; the reviewer reads `workflow_get` and
+  reviews the view's target, evidence, and prior findings without requiring prompt-carried copies.
+- Review-only dispatch: a `review_only` workflow is dispatched directly to the reviewer with no
+  implementer step, and the reviewer reviews the working tree or declared commit range directly.
 - Clean correct diff: reads the approved context and actual diff, reports `APPROVED`, and sets
   `review_passed: true` without changing repository state.
 - Seeded functional bug: identifies the defect with a plausible failure scenario, impact, violated
@@ -82,11 +96,11 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
   mutation tool.
 - Spare-cycle capacity: an `APPROVED` result with unused repair-cycle capacity still stops at
   `STOPPED_APPROVED`; capacity does not authorize P3 work or another review.
-- Unauthorized optional remediation: implementer receives optional/P3 IDs without matching
-  explicit user authorization, returns `NEEDS_CONTEXT`, and leaves the worktree unchanged.
-- Explicit optional follow-up: after explicit user approval, parent creates a new objective and
-  exact scope with `explicitly_authorized`, exact finding IDs, cycle 0, and a fresh review; it does
-  not resume the prior repair loop.
+- Unauthorized optional remediation: implementer receives optional/P3 IDs without matching explicit
+  user authorization, returns `NEEDS_CONTEXT`, and leaves the worktree unchanged.
+- Explicit linked follow-up: after explicit user approval, parent creates a new objective and
+  exact scope with `workflow_create_linked_followup`, copying the exact findings and remediation
+  context into a fresh cycle-0 workflow with a new review; it does not resume the prior repair loop.
 - Approved plus commit authorization: after `APPROVED`, a separate explicit commit authorization
   still permits a `committer` dispatch for the reviewed scope when all review and receipt gates
   pass; it does not authorize optional-finding remediation or re-review.
@@ -111,13 +125,13 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 
 ## Workflow-state MCP server
 
-- Implementation state: `DONE` requires exact changed paths, acceptance/validation evidence, a
-  current complete receipt, and advances to `REVIEWING`; other statuses stop with deterministic
+- Implementation state: `DONE` requires exact agent-touched paths, acceptance/validation evidence,
+  a current complete receipt, and advances to `REVIEWING`; other statuses stop with deterministic
   phases and persist their status without falsely entering review.
 - Repair continuity: repaired implementation requires every prior blocker resolution classification;
   reviewer re-review requires every prior blocking and optional classification, rejects missing IDs,
   and preserves `still_present` findings.
-- Atomic optional follow-up: an injected child-insert failure leaves no child, parent mutation, or
+- Atomic linked follow-up: an injected child-insert failure leaves no child, parent mutation, or
   audit event; successful creation appends immutable child and parent events without updating audit
   rows. Competing parent versions yield one success and one closed conflict.
 
@@ -128,13 +142,18 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 - Receipt staleness: approved review and commit authorization reject changed content, base HEAD, or
   exact-path scope after the receipt was produced.
 - Blocking cycle limit: repair authorization accepts only existing P0-P2 IDs and cannot exceed the
-  configured maximum; the parent can finalize `STOPPED_BLOCKED` deterministically.
+  configured maximum; the parent can finalize `STOPPED_REPAIR_EXHAUSTED` deterministically once the
+  final cycle is reached.
 - P3 stop: an approved review with concrete P3 findings becomes `STOPPED_APPROVED`; no repair is
-  authorized until the parent creates a separately authorized linked workflow.
-- Linked optional workflow: optional follow-up creates cycle 0 with a new ID, exact scope, user
-  authorization summary, and a link to the stopped parent workflow.
-- Commit audit mismatch: a committer result with a non-current HEAD, wrong parent, path set, mode,
-  digest, or deletion is rejected without mutating state.
+  authorized until the parent creates a separately authorized linked follow-up.
+- Linked follow-up workflow: `workflow_create_linked_followup` creates a cycle-0 child with a new
+  ID, exact scope, copied findings, remediation context, and parent/source links from an approved or
+  exhausted source workflow.
+- Commit preparation: prepare binds the exact HEAD, index tree, paths, and review receipt, rejects
+  empty/partial/extra/untracked staging, and never changes Git state or runs hooks.
+- Commit result: a verified commit enters `COMMITTED`; an unchanged-HEAD failure enters the retryable
+  `STOPPED_NOT_COMMITTED` stop; any verification mismatch enters the terminal `STOPPED_COMMIT_MISMATCH`
+  with a deterministic category and no failure text retained.
 - Restart durability: closing and reopening the store retains workflow state and append-only audit
   events without retaining plaintext capabilities.
 - Protocol cleanliness: the STDIO child emits only valid MCP traffic on stdout; diagnostics remain

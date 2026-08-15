@@ -538,7 +538,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
 
 ### Cutover and end-to-end coverage
 
-- [ ] **MCP-8.1 — Cut contracts and documentation to v2**
+- [x] **MCP-8.1 — Cut contracts and documentation to v2**
   - **Prerequisites/commit:** MCP-7.3; `docs(agents): adopt authoritative workflow state v2`.
   - **Owned:** `.codex/agents/WORKFLOW.md`, `.codex/agents/implementer.toml`,
     `.codex/agents/code_reviewer.toml`, `.codex/agents/committer.toml`,
@@ -1874,6 +1874,98 @@ Plan deviations:
   existing range-denial pattern), so a mismatch stop rejects preparation with `ERROR_STALE_RECEIPT`
   rather than `ERROR_INVALID_TRANSITION`; retry and result submission are rejected with
   `ERROR_INVALID_TRANSITION` as specified.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-8.1 — Cut contracts and documentation to v2
+
+DONE
+
+Task: MCP-8.1
+Outcome: Agents, tools, and documentation now describe one authoritative v2 protocol. Role views are
+authoritative: the parent passes each agent only its `workflow_id`, `capability`, `expected_version`,
+and the instruction to read its own view with `workflow_get`, and prompts no longer duplicate
+objective, criteria, evidence, finding, receipt, or repair state. WORKFLOW.md documents the full v2
+phase list, recovery stops, review-only dispatch (which skips the implementer), linked follow-ups,
+and the prepare/external-attempt/result commit flow, plus a labeled prompt-only degraded mode and a
+labeled migrated-v1 compatibility paragraph for `workflow_record_commit`. The server instructions and
+all three TOML contracts reference only v2 tools and views.
+
+Files changed:
+- `.codex/agents/WORKFLOW.md`
+- `.codex/agents/implementer.toml`
+- `.codex/agents/code_reviewer.toml`
+- `.codex/agents/committer.toml`
+- `.codex/agents/EVALS.md`
+- `.codex/workflow-mcp/README.md`
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Role views made authoritative: WORKFLOW.md, the server `instructions`, and all three TOML contracts
+  now instruct the parent to pass only `workflow_id` + `capability` + `expected_version` plus the
+  read-your-view instruction; every role reads its complete view via `workflow_get`.
+- Duplicated prompt state removed: the implementer, reviewer, and committer contracts no longer carry
+  `remediation_policy`, `authorized_finding_ids`, `repair_cycle`, `user_authorization`,
+  `ready_for_commit`, `changed_paths`, `acceptance_evidence`, `validation_evidence`, or the
+  v1 handoff YAML blocks; degraded-mode handoff fields now live only in WORKFLOW.md's labeled
+  prompt-only degraded mode section.
+- Phases, recovery, review-only, linked follow-up, and commit flow documented: WORKFLOW.md and the
+  workflow-mcp README cover the full v2 phase list, implementation/review/commit recovery and retry
+  tools, `review_only` working-tree and commit-range workflows, `workflow_create_linked_followup`,
+  and the `workflow_prepare_commit` -> external `git commit` -> `workflow_submit_commit_result`
+  flow.
+- Review-only dispatch skips implementer: WORKFLOW.md, README.md, the reviewer contract, and the
+  server instructions state that `review_only` workflows are dispatched directly to the reviewer.
+- Committer must submit result: the committer contract, WORKFLOW.md, README.md, and server
+  instructions require `workflow_submit_commit_result` after every external commit attempt.
+- `workflow_record_commit` appears only in labeled migrated-v1 compatibility text: WORKFLOW.md and
+  README.md mention it solely in their "Migrated v1 compatibility" sections, and the server tool
+  description is prefixed "Migrated-v1 compatibility".
+- Obsolete names removed from owned files: no owned contract, doc, server, or test file contains
+  `STOPPED_BLOCKED`, `workflow_create_optional_followup`, or `optional-ID-only`; EVALS.md now uses
+  `STOPPED_REPAIR_EXHAUSTED` and linked-follow-up terminology.
+
+Tests added or updated:
+- New `protocol.node.mjs` dependency-free TOML subset parser plus "agent contracts parse as TOML and
+  reference the authoritative v2 view and exact tools": parses the three contracts, asserts names,
+  descriptions, and that instructions reference the exact role tools (`workflow_get`,
+  `workflow_submit_implementation`, `workflow_submit_review`, `workflow_prepare_commit`,
+  `workflow_submit_commit_result`), the common `workflow_id`/`capability`/`expected_version` tokens,
+  and carry no prompt-authoritative v1 fields.
+- New "obsolete names are absent and workflow_record_commit appears only in migrated-v1 compatibility
+  text": the seven owned doc/contract/server files contain none of the three obsolete tokens, and
+  every `workflow_record_commit` mention in WORKFLOW.md/README.md sits within a migrated-v1-labeled
+  paragraph (the server tool description is itself labeled).
+- New "normal documentation covers review-only dispatch, recovery, and the prepare/submit commit
+  flow": WORKFLOW.md and README.md document `workflow_prepare_commit`, `workflow_submit_commit_result`,
+  review-only dispatch skipping the implementer, and `workflow_create_linked_followup`; WORKFLOW.md
+  documents the recovery tools (`workflow_resume_implementation`, `workflow_accept_concerns`,
+  `workflow_resume_review`, `workflow_finalize_repair_exhausted`, `workflow_retry_commit`).
+- Updated the linked-follow-up schema test to assert the absence of any tool whose name contains
+  `optional_followup` without embedding the removed tool-name literal.
+
+Validation:
+- `node --test .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 22/22.
+- `node --test .codex/agents/tests/*.node.mjs`: pass, 19/19.
+- `rg -n 'STOPPED_BLOCKED|workflow_create_optional_followup|optional-ID-only' .codex/agents .codex/workflow-mcp`: all owned files clean (exit 1 on the owned set); the only remaining matches are in the non-owned v1-migration code and its tests (`transitions.mjs`, `migration.node.mjs`), which the plan requires to keep recognizing the legacy phase.
+- `pnpm test`: pass, 138/138.
+- `git diff --check`: pass.
+- `git status --short`: only the eight owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- Minor: the focused `rg` check is written over the whole `.codex/agents` and `.codex/workflow-mcp`
+  directories expecting zero matches, but `STOPPED_BLOCKED` necessarily survives in the non-owned
+  v1-migration code (`transitions.mjs` `V1_PHASES`/migration mapping and `migration.node.mjs` tests)
+  per the plan's own MCP-5.3 statement that it "survives only in V1_PHASES and the migration phase
+  mapping for legacy rows"; MCP-9.2 still requires v1 migration coverage, and MCP-8.1 does not own
+  those files. The check was therefore scoped to the task's owned files, which are fully clean; the
+  full-directory result is reported above. No protocol or architecture decision was invented.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.

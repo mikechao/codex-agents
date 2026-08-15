@@ -1,35 +1,99 @@
 # Custom subagent workflow
 
-This file defines lean handoff schemas and routing. Detailed role behavior remains in the TOML
-contracts beside this file. All paths are repository-relative exact file paths; directories and
-globs are not valid. The parent agent owns scope, review decisions, repair-loop counting, and
-commit authorization.
+This file defines the authoritative MCP-based workflow and routing. The workflow-state server's role
+views carry all handoff state; agent prompts carry only the workflow ID, the role capability, the
+expected version, and the instruction to read the role's own view. Detailed role behavior remains in
+the TOML contracts beside this file. All paths are repository-relative exact file paths; directories
+and globs are not valid. The parent agent owns scope, review decisions, repair-loop counting, commit
+authorization, and linked follow-up creation.
 
 ## Authoritative MCP state
 
-When available, the project-scoped `workflow_state` MCP server is authoritative for non-trivial
-workflow state. Create one workflow before dispatch, pass only each role's one-time capability to
-the corresponding agent, and include the returned `expected_version` on every mutation. Agents
-must not call tools owned by another role, and capabilities must not be included in inherited
-conversation history. Capabilities are defense-in-depth orchestration controls, not a security
-boundary against a process with equivalent host filesystem access. If the server is unavailable,
-stop and ask the user whether to use this documented prompt-only degraded mode for the current
-objective; do not silently downgrade. In degraded mode, retain the same handoff fields, receipts,
-role ownership, stopping rule, and explicit commit authorization, but the parent must track the
-version and audit state manually and record the decision.
+For non-trivial work, the project-scoped `workflow_state` MCP server is authoritative. The parent
+creates one workflow before dispatch and passes each role only its one-time capability together with
+the `workflow_id`, the current `expected_version`, and the instruction to call `workflow_get` for its
+own view. The returned role view is authoritative and complete: it carries that role's objective,
+contracts, receipts, evidence, findings, repair state, and sorted `permitted_next_actions`, so
+prompts never duplicate objective, criteria, evidence, finding, receipt, or repair state. Mutations
+pass the common `workflow_id`, `capability`, and `expected_version` fields, and the returned view
+supplies the next `expected_version`.
 
-The server transitions are:
+Each role must not call tools owned by another role, and capabilities must not be included in
+inherited conversation history. Capabilities are defense-in-depth orchestration controls, not a
+security boundary against a process with equivalent host filesystem access. If the server is
+unavailable, stop and ask the user whether to use the documented prompt-only degraded mode below; do
+not silently downgrade. In degraded mode the parent tracks the version and audit state manually and
+records the decision.
+
+### Phases
+
+```text
+IMPLEMENTING, REVIEWING, REPAIR_REQUIRED, REPAIRING,
+STOPPED_CONCERNS, STOPPED_NEEDS_CONTEXT, STOPPED_IMPLEMENTATION_BLOCKED,
+STOPPED_INCONCLUSIVE, STOPPED_APPROVED, STOPPED_REPAIR_EXHAUSTED,
+COMMIT_AUTHORIZED, COMMIT_PREPARED, STOPPED_NOT_COMMITTED,
+STOPPED_COMMIT_MISMATCH, COMMITTED
+```
+
+The main flow and its recoverable/terminal branches:
 
 ```text
 IMPLEMENTING -> REVIEWING -> REPAIR_REQUIRED -> REPAIRING -> REVIEWING
-                                  |                |
-                                  v                v
-                       STOPPED_BLOCKED    STOPPED_APPROVED -> COMMIT_AUTHORIZED -> COMMITTED
+   |  |            |   \                  |
+   |  |            |    `-> STOPPED_INCONCLUSIVE -> (resume) REVIEWING
+   |  |            |                 |                    |
+   |  |            |                 `-> APPROVED -> STOPPED_APPROVED
+   |  |            |
+   |  |            `-> CHANGES_REQUESTED -> REPAIR_REQUIRED
+   |  |
+   |  `-> STOPPED_CONCERNS -> (accept) REVIEWING
+   |
+   `-> STOPPED_NEEDS_CONTEXT / STOPPED_IMPLEMENTATION_BLOCKED -> (resume) IMPLEMENTING/REPAIRING
+
+STOPPED_APPROVED -> COMMIT_AUTHORIZED -> COMMIT_PREPARED -> COMMITTED   (terminal)
+                        |  |                 |   `-> STOPPED_COMMIT_MISMATCH (terminal)
+                        |  `-> (unchanged-HEAD failure) STOPPED_NOT_COMMITTED -> COMMIT_AUTHORIZED
+                        |
+                        `-> STOPPED_REPAIR_EXHAUSTED (terminal, when cycles exhausted)
 ```
 
-`INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE`. `APPROVED` is a hard stop for optional findings;
-an explicitly authorized optional follow-up creates a new linked cycle-0 workflow. The server
-persists an append-only audit trail and verifies receipt freshness before approval/commit.
+`REPAIR_REQUIRED` enters `REPAIRING` via `workflow_authorize_repair` and becomes terminal
+`STOPPED_REPAIR_EXHAUSTED` via `workflow_finalize_repair_exhausted` only when the repair cycle equals
+the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0
+workflow with `workflow_create_linked_followup`. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
+recoverable with `workflow_resume_review`. Implementation context/block stops are recoverable with
+`workflow_resume_implementation`. `STOPPED_CONCERNS` enters review via `workflow_accept_concerns`
+under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED`,
+`STOPPED_COMMIT_MISMATCH`, and `COMMITTED`.
+
+### Role views and dispatch
+
+- Parent view: the full persisted workflow (minus capabilities, hashes, audits, and legacy-only
+  fields). The parent owns user and commit authorization, repair and resume authorization, retry, and
+  linked follow-up creation.
+- Implementer view: objective, acceptance criteria, validation requirements, initial receipt, dirty
+  baseline, remediation context, linked findings, final implementation fields, result arrays, finding
+  resolution map, blocking findings, and permitted actions. A `change` workflow starts `IMPLEMENTING`
+  and the implementer submits with `workflow_submit_implementation`.
+- Reviewer view: criteria, validations, dirty baseline, implementation evidence and results, concern
+  acceptance, finding buckets and classifications, resolution map, review receipt, and permitted
+  actions. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
+  skipping the implementer; the reviewer view omits the nonexistent implementer handoff.
+- Committer view: criteria, validations, derived paths, implementation results and failures, concern
+  acceptance, finding buckets, review receipt, commit authorization and preparation, and permitted
+  actions. The committer prepares and then submits the commit result.
+
+### Commit flow
+
+A commit is authorized only for an approved working-tree workflow with a fresh review receipt and an
+explicit parent/user `commit_authorization`; a `commit_range` review never authorizes a commit. After
+the parent authorizes, the committer stages complete approved paths, calls `workflow_prepare_commit`
+to verify the fully staged index against the authorized receipt, runs the external `git commit`, and
+then calls `workflow_submit_commit_result` whether the commit succeeded or failed. A verified commit
+enters `COMMITTED`; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED` stop
+(cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
+`STOPPED_COMMIT_MISMATCH`. The server never changes Git state; the committer owns staging and the
+commit.
 
 ## Bootstrap and reload checklist
 
@@ -42,7 +106,45 @@ whether prompt-only degraded mode is authorized; after reload, MCP is authoritat
 tools and instructions are visible. The config's `default_tools_approval_mode = "prompt"` keeps
 workflow tool calls approval-sensitive in the host.
 
-## Parent → implementer
+## Review/fix/re-review transition
+
+For non-trivial changes, the parent runs one independent review after implementation. When
+`CHANGES_REQUESTED` contains blocking findings, the parent authorizes repair with those exact
+finding IDs, sends the implementer back into `REPAIRING`, then re-reviews. At most two
+implementer-to-reviewer repair cycles are allowed after the initial review. If blocking findings
+remain after the second cycle, finalize `STOPPED_REPAIR_EXHAUSTED` and stop; do not loop again or
+commit. Trivial edits are exempt from this loop.
+
+The parent follows these state transitions:
+
+- `CHANGES_REQUESTED` plus `REPAIR_BLOCKERS`: authorize repair on exactly the `blocking_findings`
+  IDs with `workflow_authorize_repair`, advancing to the next repair cycle. If the final cycle still
+  has blockers, `workflow_finalize_repair_exhausted` stops terminally; do not loop or commit.
+- `APPROVED` plus `STOPPED_APPROVED`: stop optional remediation immediately, report
+  `optional_findings`, and do not invoke another agent or mutation tool to address those findings.
+  Spare cycle capacity does not change this state. A separately user-authorized commit, in the
+  original or a later instruction, may still dispatch `committer` when review and receipt gates
+  pass. An explicitly user-authorized linked follow-up spawns a fresh cycle-0 child that copies the
+  exact findings and remediation context.
+- `INCONCLUSIVE` plus `STOPPED_INCONCLUSIVE`: stop without mutation and request the missing context;
+  resume with `workflow_resume_review` once the context is available.
+- `STOPPED_NEEDS_CONTEXT` / `STOPPED_IMPLEMENTATION_BLOCKED`: resume implementation with
+  `workflow_resume_implementation` once the missing context or blocker is resolved.
+- `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this
+  enters review without rewriting the failed evidence and never implies commit authorization.
+
+An `APPROVED` review is therefore the automatic stopping point. The repair-cycle allowance is a
+safety limit, not permission to pursue every possible improvement.
+
+## Prompt-only degraded mode
+
+Use this mode only when the user explicitly authorizes it for a stopped, non-trivial workflow. The
+parent retains the same handoff fields and role ownership below, tracks the version and audit state
+manually, and records the decision. The parent passes the full handoff state in the prompt because no
+authoritative view exists. The implementer receipt is evidence only; a reviewer must produce the
+commit-gating receipt after independently inspecting the declared target.
+
+### Parent -> implementer
 
 ```yaml
 objective: <approved implementation objective>
@@ -65,15 +167,14 @@ prior_findings: []
 resolution_claims: []
 ```
 
-For initial work, use `remediation_policy: blocking_only`, an empty
-`authorized_finding_ids`, and `repair_cycle: 0`. For a blocking repair, use
-`blocking_only`, exact P0-P2 IDs, and cycle 1 or 2. For an explicitly authorized optional
-follow-up, use `explicitly_authorized`, exact user-approved IDs, a new objective and scope, and
-`repair_cycle: 0`; include the explicit user authorization in the dispatch. The implementer may
-touch only authorized finding IDs during remediation. Without matching authorization, optional or
-P3 remediation returns `NEEDS_CONTEXT` and makes no mutation.
+For initial work, use `remediation_policy: blocking_only`, an empty `authorized_finding_ids`, and
+`repair_cycle: 0`. For a blocking repair, use `blocking_only`, exact P0-P2 IDs, and cycle 1 or 2.
+For an explicitly authorized optional follow-up, use `explicitly_authorized`, exact user-approved
+IDs, a new objective and scope, and `repair_cycle: 0`; include the explicit user authorization in
+the dispatch. The implementer may touch only authorized finding IDs during remediation. Without
+matching authorization, optional or P3 remediation returns `NEEDS_CONTEXT` and makes no mutation.
 
-## Implementer → parent
+### Implementer -> parent
 
 ```yaml
 status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
@@ -95,10 +196,7 @@ user_authorization: <explicit new user instruction summary or absent>
 ready_for_commit: <true only for DONE>
 ```
 
-The implementation receipt is evidence only. A reviewer must produce the commit-gating receipt
-after independently inspecting the declared target.
-
-## Parent → code reviewer
+### Parent -> code reviewer
 
 ```yaml
 objective: <approved implementation objective>
@@ -122,7 +220,7 @@ can authorize a later commit. Commit-range reviews require explicit base and hea
 three include flags set to false, and never produce a commit receipt. Contradictory include flags
 make the review `INCONCLUSIVE`.
 
-## Reviewer → parent
+### Reviewer -> parent
 
 ```yaml
 review_status: APPROVED | CHANGES_REQUESTED | INCONCLUSIVE
@@ -147,7 +245,7 @@ before new findings are reported. `CHANGES_REQUESTED` uses `REPAIR_BLOCKERS`; `A
 uses `STOPPED_APPROVED`, even when optional findings exist; `INCONCLUSIVE` uses
 `STOPPED_INCONCLUSIVE`.
 
-## Parent → committer
+### Parent -> committer
 
 ```yaml
 objective: <commit objective>
@@ -167,7 +265,7 @@ and confirms the staged path set exactly equals `intended_changed_paths`. It com
 receipt to `review_receipt` immediately before staging and again after staging. Any mismatch stops
 the commit and requests re-review. `approved_for_commit` is a separate parent/user authorization.
 
-## Committer → parent
+### Committer -> parent
 
 ```yaml
 status: COMMITTED | NOT_COMMITTED
@@ -181,43 +279,24 @@ hook_changes: <none or exact summary>
 known_failures: <none or concise list>
 ```
 
-## Review/fix/re-review transition
+## Migrated v1 compatibility
 
-For non-trivial changes, the parent runs one independent review after implementation. When
-`CHANGES_REQUESTED` contains blocking findings, the parent sends those findings and the
-implementer's resolution claims back to the implementer, then re-reviews. At most two
-implementer-to-reviewer repair cycles are allowed after the initial review. If blocking findings
-remain after the second cycle, stop and report them; do not loop again or commit. Trivial edits are
-exempt from this loop.
-
-The parent follows these state transitions:
-
-- `CHANGES_REQUESTED` plus `REPAIR_BLOCKERS`: dispatch only `blocking_findings`, with
-  `remediation_policy: blocking_only`, exact IDs, and the next repair cycle. If cycle 2 still has
-  blockers, stop and report them; do not loop or commit.
-- `APPROVED` plus `STOPPED_APPROVED`: stop optional remediation immediately, report
-  `optional_findings`, and do not invoke another agent or mutation tool to address those findings.
-  Spare cycle capacity does not change this state. A separately user-authorized commit, in the
-  original or a later instruction, may still dispatch `committer` when review and receipt gates
-  pass.
-- `INCONCLUSIVE` plus `STOPPED_INCONCLUSIVE`: stop without mutation and request the missing context.
-- An explicit user-approved optional follow-up starts a new objective with a new exact scope,
-  `remediation_policy: explicitly_authorized`, exact authorized IDs, and `repair_cycle: 0`; it
-  receives a fresh review rather than silently continuing the prior loop.
-
-An `APPROVED` review is therefore the automatic stopping point. The repair-cycle allowance is a
-safety limit, not permission to pursue every possible improvement.
+`workflow_record_commit` exists only for migrated v1 workflows that were already in `COMMIT_AUTHORIZED`
+at migration; new v2 workflows reject it with `ERROR_LEGACY_WORKFLOW`. For such a migrated row only,
+the committer may record an already-created Git commit with `workflow_record_commit`, which verifies
+the current HEAD and reviewed content and either commits or stops terminally. Do not use it for new
+v2 workflows, which use `workflow_prepare_commit` plus `workflow_submit_commit_result`.
 
 ## Observed end-to-end run
 
 The workflow was exercised while hardening these contracts:
 
-1. The implementer completed the approved scope and validation.
+1. The implementer completed the approved scope and validation and submitted complete evidence.
 2. The reviewer independently found three blocking defects that passing tests had not exposed.
-3. The implementer repaired them and returned a finding-resolution map.
+3. The parent authorized repair, the implementer repaired them, and returned a finding-resolution map.
 4. The reviewer classified all prior findings as resolved and returned `APPROVED` with a receipt.
-5. The committer matched that receipt before and after complete-path staging, committed only the
-   approved scope, and reported a clean index and worktree.
+5. The committer prepared the staged index, committed only the approved scope, submitted the commit
+   result, and reported a clean index and worktree.
 
 The run also exposed a governance failure: after the first approval, the parent pursued a P3
 improvement without first obtaining user approval. The change was technically useful, but the

@@ -14,15 +14,22 @@ Your job is to inspect the current project changes, determine what should be inc
 generate an accurate commit message, stage the changes, and create the commit.
 
 Rules:
-- For non-trivial work, use the authoritative `workflow_state` MCP workflow when available. Accept
-  only the committer capability from the parent, require `COMMIT_AUTHORIZED`, and record the Git
-  result with `workflow_id` and `expected_version`. Never call parent, implementer, or reviewer
-  tools. If the server is unavailable, stop and ask whether prompt-only degraded mode is authorized.
-- Require an explicit commit objective and approved_for_commit: true from the parent task; otherwise report that commit authorization is missing and stop.
-- For non-trivial implementer changes covered by AGENTS.md review policy, require
-  `review_status: APPROVED`, a `working_tree` review target, and the complete reviewer receipt.
-  A `commit_range` review never authorizes this commit. Review approval and
-  `approved_for_commit: true` are separate mandatory gates.
+- For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
+  only your `workflow_id`, your committer `capability`, the current `expected_version`, and the
+  instruction to read your authoritative view. Call `workflow_get` with role `committer`; the
+  returned view is the single source of truth and carries the approved scope, derived paths,
+  review receipt, commit authorization, and your permitted next actions. Prompts carry no
+  duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,
+  implementer, or reviewer tools. If the server is unavailable, stop and ask whether prompt-only
+  degraded mode is authorized.
+- Commit authorization lives in the view: the workflow must be an approved working-tree workflow
+  with `commit_authorization` set and a fresh `review_receipt`; a `commit_range` review never
+  authorizes a commit. Do not stage or commit without it.
+- When authorized, stage the approved paths completely, then call `workflow_prepare_commit` to
+  verify the fully staged index against the authorized review receipt. After the external `git
+  commit` succeeds or fails, call `workflow_submit_commit_result` with the attempt ID, the outcome,
+  and the commit hash or a bounded failure summary. Submit a result after every attempt, whether it
+  succeeded or failed. Pass your current `expected_version` on every mutation.
 - Inspect the working tree before doing anything.
 - Review both staged and unstaged changes.
 - Understand the actual diff before generating the commit message.
@@ -71,7 +78,7 @@ Commit message:
 - Do not invent issue numbers, ticket IDs, or breaking-change notices.
 
 Before committing:
-1. Confirm the objective and approved_for_commit value supplied by the parent.
+1. Read your committer view and confirm the approved scope, `commit_authorization`, and review receipt.
 2. Inspect git status.
 3. Inspect the relevant diff.
 4. Check recent commit messages for repository conventions when useful.
@@ -79,22 +86,29 @@ Before committing:
 6. For receipt-gated changes, stage complete approved files or deletions; for trivial changes
    without a receipt, stage only the explicitly approved files or hunks.
 7. Review the complete staged diff and check it against the approved objective.
-8. Generate the final commit message.
-9. Create the commit.
-10. Inspect the created commit and final working tree, then confirm the commit contains only the approved scope.
+8. Call `workflow_prepare_commit` and confirm the preparation succeeded.
+9. Generate the final commit message and create the commit.
+10. Inspect the created commit and final working tree, then call `workflow_submit_commit_result`
+    with the attempt ID and the committed outcome, or the not-committed outcome with a bounded
+    failure summary.
 
 If a hook modifies files or the created commit does not match the approved scope, report the exact
-result. Do not repair, amend, reset, or rewrite the commit without explicit authorization.
+result and submit the corresponding not-committed or failing outcome. Do not repair, amend, reset,
+or rewrite the commit without explicit authorization.
 
 After committing, report:
 1. The commit hash.
 2. The commit message.
 3. Files included in the commit.
-4. Validation status supplied by the implementation handoff.
+4. Validation status supplied by the view.
 5. Any files intentionally left uncommitted.
 6. Final staged and unstaged worktree state.
 7. Review status, review target, and receipt comparison results.
-8. Any hook modifications, warnings, or failures.
+8. The commit result outcome you submitted.
+9. Any hook modifications, warnings, or failures.
+
+In prompt-only degraded mode, follow the degraded-mode handoff fields in WORKFLOW.md and record the
+Git result manually; do not restate the authoritative view's state when MCP is available.
 
 Do the commit work yourself.
 Do not delegate this task to another subagent.

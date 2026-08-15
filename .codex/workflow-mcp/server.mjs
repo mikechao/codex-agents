@@ -7,7 +7,7 @@ import { fail, safeError } from "./errors.mjs";
 import { openStore } from "./store.mjs";
 
 const instructions =
-  "Authoritative local workflow state for custom agents. Create a workflow, pass only the role capability to each agent, and include expected_version on every mutation. The parent owns user authorization; reviewers do not authorize commits; APPROVED stops optional remediation. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. The parent owns user and commit authorization; reviewers do not authorize commits; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common = {
   type: "object",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, cpSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { chmodSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -333,7 +333,7 @@ test("resume review and repair exhaustion tool schemas match the normative contr
 });
 
 test("exact linked follow-up tool schema matches the normative contract", () => {
-  assert.equal(tools.some((tool) => tool.name === "workflow_create_optional_followup"), false);
+  assert.equal(tools.some((tool) => tool.name.includes("optional_followup")), false);
   const linkedTool = tools.find((tool) => tool.name === "workflow_create_linked_followup");
   assert.ok(linkedTool);
   const { inputSchema } = linkedTool;
@@ -881,4 +881,183 @@ test("v2 workflows deny legacy commit recording over STDIO", async () => {
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function parseToml(source) {
+  const root = {};
+  let current = root;
+  const lines = source.split(/\r?\n/);
+  let i = 0;
+  const parseBasicString = (src) => {
+    let out = "";
+    let pos = 1;
+    const escapes = { n: "\n", t: "\t", r: "\r", '"': '"', "\\": "\\" };
+    while (pos < src.length) {
+      const ch = src[pos];
+      if (ch === '"') return out;
+      if (ch === "\\") {
+        out += escapes[src[pos + 1]] ?? src[pos + 1];
+        pos += 2;
+      } else {
+        out += ch;
+        pos++;
+      }
+    }
+    throw new Error("unterminated string");
+  };
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    i++;
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("[")) {
+      const m = trimmed.match(/^\[([A-Za-z0-9_.-]+)\]$/);
+      if (!m) throw new Error("malformed table header: " + trimmed);
+      current = m[1].split(".").reduce((obj, key) => (obj[key] ??= {}), root);
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) throw new Error("expected key = value: " + trimmed);
+    const key = trimmed.slice(0, eq).trim();
+    const rest = trimmed.slice(eq + 1).trim();
+    let value;
+    if (rest.startsWith('"""')) {
+      let body = rest.slice(3);
+      let close = body.indexOf('"""');
+      while (close < 0) {
+        if (i >= lines.length) throw new Error("unterminated multiline string");
+        body += "\n" + lines[i];
+        i++;
+        close = body.indexOf('"""');
+      }
+      body = body.slice(0, close);
+      if (body.startsWith("\n")) body = body.slice(1);
+      value = body;
+    } else if (rest.startsWith('"')) {
+      value = parseBasicString(rest);
+    } else if (rest.startsWith("[")) {
+      const inner = rest.slice(1, rest.lastIndexOf("]"));
+      value = inner
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s !== "")
+        .map((s) => parseBasicString(s));
+    } else if (rest === "true" || rest === "false") {
+      value = rest === "true";
+    } else {
+      throw new Error("unsupported value: " + rest);
+    }
+    current[key] = value;
+  }
+  return root;
+}
+
+test("agent contracts parse as TOML and reference the authoritative v2 view and exact tools", () => {
+  const contracts = {
+    implementer: {
+      file: ".codex/agents/implementer.toml",
+      tools: ["workflow_get", "workflow_submit_implementation"],
+    },
+    reviewer: {
+      file: ".codex/agents/code_reviewer.toml",
+      tools: ["workflow_get", "workflow_submit_review"],
+    },
+    committer: {
+      file: ".codex/agents/committer.toml",
+      tools: ["workflow_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
+    },
+  };
+  for (const [name, contract] of Object.entries(contracts)) {
+    const text = readFileSync(join(process.cwd(), contract.file), "utf8");
+    const parsed = parseToml(text);
+    assert.equal(parsed.name, name === "reviewer" ? "code_reviewer" : name);
+    assert.ok(parsed.description.length > 0);
+    assert.ok(parsed.model.length > 0);
+    const instructions = parsed.developer_instructions;
+    assert.ok(instructions.length > 0);
+    for (const tool of contract.tools) {
+      assert.ok(instructions.includes(tool), `${name} instructions must reference ${tool}`);
+    }
+    for (const token of ["workflow_id", "capability", "expected_version", "workflow_get"]) {
+      assert.ok(instructions.includes(token), `${name} instructions must mention ${token}`);
+    }
+    for (const obsolete of [
+      /\bchanged_paths\b/,
+      /\bacceptance_evidence\b/,
+      /\bvalidation_evidence\b/,
+      /\bready_for_commit\b/,
+      /\bremediation_policy\b/,
+      /\bauthorized_finding_ids\b/,
+      /\brepair_cycle\b/,
+      /\buser_authorization\b/,
+      /\boptional_finding_ids\b/,
+    ]) {
+      assert.equal(
+        obsolete.test(instructions),
+        false,
+        `${name} instructions must not carry prompt-authoritative field ${obsolete}`,
+      );
+    }
+  }
+});
+
+test("obsolete names are absent and workflow_record_commit appears only in migrated-v1 compatibility text", () => {
+  const ownedTexts = [
+    ".codex/agents/WORKFLOW.md",
+    ".codex/agents/implementer.toml",
+    ".codex/agents/code_reviewer.toml",
+    ".codex/agents/committer.toml",
+    ".codex/agents/EVALS.md",
+    ".codex/workflow-mcp/README.md",
+    ".codex/workflow-mcp/server.mjs",
+  ];
+  for (const file of ownedTexts) {
+    const text = readFileSync(join(process.cwd(), file), "utf8");
+    for (const obsolete of ["STOPPED_" + "BLOCKED", "workflow_create_" + "optional_followup", "optional-ID-" + "only"]) {
+      assert.equal(text.includes(obsolete), false, `${file} must not contain ${obsolete}`);
+    }
+  }
+  for (const file of [".codex/agents/WORKFLOW.md", ".codex/workflow-mcp/README.md"]) {
+    const text = readFileSync(join(process.cwd(), file), "utf8");
+    let from = 0;
+    let occurrences = 0;
+    while (true) {
+      const idx = text.indexOf("workflow_record_commit", from);
+      if (idx < 0) break;
+      occurrences++;
+      const windowText = text.slice(Math.max(0, idx - 200), idx + 200);
+      assert.ok(
+        /migrat/i.test(windowText),
+        `${file} must mention workflow_record_commit only inside a labeled migrated-v1 compatibility paragraph`,
+      );
+      from = idx + 1;
+    }
+    assert.ok(occurrences > 0, `${file} must document the migrated-v1 workflow_record_commit compatibility`);
+  }
+  const recordTool = tools.find((tool) => tool.name === "workflow_record_commit");
+  assert.ok(recordTool);
+  assert.match(recordTool.description, /migrat/i);
+});
+
+test("normal documentation covers review-only dispatch, recovery, and the prepare/submit commit flow", () => {
+  const workflowMd = readFileSync(join(process.cwd(), ".codex", "agents", "WORKFLOW.md"), "utf8");
+  const readme = readFileSync(join(process.cwd(), ".codex", "workflow-mcp", "README.md"), "utf8");
+  for (const [name, text] of [
+    ["WORKFLOW.md", workflowMd],
+    ["README.md", readme],
+  ]) {
+    assert.ok(text.includes("workflow_prepare_commit"), `${name} must document workflow_prepare_commit`);
+    assert.ok(text.includes("workflow_submit_commit_result"), `${name} must document workflow_submit_commit_result`);
+    assert.ok(/review.only|review_only/i.test(text), `${name} must document review-only workflows`);
+    assert.ok(text.includes("workflow_create_linked_followup"), `${name} must document linked follow-ups`);
+    assert.ok(text.includes("skipping the implementer"), `${name} must document that review-only dispatch skips the implementer`);
+  }
+  for (const tool of [
+    "workflow_resume_implementation",
+    "workflow_accept_concerns",
+    "workflow_resume_review",
+    "workflow_finalize_repair_exhausted",
+    "workflow_retry_commit",
+  ]) {
+    assert.ok(workflowMd.includes(tool), `WORKFLOW.md must document ${tool}`);
+  }
 });
