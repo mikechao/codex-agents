@@ -568,7 +568,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test .codex/workflow-mcp/tests/lifecycle.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** every transition/restart boundary is asserted at store level.
 
-- [ ] **MCP-9.2 — Add real-transport lifecycle, denial, and migration coverage**
+- [x] **MCP-9.2 — Add real-transport lifecycle, denial, and migration coverage**
   - **Prerequisites/commit:** MCP-9.1; `test(workflow): cover v2 protocol end to end`.
   - **Owned:** `.codex/workflow-mcp/tests/protocol-v2.node.mjs`,
     `.codex/workflow-mcp/tests/migration.node.mjs`, and
@@ -2045,6 +2045,99 @@ Validation:
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-9.2 — Add real-transport lifecycle, denial, and migration coverage
+
+DONE
+
+Task: MCP-9.2
+Outcome: Public protocol, v1 compatibility, denial, restart/shutdown, and stdout/stderr cleanliness are
+covered end to end over the real STDIO MCP transport. A new `protocol-v2.node.mjs` suite drives three
+full real-transport journeys — a change workflow through an external commit to `COMMITTED`, a
+commit-range review through a linked change/approval/commit-authorization, and a repair through a
+stop, an implementation resume, and terminal exhaustion — asserts safe errors for wrong role, stale
+version, malformed/unknown fields, wrong phase, unknown tool, and range commit denial, and runs a
+raw-transport session that performs the initialize/tools/list/tools/call handshake, then SIGINT and
+SIGTERM, verifying stdout carries only valid JSON-RPC response frames and stderr stays sanitized
+across every scenario. `migration.node.mjs` gains a real-transport test that reopens a v1
+`COMMIT_AUTHORIZED` fixture through STDIO and completes its allowed legacy path with
+`workflow_record_commit` into `COMMITTED`.
+
+Files changed:
+- `.codex/workflow-mcp/tests/protocol-v2.node.mjs`
+- `.codex/workflow-mcp/tests/migration.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Change through external commit over STDIO: create -> implement DONE -> APPROVED ->
+  `workflow_authorize_commit` -> `workflow_prepare_commit` -> external `git commit` ->
+  `workflow_submit_commit_result` reaches `COMMITTED` with the exact `commit_result`, empty
+  permitted actions, the exact six-event audit chain, and no commit hash in serialized audit.
+- Range review to linked change/approval over STDIO: a `commit_range` review-only workflow approves
+  with a null receipt, its parent lists only `workflow_create_linked_followup`, the linked child is a
+  fresh working-tree `change` at version 0 with `source_workflow_id`/`parent_workflow_id`, the exact
+  copied finding and `{policy:"explicitly_authorized", authorized_finding_ids, repair_cycle:0,
+  user_authorization}` remediation context, its implementer view is self-contained, the child
+  implements/reviews to `STOPPED_APPROVED`, and the working-tree child authorizes a commit (proving a
+  range parent never commits while its child can); the parent audit chain ends with
+  `LINKED_FOLLOWUP_CREATED` linking the child without finding text.
+- Repair through stop/resume/exhaustion over STDIO: with `max_repair_cycles:1`, the workflow goes
+  CHANGES_REQUESTED -> REPAIRING -> `STOPPED_IMPLEMENTATION_BLOCKED` (exact `stop_context`
+  `{status:"BLOCKED",summary,stopped_from:"REPAIRING"}`) -> `workflow_resume_implementation` back to
+  REPAIRING with `recovery_context.kind:"implementation"` -> repaired DONE -> CHANGES_REQUESTED at
+  cycle 1 -> `workflow_finalize_repair_exhausted` to the terminal `STOPPED_REPAIR_EXHAUSTED` with
+  `workflow_create_linked_followup` the sole parent action and empty actions for the other roles; the
+  nine-event audit chain contains no stop/finding text.
+- Safe errors over STDIO: wrong role (`ERROR_CAPABILITY_DENIED`), stale version
+  (`ERROR_VERSION_CONFLICT`), malformed/unknown fields on create and on implementation
+  (`ERROR_INVALID_SHAPE`), wrong phase on review (`ERROR_INVALID_TRANSITION`), wrong role on repair
+  authorization (`ERROR_CAPABILITY_DENIED`), range commit denial (`ERROR_COMMIT_NOT_ALLOWED`), and an
+  unknown tool name (`ERROR_UNKNOWN_TOOL`), each without mutation.
+- Reopen a v1 fixture via STDIO and complete its allowed legacy path: a hand-built v1
+  `COMMIT_AUTHORIZED` row with a modified `note.txt` review receipt migrates on server open (parent
+  view `legacy_v1:true`, version 1, receipt intact), the committer view lists
+  `["workflow_prepare_commit","workflow_record_commit"]`, and `workflow_record_commit` with the real
+  HEAD verifies parent/tree/paths and records `COMMITTED` with `{outcome:"committed",commit_hash,
+  failure_summary:null}`, followed by exactly `["WORKFLOW_MIGRATED","COMMIT_RECORDED"]` audit events
+  with no hash in serialized audit.
+- Startup/requests/SIGINT/SIGTERM cleanliness: a raw STDIO client performs initialize,
+  notifications/initialized, tools/list, workflow_create, workflow_get, workflow_get_audit, and an
+  unknown tool call, then SIGINT and SIGTERM; every stdout byte belongs to a newline-terminated
+  JSON-RPC response frame (`jsonrpc:"2.0"`, numeric id, result), no partial or invalid frames remain,
+  the process exits 0, the database reopens cleanly, and the captured child stderr contains no
+  capability, objective, auth, finding, receipt digest (64-hex token), SQL keyword, stack frame, or
+  server module path in any scenario.
+- Manual eval rule respected: `.codex/agents/EVAL_RESULTS.md` was not modified because no EVALS
+  scenarios were run.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `.codex/workflow-mcp/tests/protocol-v2.node.mjs` with 5 tests: change-through-external-commit;
+  range-review-to-linked-change/approval; repair-through-stop/resume/exhaustion; safe-errors (role,
+  version, phase, malformed/unknown fields, range commit denial); and the raw-transport
+  startup/requests/SIGINT/SIGTERM stdout/stderr cleanliness session. 5/5 pass.
+- New `migration.node.mjs` "reopens a v1 COMMIT_AUTHORIZED fixture via STDIO and completes the
+  allowed legacy path": real-transport migration + `workflow_record_commit` into `COMMITTED`. 1 new
+  test, 10/10 pass.
+- All 148 pre-existing tests kept unchanged and passing.
+
+Validation:
+- `node --test .codex/workflow-mcp/tests/protocol-v2.node.mjs .codex/workflow-mcp/tests/migration.node.mjs`: pass, 15/15.
+- `pnpm test:agents`: pass, 19/19.
+- `pnpm test:workflow-mcp`: pass, 135/135.
+- `pnpm test`: pass, 154/154 (19 agents + 135 workflow/protocol/migration/git/lifecycle).
+- `git diff --check`: pass.
+- `git status --short`: only the two owned test files plus the requested `mcp-plan.md` update;
+  `.codex/agents/EVAL_RESULTS.md` untouched.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
 
 Plan deviations:
 - none.

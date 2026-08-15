@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WorkflowError } from "../errors.mjs";
 import { WorkflowStore } from "../store.mjs";
 import { hashCapability, issueCapability, objectDigest } from "../validation.mjs";
@@ -622,6 +625,108 @@ test("rejects malformed and unknown v1 schemas and rolls back the batch", () => 
       errorCategory(() => new WorkflowStore({ repositoryRoot: root, databasePath: unknownPath })),
       "ERROR_STATE_CORRUPT",
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reopens a v1 COMMIT_AUTHORIZED fixture via STDIO and completes the allowed legacy path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "migration-stdio-"));
+  try {
+    const git = (...args) =>
+      execFileSync("git", ["-C", root, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    const base = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "note.txt"), "after\n");
+    git("add", "note.txt");
+    git("commit", "-qm", "legacy external change");
+    const head = git("rev-parse", "HEAD");
+
+    const digest = createHash("sha256").update("after\n").digest("hex");
+    const paths = [{ path: "note.txt", state: "modified", kind: "file", mode: "100644", digest }];
+    const receiptBody = { schema_version: 1, base_head: base, approved_paths: ["note.txt"], paths };
+    const state = v1State({
+      phase: "COMMIT_AUTHORIZED",
+      base_head: base,
+      review_receipt: {
+        ...receiptBody,
+        overall_scope_hash: createHash("sha256").update(JSON.stringify(receiptBody)).digest("hex"),
+      },
+    });
+    const db = join(root, "state.sqlite");
+    const issued = createV1Database(db, [state]);
+    const capabilities = issued.get(state.workflow_id);
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")],
+      cwd: root,
+      env: { ...process.env, WORKFLOW_MCP_DB_PATH: db },
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    try {
+      const call = async (name, arguments_) =>
+        JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+      const parent = await call("workflow_get", {
+        workflow_id: state.workflow_id,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      assert.equal(parent.legacy_v1, true);
+      assert.equal(parent.phase, "COMMIT_AUTHORIZED");
+      assert.equal(parent.version, 1);
+      assert.equal(parent.review_receipt.base_head, base);
+      assert.equal(parent.review_receipt.paths[0].digest, digest);
+      assert.equal(parent.review_receipt.paths[0].state, "modified");
+      const committer = await call("workflow_get", {
+        workflow_id: state.workflow_id,
+        role: "committer",
+        capability: capabilities.committer,
+      });
+      assert.deepEqual(committer.permitted_next_actions, [
+        "workflow_prepare_commit",
+        "workflow_record_commit",
+      ]);
+
+      const recorded = await call("workflow_record_commit", {
+        workflow_id: state.workflow_id,
+        capability: capabilities.committer,
+        expected_version: 1,
+        commit_hash: head,
+      });
+      assert.equal(recorded.phase, "COMMITTED");
+      assert.equal(recorded.version, 2);
+      assert.deepEqual(recorded.commit_result, {
+        outcome: "committed",
+        commit_hash: head,
+        failure_summary: null,
+      });
+      assert.deepEqual(recorded.permitted_next_actions, []);
+
+      const audit = await call("workflow_get_audit", {
+        workflow_id: state.workflow_id,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      assert.deepEqual(
+        audit.map((event) => event.event_type),
+        ["WORKFLOW_MIGRATED", "COMMIT_RECORDED"],
+      );
+      assert.equal(JSON.stringify(audit).includes(head), false);
+    } finally {
+      await client.close();
+      await transport.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
