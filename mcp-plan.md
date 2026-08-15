@@ -412,7 +412,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='implementation|criterion|validation|touched|baseline|receipt' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** only complete evidence enters review and changed scope is server-derived.
 
-- [ ] **MCP-4.2 — Add implementation stops, resume, and concern acceptance**
+- [x] **MCP-4.2 — Add implementation stops, resume, and concern acceptance**
   - **Prerequisites/commit:** MCP-4.1; `feat(workflow): add implementation recovery transitions`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/tests/workflow.node.mjs`,
@@ -1078,6 +1078,111 @@ Pre-existing changes preserved:
 
 Plan deviations:
 - none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-4.2 — Add implementation stops, resume, and concern acceptance
+
+DONE
+
+Task: MCP-4.2
+Outcome: `workflow_submit_implementation` now stores a stop context and enters one of the three
+normative implementation stops (`STOPPED_CONCERNS`, `STOPPED_NEEDS_CONTEXT`,
+`STOPPED_IMPLEMENTATION_BLOCKED`), the parent can recover `STOPPED_NEEDS_CONTEXT` and
+`STOPPED_IMPLEMENTATION_BLOCKED` with `workflow_resume_implementation` (restoring the prior active
+phase and storing an `implementation` recovery context) or accept `STOPPED_CONCERNS` into review
+with `workflow_accept_concerns` under explicit user authorization, and the new
+`IMPLEMENTATION_STOPPED`/`IMPLEMENTATION_RESUMED`/`CONCERNS_ACCEPTED` events keep one sanitized
+append-only audit chain without weakening terminals.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Three normative stops/stop context: `submitImplementation` maps `DONE_WITH_CONCERNS`,
+  `NEEDS_CONTEXT`, and `BLOCKED` to `STOPPED_CONCERNS`, `STOPPED_NEEDS_CONTEXT`, and
+  `STOPPED_IMPLEMENTATION_BLOCKED` (the BLOCKED stop moves off the legacy `STOPPED_BLOCKED` name),
+  and for every non-DONE status stores `stop_context:{status,summary,stopped_from}` where
+  `stopped_from` is the prior `IMPLEMENTING` or `REPAIRING` phase. DONE still advances to
+  `REVIEWING` with no stop context.
+- `workflow_resume_implementation` (parent, common + `resume_context`): transition `resumeImplementation`
+  accepts only `STOPPED_NEEDS_CONTEXT`/`STOPPED_IMPLEMENTATION_BLOCKED`, restores the
+  `stop_context.stopped_from` phase, clears the stop, preserves repair state/evidence (repair cycle,
+  blocking findings, resolution map, evidence results), and stores
+  `recovery_context:{kind:"implementation",context:resume_context,recovered_at:<ISO>}`. A missing or
+  non-`IMPLEMENTING`/`REPAIRING` `stopped_from` is rejected as `ERROR_STATE_CORRUPT`.
+- `workflow_accept_concerns` (parent, common + `user_authorization`): transition `acceptConcerns`
+  accepts only `STOPPED_CONCERNS`, requires `user_authorization`, stores
+  `concern_acceptance:{user_authorization,accepted_at:<ISO>}`, enters `REVIEWING`, and clears the
+  stop without rewriting the failed/satisfied evidence results. Concern acceptance sets no
+  `commit_authorization`, so it never implies commit authorization.
+- Events: a stopping submission emits `IMPLEMENTATION_STOPPED` with `outcome` equal to the resulting
+  stop phase; DONE still emits `IMPLEMENTATION_SUBMITTED`. Resume emits `IMPLEMENTATION_RESUMED` and
+  concern acceptance emits `CONCERNS_ACCEPTED`, both with `outcome:null`; none of the new envelopes
+  carry the summary, resume context, or authorization text.
+- Parent actions: `permittedNextActions` adds `workflow_resume_implementation` at
+  `STOPPED_NEEDS_CONTEXT`/`STOPPED_IMPLEMENTATION_BLOCKED` and `workflow_accept_concerns` at
+  `STOPPED_CONCERNS`; both tools are registered with exact schemas (common + `resume_context` /
+  `user_authorization`, bounded at 2,000 characters) and dispatched in the server. Role views already
+  expose `stop_context`, `recovery_context`, and `concern_acceptance`, so no projection changes were
+  needed.
+- Wrong role/phase/version: both new mutations run inside the existing immediate transaction with
+  capability, version, and phase checks, so failures change no state or audit row.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "implementation stops persist stop context and resume restores the exact
+  source phase": exact stop_context from an initial `NEEDS_CONTEXT` stop, resume to `IMPLEMENTING`,
+  cleared stop, exact `recovery_context`, and restart persistence.
+- New "resume from repair preserves repair continuity and block stops restore REPAIRING": BLOCKED stop
+  from a repair (`stopped_from:"REPAIRING"`), resume restores `REPAIRING` with the repair cycle,
+  blocking finding, and resolution map intact, then a completed repair submission reaches `REVIEWING`.
+- New "resume and concern acceptance reject wrong role, phase, version, and extra fields":
+  `ERROR_CAPABILITY_DENIED`, `ERROR_VERSION_CONFLICT`, missing/extra `resume_context` →
+  `ERROR_INVALID_SHAPE`, concern acceptance on a non-concerns stop → `ERROR_INVALID_TRANSITION`, and
+  no mutation on any failure.
+- New "terminals cannot resume implementation or accept concerns": a `COMMITTED` workflow rejects both
+  recovery tools with `ERROR_INVALID_TRANSITION`.
+- New "concern acceptance requires authorization and retains failed evidence without commit
+  authorization": empty/extra authorization rejected, `workflow_resume_implementation` on
+  `STOPPED_CONCERNS` rejected, acceptance stores `concern_acceptance`, keeps the not-satisfied/failed
+  evidence and known failures, leaves `commit_authorization` null, and persists across reopen.
+- New "stop, resume, and concern events form a sanitized append-only chain": exact event sequence,
+  `IMPLEMENTATION_STOPPED` outcome equals the stop phase, resume/concerns outcomes null, and no
+  summary or authorization text in serialized envelopes.
+- New "parent gets resume and concern acceptance actions at implementation stops": exact
+  `permitted_next_actions` per stop phase and none for the implementer while stopped.
+- New `protocol.node.mjs` "exact recovery tool schemas match the normative contract": exact
+  properties/required/bounds for `workflow_resume_implementation` and `workflow_accept_concerns`.
+- New `protocol.node.mjs` "implementation stops resume and concerns over STDIO": real transport
+  NEEDS_CONTEXT stop → denied cross-role resume → parent resume → DONE_WITH_CONCERNS stop → accepted
+  concerns → APPROVED review.
+- Updated the BLOCKED row in "every implementation status persists and advances or stops explicitly"
+  to the normative `STOPPED_IMPLEMENTATION_BLOCKED` phase; all other existing tests kept unchanged.
+
+Validation:
+- `node --test --test-name-pattern='stop|resume|context|concern|continuity' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs`: pass, 14/14.
+- `pnpm test:workflow-mcp`: pass, 60/60.
+- `pnpm test`: pass, 79/79 (19 agents + 60 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the five owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- Minor: `resume_context` and the `workflow_resume_implementation` schema bound it at 2,000
+  characters, since the plan gives no explicit bound for recovery context; the 2,000-character detail
+  bound is the closest normative fit alongside `user_authorization`.
+- Minor: `workflow_accept_concerns` clears `stop_context` on entry to `REVIEWING`, mirroring the
+  resume behavior the plan specifies ("clears the stop"); the plan does not state it explicitly for
+  concern acceptance but leaving a stale stop in a reviewing workflow would be inconsistent.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.

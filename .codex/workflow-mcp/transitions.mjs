@@ -20,6 +20,11 @@ import {
 } from "./validation.mjs";
 
 export const SCHEMA_VERSION = 2;
+export const IMPLEMENTATION_STOP_PHASES = {
+  DONE_WITH_CONCERNS: "STOPPED_CONCERNS",
+  NEEDS_CONTEXT: "STOPPED_NEEDS_CONTEXT",
+  BLOCKED: "STOPPED_IMPLEMENTATION_BLOCKED",
+};
 export const PHASES = [
   "IMPLEMENTING",
   "REVIEWING",
@@ -188,6 +193,9 @@ const ACTION_MATRIX = {
   parent: {
     REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_blocked"],
     STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_optional_followup"],
+    STOPPED_CONCERNS: ["workflow_accept_concerns"],
+    STOPPED_NEEDS_CONTEXT: ["workflow_resume_implementation"],
+    STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
   },
   committer: {
     COMMIT_AUTHORIZED: ["workflow_record_commit"],
@@ -467,10 +475,60 @@ export function submitImplementation(state, input, repositoryRoot, freshReceipt)
     }
     next.phase = "REVIEWING";
   }
-  if (input.status === "DONE_WITH_CONCERNS") next.phase = "STOPPED_CONCERNS";
-  if (input.status === "NEEDS_CONTEXT") next.phase = "STOPPED_NEEDS_CONTEXT";
-  if (input.status === "BLOCKED") next.phase = "STOPPED_BLOCKED";
-  if (input.status !== "DONE") next.repair_authorized_ids = [];
+  if (input.status !== "DONE") {
+    next.stop_context = {
+      status: input.status,
+      summary: input.summary,
+      stopped_from: state.phase,
+    };
+    next.repair_authorized_ids = [];
+  }
+  if (input.status !== "DONE") next.phase = IMPLEMENTATION_STOP_PHASES[input.status];
+  return next;
+}
+
+export function resumeImplementation(state, input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "resume input is invalid");
+  }
+  exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "resume_context"],
+    "implementation resume",
+  );
+  ensurePhase(state, "STOPPED_NEEDS_CONTEXT", "STOPPED_IMPLEMENTATION_BLOCKED");
+  const stoppedFrom = state.stop_context?.stopped_from;
+  if (!["IMPLEMENTING", "REPAIRING"].includes(stoppedFrom)) {
+    fail("ERROR_STATE_CORRUPT", "stop context is invalid");
+  }
+  const next = clone(state);
+  next.phase = stoppedFrom;
+  next.stop_context = null;
+  next.recovery_context = {
+    kind: "implementation",
+    context: boundedString(input.resume_context, "resume_context", 2000),
+    recovered_at: new Date().toISOString(),
+  };
+  return next;
+}
+
+export function acceptConcerns(state, input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "concern acceptance input is invalid");
+  }
+  exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "user_authorization"],
+    "concern acceptance",
+  );
+  ensurePhase(state, "STOPPED_CONCERNS");
+  const next = clone(state);
+  next.concern_acceptance = {
+    user_authorization: userAuthorization(input.user_authorization),
+    accepted_at: new Date().toISOString(),
+  };
+  next.phase = "REVIEWING";
+  next.stop_context = null;
   return next;
 }
 

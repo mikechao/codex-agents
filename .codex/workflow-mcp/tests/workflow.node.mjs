@@ -1199,7 +1199,7 @@ test("every implementation status persists and advances or stops explicitly", ()
       ["DONE", "REVIEWING"],
       ["DONE_WITH_CONCERNS", "STOPPED_CONCERNS"],
       ["NEEDS_CONTEXT", "STOPPED_NEEDS_CONTEXT"],
-      ["BLOCKED", "STOPPED_BLOCKED"],
+      ["BLOCKED", "STOPPED_IMPLEMENTATION_BLOCKED"],
     ];
     const ids = [];
     for (const [status, phase] of statuses) {
@@ -1369,6 +1369,246 @@ test("migrated workflows with empty contracts cannot submit implementation", () 
       .run(JSON.stringify(raw), objectDigest(raw), id);
     assert.equal(errorCategory(() => implementation(store, created, root, 0, "legacy")), "ERROR_LEGACY_WORKFLOW");
     assert.equal(store.get(id, "parent", caps.parent).version, 0);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("implementation stops persist stop context and resume restores the exact source phase", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, { objective: "resume initial" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+
+    const stopped = implementation(store, created, root, 0, "needs context", {}, "NEEDS_CONTEXT");
+    assert.equal(stopped.phase, "STOPPED_NEEDS_CONTEXT");
+    assert.deepEqual(stopped.stop_context, {
+      status: "NEEDS_CONTEXT",
+      summary: "needs context",
+      stopped_from: "IMPLEMENTING",
+    });
+    assert.equal(stopped.recovery_context, null);
+
+    const resumed = store.resumeImplementation({
+      workflow_id: id,
+      capability: caps.parent,
+      expected_version: 1,
+      resume_context: "context provided",
+    });
+    assert.equal(resumed.phase, "IMPLEMENTING");
+    assert.equal(resumed.stop_context, null);
+    assert.equal(resumed.recovery_context.kind, "implementation");
+    assert.equal(resumed.recovery_context.context, "context provided");
+    assert.match(resumed.recovery_context.recovered_at, /^[0-9]{4}-/u);
+    store.close();
+
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const persisted = reopened.get(id, "implementer", caps.implementer);
+    assert.equal(persisted.phase, "IMPLEMENTING");
+    assert.equal(persisted.stop_context, null);
+    assert.deepEqual(persisted.recovery_context, resumed.recovery_context);
+    reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("resume from repair preserves repair continuity and block stops restore REPAIRING", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "resume repair" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    const blocker = { finding_id: "RESUME-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    store.authorizeRepair({ workflow_id: id, capability: caps.parent, expected_version: 2, finding_ids: ["RESUME-1"] });
+    const stopped = implementation(store, created, root, 3, "blocked repair", { "RESUME-1": "still_present" }, "BLOCKED");
+    assert.equal(stopped.phase, "STOPPED_IMPLEMENTATION_BLOCKED");
+    assert.deepEqual(stopped.stop_context, {
+      status: "BLOCKED",
+      summary: "blocked repair",
+      stopped_from: "REPAIRING",
+    });
+    const resumed = store.resumeImplementation({
+      workflow_id: id,
+      capability: caps.parent,
+      expected_version: 4,
+      resume_context: "repair context",
+    });
+    assert.equal(resumed.phase, "REPAIRING");
+    assert.equal(resumed.repair_cycle, 1);
+    assert.deepEqual(resumed.blocking_findings, [blocker]);
+    assert.deepEqual(resumed.finding_resolution_map, { "RESUME-1": "still_present" });
+    assert.equal(resumed.recovery_context.kind, "implementation");
+    assert.equal(resumed.recovery_context.context, "repair context");
+    assert.equal(resumed.implementation_status, "BLOCKED");
+    const repaired = implementation(store, created, root, 5, "repaired", { "RESUME-1": "resolved" });
+    assert.equal(repaired.phase, "REVIEWING");
+    assert.equal(repaired.repair_cycle, 1);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("resume and concern acceptance reject wrong role, phase, version, and extra fields", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "resume guards" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "needs context", {}, "NEEDS_CONTEXT");
+
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.implementer, expected_version: 1, resume_context: "x" })), "ERROR_CAPABILITY_DENIED");
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 0, resume_context: "x" })), "ERROR_VERSION_CONFLICT");
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 1 })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "x", extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 1, user_authorization: "auth" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, 1);
+
+    const resumed = store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "x" });
+    assert.equal(resumed.phase, "IMPLEMENTING");
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 2, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("terminals cannot resume implementation or accept concerns", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "terminal resume" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    writeFileSync(join(root, "note.txt"), "after\n");
+    review(store, created, root, 1, "APPROVED", [], []);
+    store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
+    git("add", "note.txt");
+    git("commit", "-qm", "terminal");
+    store.recordCommit({ workflow_id: id, capability: caps.committer, expected_version: 3, commit_hash: git("rev-parse", "HEAD") });
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 4, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 4, user_authorization: "x" })), "ERROR_INVALID_TRANSITION");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("concern acceptance requires authorization and retains failed evidence without commit authorization", () => {
+  const { root, git } = fixture();
+  const path = join(root, "state.sqlite");
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, { objective: "concerns", acceptance_criteria: ["c1", "c2"] });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const stopped = implementation(store, created, root, 0, "concerns found", {}, "DONE_WITH_CONCERNS", {
+      criterionStatus: "not_satisfied",
+      validationStatus: "failed",
+      knownFailures: ["flaky test"],
+    });
+    assert.equal(stopped.phase, "STOPPED_CONCERNS");
+    assert.deepEqual(stopped.stop_context, {
+      status: "DONE_WITH_CONCERNS",
+      summary: "concerns found",
+      stopped_from: "IMPLEMENTING",
+    });
+
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 1, user_authorization: "" })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 1, user_authorization: "x", extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, 1);
+
+    const accepted = store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 1, user_authorization: "user accepts concerns" });
+    assert.equal(accepted.phase, "REVIEWING");
+    assert.equal(accepted.stop_context, null);
+    assert.equal(accepted.concern_acceptance.user_authorization, "user accepts concerns");
+    assert.match(accepted.concern_acceptance.accepted_at, /^[0-9]{4}-/u);
+    assert.deepEqual(accepted.acceptance_results, stopped.acceptance_results);
+    assert.deepEqual(accepted.validation_results, stopped.validation_results);
+    assert.deepEqual(accepted.implementation_known_failures, ["flaky test"]);
+    assert.equal(accepted.commit_authorization, null);
+    store.close();
+
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const persisted = reopened.get(id, "reviewer", caps.reviewer);
+    assert.equal(persisted.phase, "REVIEWING");
+    assert.deepEqual(persisted.concern_acceptance, {
+      user_authorization: "user accepts concerns",
+      accepted_at: accepted.concern_acceptance.accepted_at,
+    });
+    reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stop, resume, and concern events form a sanitized append-only chain", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "resume audit" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    const readAudit = () => store.audit(id, "parent", caps.parent);
+
+    implementation(store, created, root, 0, "needs context", {}, "NEEDS_CONTEXT");
+    let events = readAudit();
+    assert.equal(events.length, 2);
+    const stop = events[1];
+    assert.equal(stop.event_type, "IMPLEMENTATION_STOPPED");
+    assert.equal(stop.summary.phase_before, "IMPLEMENTING");
+    assert.equal(stop.summary.phase_after, "STOPPED_NEEDS_CONTEXT");
+    assert.equal(stop.summary.outcome, "STOPPED_NEEDS_CONTEXT");
+    assert.equal(stop.summary.linked_workflow_id, null);
+
+    store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "resumed" });
+    events = readAudit();
+    assert.equal(events.length, 3);
+    const resume = events[2];
+    assert.equal(resume.event_type, "IMPLEMENTATION_RESUMED");
+    assert.equal(resume.summary.phase_before, "STOPPED_NEEDS_CONTEXT");
+    assert.equal(resume.summary.phase_after, "IMPLEMENTING");
+    assert.equal(resume.summary.outcome, null);
+
+    implementation(store, created, root, 2, "concerns", {}, "DONE_WITH_CONCERNS", { knownFailures: ["flaky"] });
+    store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 3, user_authorization: "SECRET-CONCERN-AUTH" });
+    events = readAudit();
+    assert.equal(events.length, 5);
+    assert.deepEqual(events.map((event) => event.event_type), [
+      "WORKFLOW_CREATED",
+      "IMPLEMENTATION_STOPPED",
+      "IMPLEMENTATION_RESUMED",
+      "IMPLEMENTATION_STOPPED",
+      "CONCERNS_ACCEPTED",
+    ]);
+    const accepted = events[4];
+    assert.equal(accepted.summary.phase_before, "STOPPED_CONCERNS");
+    assert.equal(accepted.summary.phase_after, "REVIEWING");
+    assert.equal(accepted.summary.outcome, null);
+    const serialized = JSON.stringify(events);
+    assert.equal(serialized.includes("needs context"), false);
+    assert.equal(serialized.includes("SECRET-CONCERN-AUTH"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("parent gets resume and concern acceptance actions at implementation stops", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "stop actions" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "context", {}, "NEEDS_CONTEXT");
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_resume_implementation"]);
+    assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, []);
+
+    const blocked = create(store, root, git, { objective: "blocked actions" });
+    implementation(store, blocked, root, 0, "blocked", {}, "BLOCKED");
+    assert.deepEqual(store.get(blocked.workflow.workflow_id, "parent", blocked.capabilities.parent).permitted_next_actions, ["workflow_resume_implementation"]);
+
+    const concerns = create(store, root, git, { objective: "concerns actions" });
+    implementation(store, concerns, root, 0, "concerns", {}, "DONE_WITH_CONCERNS", { knownFailures: ["flaky"] });
+    assert.deepEqual(store.get(concerns.workflow.workflow_id, "parent", concerns.capabilities.parent).permitted_next_actions, ["workflow_accept_concerns"]);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

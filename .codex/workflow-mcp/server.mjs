@@ -266,6 +266,44 @@ export const tools = [
     },
   },
   {
+    name: "workflow_resume_implementation",
+    description:
+      "Resume an implementation context or block stop to its prior active phase.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        resume_context: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "resume_context"],
+    ),
+    annotations: {
+      title: "Resume implementation",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_accept_concerns",
+    description:
+      "Accept DONE_WITH_CONCERNS results with explicit user authorization and enter review.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "user_authorization"],
+    ),
+    annotations: {
+      title: "Accept concerns",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_submit_review",
     description:
       "Submit reviewer findings; approved working-tree reviews must include a current receipt.",
@@ -423,6 +461,12 @@ export function createServer(store = openStore()) {
           break;
         case "workflow_submit_implementation":
           result = store.submitImplementation(args);
+          break;
+        case "workflow_resume_implementation":
+          result = store.resumeImplementation(args);
+          break;
+        case "workflow_accept_concerns":
+          result = store.acceptConcerns(args);
           break;
         case "workflow_submit_review":
           result = store.submitReview(args);

@@ -259,3 +259,88 @@ test("exact implementation tool schema matches the normative contract", () => {
   assert.equal("acceptance_evidence" in inputSchema.properties, false);
   assert.equal("validation_evidence" in inputSchema.properties, false);
 });
+
+test("exact recovery tool schemas match the normative contract", () => {
+  const resumeTool = tools.find((tool) => tool.name === "workflow_resume_implementation");
+  assert.ok(resumeTool);
+  const resumeSchema = resumeTool.inputSchema;
+  assert.equal(resumeSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(resumeSchema.properties).sort(),
+    ["capability", "expected_version", "resume_context", "workflow_id"],
+  );
+  assert.deepEqual(resumeSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "resume_context",
+  ]);
+  assert.equal(resumeSchema.properties.resume_context.minLength, 1);
+  assert.equal(resumeSchema.properties.resume_context.maxLength, 2000);
+
+  const acceptTool = tools.find((tool) => tool.name === "workflow_accept_concerns");
+  assert.ok(acceptTool);
+  const acceptSchema = acceptTool.inputSchema;
+  assert.equal(acceptSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(acceptSchema.properties).sort(),
+    ["capability", "expected_version", "user_authorization", "workflow_id"],
+  );
+  assert.deepEqual(acceptSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "user_authorization",
+  ]);
+  assert.equal(acceptSchema.properties.user_authorization.minLength, 1);
+  assert.equal(acceptSchema.properties.user_authorization.maxLength, 2000);
+});
+
+test("implementation stops resume and concerns over STDIO", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-recover-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const createdResult = await client.callTool({ name: "workflow_create", arguments: { workflow_type: "change", objective: "recover", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } } });
+    const created = JSON.parse(createdResult.content[0].text);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const base = created.workflow;
+    const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+
+    const stopped = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 0, status: "NEEDS_CONTEXT", summary: "missing context", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: initialReceipt, known_failures: [], finding_resolution_map: {} });
+    assert.equal(stopped.phase, "STOPPED_NEEDS_CONTEXT");
+    assert.deepEqual(stopped.stop_context, { status: "NEEDS_CONTEXT", summary: "missing context", stopped_from: "IMPLEMENTING" });
+    assert.deepEqual(stopped.permitted_next_actions, []);
+
+    const resumeDenied = await client.callTool({ name: "workflow_resume_implementation", arguments: { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 1, resume_context: "x" } });
+    assert.equal(resumeDenied.isError, true);
+    assert.equal(JSON.parse(resumeDenied.content[0].text).category, "ERROR_CAPABILITY_DENIED");
+
+    const resumed = await call("workflow_resume_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.parent, expected_version: 1, resume_context: "context now available" });
+    assert.equal(resumed.phase, "IMPLEMENTING");
+    assert.equal(resumed.recovery_context.kind, "implementation");
+
+    const concerns = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 2, status: "DONE_WITH_CONCERNS", summary: "done with flaky", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "failed", evidence: "flaky" }], implementation_receipt: initialReceipt, known_failures: ["flaky test"], finding_resolution_map: {} });
+    assert.equal(concerns.phase, "STOPPED_CONCERNS");
+
+    const accepted = await call("workflow_accept_concerns", { workflow_id: base.workflow_id, capability: created.capabilities.parent, expected_version: 3, user_authorization: "user accepts flaky" });
+    assert.equal(accepted.phase, "REVIEWING");
+    assert.equal(accepted.concern_acceptance.user_authorization, "user accepts flaky");
+    assert.equal(accepted.commit_authorization, null);
+
+    const reviewed = await call("workflow_submit_review", { workflow_id: base.workflow_id, capability: created.capabilities.reviewer, expected_version: 4, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: initialReceipt, review_target: { review_mode: "working_tree", base_revision: base.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true }, prior_finding_classifications: {} });
+    assert.equal(reviewed.phase, "STOPPED_APPROVED");
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

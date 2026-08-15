@@ -12,14 +12,17 @@ import {
   verifyReviewReceipt,
 } from "./git.mjs";
 import {
+  acceptConcerns,
   authorizeCommit,
   authorizeRepair,
   createState,
   dirtyBaselinePaths,
   finalizeBlocked,
+  IMPLEMENTATION_STOP_PHASES,
   migrateV1State,
   optionalFollowupInput,
   recordCommit,
+  resumeImplementation,
   roleView,
   submitImplementation,
   submitReview,
@@ -335,12 +338,15 @@ export class WorkflowStore {
 
   submitImplementation(input) {
     mutationInput(input);
+    const eventType =
+      input.status === "DONE" ? "IMPLEMENTATION_SUBMITTED" : "IMPLEMENTATION_STOPPED";
+    const outcome = input.status === "DONE" ? null : IMPLEMENTATION_STOP_PHASES[input.status];
     return this.#mutate(
       input.workflow_id,
       "implementer",
       input.capability,
       input.expected_version,
-      "IMPLEMENTATION_SUBMITTED",
+      eventType,
       (state) => {
         const currentReceipt = createReceipt(this.root, state.approved_paths, true);
         if (currentReceipt.base_head !== state.base_head) {
@@ -351,6 +357,31 @@ export class WorkflowStore {
         }
         return submitImplementation(state, input, this.root, currentReceipt);
       },
+      outcome,
+    );
+  }
+
+  resumeImplementation(input) {
+    mutationInput(input);
+    return this.#mutate(
+      input.workflow_id,
+      "parent",
+      input.capability,
+      input.expected_version,
+      "IMPLEMENTATION_RESUMED",
+      (state) => resumeImplementation(state, input),
+    );
+  }
+
+  acceptConcerns(input) {
+    mutationInput(input);
+    return this.#mutate(
+      input.workflow_id,
+      "parent",
+      input.capability,
+      input.expected_version,
+      "CONCERNS_ACCEPTED",
+      (state) => acceptConcerns(state, input),
     );
   }
 
