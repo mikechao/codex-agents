@@ -557,7 +557,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
     `rg -n 'STOPPED_BLOCKED|workflow_create_optional_followup|optional-ID-only' .codex/agents .codex/workflow-mcp`, expecting exit 1/no matches. `workflow_record_commit` may match only compatibility code/docs/tests.
   - **Done:** agents, tools, and docs describe one authoritative v2 protocol.
 
-- [ ] **MCP-9.1 — Add store lifecycle and restart coverage**
+- [x] **MCP-9.1 — Add store lifecycle and restart coverage**
   - **Prerequisites/commit:** MCP-8.1; `test(workflow): cover v2 store lifecycles`.
   - **Owned:** `.codex/workflow-mcp/tests/lifecycle.node.mjs` only.
   - **Implement:** table-driven store scenarios with a helper asserting phase, version, digest,
@@ -1966,6 +1966,88 @@ Plan deviations:
   mapping for legacy rows"; MCP-9.2 still requires v1 migration coverage, and MCP-8.1 does not own
   those files. The check was therefore scoped to the task's owned files, which are fully clean; the
   full-directory result is reported above. No protocol or architecture decision was invented.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-9.1 — Add store lifecycle and restart coverage
+
+DONE
+
+Task: MCP-9.1
+Outcome: A new table-driven store-level lifecycle suite (`lifecycle.node.mjs`) drives every
+nonterminal store phase through to its terminal boundary and asserts, after each step, the exact
+phase, version, digest, every role's `permitted_next_actions`, the exact audit event sequence, and a
+digest-continuity chain, then reopens the store and re-asserts every one of those invariants
+(`reopen +0`, no migration). Scenarios cover the clean change through external commit; repair and
+approval; both implementation resumes (NEEDS_CONTEXT from IMPLEMENTING and BLOCKED from REPAIRING);
+concern acceptance; both review-only modes; review resume from INCONCLUSIVE; linked optional and
+blocker follow-ups (parent +1 / child 0); repair exhaustion; commit failure/retry/success; and commit
+mismatch. Only `.codex/workflow-mcp/tests/lifecycle.node.mjs` was created; no store, server, or
+transition behavior changed.
+
+Files changed:
+- `.codex/workflow-mcp/tests/lifecycle.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Table-driven store scenarios: each scenario is a table of steps; a `scenario` runner executes every
+  step against the real `WorkflowStore` and an `assertSnapshot` helper asserts, for each snapshot
+  after each step, phase, version, all four roles' `permitted_next_actions`, the exact cumulative
+  audit event sequence, the persisted row version/state version/state phase, `state_digest ===
+  objectDigest(parsed state_json)`, the first audit event's null `state_digest_before`, the
+  before/after digest chain across every audit event, and the final event's `state_digest_after`
+  equal to the stored row digest.
+- Clean change: create -> implement DONE -> REVIEWING -> approved -> STOPPED_APPROVED ->
+  COMMIT_AUTHORIZED -> COMMIT_PREPARED -> external commit -> COMMITTED (version 0..5, one event per
+  mutation, WORKFLOW_CREATED then IMPLEMENTATION_SUBMITTED/REVIEW_SUBMITTED/COMMIT_AUTHORIZED/
+  COMMIT_PREPARED/COMMIT_RESULT_SUBMITTED).
+- Repair/approval: CHANGES_REQUESTED -> REPAIR_REQUIRED -> REPAIRING -> repaired DONE -> REVIEWING ->
+  approved -> STOPPED_APPROVED, with the approved review classifying the prior blocker `resolved`.
+- Both implementation resumes: NEEDS_CONTEXT stop/resume restores IMPLEMENTING; BLOCKED stop from a
+  REPAIRING workflow resumes to REPAIRING with the repair cycle/finding continuity intact and then a
+  completed repair reaches REVIEWING.
+- Concern acceptance: DONE_WITH_CONCERNS -> STOPPED_CONCERNS -> CONCERNS_ACCEPTED -> REVIEWING ->
+  approved.
+- Both review-only modes: working-tree review-only stores an initial receipt and approves with a
+  fresh receipt; commit-range review-only stores a null receipt/dirty baseline and approves with a
+  null receipt; both end STOPPED_APPROVED (range parent actions exclude
+  `workflow_authorize_commit`).
+- Review resume: INCONCLUSIVE stop -> REVIEW_RESUMED -> REVIEWING -> approved.
+- Linked optional/blocker: an approved optional finding and an exhausted blocking finding each spawn
+  a fresh working-tree `change` child at version 0 (parent +1, child 0) with
+  `LINKED_FOLLOWUP_CREATED`/child `WORKFLOW_CREATED` events and both rows asserted across reopen.
+- Exhaustion: two CHANGES_REQUESTED reviews with `max_repair_cycles:1` -> REPAIR_EXHAUSTED terminal
+  stop with parent `workflow_create_linked_followup` the only action.
+- Failure/retry/success: a rejecting pre-commit hook keeps HEAD unchanged, `not_committed` enters the
+  retryable STOPPED_NOT_COMMITTED, `COMMIT_RETRY_AUTHORIZED` restores COMMIT_AUTHORIZED, a fresh
+  prepare binds a new attempt, and the second external commit verifies into COMMITTED.
+- Mismatch: an external commit moves HEAD before the result claim, so a stale committed claim enters
+  the terminal STOPPED_COMMIT_MISMATCH with empty actions for every role.
+- Restart at every nonterminal: after every step (terminal steps included) the store is closed and
+  reopened on the same SQLite file and every invariant is re-asserted, confirming `reopen +0` and
+  that no migration runs on v2-only databases.
+- Version semantics asserted: creation is version 0, every mutation increments exactly +1, linked
+  follow-up parent +1/child 0, reopen +0; the table hard-codes each expected version so any drift
+  fails the step.
+
+Tests added or updated:
+- New `.codex/workflow-mcp/tests/lifecycle.node.mjs` with 10 scenarios and an internal table-driven
+  `scenario`/`assertSnapshot` harness: 10/10 pass.
+- No existing tests changed, weakened, or skipped.
+
+Validation:
+- `node --test .codex/workflow-mcp/tests/lifecycle.node.mjs`: pass, 10/10.
+- `pnpm test:workflow-mcp`: pass, 129/129 (119 existing + 10 new lifecycle).
+- `pnpm test`: pass, 148/148 (19 agents + 129 workflow/protocol/migration/git/lifecycle).
+- `git diff --check`: pass.
+- `git status --short`: only the owned test file plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.
