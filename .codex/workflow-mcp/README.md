@@ -6,7 +6,7 @@ committer workflow. It is a Node 22 STDIO MCP server, not an extension runtime o
 Run it through the project-scoped `.codex/config.toml` or:
 
 ```sh
-pnpm workflow:mcp
+pnpm start
 ```
 
 State is stored in a stable, repository-hash-partitioned path under the user's Codex state area.
