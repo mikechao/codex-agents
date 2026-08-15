@@ -366,7 +366,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
 
 ### Contracts, evidence, and recovery
 
-- [ ] **MCP-3.1 — Expose complete v2 change-workflow creation**
+- [x] **MCP-3.1 — Expose complete v2 change-workflow creation**
   - **Prerequisites/commit:** MCP-2.3; `feat(workflow): persist complete execution contracts`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/validation.mjs`,
@@ -826,6 +826,57 @@ Validation:
 - `pnpm test`: pass, 50/50.
 - `git diff --check`: pass.
 - `git status --short`: only the three owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-3.1 — Expose complete v2 change-workflow creation
+
+DONE
+
+Task: MCP-3.1
+Outcome: The public `workflow_create` now uses the normative v2 schema, and every new change workflow persists a complete stable handoff: `workflow_type`, `objective`, `approved_paths`, server-assigned contract objects `{criterion_id:"AC-001",description}` / `{validation_id:"VAL-001",description}`, a persisted working-tree `review_target`, an absent-aware server-computed `initial_receipt`, and derived `dirty_baseline_paths`. Only `change` plus working-tree is accepted; `review_only` and `commit_range` return `ERROR_UNSUPPORTED_WORKFLOW_TYPE` until MCP-5.2.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/validation.mjs`
+- `.codex/workflow-mcp/git.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Public create schema replaced with the normative one: `workflow_create` accepts exactly `workflow_type`, `objective`, `approved_paths`, `acceptance_criteria`, `validation_requirements`, `review_target`, and optional `max_repair_cycles`; `base_head` is removed. Unknown/missing fields are invalid (`exactKeys`), and the advertised tool schema rejects unknown fields.
+- Server-assigned contract IDs: `contractList` maps caller-order descriptions to `{criterion_id:"AC-001",description}` and `{validation_id:"VAL-001",description}` with incrementing three-digit IDs; duplicate descriptions receive distinct IDs; over 999 is invalid.
+- Target/top-level consistency: `reviewTarget` requires working-tree mode, `base_revision` equal to current HEAD, null `head_revision`, all three include flags true, and target approved paths that canonically match the top-level approved paths.
+- Only `change` plus working-tree accepted: `workflow_type` other than `change` or `review_mode` other than `working_tree` returns `ERROR_UNSUPPORTED_WORKFLOW_TYPE` until MCP-5.2.
+- Absent-aware initial receipt and dirty baseline: `store.create` computes the initial receipt with `--allow-absent` (planned-absent paths emit `{path,state:"absent",kind:"missing"}` without mode/digest); `dirty_baseline_paths` are the sorted added/modified/deleted paths (absent/unchanged excluded).
+- Old shorthand removed from all owned test callers (`workflow.node.mjs`, `protocol.node.mjs`); the internal optional-follow-up child now uses a private `createState(..., {internal:true})` path preserving its empty contracts and synthesized working-tree target.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "create assigns ordered contract IDs and preserves duplicate descriptions": exact AC/VAL IDs in caller order with duplicate descriptions getting distinct IDs.
+- New "create rejects empty and oversized contract lists": empty criteria/validations and a 1000-item criteria list return `ERROR_INVALID_SHAPE`.
+- New "create rejects unknown fields and unsupported type and target mismatches": extra field, `review_only` and `commit_range` (`ERROR_UNSUPPORTED_WORKFLOW_TYPE`), target path mismatch and non-null head (`ERROR_INVALID_SHAPE`), and stale base (`ERROR_STALE_BASE`).
+- New "create persists planned absent initial receipt and dirty baseline": a nonexistent approved path yields the exact absent entry (no mode/digest) with an empty dirty baseline; modified+added paths are listed sorted in the dirty baseline.
+- New "restart persists execution contracts and review target": reopen retains version 0, phase, objective, contracts, review target, and initial receipt.
+- New `protocol.node.mjs` "exact create tool schema matches the normative contract": asserts the advertised `workflow_create` schema (exact keys/required, both workflow types, review-target `oneOf` with working-tree/commit-range modes, bounds, no `base_head`).
+- Updated every existing create caller to the normative schema, removed the pre-existing `ERROR_UNTRACKED_PATH` expectation for a planned-absent path, and updated the "v2 creation constructs every normative state key" assertions to the assigned contract objects.
+
+Validation:
+- `node --test --test-name-pattern='create|contract|criteria|validation|baseline|restart' .codex/workflow-mcp/tests/workflow.node.mjs .codex/workflow-mcp/tests/protocol.node.mjs`: pass, 7/7.
+- `pnpm test:workflow-mcp`: pass, 37/37.
+- `pnpm test`: pass, 56/56 (19 agents + 37 workflow/protocol).
+- `git diff --check`: pass.
+- `git status --short`: only the seven owned files plus the requested `mcp-plan.md` update.
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing; `notes.txt` is git-ignored).

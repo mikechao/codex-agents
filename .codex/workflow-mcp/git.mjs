@@ -75,12 +75,13 @@ export function verifyReviewReceipt(root, receipt, expectedPaths, baseHead) {
   return current;
 }
 
-export function createReceipt(root, expectedPaths) {
+export function createReceipt(root, expectedPaths, allowAbsent = false) {
   const script = join(root, ".codex", "agents", "change-receipt.mjs");
+  const args = allowAbsent ? ["--allow-absent", "--", ...expectedPaths] : ["--", ...expectedPaths];
   let current;
   try {
     current = JSON.parse(
-      execFileSync(process.execPath, [script, "--", ...expectedPaths], {
+      execFileSync(process.execPath, [script, ...args], {
         cwd: root,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],

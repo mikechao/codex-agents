@@ -4,6 +4,7 @@ import { fail } from "./errors.mjs";
 
 const MAX_PATHS = 200;
 const MAX_FINDINGS = 200;
+const MAX_CONTRACTS = 999;
 const MAX_TEXT = 4000;
 const MAX_DETAIL = 2000;
 const FINDING_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
@@ -27,6 +28,16 @@ export function boundedString(value, name, max = MAX_TEXT) {
     fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
   }
   return value;
+}
+
+export function contractList(value, name, idPrefix, idField) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CONTRACTS) {
+    fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
+  }
+  return value.map((description, index) => ({
+    [idField]: `${idPrefix}-${String(index + 1).padStart(3, "0")}`,
+    description: boundedString(description, `${name} description`),
+  }));
 }
 
 function optionalString(value, name, max = MAX_DETAIL) {

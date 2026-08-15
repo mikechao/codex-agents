@@ -62,7 +62,7 @@ const findingSchema = {
   additionalProperties: false,
 };
 
-const reviewTargetSchema = {
+const workingTreeReviewTargetSchema = {
   type: "object",
   properties: {
     review_mode: { type: "string", enum: ["working_tree"] },
@@ -85,18 +85,65 @@ const reviewTargetSchema = {
   additionalProperties: false,
 };
 
-const tools = [
+const commitRangeReviewTargetSchema = {
+  type: "object",
+  properties: {
+    review_mode: { type: "string", enum: ["commit_range"] },
+    base_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
+    head_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
+    approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+    include_staged: { type: "boolean", const: false },
+    include_unstaged: { type: "boolean", const: false },
+    include_untracked: { type: "boolean", const: false },
+  },
+  required: [
+    "review_mode",
+    "base_revision",
+    "head_revision",
+    "approved_paths",
+    "include_staged",
+    "include_unstaged",
+    "include_untracked",
+  ],
+  additionalProperties: false,
+};
+
+const createReviewTargetSchema = {
+  oneOf: [workingTreeReviewTargetSchema, commitRangeReviewTargetSchema],
+};
+
+export const tools = [
   {
     name: "workflow_create",
-    description: "Create an IMPLEMENTING workflow and return one-time role capabilities.",
+    description: "Create an IMPLEMENTING change workflow and return one-time role capabilities.",
     inputSchema: schema(
       {
+        workflow_type: { type: "string", enum: ["change", "review_only"] },
         objective: { type: "string", minLength: 1, maxLength: 4000 },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
-        base_head: { type: "string", pattern: "^[0-9a-f]{40}$" },
+        acceptance_criteria: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 4000 },
+          minItems: 1,
+          maxItems: 999,
+        },
+        validation_requirements: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 4000 },
+          minItems: 1,
+          maxItems: 999,
+        },
+        review_target: createReviewTargetSchema,
         max_repair_cycles: { type: "integer", minimum: 0, maximum: 2 },
       },
-      ["objective", "approved_paths"],
+      [
+        "workflow_type",
+        "objective",
+        "approved_paths",
+        "acceptance_criteria",
+        "validation_requirements",
+        "review_target",
+      ],
     ),
     annotations: {
       title: "Create workflow",
@@ -206,7 +253,7 @@ const tools = [
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
         review_receipt: { type: ["object", "null"] },
-        review_target: reviewTargetSchema,
+        review_target: workingTreeReviewTargetSchema,
         prior_finding_classifications: resolutionMapSchema,
       },
       [

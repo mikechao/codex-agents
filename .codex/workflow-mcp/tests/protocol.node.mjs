@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WorkflowStore } from "../store.mjs";
+import { tools } from "../server.mjs";
 
 test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () => {
   const root = mkdtempSync(join(tmpdir(), "workflow-protocol-"));
@@ -31,7 +32,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.ok(createTool);
     assert.equal(createTool.annotations.readOnlyHint, false);
     assert.ok(listed.tools.some((tool) => tool.name === "workflow_get"));
-    const createdResult = await client.callTool({ name: "workflow_create", arguments: { objective: "protocol", approved_paths: ["note.txt"] } });
+    const createdResult = await client.callTool({ name: "workflow_create", arguments: { workflow_type: "change", objective: "protocol", approved_paths: ["note.txt"], acceptance_criteria: ["protocol criterion"], validation_requirements: ["protocol validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } } });
     const created = JSON.parse(createdResult.content[0].text);
     assert.equal(created.workflow.phase, "IMPLEMENTING");
     assert.equal(created.workflow.capabilities, undefined);
@@ -94,4 +95,57 @@ test("SIGINT and SIGTERM shutdown close the store and leave a reopenable databas
       reopened.close();
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("exact create tool schema matches the normative contract", () => {
+  const createTool = tools.find((tool) => tool.name === "workflow_create");
+  assert.ok(createTool);
+  const { inputSchema } = createTool;
+  assert.equal(inputSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(inputSchema.properties).sort(),
+    [
+      "acceptance_criteria",
+      "approved_paths",
+      "max_repair_cycles",
+      "objective",
+      "review_target",
+      "validation_requirements",
+      "workflow_type",
+    ],
+  );
+  assert.deepEqual(inputSchema.required, [
+    "workflow_type",
+    "objective",
+    "approved_paths",
+    "acceptance_criteria",
+    "validation_requirements",
+    "review_target",
+  ]);
+  assert.deepEqual(inputSchema.properties.workflow_type.enum, ["change", "review_only"]);
+  assert.equal(inputSchema.properties.objective.minLength, 1);
+  assert.equal(inputSchema.properties.objective.maxLength, 4000);
+  assert.equal(inputSchema.properties.approved_paths.minItems, 1);
+  assert.equal(inputSchema.properties.approved_paths.maxItems, 200);
+  assert.equal(inputSchema.properties.acceptance_criteria.minItems, 1);
+  assert.equal(inputSchema.properties.acceptance_criteria.maxItems, 999);
+  assert.equal(inputSchema.properties.validation_requirements.minItems, 1);
+  assert.equal(inputSchema.properties.validation_requirements.maxItems, 999);
+  assert.equal(inputSchema.properties.max_repair_cycles.minimum, 0);
+  assert.equal(inputSchema.properties.max_repair_cycles.maximum, 2);
+  const target = inputSchema.properties.review_target;
+  assert.deepEqual(
+    target.oneOf.map((entry) => entry.properties.review_mode.enum[0]).sort(),
+    ["commit_range", "working_tree"],
+  );
+  const working = target.oneOf.find((entry) => entry.properties.review_mode.enum[0] === "working_tree");
+  assert.equal(working.properties.head_revision.type, "null");
+  assert.equal(working.properties.include_staged.const, true);
+  assert.equal(working.properties.include_unstaged.const, true);
+  assert.equal(working.properties.include_untracked.const, true);
+  const range = target.oneOf.find((entry) => entry.properties.review_mode.enum[0] === "commit_range");
+  assert.equal(range.properties.head_revision.pattern, "^[0-9a-f]{40}$");
+  assert.equal(range.properties.include_staged.const, false);
+  assert.equal(range.properties.include_unstaged.const, false);
+  assert.equal(range.properties.include_untracked.const, false);
 });

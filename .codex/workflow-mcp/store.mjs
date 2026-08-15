@@ -243,7 +243,7 @@ export class WorkflowStore {
     const head = currentHead(this.root);
     const workflowId = randomUUID();
     const state = createState(input, this.root, head);
-    const initialReceipt = createReceipt(this.root, state.approved_paths);
+    const initialReceipt = createReceipt(this.root, state.approved_paths, true);
     if (initialReceipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
     state.workflow_id = workflowId;
     state.initial_receipt = initialReceipt;
@@ -504,8 +504,9 @@ export class WorkflowStore {
         },
         this.root,
         currentHead(this.root),
+        { internal: true },
       );
-      const childReceipt = createReceipt(this.root, childState.approved_paths);
+      const childReceipt = createReceipt(this.root, childState.approved_paths, true);
       childState.workflow_id = childId;
       childState.initial_receipt = childReceipt;
       childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);

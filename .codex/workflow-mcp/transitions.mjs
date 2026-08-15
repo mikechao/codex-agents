@@ -1,6 +1,7 @@
 import { fail } from "./errors.mjs";
 import {
   boundedString,
+  contractList,
   exactKeys,
   exactPaths,
   findings,
@@ -82,22 +83,7 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function createState(input, repositoryRoot, currentHead) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    fail("ERROR_INVALID_SHAPE", "workflow input is invalid");
-  }
-  exactKeys(
-    input,
-    ["objective", "approved_paths", "base_head", "max_repair_cycles", "parent_workflow_id"],
-    "workflow input",
-    ["base_head", "max_repair_cycles", "parent_workflow_id"],
-  );
-  const objective = boundedString(input.objective, "objective");
-  const approvedPaths = exactPaths(input.approved_paths, repositoryRoot);
-  const baseHead = revision(input.base_head ?? currentHead, "base_head");
-  if (baseHead !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
-  const maxRepairCycles = input.max_repair_cycles ?? 2;
-  repairCycle(maxRepairCycles);
+function baseState({ objective, approvedPaths, baseHead, maxRepairCycles, parentWorkflowId = null }) {
   return {
     schema_version: SCHEMA_VERSION,
     version: 0,
@@ -123,7 +109,7 @@ export function createState(input, repositoryRoot, currentHead) {
     dirty_baseline_paths: [],
     repair_cycle: 0,
     max_repair_cycles: maxRepairCycles,
-    parent_workflow_id: optionalText(input.parent_workflow_id, "parent_workflow_id", 100),
+    parent_workflow_id: parentWorkflowId,
     source_workflow_id: null,
     linked_findings: [],
     remediation_context: null,
@@ -153,6 +139,118 @@ export function createState(input, repositoryRoot, currentHead) {
     authorized_optional_ids: [],
     user_authorization_summary: null,
   };
+}
+
+function reviewTarget(value, approvedPaths, repositoryRoot, currentHead) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("ERROR_INVALID_SHAPE", "review target is invalid");
+  }
+  exactKeys(
+    value,
+    [
+      "review_mode",
+      "base_revision",
+      "head_revision",
+      "approved_paths",
+      "include_staged",
+      "include_unstaged",
+      "include_untracked",
+    ],
+    "review target",
+  );
+  if (value.review_mode !== "working_tree") {
+    fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "review mode is not supported");
+  }
+  const baseRevision = revision(value.base_revision, "base_revision");
+  if (baseRevision !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
+  if (value.head_revision !== null) {
+    fail("ERROR_INVALID_SHAPE", "working-tree head revision is invalid");
+  }
+  const targetPaths = exactPaths(value.approved_paths, repositoryRoot);
+  if (JSON.stringify(targetPaths) !== JSON.stringify(approvedPaths)) {
+    fail("ERROR_INVALID_SHAPE", "review target paths do not match approved paths");
+  }
+  if (value.include_staged !== true || value.include_unstaged !== true || value.include_untracked !== true) {
+    fail("ERROR_INVALID_SHAPE", "working-tree include flags are invalid");
+  }
+  return {
+    review_mode: "working_tree",
+    base_revision: baseRevision,
+    head_revision: null,
+    approved_paths: targetPaths,
+    include_staged: true,
+    include_unstaged: true,
+    include_untracked: true,
+  };
+}
+
+export function createState(input, repositoryRoot, currentHead, options = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "workflow input is invalid");
+  }
+  if (options.internal === true) {
+    exactKeys(
+      input,
+      ["objective", "approved_paths", "base_head", "max_repair_cycles", "parent_workflow_id"],
+      "workflow input",
+      ["base_head", "max_repair_cycles", "parent_workflow_id"],
+    );
+    const objective = boundedString(input.objective, "objective");
+    const approvedPaths = exactPaths(input.approved_paths, repositoryRoot);
+    const baseHead = revision(input.base_head ?? currentHead, "base_head");
+    if (baseHead !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
+    const maxRepairCycles = input.max_repair_cycles ?? 2;
+    repairCycle(maxRepairCycles);
+    return baseState({
+      objective,
+      approvedPaths,
+      baseHead,
+      maxRepairCycles,
+      parentWorkflowId: optionalText(input.parent_workflow_id, "parent_workflow_id", 100),
+    });
+  }
+  exactKeys(
+    input,
+    [
+      "workflow_type",
+      "objective",
+      "approved_paths",
+      "acceptance_criteria",
+      "validation_requirements",
+      "review_target",
+      "max_repair_cycles",
+    ],
+    "workflow create",
+    ["max_repair_cycles"],
+  );
+  if (input.workflow_type !== "change") {
+    fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "workflow type is not supported");
+  }
+  const objective = boundedString(input.objective, "objective");
+  const approvedPaths = exactPaths(input.approved_paths, repositoryRoot);
+  const target = reviewTarget(input.review_target, approvedPaths, repositoryRoot, currentHead);
+  const maxRepairCycles = input.max_repair_cycles ?? 2;
+  repairCycle(maxRepairCycles);
+  const state = baseState({
+    objective,
+    approvedPaths,
+    baseHead: target.base_revision,
+    maxRepairCycles,
+  });
+  state.acceptance_criteria = contractList(
+    input.acceptance_criteria,
+    "acceptance_criteria",
+    "AC",
+    "criterion_id",
+  );
+  state.validation_requirements = contractList(
+    input.validation_requirements,
+    "validation_requirements",
+    "VAL",
+    "validation_id",
+  );
+  state.review_target = target;
+  return state;
 }
 
 export function submitImplementation(state, input, repositoryRoot) {

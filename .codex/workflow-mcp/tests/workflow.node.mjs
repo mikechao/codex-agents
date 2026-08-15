@@ -61,12 +61,37 @@ function errorCategory(callback) {
   assert.fail("expected workflow error");
 }
 
+function createInput(root, git, options = {}) {
+  const approvedPaths = options.approved_paths ?? ["note.txt"];
+  return {
+    workflow_type: "change",
+    objective: options.objective ?? "test workflow",
+    approved_paths: approvedPaths,
+    acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
+    validation_requirements: options.validation_requirements ?? ["validation A"],
+    review_target: options.review_target ?? {
+      review_mode: "working_tree",
+      base_revision: git("rev-parse", "HEAD"),
+      head_revision: null,
+      approved_paths: approvedPaths,
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    },
+    max_repair_cycles: options.max_repair_cycles,
+  };
+}
+
+function create(store, root, git, options = {}) {
+  return store.create(createInput(root, git, options));
+}
+
 test("persists workflow, rejects stale versions and enforces role capabilities", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   const path = join(root, "state.sqlite");
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-    const created = store.create({ objective: "test workflow", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "test workflow" });
     assert.equal(created.workflow.phase, "IMPLEMENTING");
     assert.equal(errorCategory(() => store.get(created.workflow.workflow_id, "reviewer", created.capabilities.parent)), "ERROR_CAPABILITY_DENIED");
     const reviewing = implementation(store, created, root, 0, "implemented");
@@ -80,7 +105,7 @@ test("persists workflow, rejects stale versions and enforces role capabilities",
 });
 
 test("production state path is stable and outside the repository", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const path = resolveStatePath(root);
     assert.equal(path.startsWith(root), false);
@@ -90,10 +115,10 @@ test("production state path is stable and outside the repository", () => {
 });
 
 test("enforces P3 stopping and blocking repair cycle limit", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "findings", approved_paths: ["note.txt"], max_repair_cycles: 1 });
+    const created = create(store, root, git, { objective: "findings", max_repair_cycles: 1 });
     assert.equal(created.workflow.version, 0);
     implementation(store, created, root, 0, "implemented");
     const finding = { finding_id: "F-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
@@ -112,10 +137,10 @@ test("enforces P3 stopping and blocking repair cycle limit", () => {
 });
 
 test("optional findings require a fresh linked workflow", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "optional", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "optional" });
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "changed\n");
     const approved = review(store, created, root, 1, "APPROVED", [], [{ finding_id: "F-3", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
@@ -134,7 +159,7 @@ test("approved receipt gates commit and commit evidence", () => {
   const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "commit", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "commit" });
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "after\n");
     const reviewResult = review(store, created, root, 1, "APPROVED", [], []);
@@ -151,10 +176,10 @@ test("approved receipt gates commit and commit evidence", () => {
 });
 
 test("implementation statuses stop explicitly and require complete repair continuity", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "status", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "status" });
     const stopped = implementation(store, created, root, 0, "needs context", {}, "NEEDS_CONTEXT");
     assert.equal(stopped.phase, "STOPPED_NEEDS_CONTEXT");
     assert.equal(stopped.implementation_status, "NEEDS_CONTEXT");
@@ -167,15 +192,15 @@ test("implementation statuses stop explicitly and require complete repair contin
 });
 
 test("rejects unsafe scopes, malformed capabilities, and duplicate finding IDs without mutation", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     mkdirSync(join(root, "folder"));
     writeFileSync(join(root, "socket-target"), "x");
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    for (const [paths, expected] of [[["folder"], "ERROR_DIRECTORY_PATH"], [["*.txt"], "ERROR_INVALID_PATHS"], [["../note.txt"], "ERROR_INVALID_PATHS"], [["./note.txt", "note.txt"], "ERROR_INVALID_PATHS"], [["absent.txt"], "ERROR_UNTRACKED_PATH"]]) {
-      assert.equal(errorCategory(() => store.create({ objective: "invalid", approved_paths: paths })), expected);
+    for (const [paths, expected] of [[["folder"], "ERROR_DIRECTORY_PATH"], [["*.txt"], "ERROR_INVALID_PATHS"], [["../note.txt"], "ERROR_INVALID_PATHS"], [["./note.txt", "note.txt"], "ERROR_INVALID_PATHS"]]) {
+      assert.equal(errorCategory(() => store.create(createInput(root, git, { objective: "invalid", approved_paths: paths }))), expected);
     }
-    const created = store.create({ objective: "valid", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "valid" });
     const auditBefore = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length;
     assert.equal(errorCategory(() => store.get(created.workflow.workflow_id, "parent", "bad")), "ERROR_CAPABILITY_DENIED");
     implementation(store, created, root, 0, "implemented");
@@ -189,10 +214,10 @@ test("rejects unsafe scopes, malformed capabilities, and duplicate finding IDs w
 });
 
 test("optional follow-up is atomic and audit rows remain append-only", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite"), faultAfterChildInsert: true });
-    const created = store.create({ objective: "atomic", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "atomic" });
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "changed\n");
     review(store, created, root, 1, "APPROVED", [], [{ finding_id: "OPT", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
@@ -215,19 +240,19 @@ test("accepts tracked deletions and symlink receipt classifications", () => {
     git("commit", "-qm", "symlink");
     unlinkSync(join(root, "note.txt"));
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const deleted = store.create({ objective: "deletion", approved_paths: ["note.txt"] });
+    const deleted = create(store, root, git, { objective: "deletion" });
     assert.equal(deleted.workflow.phase, "IMPLEMENTING");
-    const symlink = store.create({ objective: "symlink", approved_paths: ["link.txt"] });
+    const symlink = create(store, root, git, { objective: "symlink", approved_paths: ["link.txt"] });
     assert.equal(symlink.workflow.phase, "IMPLEMENTING");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("rejects missing implementation and review continuity classifications without mutation", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "continuity", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "continuity" });
     implementation(store, created, root, 0, "implemented");
     const finding = { finding_id: "CONT-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, created, root, 1, "CHANGES_REQUESTED", [finding], []);
@@ -243,15 +268,15 @@ test("rejects missing implementation and review continuity classifications witho
 });
 
 test("rejects extra mutation fields without changing workflow state", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
     assert.equal(
-      errorCategory(() => store.create({ objective: "extra", approved_paths: ["note.txt"], extra: true })),
+      errorCategory(() => store.create({ ...createInput(root, git, { objective: "extra" }), extra: true })),
       "ERROR_INVALID_SHAPE",
     );
 
-    const repairing = store.create({ objective: "repair shape", approved_paths: ["note.txt"], max_repair_cycles: 0 });
+    const repairing = create(store, root, git, { objective: "repair shape", max_repair_cycles: 0 });
     implementation(store, repairing, root, 0, "implemented");
     const blocker = { finding_id: "SHAPE-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, repairing, root, 1, "CHANGES_REQUESTED", [blocker], []);
@@ -262,7 +287,7 @@ test("rejects extra mutation fields without changing workflow state", () => {
     assert.equal(store.get(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent).version, repairBefore.version);
     assert.equal(store.audit(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent).length, repairAudit);
 
-    const approved = store.create({ objective: "commit shape", approved_paths: ["note.txt"] });
+    const approved = create(store, root, git, { objective: "commit shape" });
     implementation(store, approved, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "shape\n");
     review(store, approved, root, 1, "APPROVED", [], [{ finding_id: "OPT-SHAPE", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" }]);
@@ -283,10 +308,10 @@ test("rejects extra mutation fields without changing workflow state", () => {
 });
 
 test("preserves blocking continuity and handles inconclusive receipt semantics", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "continuity", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "continuity" });
     implementation(store, created, root, 0, "implemented");
     const blocker = { finding_id: "DEMOTE-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
@@ -299,7 +324,7 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
     assert.equal(store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version, before.version);
     assert.equal(store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length, auditBefore);
 
-    const inconclusive = store.create({ objective: "inconclusive", approved_paths: ["note.txt"] });
+    const inconclusive = create(store, root, git, { objective: "inconclusive" });
     implementation(store, inconclusive, root, 0, "implemented");
     const inconclusiveBefore = store.get(inconclusive.workflow.workflow_id, "parent", inconclusive.capabilities.parent);
     const target = { review_mode: "working_tree", base_revision: inconclusive.workflow.base_head, head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true };
@@ -314,7 +339,7 @@ test("rejects stale review and committed digest mismatches without mutation", ()
   const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "receipts", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "receipts" });
     implementation(store, created, root, 0, "implemented");
     const stale = receipt(root);
     writeFileSync(join(root, "note.txt"), "reviewed\n");
@@ -340,10 +365,10 @@ test("rejects stale review and committed digest mismatches without mutation", ()
 });
 
 test("v2 creation constructs every normative state key and stores a verified digest", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "v2 state", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "v2 state" });
     const workflow = created.workflow;
     assert.equal(workflow.schema_version, 2);
     assert.equal(workflow.version, 0);
@@ -353,8 +378,12 @@ test("v2 creation constructs every normative state key and stores a verified dig
     assert.equal(workflow.objective, "v2 state");
     assert.equal(workflow.base_head, created.workflow.base_head);
     assert.deepEqual(workflow.approved_paths, ["note.txt"]);
-    assert.deepEqual(workflow.acceptance_criteria, []);
-    assert.deepEqual(workflow.validation_requirements, []);
+    assert.deepEqual(workflow.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "criterion A" },
+    ]);
+    assert.deepEqual(workflow.validation_requirements, [
+      { validation_id: "VAL-001", description: "validation A" },
+    ]);
     assert.deepEqual(workflow.review_target, {
       review_mode: "working_tree",
       base_revision: workflow.base_head,
@@ -405,25 +434,25 @@ test("v2 creation constructs every normative state key and stores a verified dig
 });
 
 test("records dirty baseline paths from the initial receipt", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
     writeFileSync(join(root, "note.txt"), "modified\n");
     writeFileSync(join(root, "new.txt"), "added\n");
-    const created = store.create({ objective: "baseline", approved_paths: ["note.txt", "new.txt"] });
+    const created = create(store, root, git, { objective: "baseline", approved_paths: ["note.txt", "new.txt"] });
     assert.deepEqual(created.workflow.dirty_baseline_paths, ["new.txt", "note.txt"]);
     writeFileSync(join(root, "note.txt"), "before\n");
-    const clean = store.create({ objective: "clean", approved_paths: ["note.txt"] });
+    const clean = create(store, root, git, { objective: "clean" });
     assert.deepEqual(clean.workflow.dirty_baseline_paths, []);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("rejects digest and JSON tampering and preserves state on failed mutation", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "tamper", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "tamper" });
     const id = created.workflow.workflow_id;
     const read = () => store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(id);
     const original = read();
@@ -460,10 +489,10 @@ test("rejects digest and JSON tampering and preserves state on failed mutation",
 });
 
 test("audit envelopes use exact sanitized keys and sorted changed fields", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "audit keys", approved_paths: ["note.txt"], max_repair_cycles: 0 });
+    const created = create(store, root, git, { objective: "audit keys", max_repair_cycles: 0 });
     const id = created.workflow.workflow_id;
     const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
     const envelopeKeys = [
@@ -526,10 +555,10 @@ test("audit envelopes use exact sanitized keys and sorted changed fields", () =>
 });
 
 test("audit digests form a continuity chain across mutations", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "digest chain", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "digest chain" });
     const id = created.workflow.workflow_id;
     const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
     const rowDigest = () => store.db.prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?").get(id).state_digest;
@@ -558,10 +587,10 @@ test("audit digests form a continuity chain across mutations", () => {
 });
 
 test("serialized audit envelopes contain none of the prohibited data", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "SECRET-OBJECTIVE-AUDIT", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "SECRET-OBJECTIVE-AUDIT" });
     const id = created.workflow.workflow_id;
     implementation(store, created, root, 0, "SECRET-SUMMARY-AUDIT");
     writeFileSync(join(root, "note.txt"), "changed\n");
@@ -586,10 +615,10 @@ test("serialized audit envelopes contain none of the prohibited data", () => {
 });
 
 test("audit history is append-only and versioned across mutations", () => {
-  const { root } = fixture();
+  const { root, git } = fixture();
   try {
     const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
-    const created = store.create({ objective: "append", approved_paths: ["note.txt"] });
+    const created = create(store, root, git, { objective: "append" });
     const id = created.workflow.workflow_id;
     const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
     const rawIds = () =>
@@ -614,5 +643,183 @@ test("audit history is append-only and versioned across mutations", () => {
     assert.deepEqual(ids, [...ids].sort((a, b) => a - b));
     assert.equal(new Set(ids).size, ids.length);
     store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("create assigns ordered contract IDs and preserves duplicate descriptions", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, {
+      acceptance_criteria: ["alpha", "beta", "alpha"],
+      validation_requirements: ["lint", "unit"],
+    });
+    assert.deepEqual(created.workflow.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "alpha" },
+      { criterion_id: "AC-002", description: "beta" },
+      { criterion_id: "AC-003", description: "alpha" },
+    ]);
+    assert.deepEqual(created.workflow.validation_requirements, [
+      { validation_id: "VAL-001", description: "lint" },
+      { validation_id: "VAL-002", description: "unit" },
+    ]);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("create rejects empty and oversized contract lists", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    assert.equal(errorCategory(() => create(store, root, git, { acceptance_criteria: [] })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => create(store, root, git, { validation_requirements: [] })), "ERROR_INVALID_SHAPE");
+    const many = Array.from({ length: 1000 }, (_, index) => `item ${index}`);
+    assert.equal(errorCategory(() => create(store, root, git, { acceptance_criteria: many })), "ERROR_INVALID_SHAPE");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("create rejects unknown fields and unsupported type and target mismatches", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const head = git("rev-parse", "HEAD");
+    const base = createInput(root, git, { objective: "shape" });
+    assert.equal(errorCategory(() => store.create({ ...base, extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(
+      errorCategory(() => store.create({ ...base, workflow_type: "review_only" })),
+      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+    );
+    assert.equal(
+      errorCategory(() =>
+        store.create(
+          createInput(root, git, {
+            review_target: {
+              review_mode: "commit_range",
+              base_revision: head,
+              head_revision: head,
+              approved_paths: ["note.txt"],
+              include_staged: false,
+              include_unstaged: false,
+              include_untracked: false,
+            },
+          }),
+        ),
+      ),
+      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+    );
+    assert.equal(
+      errorCategory(() =>
+        store.create(
+          createInput(root, git, {
+            review_target: {
+              review_mode: "working_tree",
+              base_revision: head,
+              head_revision: null,
+              approved_paths: ["other.txt"],
+              include_staged: true,
+              include_unstaged: true,
+              include_untracked: true,
+            },
+          }),
+        ),
+      ),
+      "ERROR_INVALID_SHAPE",
+    );
+    assert.equal(
+      errorCategory(() =>
+        store.create(
+          createInput(root, git, {
+            review_target: {
+              review_mode: "working_tree",
+              base_revision: "b".repeat(40),
+              head_revision: null,
+              approved_paths: ["note.txt"],
+              include_staged: true,
+              include_unstaged: true,
+              include_untracked: true,
+            },
+          }),
+        ),
+      ),
+      "ERROR_STALE_BASE",
+    );
+    assert.equal(
+      errorCategory(() =>
+        store.create(
+          createInput(root, git, {
+            review_target: {
+              review_mode: "working_tree",
+              base_revision: head,
+              head_revision: head,
+              approved_paths: ["note.txt"],
+              include_staged: true,
+              include_unstaged: true,
+              include_untracked: true,
+            },
+          }),
+        ),
+      ),
+      "ERROR_INVALID_SHAPE",
+    );
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("create persists planned absent initial receipt and dirty baseline", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const planned = create(store, root, git, { objective: "planned absent", approved_paths: ["new/file.txt"] });
+    assert.deepEqual(planned.workflow.initial_receipt.paths, [
+      { path: "new/file.txt", state: "absent", kind: "missing" },
+    ]);
+    assert.equal("mode" in planned.workflow.initial_receipt.paths[0], false);
+    assert.equal("digest" in planned.workflow.initial_receipt.paths[0], false);
+    assert.deepEqual(planned.workflow.dirty_baseline_paths, []);
+    writeFileSync(join(root, "note.txt"), "modified\n");
+    writeFileSync(join(root, "new.txt"), "added\n");
+    const dirty = create(store, root, git, { objective: "dirty baseline", approved_paths: ["note.txt", "new.txt"] });
+    assert.deepEqual(dirty.workflow.dirty_baseline_paths, ["new.txt", "note.txt"]);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("restart persists execution contracts and review target", () => {
+  const { root, git } = fixture();
+  try {
+    const path = join(root, "state.sqlite");
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = create(store, root, git, {
+      objective: "restart contract",
+      acceptance_criteria: ["restart criterion"],
+      validation_requirements: ["restart validation"],
+    });
+    const id = created.workflow.workflow_id;
+    const capabilities = created.capabilities;
+    store.close();
+    const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const persisted = reopened.get(id, "parent", capabilities.parent);
+    assert.equal(persisted.schema_version, 2);
+    assert.equal(persisted.version, 0);
+    assert.equal(persisted.phase, "IMPLEMENTING");
+    assert.equal(persisted.objective, "restart contract");
+    assert.deepEqual(persisted.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "restart criterion" },
+    ]);
+    assert.deepEqual(persisted.validation_requirements, [
+      { validation_id: "VAL-001", description: "restart validation" },
+    ]);
+    assert.deepEqual(persisted.review_target, {
+      review_mode: "working_tree",
+      base_revision: created.workflow.base_head,
+      head_revision: null,
+      approved_paths: ["note.txt"],
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    });
+    assert.deepEqual(persisted.initial_receipt, created.workflow.initial_receipt);
+    reopened.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
