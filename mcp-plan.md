@@ -350,7 +350,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test .codex/workflow-mcp/tests/migration.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** valid v1 databases reopen as v2 with one immutable migration event per row.
 
-- [ ] **MCP-2.3 — Standardize sanitized audit envelopes**
+- [x] **MCP-2.3 — Standardize sanitized audit envelopes**
   - **Prerequisites/commit:** MCP-2.2; `feat(workflow): strengthen audit event envelopes`.
   - **Owned:** `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/tests/workflow.node.mjs`,
@@ -743,6 +743,87 @@ Validation:
 - `node --test .codex/workflow-mcp/tests/migration.node.mjs`: pass, 8/8.
 - `pnpm test:workflow-mcp`: pass, 26/26 (18 workflow + 8 migration).
 - `pnpm test`: pass, 45/45.
+- `git diff --check`: pass.
+- `git status --short`: only the three owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-2.3 — Standardize sanitized audit envelopes
+
+DONE
+
+Task: MCP-2.3
+Outcome: Every new creation and mutation event now writes the normative sanitized audit envelope.
+`WORKFLOW_CREATED`, `WORKFLOW_MIGRATED`, `IMPLEMENTATION_SUBMITTED`, `REVIEW_SUBMITTED`,
+`REPAIR_AUTHORIZED`, `WORKFLOW_BLOCKED`, `COMMIT_AUTHORIZED`, `COMMIT_RECORDED`, and the two linked
+`WORKFLOW_CREATED`/`OPTIONAL_FOLLOWUP_CREATED` events store exactly
+`{schema_version:2, phase_before, phase_after, state_digest_before, state_digest_after,
+changed_fields, linked_workflow_id, outcome}`. Changed fields are computed by canonical comparison
+over unioned top-level keys excluding `version`; creation lists every state key except `version`.
+Link IDs appear only on linked events; `outcome` is set only on migration, stops, review, and
+commit results and is null otherwise. Old audit rows stay byte-for-byte unchanged and are returned
+unsynthesized, so v2 events form a sanitized digest chain.
+
+Files changed:
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/migration.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- All creation/mutation events use the normative envelope: a new `auditEnvelope(before, after,
+  digestBefore, {linked_workflow_id, outcome})` helper always emits exactly the 8 envelope keys;
+  `create`, `#migrateLegacyRows`, and `#mutate` all build envelopes, with `phase_before` and
+  `state_digest_before` taken from the prior row (null for creation/migration).
+- Changed fields computed by canonical comparison over unioned top-level keys, excluding `version`:
+  `changedFields` compares `canonicalJson(before[key]) !== canonicalJson(after[key])` over the
+  sorted union of `Object.keys(before)` and `Object.keys(after)` and drops `version`.
+- Creation lists every state key except `version`: `auditEnvelope(null, state, null)` yields exactly
+  the created state's keys minus `version` (asserted in tests).
+- Link IDs only on linked events: child `WORKFLOW_CREATED` sets `linked_workflow_id` to the parent
+  workflow ID and parent `OPTIONAL_FOLLOWUP_CREATED` sets it to the child ID; all other events null.
+- Outcome only on migration, stops, review, and commit results; otherwise null:
+  `WORKFLOW_MIGRATED` and `WORKFLOW_BLOCKED` carry the resulting phase, `REVIEW_SUBMITTED` carries
+  `review_status`, `COMMIT_RECORDED` carries `committed`; implementation, repair, commit-authorization,
+  creation, and linked events carry null.
+- Legacy rows preserved exactly on reads: `audit()` still returns stored `summary_json` parsed
+  unsynthesized; the byte-for-byte old-audit preservation test still passes unchanged.
+- Envelopes sanitized: only phase names, state digests, key names, workflow IDs, and outcome tokens;
+  no objective, summary, finding, path, receipt, or capability text.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "audit envelopes use exact sanitized keys and sorted changed fields":
+  exact 8-key envelope across create/implementation/review/stop, sorted changed fields, creation
+  lists every state key except `version`, review outcome `CHANGES_REQUESTED`, stop outcome
+  `STOPPED_BLOCKED`, link/outcome null where required.
+- New "audit digests form a continuity chain across mutations": `state_digest_after` equals the
+  persisted row digest and `objectDigest` of the returned state; `state_digest_before` equals the
+  previous event's `state_digest_after`.
+- New "serialized audit envelopes contain none of the prohibited data": objective, implementation
+  summary, finding ID/text, path, and all four capability tokens absent from serialized audit.
+- New "audit history is append-only and versioned across mutations": exactly one event per mutation,
+  monotonic unique event IDs, failed mutations append nothing, event versions track workflow versions.
+- New `migration.node.mjs` "migration audit envelope uses the normative sanitized envelope": exact
+  keys, phase mapping across `phase_before`/`phase_after`/`outcome`, `state_digest_after` equals the
+  persisted digest, sanitized serialization, sorted changed fields.
+- Updated "preserves old audits byte-for-byte and appends one migration event" to assert the
+  normative envelope on the appended `WORKFLOW_MIGRATED` event (exact keys, phases, outcome, digest,
+  and exact sorted `changed_fields`) while the byte-for-byte preservation of the pre-existing rows
+  is unchanged.
+- All other existing tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='audit|digest|append' .codex/workflow-mcp/tests/{workflow,migration}.node.mjs`: pass, 10/10.
+- `pnpm test:workflow-mcp`: pass, 31/31.
+- `pnpm test`: pass, 50/50.
 - `git diff --check`: pass.
 - `git status --short`: only the three owned files plus the requested `mcp-plan.md` update.
 

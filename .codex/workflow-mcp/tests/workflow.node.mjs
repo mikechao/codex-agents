@@ -458,3 +458,161 @@ test("rejects digest and JSON tampering and preserves state on failed mutation",
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("audit envelopes use exact sanitized keys and sorted changed fields", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "audit keys", approved_paths: ["note.txt"], max_repair_cycles: 0 });
+    const id = created.workflow.workflow_id;
+    const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
+    const envelopeKeys = [
+      "changed_fields",
+      "linked_workflow_id",
+      "outcome",
+      "phase_after",
+      "phase_before",
+      "schema_version",
+      "state_digest_after",
+      "state_digest_before",
+    ];
+    const stateKeys = Object.keys(created.workflow)
+      .filter((key) => key !== "version")
+      .sort();
+
+    const createdEvent = readAudit()[0];
+    assert.equal(createdEvent.event_type, "WORKFLOW_CREATED");
+    assert.deepEqual(Object.keys(createdEvent.summary).sort(), envelopeKeys);
+    assert.equal(createdEvent.summary.schema_version, 2);
+    assert.equal(createdEvent.summary.phase_before, null);
+    assert.equal(createdEvent.summary.phase_after, "IMPLEMENTING");
+    assert.equal(createdEvent.summary.state_digest_before, null);
+    assert.equal(createdEvent.summary.linked_workflow_id, null);
+    assert.equal(createdEvent.summary.outcome, null);
+    assert.deepEqual(createdEvent.summary.changed_fields, stateKeys);
+
+    implementation(store, created, root, 0, "implemented");
+    const implEvent = readAudit()[1];
+    assert.equal(implEvent.event_type, "IMPLEMENTATION_SUBMITTED");
+    assert.deepEqual(Object.keys(implEvent.summary).sort(), envelopeKeys);
+    assert.equal(implEvent.summary.phase_before, "IMPLEMENTING");
+    assert.equal(implEvent.summary.phase_after, "REVIEWING");
+    assert.equal(implEvent.summary.linked_workflow_id, null);
+    assert.equal(implEvent.summary.outcome, null);
+    assert.ok(implEvent.summary.changed_fields.length > 0);
+    assert.deepEqual(implEvent.summary.changed_fields, [...implEvent.summary.changed_fields].sort());
+
+    const blocker = { finding_id: "AUDIT-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    const reviewEvent = readAudit()[2];
+    assert.equal(reviewEvent.event_type, "REVIEW_SUBMITTED");
+    assert.deepEqual(Object.keys(reviewEvent.summary).sort(), envelopeKeys);
+    assert.equal(reviewEvent.summary.phase_before, "REVIEWING");
+    assert.equal(reviewEvent.summary.phase_after, "REPAIR_REQUIRED");
+    assert.equal(reviewEvent.summary.linked_workflow_id, null);
+    assert.equal(reviewEvent.summary.outcome, "CHANGES_REQUESTED");
+    assert.deepEqual(reviewEvent.summary.changed_fields, [...reviewEvent.summary.changed_fields].sort());
+
+    store.finalizeBlocked({ workflow_id: id, capability: created.capabilities.parent, expected_version: 2 });
+    const stopEvent = readAudit()[3];
+    assert.equal(stopEvent.event_type, "WORKFLOW_BLOCKED");
+    assert.deepEqual(Object.keys(stopEvent.summary).sort(), envelopeKeys);
+    assert.equal(stopEvent.summary.phase_before, "REPAIR_REQUIRED");
+    assert.equal(stopEvent.summary.phase_after, "STOPPED_BLOCKED");
+    assert.equal(stopEvent.summary.outcome, "STOPPED_BLOCKED");
+    assert.equal(stopEvent.summary.linked_workflow_id, null);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("audit digests form a continuity chain across mutations", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "digest chain", approved_paths: ["note.txt"] });
+    const id = created.workflow.workflow_id;
+    const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
+    const rowDigest = () => store.db.prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?").get(id).state_digest;
+
+    const createdEvent = readAudit()[0];
+    assert.equal(createdEvent.summary.state_digest_before, null);
+    assert.equal(createdEvent.summary.state_digest_after, rowDigest());
+    assert.equal(createdEvent.summary.state_digest_after, objectDigest(created.workflow));
+
+    implementation(store, created, root, 0, "implemented");
+    const implEvent = readAudit()[1];
+    assert.equal(implEvent.summary.state_digest_before, createdEvent.summary.state_digest_after);
+    assert.equal(implEvent.summary.state_digest_after, rowDigest());
+    assert.equal(
+      implEvent.summary.state_digest_after,
+      objectDigest(store.get(id, "parent", created.capabilities.parent)),
+    );
+
+    const blocker = { finding_id: "CHAIN-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    const reviewEvent = readAudit()[2];
+    assert.equal(reviewEvent.summary.state_digest_before, implEvent.summary.state_digest_after);
+    assert.equal(reviewEvent.summary.state_digest_after, rowDigest());
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("serialized audit envelopes contain none of the prohibited data", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "SECRET-OBJECTIVE-AUDIT", approved_paths: ["note.txt"] });
+    const id = created.workflow.workflow_id;
+    implementation(store, created, root, 0, "SECRET-SUMMARY-AUDIT");
+    writeFileSync(join(root, "note.txt"), "changed\n");
+    const finding = { finding_id: "SECRET-FINDING", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "secret failure scenario text", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [finding], []);
+    const serialized = JSON.stringify(store.audit(id, "parent", created.capabilities.parent));
+    for (const prohibited of [
+      "SECRET-OBJECTIVE-AUDIT",
+      "SECRET-SUMMARY-AUDIT",
+      "SECRET-FINDING",
+      "secret failure scenario text",
+      "note.txt",
+      created.capabilities.parent,
+      created.capabilities.implementer,
+      created.capabilities.reviewer,
+      created.capabilities.committer,
+    ]) {
+      assert.equal(serialized.includes(prohibited), false, `audit envelope contains ${prohibited}`);
+    }
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("audit history is append-only and versioned across mutations", () => {
+  const { root } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = store.create({ objective: "append", approved_paths: ["note.txt"] });
+    const id = created.workflow.workflow_id;
+    const readAudit = () => store.audit(id, "parent", created.capabilities.parent);
+    const rawIds = () =>
+      store.db.prepare("SELECT event_id FROM audit_events WHERE workflow_id = ? ORDER BY event_id").all(id).map((row) => row.event_id);
+    assert.equal(readAudit().length, 1);
+    assert.deepEqual(rawIds(), [1]);
+
+    implementation(store, created, root, 0, "implemented");
+    assert.equal(readAudit().length, 2);
+    assert.equal(readAudit().at(-1).version, store.get(id, "parent", created.capabilities.parent).version);
+
+    const blocker = { finding_id: "APPEND-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    const before = readAudit().length;
+    assert.equal(errorCategory(() => review(store, created, root, 99, "CHANGES_REQUESTED", [blocker], [])), "ERROR_VERSION_CONFLICT");
+    assert.equal(readAudit().length, before);
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    assert.equal(readAudit().length, before + 1);
+    const events = readAudit();
+    assert.deepEqual(events.map((event) => event.version), [0, 1, 2]);
+    assert.deepEqual(events.map((event) => event.event_type), ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_SUBMITTED"]);
+    const ids = rawIds();
+    assert.deepEqual(ids, [...ids].sort((a, b) => a - b));
+    assert.equal(new Set(ids).size, ids.length);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

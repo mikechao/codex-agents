@@ -25,6 +25,7 @@ import {
   submitReview,
 } from "./transitions.mjs";
 import {
+  canonicalJson,
   compareCapability,
   exactKeys,
   exactPaths,
@@ -50,6 +51,26 @@ function mutationInput(value) {
     fail("ERROR_INVALID_SHAPE", "mutation input is invalid");
   }
   return value;
+}
+
+function changedFields(before, after) {
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return keys.filter(
+    (key) => key !== "version" && canonicalJson(before[key]) !== canonicalJson(after[key]),
+  );
+}
+
+function auditEnvelope(before, after, digestBefore, options = {}) {
+  return {
+    schema_version: 2,
+    phase_before: before ? before.phase : null,
+    phase_after: after.phase,
+    state_digest_before: digestBefore ?? null,
+    state_digest_after: objectDigest(after),
+    changed_fields: changedFields(before ?? {}, after),
+    linked_workflow_id: options.linked_workflow_id ?? null,
+    outcome: options.outcome ?? null,
+  };
 }
 
 function parseState(row) {
@@ -184,9 +205,7 @@ export class WorkflowStore {
           if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
           if (this.faultAfterMigrationUpdate)
             fail("ERROR_INJECTED_FAILURE", "injected migration failure");
-          this.#audit(row.workflow_id, next.version, "WORKFLOW_MIGRATED", "parent", {
-            phase: next.phase,
-          });
+          this.#audit(row.workflow_id, next.version, "WORKFLOW_MIGRATED", "parent", auditEnvelope(state, next, null, { outcome: next.phase }));
           migrated = true;
         } else if (state.schema_version !== 2) {
           fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
@@ -254,10 +273,7 @@ export class WorkflowStore {
           now,
           now,
         );
-      this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", {
-        phase: state.phase,
-        base_head: state.base_head,
-      });
+      this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -291,7 +307,7 @@ export class WorkflowStore {
       }));
   }
 
-  #mutate(workflowId, actorRole, token, expected, eventType, action) {
+  #mutate(workflowId, actorRole, token, expected, eventType, action, outcome = null) {
     this.#ensureOpen();
     expectedVersion(expected);
     this.db.exec("BEGIN IMMEDIATE");
@@ -310,7 +326,13 @@ export class WorkflowStore {
         )
         .run(nextVersion, JSON.stringify(next), objectDigest(next), now, workflowId, expected);
       if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      this.#audit(workflowId, nextVersion, eventType, actorRole, { phase: next.phase });
+      this.#audit(
+        workflowId,
+        nextVersion,
+        eventType,
+        actorRole,
+        auditEnvelope(current, next, row.state_digest, { outcome }),
+      );
       this.db.exec("COMMIT");
       return this.#publicState(next);
     } catch (error) {
@@ -393,6 +415,7 @@ export class WorkflowStore {
         }
         return next;
       },
+      input.review_status,
     );
   }
 
@@ -417,6 +440,7 @@ export class WorkflowStore {
       input.expected_version,
       "WORKFLOW_BLOCKED",
       (state) => finalizeBlocked(state, input),
+      "STOPPED_BLOCKED",
     );
   }
 
@@ -453,6 +477,7 @@ export class WorkflowStore {
         const evidence = verifyCommit(this.root, state, input.commit_hash);
         return recordCommit(state, evidence, input);
       },
+      "committed",
     );
   }
 
@@ -511,11 +536,13 @@ export class WorkflowStore {
         );
       if (this.faultAfterChildInsert)
         fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-      this.#audit(childId, 0, "WORKFLOW_CREATED", "parent", {
-        phase: childState.phase,
-        base_head: childState.base_head,
-        parent_workflow_id: state.workflow_id,
-      });
+      this.#audit(
+        childId,
+        0,
+        "WORKFLOW_CREATED",
+        "parent",
+        auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
+      );
       const next = { ...state, version: input.expected_version + 1 };
       const result = this.db
         .prepare(
@@ -523,10 +550,13 @@ export class WorkflowStore {
         )
         .run(next.version, JSON.stringify(next), objectDigest(next), now, input.workflow_id, input.expected_version);
       if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      this.#audit(input.workflow_id, next.version, "OPTIONAL_FOLLOWUP_CREATED", "parent", {
-        phase: next.phase,
-        linked_workflow_id: childId,
-      });
+      this.#audit(
+        input.workflow_id,
+        next.version,
+        "OPTIONAL_FOLLOWUP_CREATED",
+        "parent",
+        auditEnvelope(state, next, row.state_digest, { linked_workflow_id: childId }),
+      );
       this.db.exec("COMMIT");
       return { workflow: this.#publicState(childState), capabilities: childCapabilities };
     } catch (error) {

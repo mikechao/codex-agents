@@ -381,7 +381,50 @@ test("preserves old audits byte-for-byte and appends one migration event", () =>
     assert.equal(events[2].event_type, "WORKFLOW_MIGRATED");
     assert.equal(events[2].version, 2);
     assert.equal(events[2].actor_role, "parent");
-    assert.deepEqual(events[2].summary, { phase: "REVIEWING" });
+    assert.deepEqual(Object.keys(events[2].summary).sort(), [
+      "changed_fields",
+      "linked_workflow_id",
+      "outcome",
+      "phase_after",
+      "phase_before",
+      "schema_version",
+      "state_digest_after",
+      "state_digest_before",
+    ]);
+    assert.equal(events[2].summary.schema_version, 2);
+    assert.equal(events[2].summary.phase_before, "REVIEWING");
+    assert.equal(events[2].summary.phase_after, "REVIEWING");
+    assert.equal(events[2].summary.state_digest_before, null);
+    assert.equal(events[2].summary.linked_workflow_id, null);
+    assert.equal(events[2].summary.outcome, "REVIEWING");
+    assert.deepEqual(events[2].summary.changed_fields, [
+      "acceptance_criteria",
+      "acceptance_results",
+      "agent_touched_paths",
+      "commit_preparation",
+      "concern_acceptance",
+      "dirty_baseline_paths",
+      "initial_receipt",
+      "legacy_evidence",
+      "legacy_v1",
+      "linked_findings",
+      "recovery_context",
+      "remediation_context",
+      "review_target",
+      "schema_version",
+      "scope_changed_paths",
+      "source_workflow_id",
+      "stop_context",
+      "validation_requirements",
+      "validation_results",
+      "workflow_type",
+    ]);
+    assert.equal(
+      events[2].summary.state_digest_after,
+      store.db
+        .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
+        .get(state.workflow_id).state_digest,
+    );
     const after = store.db
       .prepare(
         "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json, created_at FROM audit_events ORDER BY event_id",
@@ -390,6 +433,57 @@ test("preserves old audits byte-for-byte and appends one migration event", () =>
     assert.deepEqual(after.slice(0, before.length), before);
     assert.equal(after.length, before.length + 1);
     assert.equal(after[before.length].event_type, "WORKFLOW_MIGRATED");
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("migration audit envelope uses the normative sanitized envelope", () => {
+  const root = mkdtempSync(join(tmpdir(), "migration-envelope-"));
+  try {
+    const path = join(root, "state.sqlite");
+    const state = v1State({ phase: "STOPPED_BLOCKED", implementation_status: "DONE" });
+    const issued = createV1Database(path, [state]);
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const events = store.audit(state.workflow_id, "parent", issued.get(state.workflow_id).parent);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event_type, "WORKFLOW_MIGRATED");
+    assert.equal(events[0].version, 1);
+    assert.deepEqual(Object.keys(events[0].summary).sort(), [
+      "changed_fields",
+      "linked_workflow_id",
+      "outcome",
+      "phase_after",
+      "phase_before",
+      "schema_version",
+      "state_digest_after",
+      "state_digest_before",
+    ]);
+    assert.equal(events[0].summary.schema_version, 2);
+    assert.equal(events[0].summary.phase_before, "STOPPED_BLOCKED");
+    assert.equal(events[0].summary.phase_after, "STOPPED_REPAIR_EXHAUSTED");
+    assert.equal(events[0].summary.state_digest_before, null);
+    assert.equal(events[0].summary.linked_workflow_id, null);
+    assert.equal(events[0].summary.outcome, "STOPPED_REPAIR_EXHAUSTED");
+    assert.ok(events[0].summary.changed_fields.includes("phase"));
+    assert.deepEqual(events[0].summary.changed_fields, [...events[0].summary.changed_fields].sort());
+    const serialized = JSON.stringify(events);
+    for (const prohibited of [
+      "legacy objective",
+      "note.txt",
+      "accepted",
+      issued.get(state.workflow_id).parent,
+      issued.get(state.workflow_id).implementer,
+    ]) {
+      assert.equal(serialized.includes(prohibited), false, `migration audit contains ${prohibited}`);
+    }
+    assert.equal(
+      events[0].summary.state_digest_after,
+      store.db
+        .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
+        .get(state.workflow_id).state_digest,
+    );
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
