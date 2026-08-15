@@ -297,7 +297,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test .codex/agents/tests/change-receipt.node.mjs`.
   - **Done:** path safety is independently testable with byte-compatible v1 receipts.
 
-- [ ] **MCP-1.2 — Add explicit absent-path receipt mode**
+- [x] **MCP-1.2 — Add explicit absent-path receipt mode**
   - **Prerequisites/commit:** MCP-1.1; `feat(receipts): support explicitly absent workflow paths`.
   - **Owned:** `.codex/agents/change-receipt.mjs`,
     `.codex/agents/tests/change-receipt.node.mjs`.
@@ -621,6 +621,49 @@ Pre-existing changes preserved:
 
 Plan deviations:
 - Minor: the symlink-parent check now compares `relative(realpathSync(root), parent)` instead of `relative(root, parent)`. In the receipt flow `root` is git's canonical toplevel (verified `/private/var`), so v1 output is byte-identical; the canonical base makes the exported `safePaths` correct for any caller-supplied root, which the task's independent-testability requirement needs.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-1.2 — Add explicit absent-path receipt mode
+
+DONE
+
+Task: MCP-1.2
+Outcome: `createReceipt` and the CLI now support an explicit, opt-in absent-path mode that emits the normative `{path,state:"absent",kind:"missing"}` entry (no mode/digest) while default calls still reject such paths with `ERROR_UNTRACKED_PATH` and tracked deletions remain `deleted`.
+
+Files changed:
+- `.codex/agents/change-receipt.mjs`
+- `.codex/agents/tests/change-receipt.node.mjs`
+
+Requirements completed:
+- Library signature is now `createReceipt(inputs, cwd = process.cwd(), options = {})`; a new `validateOptions` accepts only `{allowAbsent:boolean}` (defaulting false) and throws `ERROR_INVALID_ARGUMENTS` for null/non-object/array options, unknown keys, or non-boolean `allowAbsent`.
+- CLI is `--allow-absent -- path...`; `main()` permits the flag at most once and rejects any other pre-separator argument (unknown flags, duplicates, or bare paths) with `ERROR_INVALID_ARGUMENTS`, preserving the old all-invalid behavior for non-flag pre-separator arguments.
+- The normative absent entry `{path,state:"absent",kind:"missing"}` is emitted without `mode`/`digest` for paths absent from both `HEAD` and the worktree when opt-in; it participates in `overall_scope_hash` via the unchanged canonical receipt.
+- Default calls (library without options or CLI without the flag) still reject absent paths with `ERROR_UNTRACKED_PATH`; tracked missing paths remain `deleted` with HEAD mode and no digest.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- Library opt-in success and default rejection (`createReceipt(["new/file.txt"], root)` and `{allowAbsent:false}` throw `ERROR_UNTRACKED_PATH`; `{allowAbsent:true}` yields the exact absent entry with no `mode`/`digest`).
+- Library options validation: `null`, `true`, `[]`, `{allowAbsent:"yes"}`, `{allowAbsent:1}`, and `{bogus:true}` all throw `ERROR_INVALID_ARGUMENTS`; `{}` stays false.
+- Mixed present/absent paths sort lexicographically and produce a deterministic `overall_scope_hash`; adding another absent path changes the hash.
+- `allowAbsent` keeps tracked deletions `deleted`, never `absent`.
+- CLI opt-in emits absent entries (with `base_head`) and default calls reject them, with empty stdout on error and non-empty stdout only for the JSON line on success.
+- CLI rejects duplicate `--allow-absent`, unknown flags, and paths before the separator with `ERROR_INVALID_ARGUMENTS` and empty stdout.
+- All 13 existing receipt cases (deletion, addition, symlink, unsafe, metadata-only, stdout/stderr) kept unchanged and passing.
+
+Validation:
+- `node --test .codex/agents/tests/change-receipt.node.mjs`: pass, 19/19.
+- `pnpm test:agents`: pass, 19/19.
+- `pnpm test`: pass, 34/34.
+- `git diff --check`: pass.
+- `git status --short`: only the two owned files.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
+
+Plan deviations:
+- none.
 
 Remaining risks or blockers:
 - none. No commit made; worktree returned for parent review.

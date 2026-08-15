@@ -216,15 +216,32 @@ function canonicalReceipt(receipt) {
   });
 }
 
-export function createReceipt(inputs, cwd = process.cwd()) {
+function validateOptions(options) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("ERROR_INVALID_ARGUMENTS");
+  }
+  for (const key of Object.keys(options)) {
+    if (key !== "allowAbsent") {
+      throw new Error("ERROR_INVALID_ARGUMENTS");
+    }
+  }
+  if ("allowAbsent" in options && typeof options.allowAbsent !== "boolean") {
+    throw new Error("ERROR_INVALID_ARGUMENTS");
+  }
+  return { allowAbsent: options.allowAbsent === true };
+}
+
+export function createReceipt(inputs, cwd = process.cwd(), options = {}) {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("ERROR_EMPTY_PATHS");
   }
+  const normalizedOptions = validateOptions(options);
   const root = repositoryRoot(cwd);
-  return createReceiptAtRoot(inputs, root);
+  return createReceiptAtRoot(inputs, root, normalizedOptions);
 }
 
-function createReceiptAtRoot(inputs, root) {
+function createReceiptAtRoot(inputs, root, options = { allowAbsent: false }) {
+  const allowAbsent = options.allowAbsent === true;
   const headRevision = requireHead(root);
   const approvedPaths = safePaths(root, inputs);
   const paths = approvedPaths.map((path) => {
@@ -236,9 +253,15 @@ function createReceiptAtRoot(inputs, root) {
       if (error instanceof Error && error.message === "ERROR_UNTRACKED_PATH" && head) {
         throw new Error("ERROR_PATH_ACCESS");
       }
+      if (error instanceof Error && error.message === "ERROR_UNTRACKED_PATH" && allowAbsent) {
+        return { path, state: "absent", kind: "missing" };
+      }
       throw error;
     }
     if (!head && current.kind === "missing") {
+      if (allowAbsent) {
+        return { path, state: "absent", kind: "missing" };
+      }
       throw new Error("ERROR_UNTRACKED_PATH");
     }
     return current;
@@ -257,14 +280,19 @@ function createReceiptAtRoot(inputs, root) {
 function main() {
   const separator = process.argv.indexOf("--");
   const inputs = separator < 0 ? [] : process.argv.slice(separator + 1);
-  if (separator >= 0 && process.argv.slice(2, separator).length > 0) {
-    return fail("ERROR_INVALID_ARGUMENTS");
+  const flags = separator < 0 ? process.argv.slice(2) : process.argv.slice(2, separator);
+  let allowAbsent = false;
+  for (const flag of flags) {
+    if (flag !== "--allow-absent" || allowAbsent) {
+      return fail("ERROR_INVALID_ARGUMENTS");
+    }
+    allowAbsent = true;
   }
   if (inputs.length === 0) return fail("ERROR_EMPTY_PATHS");
 
   try {
     const root = repositoryRoot();
-    const receipt = createReceiptAtRoot(inputs, root);
+    const receipt = createReceiptAtRoot(inputs, root, { allowAbsent });
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
     return 0;
   } catch (error) {

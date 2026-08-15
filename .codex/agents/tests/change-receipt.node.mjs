@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { safePaths } from "../change-receipt.mjs";
+import { createReceipt, safePaths } from "../change-receipt.mjs";
 
 const utility = resolve(import.meta.dirname, "..", "change-receipt.mjs");
 
@@ -29,6 +29,18 @@ function commit(root, message = "fixture") {
 
 function run(root, paths) {
   const result = spawnSync(process.execPath, [utility, "--", ...paths], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
+}
+
+function runWithFlags(root, flags, paths) {
+  const result = spawnSync(process.execPath, [utility, ...flags, "--", ...paths], {
     cwd: root,
     encoding: "utf8",
   });
@@ -214,6 +226,112 @@ test("requires a repository with an existing HEAD", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("library emits the absent entry only with allowAbsent opt-in", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "tracked.txt"), "tracked\n");
+    commit(root);
+    assert.throws(() => createReceipt(["new/file.txt"], root), { message: "ERROR_UNTRACKED_PATH" });
+    assert.throws(() => createReceipt(["new/file.txt"], root, { allowAbsent: false }), {
+      message: "ERROR_UNTRACKED_PATH",
+    });
+    const receipt = createReceipt(["new/file.txt"], root, { allowAbsent: true });
+    assert.deepEqual(receipt.paths, [{ path: "new/file.txt", state: "absent", kind: "missing" }]);
+    assert.equal("mode" in receipt.paths[0], false);
+    assert.equal("digest" in receipt.paths[0], false);
+  });
+});
+
+test("library rejects unknown or non-boolean options", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "tracked.txt"), "tracked\n");
+    commit(root);
+    const invalid = [null, true, [], { allowAbsent: "yes" }, { allowAbsent: 1 }, { bogus: true }];
+    for (const options of invalid) {
+      assert.throws(() => createReceipt(["tracked.txt"], root, options), {
+        message: "ERROR_INVALID_ARGUMENTS",
+      });
+    }
+    const receipt = createReceipt(["tracked.txt"], root, {});
+    assert.equal(receipt.paths[0].state, "unchanged");
+  });
+});
+
+test("absent entries sort with present paths and keep the hash deterministic", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "a.txt"), "a\n");
+    writeFileSync(join(root, "b.txt"), "b\n");
+    commit(root);
+    const first = createReceipt(["b.txt", "new/z.txt", "a.txt"], root, { allowAbsent: true });
+    const second = createReceipt(["a.txt", "new/z.txt", "b.txt"], root, { allowAbsent: true });
+    assert.deepEqual(first, second);
+    assert.deepEqual(first.approved_paths, ["a.txt", "b.txt", "new/z.txt"]);
+    assert.deepEqual(
+      first.paths.map((entry) => entry.path),
+      ["a.txt", "b.txt", "new/z.txt"],
+    );
+    assert.deepEqual(
+      first.paths.find((entry) => entry.path === "new/z.txt"),
+      { path: "new/z.txt", state: "absent", kind: "missing" },
+    );
+    assert.equal(first.overall_scope_hash, second.overall_scope_hash);
+    const third = createReceipt(["b.txt", "new/z.txt", "a.txt", "other/missing.txt"], root, {
+      allowAbsent: true,
+    });
+    assert.notEqual(first.overall_scope_hash, third.overall_scope_hash);
+  });
+});
+
+test("allowAbsent keeps tracked deletions as deleted, never absent", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "gone.txt"), "gone\n");
+    commit(root);
+    unlinkSync(join(root, "gone.txt"));
+    const result = runWithFlags(root, ["--allow-absent"], ["gone.txt"]);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(parsed.paths, [
+      { path: "gone.txt", state: "deleted", kind: "missing", mode: "100644" },
+    ]);
+  });
+});
+
+test("CLI opt-in emits absent entries while default calls reject them", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "tracked.txt"), "tracked\n");
+    commit(root);
+    const rejected = run(root, ["future.txt"]);
+    assert.notEqual(rejected.status, 0);
+    assert.equal(rejected.stderr, "ERROR_UNTRACKED_PATH");
+    assert.equal(rejected.stdout, "");
+
+    const result = runWithFlags(root, ["--allow-absent"], ["future.txt"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(parsed.paths, [{ path: "future.txt", state: "absent", kind: "missing" }]);
+    assert.equal(parsed.base_head, git(root, "rev-parse", "HEAD"));
+  });
+});
+
+test("CLI rejects duplicate or unknown flags and paths before the separator", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "tracked.txt"), "tracked\n");
+    commit(root);
+    const scenarios = [
+      { flags: ["--allow-absent", "--allow-absent"], paths: ["tracked.txt"] },
+      { flags: ["--unknown"], paths: ["tracked.txt"] },
+      { flags: ["tracked.txt"], paths: ["tracked.txt"] },
+      { flags: ["--allow-absent", "--unknown"], paths: ["tracked.txt"] },
+    ];
+    for (const scenario of scenarios) {
+      const result = runWithFlags(root, scenario.flags, scenario.paths);
+      assert.notEqual(result.status, 0, JSON.stringify(scenario));
+      assert.equal(result.stderr, "ERROR_INVALID_ARGUMENTS", JSON.stringify(scenario));
+      assert.equal(result.stdout, "", JSON.stringify(scenario));
+    }
+  });
 });
 
 test("rejects unsupported Unix-domain socket filesystem objects", { skip: process.platform === "win32" }, async (context) => {
