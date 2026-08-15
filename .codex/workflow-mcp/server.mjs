@@ -354,11 +354,29 @@ export const tools = [
     },
   },
   {
-    name: "workflow_finalize_blocked",
-    description: "Finalize STOPPED_BLOCKED after the maximum repair cycle is exhausted.",
+    name: "workflow_resume_review",
+    description: "Resume an inconclusive review stop to REVIEWING.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        resume_context: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "resume_context"],
+    ),
+    annotations: {
+      title: "Resume review",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_finalize_repair_exhausted",
+    description: "Finalize STOPPED_REPAIR_EXHAUSTED after the maximum repair cycle is exhausted.",
     inputSchema: schema(common.properties, common.required),
     annotations: {
-      title: "Finalize blocked",
+      title: "Finalize repair exhausted",
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: false,
@@ -474,8 +492,11 @@ export function createServer(store = openStore()) {
         case "workflow_authorize_repair":
           result = store.authorizeRepair(args);
           break;
-        case "workflow_finalize_blocked":
-          result = store.finalizeBlocked(args);
+        case "workflow_resume_review":
+          result = store.resumeReview(args);
+          break;
+        case "workflow_finalize_repair_exhausted":
+          result = store.finalizeRepairExhausted(args);
           break;
         case "workflow_create_optional_followup":
           result = store.createOptionalFollowup(args);

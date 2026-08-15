@@ -34,7 +34,6 @@ export const PHASES = [
   "STOPPED_INCONCLUSIVE",
   "STOPPED_CONCERNS",
   "STOPPED_NEEDS_CONTEXT",
-  "STOPPED_BLOCKED",
   "STOPPED_IMPLEMENTATION_BLOCKED",
   "STOPPED_REPAIR_EXHAUSTED",
   "COMMIT_AUTHORIZED",
@@ -203,11 +202,12 @@ const ACTION_MATRIX = {
     REVIEWING: ["workflow_submit_review"],
   },
   parent: {
-    REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_blocked"],
+    REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
     STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_optional_followup"],
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
+    STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
   },
   committer: {
     COMMIT_AUTHORIZED: ["workflow_record_commit"],
@@ -667,7 +667,14 @@ export function submitReview(state, input) {
     ? JSON.parse(JSON.stringify(input.review_receipt))
     : null;
   if (input.review_status === "APPROVED") next.phase = "STOPPED_APPROVED";
-  if (input.review_status === "INCONCLUSIVE") next.phase = "STOPPED_INCONCLUSIVE";
+  if (input.review_status === "INCONCLUSIVE") {
+    next.phase = "STOPPED_INCONCLUSIVE";
+    next.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+  }
   if (input.review_status === "CHANGES_REQUESTED") next.phase = "REPAIR_REQUIRED";
   return next;
 }
@@ -705,13 +712,34 @@ export function authorizeRepair(state, input) {
   return next;
 }
 
-export function finalizeBlocked(state, input) {
-  exactKeys(input, ["workflow_id", "capability", "expected_version"], "blocked finalization");
+export function resumeReview(state, input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "review resume input is invalid");
+  }
+  exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "resume_context"],
+    "review resume",
+  );
+  ensurePhase(state, "STOPPED_INCONCLUSIVE");
+  const next = clone(state);
+  next.phase = "REVIEWING";
+  next.stop_context = null;
+  next.recovery_context = {
+    kind: "review",
+    context: boundedString(input.resume_context, "resume_context", 2000),
+    recovered_at: new Date().toISOString(),
+  };
+  return next;
+}
+
+export function finalizeRepairExhausted(state, input) {
+  exactKeys(input, ["workflow_id", "capability", "expected_version"], "repair exhaustion");
   ensurePhase(state, "REPAIR_REQUIRED");
   if (state.repair_cycle < state.max_repair_cycles)
     fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
   const next = clone(state);
-  next.phase = "STOPPED_BLOCKED";
+  next.phase = "STOPPED_REPAIR_EXHAUSTED";
   return next;
 }
 

@@ -136,7 +136,7 @@ test("enforces P3 stopping and blocking repair cycle limit", () => {
     const finalReview = review(store, created, root, 4, "CHANGES_REQUESTED", [finding], [], { "F-1": "still_present", "F-2": "resolved" });
     assert.equal(finalReview.phase, "REPAIR_REQUIRED");
     assert.equal(errorCategory(() => store.authorizeRepair({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 5, finding_ids: ["F-1"] })), "ERROR_REPAIR_LIMIT");
-    assert.equal(store.finalizeBlocked({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 5 }).phase, "STOPPED_BLOCKED");
+    assert.equal(store.finalizeRepairExhausted({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 5 }).phase, "STOPPED_REPAIR_EXHAUSTED");
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -290,7 +290,7 @@ test("rejects extra mutation fields without changing workflow state", () => {
     const repairBefore = store.get(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent);
     const repairAudit = store.audit(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent).length;
     assert.equal(errorCategory(() => store.authorizeRepair({ workflow_id: repairing.workflow.workflow_id, capability: repairing.capabilities.parent, expected_version: 2, finding_ids: ["SHAPE-1"], extra: true })), "ERROR_INVALID_SHAPE");
-    assert.equal(errorCategory(() => store.finalizeBlocked({ workflow_id: repairing.workflow.workflow_id, capability: repairing.capabilities.parent, expected_version: 2, extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.finalizeRepairExhausted({ workflow_id: repairing.workflow.workflow_id, capability: repairing.capabilities.parent, expected_version: 2, extra: true })), "ERROR_INVALID_SHAPE");
     assert.equal(store.get(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent).version, repairBefore.version);
     assert.equal(store.audit(repairing.workflow.workflow_id, "parent", repairing.capabilities.parent).length, repairAudit);
 
@@ -561,13 +561,13 @@ test("audit envelopes use exact sanitized keys and sorted changed fields", () =>
     assert.equal(reviewEvent.summary.outcome, "CHANGES_REQUESTED");
     assert.deepEqual(reviewEvent.summary.changed_fields, [...reviewEvent.summary.changed_fields].sort());
 
-    store.finalizeBlocked({ workflow_id: id, capability: created.capabilities.parent, expected_version: 2 });
+    store.finalizeRepairExhausted({ workflow_id: id, capability: created.capabilities.parent, expected_version: 2 });
     const stopEvent = readAudit()[3];
-    assert.equal(stopEvent.event_type, "WORKFLOW_BLOCKED");
+    assert.equal(stopEvent.event_type, "REPAIR_EXHAUSTED");
     assert.deepEqual(Object.keys(stopEvent.summary).sort(), envelopeKeys);
     assert.equal(stopEvent.summary.phase_before, "REPAIR_REQUIRED");
-    assert.equal(stopEvent.summary.phase_after, "STOPPED_BLOCKED");
-    assert.equal(stopEvent.summary.outcome, "STOPPED_BLOCKED");
+    assert.equal(stopEvent.summary.phase_after, "STOPPED_REPAIR_EXHAUSTED");
+    assert.equal(stopEvent.summary.outcome, "STOPPED_REPAIR_EXHAUSTED");
     assert.equal(stopEvent.summary.linked_workflow_id, null);
     store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -981,7 +981,7 @@ test("role views expose exact projection keys and sorted permitted actions", () 
 
     const blocker = { finding_id: "ROLE-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
-    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_repair", "workflow_finalize_blocked"]);
+    assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"]);
 
     store.authorizeRepair({ workflow_id: id, capability: caps.parent, expected_version: 2, finding_ids: ["ROLE-1"] });
     assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, ["workflow_submit_implementation"]);
@@ -1874,5 +1874,168 @@ test("review-only restart preserves phase, receipt, and permitted actions", () =
     assert.deepEqual(parent.initial_receipt, created.workflow.initial_receipt);
     assert.deepEqual(reopened.get(id, "reviewer", caps.reviewer).permitted_next_actions, ["workflow_submit_review"]);
     reopened.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function inconclusiveReview(store, workflow, caps, target, version = 0) {
+  return store.submitReview({
+    workflow_id: workflow.workflow_id,
+    capability: caps.reviewer,
+    expected_version: version,
+    review_status: "INCONCLUSIVE",
+    blocking_findings: [],
+    optional_findings: [],
+    review_receipt: null,
+    review_target: target,
+    prior_finding_classifications: {},
+  });
+}
+
+test("inconclusive review resumes to reviewing in both working-tree and range modes", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const wt = create(store, root, git, { objective: "inconclusive wt", workflow_type: "review_only" });
+    const wtId = wt.workflow.workflow_id;
+    const wtCaps = wt.capabilities;
+    const wtTarget = workingTarget(wt.workflow.base_head);
+    const wtStopped = inconclusiveReview(store, wt.workflow, wtCaps, wtTarget);
+    assert.equal(wtStopped.phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(wtStopped.stop_context, {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    });
+    assert.deepEqual(store.get(wtId, "parent", wtCaps.parent).permitted_next_actions, ["workflow_resume_review"]);
+    assert.deepEqual(store.get(wtId, "reviewer", wtCaps.reviewer).permitted_next_actions, []);
+
+    const wtResumed = store.resumeReview({ workflow_id: wtId, capability: wtCaps.parent, expected_version: 1, resume_context: "context supplied" });
+    assert.equal(wtResumed.phase, "REVIEWING");
+    assert.equal(wtResumed.stop_context, null);
+    assert.deepEqual(wtResumed.recovery_context, {
+      kind: "review",
+      context: "context supplied",
+      recovered_at: wtResumed.recovery_context.recovered_at,
+    });
+    assert.equal(wtResumed.recovery_context.kind, "review");
+    assert.equal(wtResumed.recovery_context.context, "context supplied");
+    assert.match(wtResumed.recovery_context.recovered_at, /^[0-9]{4}-/u);
+
+    const events = store.audit(wtId, "parent", wtCaps.parent);
+    assert.deepEqual(events.map((event) => event.event_type), [
+      "WORKFLOW_CREATED",
+      "REVIEW_SUBMITTED",
+      "REVIEW_RESUMED",
+    ]);
+    const resumeEvent = events[2];
+    assert.equal(resumeEvent.summary.phase_before, "STOPPED_INCONCLUSIVE");
+    assert.equal(resumeEvent.summary.phase_after, "REVIEWING");
+    assert.equal(resumeEvent.summary.outcome, null);
+    assert.equal(resumeEvent.summary.linked_workflow_id, null);
+
+    const wtApproved = store.submitReview({
+      workflow_id: wtId,
+      capability: wtCaps.reviewer,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      review_receipt: receipt(root),
+      review_target: wtTarget,
+      prior_finding_classifications: {},
+    });
+    assert.equal(wtApproved.phase, "STOPPED_APPROVED");
+
+    writeFileSync(join(root, "added.txt"), "added\n");
+    git("add", "added.txt");
+    git("commit", "-qm", "range head");
+    const base = git("rev-parse", "HEAD~1");
+    const head = git("rev-parse", "HEAD");
+    const range = create(store, root, git, rangeInput(root, git, base, head, { objective: "inconclusive range" }));
+    const rangeStopped = inconclusiveReview(store, range.workflow, range.capabilities, range.workflow.review_target);
+    assert.equal(rangeStopped.phase, "STOPPED_INCONCLUSIVE");
+    const rangeResumed = store.resumeReview({ workflow_id: range.workflow.workflow_id, capability: range.capabilities.parent, expected_version: 1, resume_context: "range context" });
+    assert.equal(rangeResumed.phase, "REVIEWING");
+    assert.equal(rangeResumed.stop_context, null);
+    assert.equal(rangeResumed.recovery_context.kind, "review");
+    assert.equal(rangeResumed.recovery_context.context, "range context");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review resume rejects wrong role, phase, version, and extra fields", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "resume review guards", workflow_type: "review_only" });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    inconclusiveReview(store, created.workflow, caps, workingTarget(created.workflow.base_head));
+
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, resume_context: "x" })), "ERROR_CAPABILITY_DENIED");
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 0, resume_context: "x" })), "ERROR_VERSION_CONFLICT");
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 1 })), "ERROR_INVALID_SHAPE");
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "x", extra: true })), "ERROR_INVALID_SHAPE");
+    assert.equal(store.get(id, "parent", caps.parent).version, 1);
+
+    const resumed = store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 1, resume_context: "x" });
+    assert.equal(resumed.phase, "REVIEWING");
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 2, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("repair exhaustion finalizes only at the max cycle and enters a terminal stop", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "exhaustion", max_repair_cycles: 1 });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    const blocker = { finding_id: "EXH-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    assert.equal(errorCategory(() => store.finalizeRepairExhausted({ workflow_id: id, capability: caps.parent, expected_version: 2 })), "ERROR_REPAIR_LIMIT");
+    store.authorizeRepair({ workflow_id: id, capability: caps.parent, expected_version: 2, finding_ids: ["EXH-1"] });
+    implementation(store, created, root, 3, "repaired", { "EXH-1": "still_present" });
+    review(store, created, root, 4, "CHANGES_REQUESTED", [blocker], [], { "EXH-1": "still_present" });
+    const exhausted = store.finalizeRepairExhausted({ workflow_id: id, capability: caps.parent, expected_version: 5 });
+    assert.equal(exhausted.phase, "STOPPED_REPAIR_EXHAUSTED");
+    assert.equal(exhausted.repair_cycle, 1);
+    const events = store.audit(id, "parent", caps.parent);
+    const stopEvent = events[events.length - 1];
+    assert.equal(stopEvent.event_type, "REPAIR_EXHAUSTED");
+    assert.equal(stopEvent.summary.phase_before, "REPAIR_REQUIRED");
+    assert.equal(stopEvent.summary.phase_after, "STOPPED_REPAIR_EXHAUSTED");
+    assert.equal(stopEvent.summary.outcome, "STOPPED_REPAIR_EXHAUSTED");
+    assert.equal(stopEvent.summary.linked_workflow_id, null);
+    const serialized = JSON.stringify(events);
+    assert.equal(serialized.includes("EXH-1"), false);
+    store.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("repair exhaustion is terminal and cannot resume or commit", () => {
+  const { root, git } = fixture();
+  try {
+    const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const created = create(store, root, git, { objective: "terminal exhaust", max_repair_cycles: 0 });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    implementation(store, created, root, 0, "implemented");
+    const blocker = { finding_id: "TERM-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    store.finalizeRepairExhausted({ workflow_id: id, capability: caps.parent, expected_version: 2 });
+    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
+      assert.deepEqual(store.get(id, role, caps[role]).permitted_next_actions, []);
+    }
+    assert.equal(errorCategory(() => store.resumeImplementation({ workflow_id: id, capability: caps.parent, expected_version: 3, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.resumeReview({ workflow_id: id, capability: caps.parent, expected_version: 3, resume_context: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.acceptConcerns({ workflow_id: id, capability: caps.parent, expected_version: 3, user_authorization: "x" })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 3, user_authorization: "x" })), "ERROR_STALE_RECEIPT");
+    assert.equal(errorCategory(() => store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 3, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(root), review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} })), "ERROR_INVALID_TRANSITION");
+    assert.equal(errorCategory(() => implementation(store, created, root, 3, "attempted")), "ERROR_INVALID_TRANSITION");
+    assert.equal(store.get(id, "parent", caps.parent).version, 3);
+    store.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

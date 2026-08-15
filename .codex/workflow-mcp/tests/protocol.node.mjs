@@ -296,6 +296,40 @@ test("exact recovery tool schemas match the normative contract", () => {
   assert.equal(acceptSchema.properties.user_authorization.maxLength, 2000);
 });
 
+test("resume review and repair exhaustion tool schemas match the normative contract", () => {
+  const resumeReviewTool = tools.find((tool) => tool.name === "workflow_resume_review");
+  assert.ok(resumeReviewTool);
+  const resumeReviewSchema = resumeReviewTool.inputSchema;
+  assert.equal(resumeReviewSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(resumeReviewSchema.properties).sort(),
+    ["capability", "expected_version", "resume_context", "workflow_id"],
+  );
+  assert.deepEqual(resumeReviewSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "resume_context",
+  ]);
+  assert.equal(resumeReviewSchema.properties.resume_context.minLength, 1);
+  assert.equal(resumeReviewSchema.properties.resume_context.maxLength, 2000);
+
+  const finalizeTool = tools.find((tool) => tool.name === "workflow_finalize_repair_exhausted");
+  assert.ok(finalizeTool);
+  const finalizeSchema = finalizeTool.inputSchema;
+  assert.equal(finalizeSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(finalizeSchema.properties).sort(),
+    ["capability", "expected_version", "workflow_id"],
+  );
+  assert.deepEqual(finalizeSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+  ]);
+  assert.equal(tools.some((tool) => tool.name === "workflow_finalize_blocked"), false);
+});
+
 test("implementation stops resume and concerns over STDIO", async () => {
   const root = mkdtempSync(join(tmpdir(), "workflow-recover-"));
   const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -391,6 +425,54 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     const denied = await client.callTool({ name: "workflow_authorize_commit", arguments: { workflow_id: range.workflow_id, capability: rangeResult.capabilities.parent, expected_version: 1, user_authorization: "authorize range review-only" } });
     assert.equal(denied.isError, true);
     assert.equal(JSON.parse(denied.content[0].text).category, "ERROR_COMMIT_NOT_ALLOWED");
+    await client.close();
+    await transport.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review resume and repair exhaustion over STDIO", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-recover-review-"));
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "workflow@example.invalid");
+    git("config", "user.name", "Workflow Tests");
+    writeFileSync(join(root, "note.txt"), "before\n");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.mjs")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    const call = async (name, arguments_) => JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
+    const receipt = () => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+
+    const wtResult = await call("workflow_create", { workflow_type: "review_only", objective: "recover review", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: [], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    const wt = wtResult.workflow;
+    const wtTarget = wt.review_target;
+    const inconclusive = await call("workflow_submit_review", { workflow_id: wt.workflow_id, capability: wtResult.capabilities.reviewer, expected_version: 0, review_status: "INCONCLUSIVE", blocking_findings: [], optional_findings: [], review_receipt: null, review_target: wtTarget, prior_finding_classifications: {} });
+    assert.equal(inconclusive.phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(inconclusive.stop_context, { status: "INCONCLUSIVE", summary: "review context unavailable", stopped_from: "REVIEWING" });
+    const resumed = await call("workflow_resume_review", { workflow_id: wt.workflow_id, capability: wtResult.capabilities.parent, expected_version: 1, resume_context: "context available" });
+    assert.equal(resumed.phase, "REVIEWING");
+    assert.equal(resumed.stop_context, null);
+    assert.equal(resumed.recovery_context.kind, "review");
+    assert.equal(resumed.recovery_context.context, "context available");
+    const approved = await call("workflow_submit_review", { workflow_id: wt.workflow_id, capability: wtResult.capabilities.reviewer, expected_version: 2, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt(), review_target: wtTarget, prior_finding_classifications: {} });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+
+    const chgResult = await call("workflow_create", { workflow_type: "change", objective: "exhaust", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], max_repair_cycles: 0, review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
+    const chg = chgResult.workflow;
+    await call("workflow_submit_implementation", { workflow_id: chg.workflow_id, capability: chgResult.capabilities.implementer, expected_version: 0, status: "DONE", summary: "done", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt(), known_failures: [], finding_resolution_map: {} });
+    const finding = { finding_id: "PROTO-EXH", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+    await call("workflow_submit_review", { workflow_id: chg.workflow_id, capability: chgResult.capabilities.reviewer, expected_version: 1, review_status: "CHANGES_REQUESTED", blocking_findings: [finding], optional_findings: [], review_receipt: null, review_target: chg.review_target, prior_finding_classifications: {} });
+    const exhausted = await call("workflow_finalize_repair_exhausted", { workflow_id: chg.workflow_id, capability: chgResult.capabilities.parent, expected_version: 2 });
+    assert.equal(exhausted.phase, "STOPPED_REPAIR_EXHAUSTED");
+    assert.deepEqual((await call("workflow_get", { workflow_id: chg.workflow_id, role: "parent", capability: chgResult.capabilities.parent })).permitted_next_actions, []);
+    const resumeDenied = await client.callTool({ name: "workflow_resume_review", arguments: { workflow_id: chg.workflow_id, capability: chgResult.capabilities.parent, expected_version: 3, resume_context: "x" } });
+    assert.equal(resumeDenied.isError, true);
+    assert.equal(JSON.parse(resumeDenied.content[0].text).category, "ERROR_INVALID_TRANSITION");
     await client.close();
     await transport.close();
   } finally { rmSync(root, { recursive: true, force: true }); }

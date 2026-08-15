@@ -18,13 +18,14 @@ import {
   authorizeRepair,
   createState,
   dirtyBaselinePaths,
-  finalizeBlocked,
+  finalizeRepairExhausted,
   IMPLEMENTATION_STOP_PHASES,
   migrateV1State,
   optionalFollowupInput,
   rangeDirtyBaselinePaths,
   recordCommit,
   resumeImplementation,
+  resumeReview,
   roleView,
   submitImplementation,
   submitReview,
@@ -459,16 +460,28 @@ export class WorkflowStore {
     );
   }
 
-  finalizeBlocked(input) {
+  resumeReview(input) {
     mutationInput(input);
     return this.#mutate(
       input.workflow_id,
       "parent",
       input.capability,
       input.expected_version,
-      "WORKFLOW_BLOCKED",
-      (state) => finalizeBlocked(state, input),
-      "STOPPED_BLOCKED",
+      "REVIEW_RESUMED",
+      (state) => resumeReview(state, input),
+    );
+  }
+
+  finalizeRepairExhausted(input) {
+    mutationInput(input);
+    return this.#mutate(
+      input.workflow_id,
+      "parent",
+      input.capability,
+      input.expected_version,
+      "REPAIR_EXHAUSTED",
+      (state) => finalizeRepairExhausted(state, input),
+      "STOPPED_REPAIR_EXHAUSTED",
     );
   }
 

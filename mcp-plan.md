@@ -456,7 +456,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='review.only|commit.range|historical|receipt|authorization' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** historical reviews are self-contained and cannot authorize commits.
 
-- [ ] **MCP-5.3 — Add review resume and terminal repair exhaustion**
+- [x] **MCP-5.3 — Add review resume and terminal repair exhaustion**
   - **Prerequisites/commit:** MCP-5.2; `feat(workflow): add review recovery transitions`.
   - **Owned:** `.codex/workflow-mcp/server.mjs`, `.codex/workflow-mcp/store.mjs`,
     `.codex/workflow-mcp/transitions.mjs`, `.codex/workflow-mcp/tests/workflow.node.mjs`,
@@ -1329,6 +1329,95 @@ Validation:
 - `pnpm test`: pass, 95/95.
 - `git diff --check`: pass.
 - `git status --short`: only the six owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-5.3 — Add review resume and terminal repair exhaustion
+
+DONE
+
+Task: MCP-5.3
+Outcome: `workflow_resume_review` (parent, common + `resume_context`) now recovers `STOPPED_INCONCLUSIVE`
+stops back to `REVIEWING` in both working-tree and commit-range review modes, storing a `review`
+recovery context; `workflow_finalize_blocked` is renamed to `workflow_finalize_repair_exhausted` and
+now targets the terminal `STOPPED_REPAIR_EXHAUSTED` phase, gated on `repair_cycle` equalling the max.
+`STOPPED_BLOCKED` is removed from the new phase list and from all tool schemas/actions, while v1
+migration mapping keeps recognizing it. Events are `REVIEW_RESUMED` and `REPAIR_EXHAUSTED`, and the
+exhausted stop exposes no permitted actions for any role and cannot resume or commit.
+
+Files changed:
+- `.codex/workflow-mcp/server.mjs`
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/workflow.node.mjs`
+- `.codex/workflow-mcp/tests/protocol.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- `workflow_resume_review` added: tool schema is common + `resume_context` (1..2000 chars), registered
+  in the server dispatch, and dispatched through the store's transactional `#mutate` with parent role
+  capability, expected-version, and `STOPPED_INCONCLUSIVE` phase checks. The transition restores
+  `REVIEWING`, clears `stop_context`, and stores
+  `recovery_context:{kind:"review",context:resume_context,recovered_at:<ISO>}`. The parent action list
+  at `STOPPED_INCONCLUSIVE` is exactly `["workflow_resume_review"]`.
+- Inconclusive stops now persist the normative stop context:
+  `{status:"INCONCLUSIVE",summary:"review context unavailable",stopped_from:"REVIEWING"}` in
+  `submitReview`, so the reviewer view carries a complete stop and the resume is meaningful.
+- `workflow_finalize_blocked` renamed to `workflow_finalize_repair_exhausted`: tool schema (common
+  only), server dispatch, store method, and transition `finalizeRepairExhausted`; the target phase is
+  the terminal `STOPPED_REPAIR_EXHAUSTED` and it remains gated on `repair_cycle` equalling
+  `max_repair_cycles` (`ERROR_REPAIR_LIMIT` while cycles remain). The parent action at
+  `REPAIR_REQUIRED` is now `["workflow_authorize_repair","workflow_finalize_repair_exhausted"]`.
+- `STOPPED_BLOCKED` removed from the new phase list (`PHASES`), the action matrix, and every tool
+  schema/description; it survives only in `V1_PHASES` and the migration phase mapping for legacy rows,
+  which still map it to `STOPPED_IMPLEMENTATION_BLOCKED` or `STOPPED_REPAIR_EXHAUSTED`.
+- Events: `REVIEW_RESUMED` (outcome null) and `REPAIR_EXHAUSTED` (outcome `STOPPED_REPAIR_EXHAUSTED`),
+  both with the exact sanitized envelope and no finding/auth/context text.
+- Exhausted stop is terminal: every role gets empty `permitted_next_actions`, and resume, concerns,
+  review, and implementation calls are rejected (`ERROR_INVALID_TRANSITION`; commit authorization is
+  rejected by the existing receipt gate with `ERROR_STALE_RECEIPT`).
+- All mutations remain transactional, version-checked, capability-checked, and audit-safe; no new
+  dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `workflow.node.mjs` "inconclusive review resumes to reviewing in both working-tree and range
+  modes": exact stop_context, parent resume action, `REVIEW_RESUMED` audit event with phases/outcome
+  null/link null, resume to `REVIEWING` with `kind:"review"` recovery context, recovery to
+  `STOPPED_APPROVED`, and an identical range-mode resume.
+- New "review resume rejects wrong role, phase, version, and extra fields": `ERROR_CAPABILITY_DENIED`,
+  `ERROR_VERSION_CONFLICT`, missing/extra `resume_context` → `ERROR_INVALID_SHAPE`, no mutation, and
+  repeat resume at `REVIEWING` → `ERROR_INVALID_TRANSITION`.
+- New "repair exhaustion finalizes only at the max cycle and enters a terminal stop": `ERROR_REPAIR_LIMIT`
+  with cycles remaining, exhaustion only after the final `CHANGES_REQUESTED`, `STOPPED_REPAIR_EXHAUSTED`
+  with cycle retained, `REPAIR_EXHAUSTED` audit event (phases/outcome exact), and no finding text in
+  serialized envelopes.
+- New "repair exhaustion is terminal and cannot resume or commit": empty actions for all four roles and
+  resume/concerns/review/implementation/commit denial with version/audit preserved.
+- Updated existing tests to the renamed tool/phase/event: `enforces P3 stopping and blocking repair
+  cycle limit`, `rejects extra mutation fields`, `audit envelopes use exact sanitized keys and sorted
+  changed fields` (`REPAIR_EXHAUSTED`/`STOPPED_REPAIR_EXHAUSTED`), and `role views expose exact
+  projection keys and sorted permitted actions`.
+- New `protocol.node.mjs` "resume review and repair exhaustion tool schemas match the normative
+  contract": exact `workflow_resume_review` schema (common + `resume_context`), exact
+  `workflow_finalize_repair_exhausted` schema (common only), and absence of `workflow_finalize_blocked`.
+- New `protocol.node.mjs` "review resume and repair exhaustion over STDIO": real transport
+  `INCONCLUSIVE` → parent resume → approved working-tree review, and change workflow exhausted at
+  `max_repair_cycles:0` → `STOPPED_REPAIR_EXHAUSTED` with empty parent actions and denied review resume.
+- All other existing tests kept unchanged and passing.
+
+Validation:
+- `node --test --test-name-pattern='inconclusive|resume.review|repair.exhaust|terminal' .codex/workflow-mcp/tests/{workflow,protocol}.node.mjs`: pass, 7/7.
+- `pnpm test:workflow-mcp`: pass, 82/82.
+- `pnpm test`: pass, 101/101 (19 agents + 82 workflow/protocol/migration).
+- `git diff --check`: pass.
+- `git status --short`: only the five owned files plus the requested `mcp-plan.md` update.
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).
