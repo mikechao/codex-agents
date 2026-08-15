@@ -24,8 +24,54 @@ export const PHASES = [
   "STOPPED_CONCERNS",
   "STOPPED_NEEDS_CONTEXT",
   "STOPPED_BLOCKED",
+  "STOPPED_IMPLEMENTATION_BLOCKED",
+  "STOPPED_REPAIR_EXHAUSTED",
   "COMMIT_AUTHORIZED",
   "COMMITTED",
+];
+
+const V1_PHASES = [
+  "IMPLEMENTING",
+  "REVIEWING",
+  "REPAIR_REQUIRED",
+  "REPAIRING",
+  "STOPPED_APPROVED",
+  "STOPPED_INCONCLUSIVE",
+  "STOPPED_CONCERNS",
+  "STOPPED_NEEDS_CONTEXT",
+  "STOPPED_BLOCKED",
+  "COMMIT_AUTHORIZED",
+  "COMMITTED",
+];
+
+const V1_STATE_KEYS = [
+  "schema_version",
+  "version",
+  "workflow_id",
+  "phase",
+  "objective",
+  "base_head",
+  "approved_paths",
+  "repair_cycle",
+  "max_repair_cycles",
+  "parent_workflow_id",
+  "implementation_summary",
+  "implementation_status",
+  "implementation_changed_paths",
+  "implementation_acceptance_evidence",
+  "implementation_validation_evidence",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "finding_resolution_map",
+  "prior_finding_classifications",
+  "blocking_findings",
+  "optional_findings",
+  "review_receipt",
+  "commit_authorization",
+  "commit_result",
+  "repair_authorized_ids",
+  "authorized_optional_ids",
+  "user_authorization_summary",
 ];
 
 function ensurePhase(state, ...allowed) {
@@ -381,4 +427,138 @@ export function dirtyBaselinePaths(receipt) {
     .filter((item) => ["added", "modified", "deleted"].includes(item.state))
     .map((item) => item.path)
     .sort();
+}
+
+function corrupt() {
+  fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+}
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+export function migrateV1State(state) {
+  if (!isObject(state)) corrupt();
+  const actual = Object.keys(state).sort();
+  const expected = [...V1_STATE_KEYS].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    corrupt();
+  }
+  if (state.schema_version !== 1) corrupt();
+  if (!Number.isSafeInteger(state.version) || state.version < 0) corrupt();
+  if (typeof state.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(state.workflow_id))
+    corrupt();
+  if (typeof state.phase !== "string" || !V1_PHASES.includes(state.phase)) corrupt();
+  if (typeof state.objective !== "string" || state.objective.length === 0 || state.objective.length > 4000)
+    corrupt();
+  if (typeof state.base_head !== "string" || !/^[0-9a-f]{40}$/u.test(state.base_head)) corrupt();
+  if (
+    !isStringArray(state.approved_paths) ||
+    state.approved_paths.length === 0 ||
+    state.approved_paths.length > 200
+  )
+    corrupt();
+  if (!Number.isSafeInteger(state.repair_cycle) || state.repair_cycle < 0 || state.repair_cycle > 2)
+    corrupt();
+  if (
+    !Number.isSafeInteger(state.max_repair_cycles) ||
+    state.max_repair_cycles < 0 ||
+    state.max_repair_cycles > 2
+  )
+    corrupt();
+  if (state.parent_workflow_id !== null && typeof state.parent_workflow_id !== "string") corrupt();
+  if (state.implementation_summary !== null && typeof state.implementation_summary !== "string")
+    corrupt();
+  if (
+    state.implementation_status !== null &&
+    !["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"].includes(state.implementation_status)
+  )
+    corrupt();
+  if (!isStringArray(state.implementation_changed_paths)) corrupt();
+  if (!isStringArray(state.implementation_acceptance_evidence)) corrupt();
+  if (!isStringArray(state.implementation_validation_evidence)) corrupt();
+  if (state.implementation_receipt !== null && !isObject(state.implementation_receipt)) corrupt();
+  if (!isStringArray(state.implementation_known_failures)) corrupt();
+  if (!isObject(state.finding_resolution_map) || !isObject(state.prior_finding_classifications))
+    corrupt();
+  if (!Array.isArray(state.blocking_findings) || !Array.isArray(state.optional_findings)) corrupt();
+  if (state.review_receipt !== null && !isObject(state.review_receipt)) corrupt();
+  if (state.commit_authorization !== null && !isObject(state.commit_authorization)) corrupt();
+  if (state.commit_result !== null && !isObject(state.commit_result)) corrupt();
+  if (!isStringArray(state.repair_authorized_ids)) corrupt();
+  if (!isStringArray(state.authorized_optional_ids)) corrupt();
+  if (state.user_authorization_summary !== null && typeof state.user_authorization_summary !== "string")
+    corrupt();
+
+  const changedPaths = [...state.implementation_changed_paths].sort();
+  const approvedPaths = [...state.approved_paths].sort();
+  const phase =
+    state.phase === "STOPPED_BLOCKED"
+      ? state.implementation_status === "BLOCKED"
+        ? "STOPPED_IMPLEMENTATION_BLOCKED"
+        : "STOPPED_REPAIR_EXHAUSTED"
+      : state.phase;
+  return {
+    schema_version: SCHEMA_VERSION,
+    version: state.version,
+    workflow_id: state.workflow_id,
+    workflow_type: "change",
+    legacy_v1: true,
+    phase,
+    objective: state.objective,
+    base_head: state.base_head,
+    approved_paths: approvedPaths,
+    acceptance_criteria: [],
+    validation_requirements: [],
+    review_target: {
+      review_mode: "working_tree",
+      base_revision: state.base_head,
+      head_revision: null,
+      approved_paths: approvedPaths,
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    },
+    initial_receipt: null,
+    dirty_baseline_paths: [],
+    repair_cycle: state.repair_cycle,
+    max_repair_cycles: state.max_repair_cycles,
+    parent_workflow_id: state.parent_workflow_id,
+    source_workflow_id: null,
+    linked_findings: [],
+    remediation_context: null,
+    implementation_summary: state.implementation_summary,
+    implementation_status: state.implementation_status,
+    agent_touched_paths: changedPaths,
+    scope_changed_paths: changedPaths,
+    acceptance_results: [],
+    validation_results: [],
+    implementation_receipt: state.implementation_receipt,
+    implementation_known_failures: [...state.implementation_known_failures],
+    finding_resolution_map: { ...state.finding_resolution_map },
+    prior_finding_classifications: { ...state.prior_finding_classifications },
+    blocking_findings: state.blocking_findings,
+    optional_findings: state.optional_findings,
+    review_receipt: state.review_receipt,
+    stop_context: null,
+    recovery_context: null,
+    repair_authorized_ids: [...state.repair_authorized_ids].sort(),
+    concern_acceptance: null,
+    commit_authorization: state.commit_authorization,
+    commit_preparation: null,
+    commit_result: state.commit_result,
+    implementation_changed_paths: changedPaths,
+    implementation_acceptance_evidence: [...state.implementation_acceptance_evidence],
+    implementation_validation_evidence: [...state.implementation_validation_evidence],
+    authorized_optional_ids: [...state.authorized_optional_ids].sort(),
+    user_authorization_summary: state.user_authorization_summary,
+    legacy_evidence: {
+      acceptance_evidence: [...state.implementation_acceptance_evidence],
+      validation_evidence: [...state.implementation_validation_evidence],
+    },
+  };
 }

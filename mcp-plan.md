@@ -329,7 +329,7 @@ or capabilities. Old audit rows remain byte-for-byte unchanged and are returned 
   - **Focused:** `node --test --test-name-pattern='schema|digest|corrupt' .codex/workflow-mcp/tests/workflow.node.mjs && pnpm test:workflow-mcp`.
   - **Done:** every newly inserted row is a complete digest-protected v2 row.
 
-- [ ] **MCP-2.2 — Migrate v1 rows transactionally**
+- [x] **MCP-2.2 — Migrate v1 rows transactionally**
   - **Prerequisites/commit:** MCP-2.1; `feat(workflow): migrate v1 workflow state`.
   - **Owned:** `.codex/workflow-mcp/store.mjs`, `.codex/workflow-mcp/transitions.mjs`,
     `.codex/workflow-mcp/tests/migration.node.mjs`.
@@ -704,6 +704,50 @@ Validation:
 
 Pre-existing changes preserved:
 - none (worktree was clean before editing).
+
+Plan deviations:
+- none.
+
+Remaining risks or blockers:
+- none. No commit made; worktree returned for parent review.
+
+### MCP-2.2 — Migrate v1 rows transactionally
+
+DONE
+
+Task: MCP-2.2
+Outcome: Valid v1 databases now reopen as v2. During store open, all schema-1 rows are migrated in one immediate transaction before serving calls: each row maps to complete digest-protected state with `legacy_v1:true`, `workflow_type:"change"`, a synthesized working-tree target, null initial receipt, empty contract lists, `legacy_evidence:{acceptance_evidence,validation_evidence}`, and every genuinely new field at its normative empty value; each row increments N->N+1 and appends exactly one immutable `WORKFLOW_MIGRATED` event. Old audits and capability hashes are never altered. A test-only `faultAfterMigrationUpdate` option rolls back the whole batch after the first update/before the event.
+
+Files changed:
+- `.codex/workflow-mcp/store.mjs`
+- `.codex/workflow-mcp/transitions.mjs`
+- `.codex/workflow-mcp/tests/migration.node.mjs`
+- `mcp-plan.md` (requested checkbox + Done Report update)
+
+Requirements completed:
+- Migration runs during store open: `#migrateLegacyRows` scans every workflow row inside one `BEGIN IMMEDIATE` transaction before any call is served, so the batch is atomic.
+- Complete state mapping in `migrateV1State`: `legacy_v1:true`, `workflow_type:"change"`, synthesized working-tree `review_target` from the v1 base/paths, `initial_receipt:null`, empty `acceptance_criteria`/`validation_requirements`, and `legacy_evidence:{acceptance_evidence,validation_evidence}`.
+- Old changed paths map to both `agent_touched_paths` and `scope_changed_paths` (and the temporary `implementation_changed_paths` compatibility key).
+- Summary/status/receipt/known failures, resolution/classification/finding/review/commit fields, `repair_authorized_ids`, and the temporary compatibility keys map directly; all genuinely new fields (acceptance/validation results, stop/recovery context, concern acceptance, commit preparation, dirty baseline, source/linked/remediation fields) are set to their normative empty values.
+- Phase mapping: `STOPPED_BLOCKED` with `implementation_status:"BLOCKED"` becomes `STOPPED_IMPLEMENTATION_BLOCKED`; any other `STOPPED_BLOCKED` becomes `STOPPED_REPAIR_EXHAUSTED`; all other v1 phases are preserved.
+- Unknown/malformed schemas (missing/extra keys, bad types, non-1/2 `schema_version`, JSON that fails to parse) fail `ERROR_STATE_CORRUPT` and roll back the batch; the store closes its connection when migration fails.
+- Each row increments `version` N->N+1, receives `state_digest = objectDigest(state)`, and appends one `WORKFLOW_MIGRATED` v2 envelope (summary `{phase}`), matching the existing audit summary style. Old audit rows and capability hashes are untouched; reopens are idempotent with no second event.
+- Added test-only `faultAfterMigrationUpdate` that fails after the first workflow UPDATE and before its event insert, exercising full-batch rollback.
+- No new dependencies; no non-owned files touched.
+
+Tests added or updated:
+- New `migration.node.mjs`: single-row full mapping to complete v2 state plus digest and one migration event; STOPPED_BLOCKED/phase mapping; capability-hash preservation with stale-version rejection after migration (expected 0 fails, 1 succeeds, 1 again fails); byte-for-byte old audit preservation plus one appended migration event; multi-row batch with one event per row; injected-rollback leaving every row and all audits untouched; reopen idempotence; malformed-missing-key and unknown-schema `ERROR_STATE_CORRUPT` with batch rollback. 8/8 pass.
+- All 18 existing workflow tests and all other suites kept unchanged and passing.
+
+Validation:
+- `node --test .codex/workflow-mcp/tests/migration.node.mjs`: pass, 8/8.
+- `pnpm test:workflow-mcp`: pass, 26/26 (18 workflow + 8 migration).
+- `pnpm test`: pass, 45/45.
+- `git diff --check`: pass.
+- `git status --short`: only the three owned files plus the requested `mcp-plan.md` update.
+
+Pre-existing changes preserved:
+- none (worktree was clean before editing; `notes.txt` is git-ignored).
 
 Plan deviations:
 - none.

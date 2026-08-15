@@ -18,6 +18,7 @@ import {
   createState,
   dirtyBaselinePaths,
   finalizeBlocked,
+  migrateV1State,
   optionalFollowupInput,
   recordCommit,
   submitImplementation,
@@ -65,6 +66,7 @@ export class WorkflowStore {
     this.path =
       options.databasePath ?? (process.env.WORKFLOW_MCP_DB_PATH || resolveStatePath(this.root));
     this.faultAfterChildInsert = options.faultAfterChildInsert === true;
+    this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
@@ -99,6 +101,12 @@ export class WorkflowStore {
       .map((column) => column.name);
     if (!workflowColumns.includes("state_digest")) {
       this.db.exec("ALTER TABLE workflows ADD COLUMN state_digest TEXT");
+    }
+    try {
+      this.#migrateLegacyRows();
+    } catch (error) {
+      this.db.close();
+      throw error;
     }
   }
 
@@ -146,6 +154,50 @@ export class WorkflowStore {
     if (!row) fail("ERROR_NOT_FOUND", "workflow is not found");
     this.#verifyDigest(row);
     return row;
+  }
+
+  #migrateLegacyRows() {
+    const rows = this.db.prepare("SELECT workflow_id, version, state_json FROM workflows").all();
+    if (rows.length === 0) return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      let migrated = false;
+      for (const row of rows) {
+        const state = parseState(row);
+        if (state.schema_version === 1) {
+          if (row.version !== state.version) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+          const next = migrateV1State(state);
+          next.version = state.version + 1;
+          const now = new Date().toISOString();
+          const result = this.db
+            .prepare(
+              "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+            )
+            .run(
+              next.version,
+              JSON.stringify(next),
+              objectDigest(next),
+              now,
+              row.workflow_id,
+              row.version,
+            );
+          if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+          if (this.faultAfterMigrationUpdate)
+            fail("ERROR_INJECTED_FAILURE", "injected migration failure");
+          this.#audit(row.workflow_id, next.version, "WORKFLOW_MIGRATED", "parent", {
+            phase: next.phase,
+          });
+          migrated = true;
+        } else if (state.schema_version !== 2) {
+          fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+        }
+      }
+      if (migrated) this.db.exec("COMMIT");
+      else this.db.exec("ROLLBACK");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   #audit(workflowId, version, eventType, actorRole, summary) {
