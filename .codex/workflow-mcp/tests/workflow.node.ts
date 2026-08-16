@@ -93,6 +93,20 @@ function create(store: any, root: string, git: (...args: string[]) => string, op
   return store.create(createInput(root, git, options));
 }
 
+test("store database runs in Bun SQLite strict mode for named bindings", () => {
+  const { root } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+    const byId = store.db.prepare("SELECT workflow_id FROM workflows WHERE workflow_id = :id");
+    assert.throws(() => byId.get({}), /Missing parameter/);
+    assert.equal(byId.get({ id: "0".repeat(36) }), null);
+    const store2: any = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state2.sqlite") });
+    assert.equal(store2.db.prepare("SELECT :value AS bound").get({ value: 7 }).bound, 7);
+    store.close();
+    store2.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("persists workflow, rejects stale versions and enforces role capabilities", () => {
   const { root, git } = fixture();
   const path = join(root, "state.sqlite");

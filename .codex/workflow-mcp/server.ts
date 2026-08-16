@@ -657,6 +657,6 @@ export async function main(): Promise<void> {
   connected = true;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.main) {
   main().catch(() => (process.exitCode = 1));
 }

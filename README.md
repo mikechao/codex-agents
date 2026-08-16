@@ -24,6 +24,8 @@ bun run typecheck         # strict tsc checks without emitting
 bun run test              # full suite: agents + workflow-MCP tests
 bun run test:agents       # focused change-receipt tests
 bun run test:workflow-mcp # focused workflow-state MCP server tests
+bun run test:coverage     # full suite with Bun coverage reporting
+bun run test:stress       # full suite, randomized order, each file run twice
 ```
 
 ## Install into another repository
@@ -31,12 +33,13 @@ bun run test:workflow-mcp # focused workflow-state MCP server tests
 After `bun install`, run:
 
 ```sh
-./install-into.sh /absolute/path/to/target-repository
+./install-into.ts /absolute/path/to/target-repository
 ```
 
-The installer requires Bun and a Git repository, refuses to replace an existing `.codex/agents`
-directory or `workflow_state` MCP registration, copies the agent definitions, and registers this
-project's server by absolute path. Restart or reload Codex afterward, then verify it with:
+The installer requires Bun 1.3 or newer and a Git repository, refuses to replace an existing
+`.codex/agents` directory or `workflow_state` MCP registration, copies the agent definitions, and
+registers this project's server by absolute path. Restart or reload Codex afterward, then verify it
+with:
 
 ```sh
 codex mcp get workflow_state

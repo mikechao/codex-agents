@@ -7,6 +7,7 @@ import { chmodSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TOML } from "bun";
 import { test } from "bun:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -883,72 +884,23 @@ test("v2 workflows deny legacy commit recording over STDIO", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-function parseToml(source: string): any {
-  const root: Record<string, any> = {};
-  let current: Record<string, any> = root;
-  const lines = source.split(/\r?\n/);
-  let i = 0;
-  const parseBasicString = (src: string): string => {
-    let out = "";
-    let pos = 1;
-    const escapes = { n: "\n", t: "\t", r: "\r", '"': '"', "\\": "\\" };
-    while (pos < src.length) {
-      const ch = src[pos];
-      if (ch === '"') return out;
-      if (ch === "\\") {
-        out += escapes[src[pos + 1] as keyof typeof escapes] ?? src[pos + 1];
-        pos += 2;
-      } else {
-        out += ch;
-        pos++;
-      }
-    }
-    throw new Error("unterminated string");
+interface AgentContract {
+  name: string;
+  description: string;
+  model: string;
+  developer_instructions: string;
+}
+
+interface WorkflowStateConfig {
+  mcp_servers?: {
+    workflow_state?: {
+      command?: string;
+      args?: string[];
+      startup_timeout_sec?: number;
+      tool_timeout_sec?: number;
+      required?: boolean;
+    };
   };
-  while (i < lines.length) {
-    const trimmed = lines[i].trim();
-    i++;
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    if (trimmed.startsWith("[")) {
-      const m = trimmed.match(/^\[([A-Za-z0-9_.-]+)\]$/);
-      if (!m) throw new Error("malformed table header: " + trimmed);
-      current = m[1].split(".").reduce((obj, key) => (obj[key] ??= {}), root);
-      continue;
-    }
-    const eq = trimmed.indexOf("=");
-    if (eq < 0) throw new Error("expected key = value: " + trimmed);
-    const key = trimmed.slice(0, eq).trim();
-    const rest = trimmed.slice(eq + 1).trim();
-    let value;
-    if (rest.startsWith('"""')) {
-      let body = rest.slice(3);
-      let close = body.indexOf('"""');
-      while (close < 0) {
-        if (i >= lines.length) throw new Error("unterminated multiline string");
-        body += "\n" + lines[i];
-        i++;
-        close = body.indexOf('"""');
-      }
-      body = body.slice(0, close);
-      if (body.startsWith("\n")) body = body.slice(1);
-      value = body;
-    } else if (rest.startsWith('"')) {
-      value = parseBasicString(rest);
-    } else if (rest.startsWith("[")) {
-      const inner = rest.slice(1, rest.lastIndexOf("]"));
-      value = inner
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s !== "")
-        .map((s) => parseBasicString(s));
-    } else if (rest === "true" || rest === "false") {
-      value = rest === "true";
-    } else {
-      throw new Error("unsupported value: " + rest);
-    }
-    current[key] = value;
-  }
-  return root;
 }
 
 test("agent contracts parse as TOML and reference the authoritative v2 view and exact tools", () => {
@@ -968,7 +920,7 @@ test("agent contracts parse as TOML and reference the authoritative v2 view and 
   };
   for (const [name, contract] of Object.entries(contracts)) {
     const text = readFileSync(join(process.cwd(), contract.file), "utf8");
-    const parsed = parseToml(text);
+    const parsed = TOML.parse(text) as AgentContract;
     assert.equal(parsed.name, name === "reviewer" ? "code_reviewer" : name);
     assert.ok(parsed.description.length > 0);
     assert.ok(parsed.model.length > 0);
@@ -998,6 +950,24 @@ test("agent contracts parse as TOML and reference the authoritative v2 view and 
       );
     }
   }
+});
+
+test("project config.toml registers the workflow_state server with Bun and exact source paths", () => {
+  const text = readFileSync(join(process.cwd(), ".codex", "config.toml"), "utf8");
+  const parsed = TOML.parse(text) as WorkflowStateConfig;
+  const server = parsed.mcp_servers?.workflow_state;
+  assert.ok(server, "config.toml must register mcp_servers.workflow_state");
+  assert.equal(server.command, "bun");
+  assert.deepEqual(server.args, ["--no-warnings", ".codex/workflow-mcp/server.ts"]);
+  const serverPath = server.args?.[server.args.length - 1];
+  assert.ok(typeof serverPath === "string" && serverPath.length > 0);
+  assert.ok(serverPath.endsWith(".codex/workflow-mcp/server.ts"), "args must point at the server source");
+  assert.equal(existsSync(join(process.cwd(), serverPath)), true, "server source must exist");
+  assert.equal(typeof server.startup_timeout_sec, "number");
+  assert.ok((server.startup_timeout_sec ?? 0) >= 1);
+  assert.equal(typeof server.tool_timeout_sec, "number");
+  assert.ok((server.tool_timeout_sec ?? 0) >= 1);
+  assert.throws(() => TOML.parse('command = "unterminated'), /unterminated/i);
 });
 
 test("obsolete names are absent and workflow_record_commit appears only in migrated-v1 compatibility text", () => {

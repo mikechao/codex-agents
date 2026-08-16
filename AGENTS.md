@@ -23,3 +23,9 @@ focused server checks. Run the full `bun run test` suite before declaring any ch
 The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/` and run
 directly from source with Bun; there is no compiled `dist/` mirror. Run `bun run typecheck`
 before declaring changes complete.
+
+Subprocess execution keeps Node-compatible `node:child_process` (`execFileSync`/`spawnSync`)
+semantics: Bun's `spawnSync` does not throw on `maxBuffer` overflow (it SIGTERMs with no error),
+so the binary-blob protections and `ERROR_GIT`/`ERROR_RECEIPT_UNAVAILABLE` categorization rely on
+the Node APIs and must not be swapped out. TOML contracts and project config are parsed with
+`Bun.TOML.parse`, not a custom parser.

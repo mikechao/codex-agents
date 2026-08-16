@@ -162,7 +162,9 @@ export class WorkflowStore {
     this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
     this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    this.db = new Database(this.path);
+    // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
+    // counts are not checked in this version); every query here binds positionally.
+    this.db = new Database(this.path, { strict: true });
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (
@@ -248,9 +250,7 @@ export class WorkflowStore {
     const rows = this.db.prepare("SELECT workflow_id, version, state_json FROM workflows").all() as
       Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json">>;
     if (rows.length === 0) return;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      let migrated = false;
+    this.db.transaction(() => {
       for (const row of rows) {
         let parsed: unknown;
         try {
@@ -290,19 +290,13 @@ export class WorkflowStore {
             "parent",
             auditEnvelope(state, next, null, { outcome: next.phase }),
           );
-          migrated = true;
         } else if (schema === 2) {
           validateWorkflowStateV2(parsed);
         } else {
           fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
         }
       }
-      if (migrated) this.db.exec("COMMIT");
-      else this.db.exec("ROLLBACK");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    }).immediate();
   }
 
   #audit(
@@ -343,8 +337,7 @@ export class WorkflowStore {
     };
     const hashes = this.#capabilityHashes(capabilities);
     const now = isoNow();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const created = this.db.transaction(() => {
       this.db
         .prepare(
           "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -361,12 +354,9 @@ export class WorkflowStore {
           now,
         );
       this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-    return { workflow: roleView(state, "parent"), capabilities };
+      return state;
+    }).immediate();
+    return { workflow: roleView(created, "parent"), capabilities };
   }
 
   get(workflowIdValue: unknown, actorRole: unknown, token: unknown): RoleView {
@@ -415,8 +405,7 @@ export class WorkflowStore {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
     const id = workflowId(workflowIdValue); // brand at boundary; regex also inside #row
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const { next, selectedRole } = this.db.transaction(() => {
       const row = this.#row(id);
       const selectedRole = this.#assertAuth(row, actorRole, token);
       if (row.version !== expectedVersionNumber) {
@@ -443,12 +432,9 @@ export class WorkflowStore {
           outcome: resolvedOutcome,
         }),
       );
-      this.db.exec("COMMIT");
-      return roleViewForRole(next, selectedRole);
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return { next, selectedRole };
+    }).immediate();
+    return roleViewForRole(next, selectedRole);
   }
 
   submitImplementation(input: unknown): RoleView {
@@ -706,8 +692,7 @@ export class WorkflowStore {
     const args = mutationInput(input);
     const expectedVersionNumber = expectedVersion(args.expected_version);
     const id = workflowId(args.workflow_id);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const result = this.db.transaction(() => {
       const row = this.#row(id);
       this.#assertAuth(row, "parent", args.capability);
       if (row.version !== expectedVersionNumber)
@@ -753,12 +738,12 @@ export class WorkflowStore {
         auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
       );
       const next = { ...state, version: (expectedVersionNumber + 1) as WorkflowVersion };
-      const result = this.db
+      const update = this.db
         .prepare(
           "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
         )
         .run(next.version, JSON.stringify(next), objectDigest(next), now, id, expectedVersionNumber);
-      if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+      if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
       this.#audit(
         id,
         next.version,
@@ -770,12 +755,9 @@ export class WorkflowStore {
       );
       if (this.faultAfterLinkedChildInsert)
         fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-      this.db.exec("COMMIT");
-      return { workflow: roleView(childState, "parent"), capabilities: childCapabilities };
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return { childState, childCapabilities };
+    }).immediate();
+    return { workflow: roleView(result.childState, "parent"), capabilities: result.childCapabilities };
   }
 }
 

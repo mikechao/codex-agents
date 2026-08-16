@@ -1,0 +1,10 @@
+# Shared Bun test configuration.
+#
+# Bun 1.3.x does not honor a `[test] timeout` key, so the 60-second per-test
+# timeout stays explicit in the package.json test scripts. Only options this
+# Bun version actually applies live here.
+
+[test]
+# Test files use the historical *.node.ts suffix; Bun's coverageSkipTestFiles
+# only matches *.test.* naming, so exclude them explicitly from coverage stats.
+coveragePathIgnorePatterns = ["**/*.node.ts"]
