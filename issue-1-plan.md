@@ -466,11 +466,61 @@ import type { Tool } from "@modelcontextprotocol/server";
   `dist/tests/*.node.js` glob matches no files (pre-existing since Phase A; restored when tests
   migrate in Phase I).
 
-## Phase H — `change-receipt.ts`
+## Phase H — `change-receipt.ts`  [DONE]
 
 - Port `change-receipt.mjs` -> TS 1:1, keeping byte-compatible receipts, CLI behavior,
   `safePaths`/`createReceipt` exports, and stdout/stderr contract. Compile to
   `.codex/agents/dist/change-receipt.js`.
+
+### Done Report — Phase H
+
+**Changes:**
+- Added `.codex/agents/change-receipt.ts` — 1:1 port of the 309-line receipt CLI with local
+  structural types (`GitMode`, `HeadEntry`, `ReceiptEntry`, `Receipt`, `SCHEMA_VERSION`); the
+  `safePaths`/`createReceipt` exports, every `ERROR_*` category, stderr/stdout contract, and the
+  `import.meta.url` CLI guard are unchanged. Catch narrowing uses `instanceof Error` +
+  `message` equality and `"code" in error` + cast for the two ENOENT checks; `canonicalReceipt`
+  stays plain `JSON.stringify` — output byte-identical.
+- `.codex/agents/tests/change-receipt.node.mjs` -> `.codex/agents/tests/change-receipt.node.ts`:
+  all 19 cases unchanged; imports the compiled `../change-receipt.js`; local `Receipt` /
+  `ReceiptEntry` / `RunResult` interfaces; the invalid-options loop is typed `unknown[]` with a
+  `Record<string, unknown>` cast at the call.
+- Deleted `.codex/agents/change-receipt.mjs` (no shim — the CLI entry guard is path-sensitive).
+  Committed `dist/change-receipt.js` + `dist/tests/change-receipt.node.js`; tsc retains the
+  shebang but it is irrelevant (spawned via `process.execPath`).
+- `git.ts` spawn path -> `join(root, ".codex", "agents", "dist", "change-receipt.js")`; rebuilt
+  `dist/git.js`.
+- The three loadable workflow tests (`git`/`lifecycle`/`workflow` `.node.mjs`) flipped
+  mechanically: fixture `mkdirSync` -> `.codex/agents/dist`, receipt copy source/dest ->
+  `dist/change-receipt.js`, spawn `realpathSync` -> `dist/change-receipt.js`. The unloadable
+  protocol tests keep the `.mjs` path until Phase I (pre-existing).
+- Receipt commands flipped in `WORKFLOW.md` + `implementer.toml` + `committer.toml` +
+  `code_reviewer.toml` -> `node .codex/agents/dist/change-receipt.js -- ...`.
+
+**Deviations / decisions (pre-documented in the Phase H spec §§5–8):**
+- All three TOML contracts flipped (spec §6 listed only `implementer.toml`; `committer.toml` and
+  `code_reviewer.toml` carried the same command and are covered by the "no refs in configs" done
+  criterion).
+- `digest(value: Buffer | string)` — `readlinkSync` returns a string; `createHash().update()`
+  consumes the same utf8 bytes, so digest output is unchanged.
+- Test helpers typed with local interfaces; the socket-test promise executor renames `resolve` ->
+  `listenResolve` to avoid shadowing the `node:path` import.
+- Remaining `change-receipt.mjs` references: `docs/archive/issue-1-phase-d.md`, historical plan
+  text (`issue-1-plan.md`, `mcp-plan.md`), and the two unloadable protocol tests (Phase I).
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs (the agents config now compiles real files).
+- `pnpm test:agents` — **19 tests, 0 fail** (`pnpm build && node --test
+  .codex/agents/dist/tests/*.node.js`), green for the first time this phase.
+- Oracle (spec §7.4): `pnpm build && node --test .codex/workflow-mcp/tests/git.node.mjs
+  .codex/workflow-mcp/tests/lifecycle.node.mjs .codex/workflow-mcp/tests/workflow.node.mjs` —
+  **98 tests, 0 fail**; the server now spawns the compiled receipt from the temp-repo fixtures.
+- CLI spot check skipped by request (optional per spec §7.5; byte-compatibility is asserted by
+  the receipt suite).
+- `rg -n 'change-receipt\.mjs'` matches only `docs/archive/`, historical plan text, and the
+  unloadable protocol tests.
+- `git diff --check` clean; committed `change-receipt.ts`, the converted test, `git.ts`, the
+  three test edits, docs, and `dist/` together (`f51ff37`); worktree clean at commit.
 
 ## Phase I — Tests
 
@@ -498,6 +548,8 @@ import type { Tool } from "@modelcontextprotocol/server";
     `EVAL_RESULTS.md`. Do NOT copy `.ts` sources or `tests/` into target repos. The target must end
     up with `.codex/agents/dist/change-receipt.js` (the server spawns that exact path).
 - `WORKFLOW.md` + `implementer.toml` receipt commands -> `node .codex/agents/dist/change-receipt.js -- ...`.
+  **Landed in Phase H** (`issue-1-phase-h.md` §6; also `committer.toml` and `code_reviewer.toml`,
+  which carried the same command).
 - `.codex/workflow-mcp/README.md` + root `README.md` + `AGENTS.md`: note TS/build (`pnpm build`,
   `pnpm typecheck`) and the compiled `dist/` layout; no `.mjs` entry references remain.
 - **EVALS / agent-contract note:** the `implementer.toml`/`WORKFLOW.md` receipt-command change is
