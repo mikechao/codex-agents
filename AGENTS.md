@@ -10,10 +10,15 @@ definitions are host adapters: Codex TOML under `.codex/agents/` and OpenCode Ma
 byte-identical to the generator output (`bun run test:agents` enforces this). The project-scoped
 configuration in `.codex/config.toml` registers the local workflow-state server for Codex; the
 root `opencode.json` registers the same server for direct OpenCode use of this repository, and
-`install-into.ts` registers it for OpenCode in target repositories. The root `opencode.json` also
-loads `.opencode/ORCHESTRATION.md` through its top-level `instructions` field: that file carries
-OpenCode-only primary-agent orchestration (delegation flow and exact `workflow_id` propagation) and
-must stay separate from `AGENTS.md` so Codex behavior is unaffected. The historical v2
+`install-into.ts` registers it for OpenCode in target repositories. The generated
+`implementer`, `code_reviewer`, and `committer` files are the shared cross-host worker adapters;
+`.opencode/agents/orchestrator.md` is intentionally an OpenCode-only `mode: primary` agent outside
+the shared generator and must not be added to the host-neutral contracts or overwritten by
+generation. The root `opencode.json` selects that primary with `default_agent: "orchestrator"` and
+does not inject orchestration instructions globally into the built-in Build agent. The installer
+copies the orchestrator into target repositories, defaults a new OpenCode config (or one without
+`default_agent`) to `orchestrator`, and preserves an existing explicit `default_agent` while still
+installing the orchestrator as an available primary agent. The historical v2
 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
