@@ -76,7 +76,7 @@ function registrationBlock(projectRoot: string): string {
   ].join("\n");
 }
 
-function hasWorkflowStateRegistration(configPath: string): boolean {
+export function hasWorkflowStateRegistration(configPath: string): boolean {
   if (!existsSync(configPath)) return false;
   let parsed: unknown;
   try {
@@ -89,7 +89,23 @@ function hasWorkflowStateRegistration(configPath: string): boolean {
     section = (section as Record<string, unknown> | null)?.[key];
     if (section === undefined || section === null) return false;
   }
-  return typeof section === "object" && !Array.isArray(section);
+  return section !== undefined && section !== null;
+}
+
+export function commitStaged(
+  agentsStaging: string,
+  agentsTarget: string,
+  stagedConfig: string,
+  config: string,
+  rename: (from: string, to: string) => void = renameSync,
+): void {
+  rename(agentsStaging, agentsTarget);
+  try {
+    rename(stagedConfig, config);
+  } catch (cause) {
+    rmSync(agentsTarget, { recursive: true, force: true });
+    throw cause;
+  }
 }
 
 function isGitRepository(target: string): boolean {
@@ -131,6 +147,13 @@ export function main(args: readonly string[]): number {
   } catch {
     error(`Project path cannot be represented safely in TOML: ${projectRoot}`);
   }
+  const existing = existsSync(config) ? readFileSync(config, "utf8") + "\n" : "";
+  const stagedContent = existing + registrationBlock(projectRoot);
+  try {
+    TOML.parse(stagedContent);
+  } catch (cause) {
+    error(`Staged config is not valid TOML; refusing to install: ${config} (${cause instanceof Error ? cause.message : String(cause)})`);
+  }
 
   mkdirSync(resolve(target, ".codex"), { recursive: true });
   const agentsStaging = mkdtempSync(resolve(target, ".codex/.agents.install."));
@@ -142,10 +165,8 @@ export function main(args: readonly string[]): number {
       }
     }
     const stagedConfig = resolve(configStaging, "config.toml");
-    const existing = existsSync(config) ? readFileSync(config, "utf8") + "\n" : "";
-    writeFileSync(stagedConfig, existing + registrationBlock(projectRoot));
-    renameSync(agentsStaging, resolve(target, ".codex/agents"));
-    renameSync(stagedConfig, config);
+    writeFileSync(stagedConfig, stagedContent);
+    commitStaged(agentsStaging, resolve(target, ".codex/agents"), stagedConfig, config);
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });

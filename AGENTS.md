@@ -17,8 +17,9 @@ repository-local, emit no non-protocol output on stdout, preserve append-only wo
 history, and keep role capabilities and optimistic version checks intact. Runtime SQLite state
 belongs outside the repository by default; tests may override its location explicitly.
 
-Use `bun run test:agents` for focused receipt/agent checks and `bun run test:workflow-mcp` for
-focused server checks. Run the full `bun run test` suite before declaring any change complete.
+Use `bun run test:agents` for focused receipt/agent checks, `bun run test:installer` for focused
+installer checks, and `bun run test:workflow-mcp` for focused server checks. Run the full
+`bun run test` suite before declaring any change complete.
 
 The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/` and run
 directly from source with Bun; there is no compiled `dist/` mirror. Run `bun run typecheck`

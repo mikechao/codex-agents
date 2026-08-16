@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {},
-  "include": ["install-into.ts"]
+  "include": ["install-into.ts", ".codex/installer/tests/**/*.ts"]
 }

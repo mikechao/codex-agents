@@ -21,8 +21,9 @@ under the user's Codex state directory.
 ```sh
 bun run start             # launch the workflow_state MCP server on STDIO
 bun run typecheck         # strict tsc checks without emitting
-bun run test              # full suite: agents + workflow-MCP tests
+bun run test              # full suite: agents + workflow-MCP + installer tests
 bun run test:agents       # focused change-receipt tests
+bun run test:installer    # focused installer tests
 bun run test:workflow-mcp # focused workflow-state MCP server tests
 bun run test:coverage     # full suite with Bun coverage reporting
 bun run test:stress       # full suite, randomized order, each file run twice
