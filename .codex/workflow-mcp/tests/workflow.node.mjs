@@ -20,17 +20,17 @@ function fixture() {
   writeFileSync(join(root, "note.txt"), "before\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
-  cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.mjs"), join(root, ".codex", "agents", "change-receipt.mjs"));
+  mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
+  cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
   return { root, git };
 }
 
 function receipt(root) {
-  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 }
 
 function absentReceipt(root, paths) {
-  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--allow-absent", "--", ...paths], { cwd: root, encoding: "utf8" }));
+  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--allow-absent", "--", ...paths], { cwd: root, encoding: "utf8" }));
 }
 
 function implementation(store, created, root, version, summary, resolution = {}, status = "DONE", options = {}) {
@@ -2159,14 +2159,14 @@ function authorizedWorkflow(store, root, git, options = {}) {
   const caps = created.capabilities;
   implementation(store, created, root, 0, "implemented");
   writeFileSync(join(root, "note.txt"), options.content ?? "v2\n");
-  const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+  const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
   store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} });
   store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
   return { created, id, caps, reviewReceipt };
 }
 
 function implReceipt(root, paths) {
-  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--allow-absent", "--", ...paths], { cwd: root, encoding: "utf8" }));
+  return JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--allow-absent", "--", ...paths], { cwd: root, encoding: "utf8" }));
 }
 
 test("commit preparation succeeds across modify, add, delete, and mode and persists exact fields", () => {
@@ -2187,7 +2187,7 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
     writeFileSync(join(root, "add.txt"), "new\n");
     unlinkSync(join(root, "del.txt"));
     chmodSync(join(root, "mode.txt"), 0o755);
-    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", ...approved], { cwd: root, encoding: "utf8" }));
+    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", ...approved], { cwd: root, encoding: "utf8" }));
     const wtTarget = { review_mode: "working_tree", base_revision: created.workflow.base_head, head_revision: null, approved_paths: approved, include_staged: true, include_unstaged: true, include_untracked: true };
     store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: wtTarget, prior_finding_classifications: {} });
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "prepare authorized" });
@@ -2243,7 +2243,7 @@ test("commit preparation rejects empty, partial, extra, and untracked staging wi
     writeFileSync(join(root, "note.txt"), "n2\n");
     writeFileSync(join(root, "other.txt"), "o2\n");
     writeFileSync(join(root, "new.txt"), "added\n");
-    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", ...approved], { cwd: root, encoding: "utf8" }));
+    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", ...approved], { cwd: root, encoding: "utf8" }));
     const wtTarget = { review_mode: "working_tree", base_revision: created.workflow.base_head, head_revision: null, approved_paths: approved, include_staged: true, include_unstaged: true, include_untracked: true };
     store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: wtTarget, prior_finding_classifications: {} });
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "guards" });
@@ -2330,7 +2330,7 @@ test("commit preparation executes no hooks and leaves Git state untouched", () =
     const caps = created.capabilities;
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "v2\n");
-    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
     store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} });
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
     const head = git("rev-parse", "HEAD");
@@ -2356,7 +2356,7 @@ test("commit result records a verified single-parent success", () => {
     const caps = created.capabilities;
     implementation(store, created, root, 0, "implemented");
     writeFileSync(join(root, "note.txt"), "v2\n");
-    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const reviewReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
     store.submitReview({ workflow_id: id, capability: caps.reviewer, expected_version: 1, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: reviewReceipt, review_target: workingTarget(created.workflow.base_head), prior_finding_classifications: {} });
     store.authorizeCommit({ workflow_id: id, capability: caps.parent, expected_version: 2, user_authorization: "authorized" });
     const headBefore = git("rev-parse", "HEAD");
@@ -2593,7 +2593,7 @@ function v1AuthorizedState(root, git, overrides = {}) {
   const base = git("rev-parse", "HEAD");
   writeFileSync(join(root, "note.txt"), "after\n");
   const reviewReceipt = JSON.parse(
-    execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"], { cwd: root, encoding: "utf8" }),
+    execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }),
   );
   return {
     schema_version: 1,

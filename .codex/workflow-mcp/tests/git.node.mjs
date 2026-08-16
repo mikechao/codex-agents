@@ -326,10 +326,10 @@ test("writeTree returns the current index tree without altering Git state", () =
 test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged content", () => {
   const { root, git, write } = fixture();
   try {
-    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
     cpSync(
-      join(process.cwd(), ".codex", "agents", "change-receipt.mjs"),
-      join(root, ".codex", "agents", "change-receipt.mjs"),
+      join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"),
+      join(root, ".codex", "agents", "dist", "change-receipt.js"),
     );
     write("note.txt", "v1\n");
     git("add", ".");
@@ -339,7 +339,7 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
       JSON.parse(
         execFileSync(
           process.execPath,
-          [realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")), "--", "note.txt"],
+          [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"],
           { cwd: root, encoding: "utf8" },
         ),
       );

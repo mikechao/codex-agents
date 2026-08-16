@@ -165,7 +165,7 @@ export function verifyReviewReceipt(root, receipt, expectedPaths, baseHead) {
     return current;
 }
 export function createReceipt(root, expectedPaths, allowAbsent = false) {
-    const script = join(root, ".codex", "agents", "change-receipt.mjs");
+    const script = join(root, ".codex", "agents", "dist", "change-receipt.js");
     const args = allowAbsent ? ["--allow-absent", "--", ...expectedPaths] : ["--", ...expectedPaths];
     let current;
     try {

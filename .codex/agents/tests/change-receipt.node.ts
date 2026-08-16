@@ -6,15 +6,37 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { createReceipt, safePaths } from "../change-receipt.mjs";
+import { createReceipt, safePaths } from "../change-receipt.js";
 
-const utility = resolve(import.meta.dirname, "..", "change-receipt.mjs");
+const utility = resolve(import.meta.dirname, "..", "change-receipt.js");
 
-function git(root, ...args) {
+interface RunResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+interface ReceiptEntry {
+  path: string;
+  state: string;
+  kind: string;
+  mode?: string;
+  digest?: string;
+}
+
+interface Receipt {
+  schema_version: number;
+  base_head: string;
+  approved_paths: string[];
+  paths: ReceiptEntry[];
+  overall_scope_hash: string;
+}
+
+function git(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function repository() {
+function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "change-receipt-"));
   git(root, "init", "-q");
   git(root, "config", "user.email", "receipt-tests@example.invalid");
@@ -22,12 +44,12 @@ function repository() {
   return root;
 }
 
-function commit(root, message = "fixture") {
+function commit(root: string, message = "fixture"): void {
   git(root, "add", "--", ".");
   git(root, "commit", "-qm", message);
 }
 
-function run(root, paths) {
+function run(root: string, paths: string[]): RunResult {
   const result = spawnSync(process.execPath, [utility, "--", ...paths], {
     cwd: root,
     encoding: "utf8",
@@ -39,7 +61,7 @@ function run(root, paths) {
   };
 }
 
-function runWithFlags(root, flags, paths) {
+function runWithFlags(root: string, flags: string[], paths: string[]): RunResult {
   const result = spawnSync(process.execPath, [utility, ...flags, "--", ...paths], {
     cwd: root,
     encoding: "utf8",
@@ -51,19 +73,28 @@ function runWithFlags(root, flags, paths) {
   };
 }
 
-function receipt(root, paths) {
+function receipt(root: string, paths: string[]): Receipt {
   const result = run(root, paths);
   assert.equal(result.status, 0, result.stderr);
-  return JSON.parse(result.stdout);
+  return JSON.parse(result.stdout) as Receipt;
 }
 
-function withRepository(callback) {
+function withRepository(callback: (root: string) => void): void {
   const root = repository();
   try {
     callback(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 test("reports modified tracked content and remains stable across git add", () => {
@@ -89,7 +120,7 @@ test("reports new untracked content with a content digest", () => {
     const result = receipt(root, ["new.txt"]);
     assert.equal(result.paths[0].state, "added");
     assert.equal(result.paths[0].kind, "file");
-    assert.match(result.paths[0].digest, /^[0-9a-f]{64}$/u);
+    assert.match(String(result.paths[0].digest), /^[0-9a-f]{64}$/u);
   });
 });
 
@@ -236,10 +267,10 @@ test("library emits the absent entry only with allowAbsent opt-in", () => {
     assert.throws(() => createReceipt(["new/file.txt"], root, { allowAbsent: false }), {
       message: "ERROR_UNTRACKED_PATH",
     });
-    const receipt = createReceipt(["new/file.txt"], root, { allowAbsent: true });
-    assert.deepEqual(receipt.paths, [{ path: "new/file.txt", state: "absent", kind: "missing" }]);
-    assert.equal("mode" in receipt.paths[0], false);
-    assert.equal("digest" in receipt.paths[0], false);
+    const absentReceipt = createReceipt(["new/file.txt"], root, { allowAbsent: true });
+    assert.deepEqual(absentReceipt.paths, [{ path: "new/file.txt", state: "absent", kind: "missing" }]);
+    assert.equal("mode" in absentReceipt.paths[0], false);
+    assert.equal("digest" in absentReceipt.paths[0], false);
   });
 });
 
@@ -247,14 +278,14 @@ test("library rejects unknown or non-boolean options", () => {
   withRepository((root) => {
     writeFileSync(join(root, "tracked.txt"), "tracked\n");
     commit(root);
-    const invalid = [null, true, [], { allowAbsent: "yes" }, { allowAbsent: 1 }, { bogus: true }];
+    const invalid: unknown[] = [null, true, [], { allowAbsent: "yes" }, { allowAbsent: 1 }, { bogus: true }];
     for (const options of invalid) {
-      assert.throws(() => createReceipt(["tracked.txt"], root, options), {
+      assert.throws(() => createReceipt(["tracked.txt"], root, options as Record<string, unknown>), {
         message: "ERROR_INVALID_ARGUMENTS",
       });
     }
-    const receipt = createReceipt(["tracked.txt"], root, {});
-    assert.equal(receipt.paths[0].state, "unchanged");
+    const normalReceipt = createReceipt(["tracked.txt"], root, {});
+    assert.equal(normalReceipt.paths[0].state, "unchanged");
   });
 });
 
@@ -290,7 +321,7 @@ test("allowAbsent keeps tracked deletions as deleted, never absent", () => {
     unlinkSync(join(root, "gone.txt"));
     const result = runWithFlags(root, ["--allow-absent"], ["gone.txt"]);
     assert.equal(result.status, 0, result.stderr);
-    const parsed = JSON.parse(result.stdout);
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     assert.deepEqual(parsed.paths, [
       { path: "gone.txt", state: "deleted", kind: "missing", mode: "100644" },
     ]);
@@ -309,7 +340,7 @@ test("CLI opt-in emits absent entries while default calls reject them", () => {
     const result = runWithFlags(root, ["--allow-absent"], ["future.txt"]);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     assert.deepEqual(parsed.paths, [{ path: "future.txt", state: "absent", kind: "missing" }]);
     assert.equal(parsed.base_head, git(root, "rev-parse", "HEAD"));
   });
@@ -343,12 +374,12 @@ test("rejects unsupported Unix-domain socket filesystem objects", { skip: proces
     writeFileSync(join(root, "tracked.txt"), "tracked\n");
     commit(root);
     try {
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((listenResolve, reject) => {
         server.once("error", reject);
-        server.listen(socketPath, resolve);
+        server.listen(socketPath, listenResolve);
       });
     } catch (error) {
-      if (error && typeof error === "object" && (error.code === "EPERM" || error.code === "ENOSYS")) {
+      if (isErrno(error, "EPERM") || isErrno(error, "ENOSYS")) {
         context.skip("Unix-domain sockets are unavailable in this environment");
         return;
       }
@@ -359,7 +390,7 @@ test("rejects unsupported Unix-domain socket filesystem objects", { skip: proces
     assert.notEqual(result.status, 0);
     assert.equal(result.stderr, "ERROR_UNSUPPORTED_FILE_TYPE");
   } finally {
-    if (listening) await new Promise((resolve) => server.close(resolve));
+    if (listening) await new Promise((resolveClose) => server.close(resolveClose));
     rmSync(socketPath, { force: true });
     rmSync(root, { recursive: true, force: true });
   }

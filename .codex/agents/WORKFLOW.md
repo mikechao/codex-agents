@@ -308,7 +308,7 @@ findings enter the bounded repair loop; non-blocking findings are reported and a
 Run from the repository root with an explicit exact-path allowlist:
 
 ```sh
-node .codex/agents/change-receipt.mjs -- path/a path/b
+node .codex/agents/dist/change-receipt.js -- path/a path/b
 ```
 
 The command emits metadata-only JSON and never changes files or the index. The reviewer runs it at

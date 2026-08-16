@@ -5,14 +5,38 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
+type GitMode = "100644" | "100755" | "120000";
+
+interface HeadEntry {
+  mode: GitMode;
+  kind: "symlink" | "file";
+  digest: string;
+}
+
+interface ReceiptEntry {
+  path: string;
+  state: "added" | "modified" | "deleted" | "unchanged" | "absent";
+  kind: "file" | "symlink" | "missing";
+  mode?: GitMode;
+  digest?: string;
+}
+
+interface Receipt {
+  schema_version: 1;
+  base_head: string;
+  approved_paths: string[];
+  paths: ReceiptEntry[];
+  overall_scope_hash: string;
+}
+
 const SCHEMA_VERSION = 1;
 
-function fail(category) {
+function fail(category: string): number {
   process.stderr.write(`${category}\n`);
   return 2;
 }
 
-function runGit(repositoryRoot, args) {
+function runGit(repositoryRoot: string, args: readonly string[]): string {
   try {
     return execFileSync("git", ["-C", repositoryRoot, ...args], {
       encoding: "utf8",
@@ -24,7 +48,7 @@ function runGit(repositoryRoot, args) {
   }
 }
 
-function readGitBlob(repositoryRoot, objectId) {
+function readGitBlob(repositoryRoot: string, objectId: string): Buffer {
   const sizeText = runGit(repositoryRoot, ["cat-file", "-s", objectId]).trim();
   if (!/^\d+$/u.test(sizeText)) {
     throw new Error("ERROR_GIT_SIZE");
@@ -43,7 +67,7 @@ function readGitBlob(repositoryRoot, objectId) {
   }
 }
 
-function repositoryRoot(cwd = process.cwd()) {
+function repositoryRoot(cwd = process.cwd()): string {
   try {
     return runGit(cwd, ["rev-parse", "--show-toplevel"]).trim();
   } catch {
@@ -51,7 +75,7 @@ function repositoryRoot(cwd = process.cwd()) {
   }
 }
 
-function requireHead(root) {
+function requireHead(root: string): string {
   try {
     const head = runGit(root, ["rev-parse", "--verify", "HEAD"]).trim();
     if (!/^[0-9a-f]{40}$/u.test(head)) {
@@ -66,7 +90,7 @@ function requireHead(root) {
   }
 }
 
-function normalizePath(root, input) {
+function normalizePath(root: string, input: string): string {
   if (typeof input !== "string" || input.length === 0) {
     throw new Error("ERROR_EMPTY_PATH");
   }
@@ -87,7 +111,7 @@ function normalizePath(root, input) {
   return normalized.split(sep).join("/");
 }
 
-function assertSafeParent(root, path) {
+function assertSafeParent(root: string, path: string): void {
   const absolute = resolve(root, path);
   try {
     const parent = realpathSync(dirname(absolute));
@@ -101,13 +125,20 @@ function assertSafeParent(root, path) {
     }
   } catch (error) {
     if (error instanceof Error && error.message === "ERROR_UNSAFE_PATH") throw error;
-    if (!(error && typeof error === "object" && error.code === "ENOENT")) {
+    if (
+      !(
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "ENOENT"
+      )
+    ) {
       throw new Error("ERROR_PATH_ACCESS");
     }
   }
 }
 
-export function safePaths(root, inputs) {
+export function safePaths(root: string, inputs: string[]): string[] {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("ERROR_EMPTY_PATHS");
   }
@@ -123,8 +154,8 @@ export function safePaths(root, inputs) {
   return approvedPaths;
 }
 
-function headEntry(root, path) {
-  let output;
+function headEntry(root: string, path: string): HeadEntry | null {
+  let output: string;
   try {
     output = runGit(root, ["--literal-pathspecs", "ls-tree", "-z", "-r", "HEAD", "--", path]);
   } catch {
@@ -148,24 +179,29 @@ function headEntry(root, path) {
   return null;
 }
 
-function normalizeMode(mode) {
+function normalizeMode(mode: string): GitMode {
   if (mode === "120000") return mode;
   if (mode === "100755") return mode;
   if (mode === "100644") return mode;
   throw new Error("ERROR_UNSUPPORTED_MODE");
 }
 
-function digest(value) {
+function digest(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function currentMetadata(root, path, head) {
+function currentMetadata(root: string, path: string, head: HeadEntry | null): ReceiptEntry {
   const absolute = resolve(root, path);
-  let stat;
+  let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(absolute);
   } catch (error) {
-    if (error && typeof error === "object" && error.code === "ENOENT") {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
       if (!head) throw new Error("ERROR_UNTRACKED_PATH");
       return {
         path,
@@ -177,9 +213,9 @@ function currentMetadata(root, path, head) {
     throw new Error("ERROR_PATH_ACCESS");
   }
 
-  let kind;
-  let currentDigest;
-  let mode;
+  let kind: ReceiptEntry["kind"];
+  let currentDigest: string;
+  let mode: GitMode;
   if (stat.isSymbolicLink()) {
     kind = "symlink";
     mode = "120000";
@@ -207,7 +243,7 @@ function currentMetadata(root, path, head) {
   };
 }
 
-function canonicalReceipt(receipt) {
+function canonicalReceipt(receipt: Receipt): string {
   return JSON.stringify({
     schema_version: receipt.schema_version,
     base_head: receipt.base_head,
@@ -216,7 +252,7 @@ function canonicalReceipt(receipt) {
   });
 }
 
-function validateOptions(options) {
+function validateOptions(options: unknown): { allowAbsent: boolean } {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new Error("ERROR_INVALID_ARGUMENTS");
   }
@@ -225,13 +261,20 @@ function validateOptions(options) {
       throw new Error("ERROR_INVALID_ARGUMENTS");
     }
   }
-  if ("allowAbsent" in options && typeof options.allowAbsent !== "boolean") {
+  if (
+    "allowAbsent" in options &&
+    typeof (options as Record<string, unknown>).allowAbsent !== "boolean"
+  ) {
     throw new Error("ERROR_INVALID_ARGUMENTS");
   }
-  return { allowAbsent: options.allowAbsent === true };
+  return { allowAbsent: (options as Record<string, unknown>).allowAbsent === true };
 }
 
-export function createReceipt(inputs, cwd = process.cwd(), options = {}) {
+export function createReceipt(
+  inputs: string[],
+  cwd = process.cwd(),
+  options: Record<string, unknown> = {},
+): Receipt {
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("ERROR_EMPTY_PATHS");
   }
@@ -240,13 +283,17 @@ export function createReceipt(inputs, cwd = process.cwd(), options = {}) {
   return createReceiptAtRoot(inputs, root, normalizedOptions);
 }
 
-function createReceiptAtRoot(inputs, root, options = { allowAbsent: false }) {
+function createReceiptAtRoot(
+  inputs: string[],
+  root: string,
+  options: { allowAbsent: boolean } = { allowAbsent: false },
+): Receipt {
   const allowAbsent = options.allowAbsent === true;
   const headRevision = requireHead(root);
   const approvedPaths = safePaths(root, inputs);
-  const paths = approvedPaths.map((path) => {
+  const paths = approvedPaths.map((path): ReceiptEntry => {
     const head = headEntry(root, path);
-    let current;
+    let current: ReceiptEntry;
     try {
       current = currentMetadata(root, path, head);
     } catch (error) {
@@ -267,17 +314,18 @@ function createReceiptAtRoot(inputs, root, options = { allowAbsent: false }) {
     return current;
   });
 
-  const receipt = {
+  const receipt: Receipt = {
     schema_version: SCHEMA_VERSION,
     base_head: headRevision,
     approved_paths: approvedPaths,
     paths,
+    overall_scope_hash: "",
   };
   receipt.overall_scope_hash = digest(canonicalReceipt(receipt));
   return receipt;
 }
 
-function main() {
+function main(): number {
   const separator = process.argv.indexOf("--");
   const inputs = separator < 0 ? [] : process.argv.slice(separator + 1);
   const flags = separator < 0 ? process.argv.slice(2) : process.argv.slice(2, separator);
