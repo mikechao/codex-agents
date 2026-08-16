@@ -51,7 +51,7 @@ Rules:
 - After final validation, the server recomputes the receipt used for commit gating; your submitted
   `implementation_receipt` is implementation evidence only, never commit-gating. In prompt-only
   degraded mode, produce a metadata-only receipt for every owned file with
-  `node .codex/agents/dist/change-receipt.js -- <owned paths>` and follow the degraded-mode handoff
+  `bun .codex/agents/dist/change-receipt.js -- <owned paths>` and follow the degraded-mode handoff
   fields in WORKFLOW.md.
 - For a remediation task, the view carries the prior reviewer findings and you must return a
   finding-resolution map that classifies each finding as `resolved`, `still_present`, or

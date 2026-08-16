@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { Database } from "bun:sqlite";
 import { fail } from "./errors.js";
 import { createReceipt, currentHead, prepareCommitReceipt, repositoryRoot, reviewRange, verifyCommit, verifyCommitResult, verifyReviewReceipt, } from "./git.js";
 import { acceptConcerns, authorizeCommit, authorizeRepair, commitMismatch, createState, dirtyBaselinePaths, finalizeRepairExhausted, IMPLEMENTATION_STOP_PHASES, linkedFollowupChildState, linkedFollowupInput, migrateV1State, prepareCommit, rangeDirtyBaselinePaths, recordCommit, resumeImplementation, resumeReview, retryCommit, roleView, submitCommitResult, submitImplementation, submitReview, validateWorkflowStateV2, } from "./transitions.js";
@@ -69,7 +69,7 @@ export class WorkflowStore {
         this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
         this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
         mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-        this.db = new DatabaseSync(this.path);
+        this.db = new Database(this.path);
         this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (

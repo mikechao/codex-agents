@@ -1,7 +1,7 @@
 # Workflow-state MCP server
 
 This is local developer tooling for the repository's custom implementer, code reviewer, and
-committer workflow. It is a Node 22 STDIO MCP server, not an extension runtime or product backend.
+committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
 Run it through the project-scoped `.codex/config.toml` or:
 
@@ -10,8 +10,8 @@ pnpm start
 ```
 
 Sources are TypeScript; `pnpm build` compiles them to the committed `dist/` mirror (entry
-`dist/server.js`), and `pnpm typecheck` runs strict checks. Tests are TypeScript under `tests/`,
-compiled to `dist/tests/`.
+`dist/server.js`), and `pnpm typecheck` runs strict checks. Bun runs the compiled server and the
+`bun test` runner executes the compiled tests under `dist/tests/`.
 
 State is stored in a stable, repository-hash-partitioned path under the user's Codex state area.
 Tests may pass an explicit database path. The server does not read PGlite, corpus data, browser

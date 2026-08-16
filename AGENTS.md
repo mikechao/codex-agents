@@ -1,9 +1,11 @@
 # AGENTS.md
 
-This is a Node 22+ ESM project managed with pnpm. The reusable Codex `implementer`,
-`code_reviewer`, and `committer` definitions live under `.codex/agents/`; the project-scoped
-configuration in `.codex/config.toml` registers the local workflow-state server. The historical
-v2 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
+This is a Bun-runtime ESM project managed with pnpm. Bun is required to run the local MCP server
+and the test suite; pnpm remains the package manager, and TypeScript/tsc handles typechecking and
+building. The reusable Codex `implementer`, `code_reviewer`, and `committer` definitions live
+under `.codex/agents/`; the project-scoped configuration in `.codex/config.toml` registers the
+local workflow-state server. The historical v2 implementation spec and the TypeScript/SDK-v2
+migration records live under `docs/archive/`.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the TOML contracts, workflow documentation, MCP tool schemas and transitions, and

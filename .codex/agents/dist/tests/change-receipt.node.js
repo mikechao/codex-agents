@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, 
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { test } from "node:test";
+import { test } from "bun:test";
 import { createReceipt, safePaths } from "../change-receipt.js";
 const utility = resolve(import.meta.dirname, "..", "change-receipt.js");
 function git(root, ...args) {
@@ -100,7 +100,8 @@ test("reports deletion using HEAD metadata without a digest", () => {
         assert.equal("digest" in result.paths[0], false);
     });
 });
-test("handles symlinks and changes to their link targets", { skip: process.platform === "win32" }, () => {
+const skipOnWindows = test.skipIf(process.platform === "win32");
+skipOnWindows("handles symlinks and changes to their link targets", () => {
     withRepository((root) => {
         writeFileSync(join(root, "target.txt"), "target\n");
         symlinkSync("target.txt", join(root, "link.txt"));
@@ -116,7 +117,7 @@ test("handles symlinks and changes to their link targets", { skip: process.platf
         assert.notEqual(changed.paths[0].digest, original.paths[0].digest);
     });
 });
-test("rejects a path nested under an escaping symlink parent regardless of leaf existence", { skip: process.platform === "win32" }, () => {
+skipOnWindows("rejects a path nested under an escaping symlink parent regardless of leaf existence", () => {
     withRepository((root) => {
         writeFileSync(join(root, "base.txt"), "base\n");
         commit(root);
@@ -307,7 +308,7 @@ test("CLI rejects duplicate or unknown flags and paths before the separator", ()
         }
     });
 });
-test("rejects unsupported Unix-domain socket filesystem objects", { skip: process.platform === "win32" }, async (context) => {
+skipOnWindows("rejects unsupported Unix-domain socket filesystem objects", async () => {
     const root = repository();
     const socketPath = join(root, "socket");
     const server = createServer();
@@ -323,7 +324,6 @@ test("rejects unsupported Unix-domain socket filesystem objects", { skip: proces
         }
         catch (error) {
             if (isErrno(error, "EPERM") || isErrno(error, "ENOSYS")) {
-                context.skip("Unix-domain sockets are unavailable in this environment");
                 return;
             }
             throw error;

@@ -34,6 +34,10 @@ case "$project_root" in
     ;;
 esac
 
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Bun runtime not found on PATH; it is required to run the workflow_state server." >&2
+  exit 1
+fi
 if [ ! -f "$project_root/.codex/workflow-mcp/dist/server.js" ]; then
   echo "Compiled server artifact missing: $project_root/.codex/workflow-mcp/dist/server.js" >&2
   echo "Run 'pnpm build' in $project_root first." >&2
@@ -76,7 +80,7 @@ fi
 cat >>"$config_staging" <<EOF_CONFIG
 # Local durable state for the reusable custom-agent workflow.
 [mcp_servers.workflow_state]
-command = "node"
+command = "bun"
 args = ["--no-warnings", '$project_root/.codex/workflow-mcp/dist/server.js']
 startup_timeout_sec = 10
 tool_timeout_sec = 30

@@ -4,8 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { Database } from "bun:sqlite";
+import { test } from "bun:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WorkflowError } from "../errors.js";
@@ -46,7 +46,7 @@ function v1State(overrides: any = {}): any {
 }
 
 function createV1Database(path: string, states: any[], audits: any[] = []): Map<string, any> {
-  const db = new DatabaseSync(path);
+  const db = new Database(path);
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE workflows (
@@ -114,7 +114,7 @@ function createV1Database(path: string, states: any[], audits: any[] = []): Map<
 }
 
 function rawAudits(path: string) {
-  const db = new DatabaseSync(path);
+  const db = new Database(path);
   const rows = db
     .prepare(
       "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json, created_at FROM audit_events ORDER BY event_id",
@@ -545,7 +545,7 @@ test("injected migration failure rolls back the whole batch", () => {
       ),
       "ERROR_INJECTED_FAILURE",
     );
-    const db = new DatabaseSync(path);
+    const db = new Database(path);
     for (const state of [a, b]) {
       const row = db
         .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
@@ -604,7 +604,7 @@ test("rejects malformed and unknown v1 schemas and rolls back the batch", () => 
       errorCategory(() => new WorkflowStore({ repositoryRoot: root, databasePath: missingPath })),
       "ERROR_STATE_CORRUPT",
     );
-    const db = new DatabaseSync(missingPath);
+    const db = new Database(missingPath);
     for (const state of [valid, malformed]) {
       const row = db
         .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")

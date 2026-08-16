@@ -57,7 +57,7 @@ Rules:
 - If there are no changes to commit, report that and do not create an empty commit.
 - If the staged diff is incomplete, internally inconsistent, or exceeds the approved objective, do not commit; report the mismatch.
 - Immediately before staging, run
-  `node .codex/agents/dist/change-receipt.js -- <approved paths>` and compare every receipt field with
+  `bun .codex/agents/dist/change-receipt.js -- <approved paths>` and compare every receipt field with
   the reviewer receipt. If any field differs, stop without modifying the index and request
   re-review. Define `intended_changed_paths` as the exact approved paths whose reviewer receipt
   state is `added`, `modified`, or `deleted`. After staging and before the post-stage receipt

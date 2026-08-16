@@ -10,10 +10,11 @@ pnpm install
 pnpm test
 ```
 
-The project requires Node 22 or newer. `pnpm build` must have run so the committed `dist/`
-artifacts are fresh; it is part of `pnpm test`. Its own `.codex/config.toml` runs the server
-against this repository. Runtime SQLite state is stored outside the repository under the user's
-Codex state directory.
+The project requires Bun 1.3 or newer to run the MCP server and tests. pnpm remains the package
+manager, and TypeScript/tsc remains responsible for typechecking and building. `pnpm build` must
+have run so the committed `dist/` artifacts are fresh; it is part of `pnpm test`. Its own
+`.codex/config.toml` runs the server against this repository with Bun. Runtime SQLite state is
+stored outside the repository under the user's Codex state directory.
 
 ## Install into another repository
 

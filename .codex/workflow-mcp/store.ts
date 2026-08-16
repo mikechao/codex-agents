@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { Database } from "bun:sqlite";
 import { fail } from "./errors.js";
 import {
   createReceipt,
@@ -152,7 +152,7 @@ export class WorkflowStore {
   readonly path: string;
   readonly faultAfterLinkedChildInsert: boolean;
   readonly faultAfterMigrationUpdate: boolean;
-  private db: DatabaseSync;
+  private db: Database;
   private closed = false;
 
   constructor(options: WorkflowStoreOptions = {}) {
@@ -162,7 +162,7 @@ export class WorkflowStore {
     this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
     this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(this.path);
+    this.db = new Database(this.path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (

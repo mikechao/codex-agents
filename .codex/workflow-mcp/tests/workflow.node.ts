@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, cpSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { Database } from "bun:sqlite";
+import { test } from "bun:test";
 import { WorkflowError } from "../errors.js";
 import { resolveStatePath, WorkflowStore } from "../store.js";
 import { permittedNextActions, roleView } from "../transitions.js";
@@ -2604,7 +2604,7 @@ test("committed results are terminal and cannot retry", () => {
 });
 
 function insertV1Workflow(path: string, state: any) {
-  const db = new DatabaseSync(path);
+  const db = new Database(path);
   db.exec(`
     CREATE TABLE workflows (
       workflow_id TEXT PRIMARY KEY,

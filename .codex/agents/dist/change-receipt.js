@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
@@ -277,9 +277,15 @@ function createReceiptAtRoot(inputs, root, options = { allowAbsent: false }) {
     return receipt;
 }
 function main() {
+    // Bun consumes a leading `--` from process.argv when running a script, so the
+    // separator may be absent; fall back to `-`-prefixed flag detection.
     const separator = process.argv.indexOf("--");
-    const inputs = separator < 0 ? [] : process.argv.slice(separator + 1);
-    const flags = separator < 0 ? process.argv.slice(2) : process.argv.slice(2, separator);
+    const inputs = separator < 0
+        ? process.argv.slice(2).filter((arg) => !arg.startsWith("-"))
+        : process.argv.slice(separator + 1);
+    const flags = separator < 0
+        ? process.argv.slice(2).filter((arg) => arg.startsWith("-"))
+        : process.argv.slice(2, separator);
     let allowAbsent = false;
     for (const flag of flags) {
         if (flag !== "--allow-absent" || allowAbsent) {
