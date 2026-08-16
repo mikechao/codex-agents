@@ -258,7 +258,7 @@ from the actual runtime code:
 - `git diff --check` clean; committed `git.ts` + shim + `dist/git.js` together (`31dce7b`); worktree
   clean after the oracle build.
 
-## Phase E — `transitions.ts`
+## Phase E — `transitions.ts`  [DONE]
 
 - Transition functions typed `(state: WorkflowState, input: unknown, ...) => WorkflowState`,
   keeping all in-function runtime validation.
@@ -326,7 +326,7 @@ from the actual runtime code:
 - `git diff --check` clean; committed `transitions.ts` + shim + `dist/transitions.js` together;
   worktree clean after the oracle build; committed `dist/` deterministic across rebuilds.
 
-## Phase F — `store.ts`
+## Phase F — `store.ts`  [DONE]
 
 - `WorkflowStore` methods typed; `#row(): WorkflowRow` (cast from `node:sqlite` results after
   digest/auth checks), `parseState(): WorkflowState` (JSON parse + digest verification —
@@ -337,6 +337,61 @@ from the actual runtime code:
   as-is (loosely typed), only new events are `AuditEnvelope`.
 - Preserve the `export { exactPaths }` re-export currently at `store.mjs:685` (kept for library
   compatibility alongside the `index.ts` barrel).
+
+### Done Report — Phase F
+
+**Changes:**
+- Added `.codex/workflow-mcp/store.ts` — every signature from `issue-1-phase-f.md` §§3–9:
+  `resolveStatePath`, `WorkflowStoreOptions`, the `WorkflowStore` class (constructor PRAGMA/CREATE
+  TABLE/`state_digest` column migration + `#migrateLegacyRows` on open), all 16 public methods,
+  `openStore`, and the module-level `mutationInput`/`changedFields`/`auditEnvelope`/`parseState`
+  helpers. Private `#ensureOpen`/`#capabilityHashes`/`#assertAuth`/`#verifyDigest`/`#row`/`#audit`/
+  `#mutate` typed; SQLite rows cast at read sites (`WorkflowRow`, partial picks, `PRAGMA
+  table_info` columns); branded strings/numbers pass through `node:sqlite` `SQLInputValue` params
+  directly; `isoNow()` replaces `new Date().toISOString()`; `audit()` returns `AuditEvent[]` with
+  boundary casts (`AuditEventType`, `ActorRole`, `IsoTimestamp`, `AuditEnvelope |
+  LegacyAuditSummary`) for legacy rows.
+- `store.mjs` replaced with the temporary shim `export * from "./dist/store.js";`; no `.mjs`
+  consumer or test file edited (`server.mjs`, `index.mjs`, `.mjs` tests resolve through the shim).
+  Shim removed at Phase G (server entry conversion).
+- Committed `.codex/workflow-mcp/dist/store.js` per the committed-`dist/` policy; runtime export
+  set identical to the pre-conversion `.mjs` (`resolveStatePath`, `openStore`, `WorkflowStore`,
+  plus the `export { exactPaths }` re-export per spec §11.7).
+
+**Deviations / decisions (pre-documented in the Phase F spec §§8, 11):**
+- Validation order preserved exactly: `mutationInput` -> `expectedVersion` -> `workflowId` brand
+  (before `BEGIN`) -> `#assertAuth` (after `BEGIN`) -> version conflict (spec §8 table); the `#row`
+  format regex stays as never-firing defense-in-depth.
+- `#assertAuth` returns the validated `Role` (spec §11.2). `roleView` is reached through a
+  module-level typed binding `roleViewForRole` — a single documented cast to the implementation
+  signature, because `transitions.roleView`'s public overloads accept only literal roles and a
+  `Role`-typed argument matches none; the emitted JS erases to a direct `roleView` call.
+- `changedFields` projects the after-state via `as unknown as Record<string, unknown>` (direct
+  cast rejected — interfaces lack index signatures).
+- `get`/`audit`/`#mutate` name the untrusted id parameter `workflowIdValue` to avoid shadowing the
+  imported `workflowId` brander.
+- `next.commit_result!.outcome` non-null assertions kept in the `recordCommit`/`submitCommitResult`
+  outcome callbacks (spec §11.4).
+- `#migrateLegacyRows` is a strict 1:1 blind port (single raw `JSON.parse`, branch on untyped
+  `schema_version`, `migrateV1State` revalidation, `+1 as WorkflowVersion`, `WORKFLOW_MIGRATED`
+  audit, `faultAfterMigrationUpdate` injection); **Phase I must run `migration.node.mjs`** to close
+  the coverage gap (spec §0, §11.9).
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs.
+- Oracle (SDK-free subset, spec §0): `pnpm build && node --test
+  .codex/workflow-mcp/tests/git.node.mjs .codex/workflow-mcp/tests/lifecycle.node.mjs
+  .codex/workflow-mcp/tests/workflow.node.mjs` — **98 tests, 0 fail**: lifecycle-restart
+  reopen/re-digest checks, store-level transition/audit/digest-continuity tests, append-only audit
+  order, fault-injection rollbacks (linked-followup atomicity), capability-denial / version-conflict
+  / stale-base-receipt categories, and the `exactPaths` re-export all intact.
+- No shim bypass: `rg -n 'store\.mjs' .codex` matches only `server.mjs`, `index.mjs`, and the
+  `.mjs` tests (the shim itself references only `dist/store.js`); expected until Phase G.
+- `migration.node.mjs` remains unloadable (imports `@modelcontextprotocol/sdk`; pre-existing until
+  Phase I) — confirmed the failure is at module load, before any store code runs.
+- `git diff --check` clean; committed `store.ts` + shim + `dist/store.js` together (`ee654c5`);
+  worktree clean after the oracle build.
+
 
 ## Phase G — `server.ts` (SDK v2)
 
