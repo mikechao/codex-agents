@@ -9,7 +9,7 @@
   "scripts": {
     "start": "bun --no-warnings .codex/workflow-mcp/server.ts",
     "generate:agents": "bun .codex/agents/generate-host-definitions.ts --write",
-    "typecheck": "tsc --noEmit -p tsconfig.workflow-mcp.json && tsc --noEmit -p tsconfig.agents.json && tsc --noEmit -p tsconfig.installer.json",
+    "typecheck": "tsc -p tsconfig.workflow-mcp.json && tsc -p tsconfig.agents.json && tsc -p tsconfig.installer.json",
     "test": "bun test --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts",
     "test:agents": "bun test --timeout=60000 ./.codex/agents/tests/*.node.ts",
     "test:installer": "bun test --timeout=60000 ./.codex/installer/tests/*.node.ts",

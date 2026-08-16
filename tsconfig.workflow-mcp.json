@@ -1,5 +1,4 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": {},
   "include": [".codex/workflow-mcp/**/*.ts"]
 }
