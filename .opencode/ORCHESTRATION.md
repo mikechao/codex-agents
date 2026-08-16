@@ -6,10 +6,46 @@ root `opencode.json`. This file coordinates the project's `implementer`, `code_r
 the role contracts (`.opencode/agents/*.md`) or `.codex/agents/WORKFLOW.md`; keep detailed role
 behavior in those files and keep this file OpenCode-only so Codex behavior is unchanged.
 
+## Build orchestrator boundary
+
+Build is the orchestrator, not the implementer. This boundary applies to every non-trivial
+implementation request, whether the request enters directly in Build or follows a completed
+Plan-mode plan. Build must delegate the implementation to `implementer`; delegation is a required
+responsibility boundary, not an optional strategy.
+
+For a direct Build request such as `Implement <issue>`, Build performs only bounded, read-only
+preflight, creates or reuses the authoritative workflow, and promptly delegates to `implementer`.
+For Plan-mode work, planning, refinement, review, and discarding a plan are pre-workflow activities
+and do not create an implementation workflow. An explicit execution approval such as `implement the
+plan`, `execute the plan`, or `go ahead` ends planning and switches Build to this orchestration
+boundary. The approved plan is handoff context for `implementer`; Build must not re-derive it.
+
+Bounded pre-delegation preflight may include only the minimum read-only context needed to establish
+the workflow contract: inspect `git status` and current `HEAD`, confirm the expected working-tree
+baseline, extract the objective, approved paths, acceptance criteria, and validation requirements,
+and optionally run one baseline validation command when useful. Preflight must not become a second
+implementation-planning pass. Before delegation, Build must not redesign APIs, draft implementation
+signatures, repeatedly grep or read implementation details, reason through refactor mechanics, or
+otherwise solve the implementation.
+
+For non-trivial work, Build must not edit source, configuration, or test files, apply patches, enter
+source-level implementation TODOs, or execute source-level implementation work before delegation.
+After bounded preflight, Build must create or reuse the authoritative `workflow_state` workflow
+before any implementation mutation, capture the exact returned `workflow_id`, and delegate with the
+exact `workflow_id`, `implementer` capability, and current `expected_version`. The implementer's
+first authoritative action remains `workflow_get` for that workflow. Build-side TODOs, if used, track
+only orchestration progress such as preflight, workflow creation/reuse, delegation, review,
+authorization, and commit handoff; they do not describe source changes Build intends to perform.
+
+This boundary preserves the existing trivial-edit exemption: a clearly trivial edit may follow the
+ordinary lightweight path, but Build must use the workflow-backed implementer lifecycle for
+non-trivial implementation work.
+
 ## Workflow identity
 
-- Before delegating non-trivial work, create the authoritative workflow through `workflow_state`
-  (or reuse the existing authoritative workflow when one is already in progress).
+- After bounded preflight and before delegating non-trivial work, create the authoritative workflow
+  through `workflow_state` (or reuse the existing authoritative workflow when one is already in
+  progress).
 - Capture the exact `workflow_id` returned by workflow creation.
 - Include that exact `workflow_id` in every delegated subagent invocation, together with each role's
   own `capability` and the current `expected_version` from the parent view.

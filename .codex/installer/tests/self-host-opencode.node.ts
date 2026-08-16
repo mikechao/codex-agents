@@ -32,10 +32,43 @@ test("the repository's own opencode.json registers workflow_state exactly like t
 test("the repository's own opencode.json loads the primary-agent orchestration instructions", () => {
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as { instructions?: string[] };
   assert.deepEqual(parsed.instructions, [orchestrationPath]);
+  const orchestrationFile = resolve(repoRoot, orchestrationPath);
+  assert.ok(existsSync(orchestrationFile), `missing orchestration file: ${orchestrationPath}`);
+  const orchestration = readFileSync(orchestrationFile, "utf8");
+  const normalizedOrchestration = orchestration.replace(/\s+/gu, " ");
+  for (const guardrail of [
+    "## Build orchestrator boundary",
+    "Build is the orchestrator, not the implementer",
+    "must delegate the implementation to `implementer`",
+    "bounded, read-only preflight",
+    "must not become a second implementation-planning pass",
+    "For a direct Build request",
+    "Plan-mode work",
+    "implement the plan",
+    "approved plan is handoff context for `implementer`",
+    "must not edit source, configuration, or test files",
+    "source-level implementation TODOs",
+    "create or reuse the authoritative `workflow_state` workflow",
+    "capture the exact returned `workflow_id`",
+    "current `expected_version`",
+    "first authoritative action remains `workflow_get`",
+    "Build-side TODOs",
+    "trivial-edit exemption",
+  ]) {
+    assert.ok(normalizedOrchestration.includes(guardrail), `missing Build guardrail: ${guardrail}`);
+  }
   assert.ok(
-    existsSync(resolve(repoRoot, orchestrationPath)),
-    `missing orchestration file: ${orchestrationPath}`,
+    normalizedOrchestration.includes("every non-trivial implementation request"),
+    "missing Build guardrail: every non-trivial implementation request",
   );
+
+  const preflightIndex = normalizedOrchestration.indexOf("bounded, read-only preflight");
+  const workflowIndex = normalizedOrchestration.indexOf(
+    "creates or reuses the authoritative workflow",
+  );
+  const delegationIndex = normalizedOrchestration.indexOf("promptly delegates to `implementer`");
+  assert.ok(preflightIndex >= 0 && preflightIndex < workflowIndex);
+  assert.ok(workflowIndex < delegationIndex);
 });
 
 test("the repository's own OpenCode registration keeps the installer server semantics", () => {

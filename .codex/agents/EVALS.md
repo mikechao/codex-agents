@@ -171,6 +171,19 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 Run in an installed OpenCode project (`.opencode/agents/` plus the `mcp.workflow_state` local
 registration) after changing the generator or a canonical contract.
 
+- Direct Build implementation orchestration: in a fresh Build session, submit a non-trivial request
+  such as `Implement <issue>`. Confirm Build performs only bounded read-only preflight, does not
+  create source-level implementation TODOs or mutate repository files, creates or reuses the
+  authoritative workflow, captures the exact `workflow_id`, and automatically delegates to
+  `implementer` with its capability and current `expected_version`; confirm the implementer's first
+  authoritative action is `workflow_get` and that implementation occurs inside `implementer`.
+- Plan -> Build execution orchestration: run `/plan <non-trivial issue>`, allow Plan to finish a
+  detailed plan, then explicitly approve it with `implement the plan` (or equivalent). Confirm Plan
+  remains pre-workflow, Build performs only bounded read-only preflight after approval, does not
+  begin a second implementation investigation or mutate files, creates or reuses the authoritative
+  workflow, and automatically delegates the approved plan as execution context to `implementer`
+  with the exact `workflow_id`, capability, and current `expected_version`; confirm the
+  implementer's first authoritative action is `workflow_get`.
 - Subagent loading: OpenCode loads `implementer`, `code_reviewer`, and `committer` from
   `.opencode/agents/` as subagents with `mode: subagent`, and each can be dispatched by the parent.
 - MCP startup: OpenCode starts the `workflow_state` local server from the project config itself
