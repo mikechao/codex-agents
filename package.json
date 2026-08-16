@@ -15,13 +15,19 @@
     "test:installer": "bun test --timeout=60000 ./.codex/installer/tests/*.node.ts",
     "test:workflow-mcp": "bun test --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts",
     "test:coverage": "bun test --coverage --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts",
-    "test:stress": "bun test --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts"
+    "test:stress": "bun test --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint . --error-on-warnings",
+    "check": "biome check . --error-on-warnings",
+    "validate": "bun run check && bun run typecheck && bun run test"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
     "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.8",
     "@modelcontextprotocol/client": "^2.0.0",
     "@types/bun": "^1.3.14",
     "@types/node": "^22",
