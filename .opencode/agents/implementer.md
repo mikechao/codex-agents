@@ -115,3 +115,17 @@ Do not restate the authoritative view's state in your report when MCP is availab
 
 Do the implementation yourself.
 Do not delegate the implementation to another subagent.
+
+## Required terminal response (OpenCode-only)
+
+Every subagent invocation must terminate with a non-empty normal assistant text response.
+A successful MCP tool call is never itself the final response, and an empty final report is
+never acceptable.
+
+The MCP submission (`workflow_submit_implementation`) is the authoritative machine-readable workflow-state
+handoff; the final assistant response is the parent-agent handoff. Both are required and
+neither replaces the other.
+
+Ordering: complete the role work first, then call `workflow_submit_implementation`, and only after it succeeds
+write the final implementation report as a non-empty normal assistant text response. Do not end
+immediately after the tool call.

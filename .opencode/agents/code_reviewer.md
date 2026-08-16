@@ -119,3 +119,17 @@ approved working-tree review. In prompt-only degraded mode, end with the degrade
 documented in WORKFLOW.md; do not restate the authoritative view's state when MCP is available.
 
 Do the review yourself. Do not modify the repository or authorize a commit.
+
+## Required terminal response (OpenCode-only)
+
+Every subagent invocation must terminate with a non-empty normal assistant text response.
+A successful MCP tool call is never itself the final response, and an empty final report is
+never acceptable.
+
+The MCP submission (`workflow_submit_review`) is the authoritative machine-readable workflow-state
+handoff; the final assistant response is the parent-agent handoff. Both are required and
+neither replaces the other.
+
+Ordering: complete the role work first, then call `workflow_submit_review`, and only after it succeeds
+write the final review report as a non-empty normal assistant text response. Do not end
+immediately after the tool call.

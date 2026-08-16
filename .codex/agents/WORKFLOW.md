@@ -34,6 +34,13 @@ Host permission syntax differs and must not be treated as equivalent:
   announces its own identity line (Codex model plus reasoning effort in the TOML, the OpenCode Go
   provider/model ID in the Markdown), injected by the generator in place of the contract's
   `__HOST_IDENTITY__` marker.
+- OpenCode requires a dual-handoff terminal response: after the role's MCP submission tool
+  (`workflow_submit_implementation`/`workflow_submit_review`/`workflow_submit_commit_result`)
+  succeeds, the agent must still write a non-empty normal assistant text report to the parent
+  (labeled "final implementation/review/commit report", required for the committer whether the
+  commit succeeded or failed). This ordering invariant is appended to the OpenCode definitions by
+  the generator only; it is not contract prose and is never present in the Codex TOML, whose
+  terminal handoff stays the MCP submission itself.
 
 ## Authoritative MCP state
 

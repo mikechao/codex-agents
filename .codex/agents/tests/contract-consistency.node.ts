@@ -2,7 +2,10 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { generateDefinitions } from "../generate-host-definitions.js";
+import {
+  generateDefinitions,
+  OPENCODE_TERMINAL_SECTION_HEADING,
+} from "../generate-host-definitions.js";
 
 const agentsDir = resolve(import.meta.dir, "..");
 
@@ -170,7 +173,12 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
     const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
     const markdown = opencode(`${role}.md`);
     const tomlBody = toml.split('developer_instructions = """\n')[1].split('\n"""\n')[0];
-    const markdownBody = markdown.split("---\n").slice(2).join("---\n").replace(/\n$/, "");
+    const markdownBody = markdown
+      .split("---\n")
+      .slice(2)
+      .join("---\n")
+      .split(OPENCODE_TERMINAL_SECTION_HEADING)[0]
+      .trimEnd();
     assert.equal(
       normalize(tomlBody),
       normalize(markdownBody),
@@ -182,6 +190,77 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
     assert.ok(
       bodies.get(role)!.includes("workflow_get"),
       `${role} must use the authoritative view`,
+    );
+  }
+});
+
+test("OpenCode definitions require a non-empty final report after terminal MCP submission", () => {
+  const terminalTools: Record<string, string> = {
+    implementer: "workflow_submit_implementation",
+    code_reviewer: "workflow_submit_review",
+    committer: "workflow_submit_commit_result",
+  };
+  const finalReportLabels: Record<string, string> = {
+    implementer: "final implementation report",
+    code_reviewer: "final review report",
+    committer: "final commit report",
+  };
+  for (const name of Object.keys(terminalTools)) {
+    const content = opencode(`${name}.md`);
+    assert.ok(
+      content.includes(OPENCODE_TERMINAL_SECTION_HEADING),
+      `${name} must carry the OpenCode-only terminal response section`,
+    );
+    assert.ok(
+      content.includes("non-empty normal assistant text response"),
+      `${name} must require a non-empty final assistant text response`,
+    );
+    assert.ok(
+      content.includes("A successful MCP tool call is never itself the final response"),
+      `${name} must forbid ending on a bare successful tool call`,
+    );
+    assert.match(
+      content,
+      /empty final report\s+is\s+never\s+acceptable/,
+      `${name} must forbid an empty final report`,
+    );
+    assert.ok(
+      content.includes(`The MCP submission (\`${terminalTools[name]}\`)`),
+      `${name} must name its authoritative terminal MCP tool`,
+    );
+    assert.ok(
+      content.includes(
+        `write the ${finalReportLabels[name]} as a non-empty normal assistant text response`,
+      ),
+      `${name} must require its role-specific final report`,
+    );
+    assert.match(
+      content,
+      /Do not end\s+immediately after the tool call/,
+      `${name} must forbid ending immediately after the submission tool call`,
+    );
+  }
+  const committer = opencode("committer.md");
+  assert.ok(
+    committer.includes("The report is required whether the commit succeeded or failed."),
+    "committer terminal report must apply whether the commit succeeded or failed",
+  );
+});
+
+test("Codex TOML never carries the OpenCode-only terminal response section", () => {
+  for (const role of ["implementer", "code_reviewer", "committer"]) {
+    const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
+    assert.ok(
+      !toml.includes(OPENCODE_TERMINAL_SECTION_HEADING),
+      `${role} Codex TOML must not carry the OpenCode-only section heading`,
+    );
+    assert.ok(
+      !toml.includes("non-empty normal assistant text response"),
+      `${role} Codex TOML must not carry the OpenCode-only response invariant`,
+    );
+    assert.ok(
+      !toml.includes("Do not end immediately after the tool call"),
+      `${role} Codex TOML must not carry the OpenCode-only ordering phrase`,
     );
   }
 });

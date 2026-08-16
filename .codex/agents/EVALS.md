@@ -197,6 +197,11 @@ registration) after changing the generator or a canonical contract.
   if a host permission were relaxed.
 - Contract parity: `bun run generate:agents` is idempotent and the checked-in Codex/OpenCode
   definitions remain byte-identical to its output.
+- Terminal-response guarantee: after a successful terminal MCP submission
+  (`workflow_submit_implementation`/`workflow_submit_review`/`workflow_submit_commit_result`) each
+  OpenCode role still ends its invocation with a non-empty normal assistant text report (the
+  role-specific "final implementation/review/commit report", required for the committer whether
+  the commit succeeded or failed); the generator-appended section is absent from the Codex TOML.
 
 ## Acceptance
 

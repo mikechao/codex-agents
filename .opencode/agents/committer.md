@@ -161,3 +161,17 @@ Git result manually; do not restate the authoritative view's state when MCP is a
 
 Do the commit work yourself.
 Do not delegate this task to another subagent.
+
+## Required terminal response (OpenCode-only)
+
+Every subagent invocation must terminate with a non-empty normal assistant text response.
+A successful MCP tool call is never itself the final response, and an empty final report is
+never acceptable.
+
+The MCP submission (`workflow_submit_commit_result`) is the authoritative machine-readable workflow-state
+handoff; the final assistant response is the parent-agent handoff. Both are required and
+neither replaces the other.
+
+Ordering: complete the role work first, then call `workflow_submit_commit_result`, and only after it succeeds
+write the final commit report as a non-empty normal assistant text response. Do not end
+immediately after the tool call. The report is required whether the commit succeeded or failed.

@@ -24,6 +24,11 @@ interface OpenCodeConfig {
   description: string;
   model: string;
   permission: string[];
+  // OpenCode-only runtime handoff: the MCP tool that carries the authoritative
+  // workflow-state submission and the label of the required final report the
+  // agent must write after that tool call succeeds.
+  terminalTool: string;
+  finalReportLabel: string;
 }
 
 interface RoleSpec {
@@ -86,6 +91,8 @@ const ROLES: readonly RoleSpec[] = [
         "  workflow_state_workflow_get: allow",
         "  workflow_state_workflow_submit_implementation: allow",
       ],
+      terminalTool: "workflow_submit_implementation",
+      finalReportLabel: "final implementation report",
     },
   },
   {
@@ -117,6 +124,8 @@ const ROLES: readonly RoleSpec[] = [
         "  workflow_state_workflow_get: allow",
         "  workflow_state_workflow_submit_review: allow",
       ],
+      terminalTool: "workflow_submit_review",
+      finalReportLabel: "final review report",
     },
   },
   {
@@ -184,6 +193,8 @@ const ROLES: readonly RoleSpec[] = [
         "  workflow_state_workflow_prepare_commit: allow",
         "  workflow_state_workflow_submit_commit_result: allow",
       ],
+      terminalTool: "workflow_submit_commit_result",
+      finalReportLabel: "final commit report",
     },
   },
 ];
@@ -198,6 +209,12 @@ function tomlEscape(value: string): string {
 // Model/reasoning identity is host-specific metadata; the shared contract
 // prose carries this marker and each host injects its own identity line.
 const HOST_IDENTITY_MARKER = "__HOST_IDENTITY__";
+
+// OpenCode-only terminal-response section appended after the shared contract
+// body by opencodeTerminalHandoff. Exported so the consistency test can strip
+// it before the Codex/OpenCode equivalence comparison and assert its presence
+// and absence respectively. Codex TOML never carries this section.
+export const OPENCODE_TERMINAL_SECTION_HEADING = "## Required terminal response (OpenCode-only)";
 
 function injectHostIdentity(body: string, identity: string, role: string): string {
   if (!body.includes(HOST_IDENTITY_MARKER)) {
@@ -228,7 +245,38 @@ function opencodeMarkdown(spec: RoleSpec, body: string): string {
     ...spec.opencode.permission,
     "---",
   ].join("\n");
-  return `${frontmatter}\n${injectHostIdentity(body, spec.opencode.model, spec.name)}\n`;
+  const contract = injectHostIdentity(body, spec.opencode.model, spec.name);
+  return `${frontmatter}\n${contract}${opencodeTerminalHandoff(spec)}\n`;
+}
+
+// OpenCode-only runtime ordering section appended after the shared contract
+// body. It does not restate contract behavior; it pins the host-specific
+// requirement that the agent always ends with a non-empty normal assistant
+// text response after (not instead of) its terminal MCP submission call. Codex
+// TOML output must remain byte-identical, so this never touches codexToml.
+function opencodeTerminalHandoff(spec: RoleSpec): string {
+  const { terminalTool, finalReportLabel } = spec.opencode;
+  const failureClause =
+    spec.name === "committer"
+      ? " The report is required whether the commit succeeded or failed."
+      : "";
+  return [
+    "",
+    "",
+    OPENCODE_TERMINAL_SECTION_HEADING,
+    "",
+    "Every subagent invocation must terminate with a non-empty normal assistant text response.",
+    "A successful MCP tool call is never itself the final response, and an empty final report is",
+    "never acceptable.",
+    "",
+    `The MCP submission (\`${terminalTool}\`) is the authoritative machine-readable workflow-state`,
+    "handoff; the final assistant response is the parent-agent handoff. Both are required and",
+    "neither replaces the other.",
+    "",
+    `Ordering: complete the role work first, then call \`${terminalTool}\`, and only after it succeeds`,
+    `write the ${finalReportLabel} as a non-empty normal assistant text response. Do not end`,
+    `immediately after the tool call.${failureClause}`,
+  ].join("\n");
 }
 
 export interface GeneratedDefinitions {
