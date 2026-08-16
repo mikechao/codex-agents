@@ -598,7 +598,7 @@ import type { Tool } from "@modelcontextprotocol/server";
   single commit `c41bfd5` (six converted test files, the five shim deletions + six `.mjs` test
   deletions, `dist/` sources + tests, and `issue-1-phase-i.md`).
 
-## Phase J — Config / installer / docs
+## Phase J — Config / installer / docs  [DONE]
 
 - **Server-entry path flips already landed in Phase G** (deviation, `issue-1-phase-g.md` §7):
   `.codex/config.toml` args -> `[--no-warnings, ".codex/workflow-mcp/dist/server.js"]` and the
@@ -621,6 +621,58 @@ import type { Tool } from "@modelcontextprotocol/server";
 - **`mcp-plan.md`:** the optional migration-task append must explicitly note that it supersedes the
   v2 global rule "Keep ... the existing MCP SDK; add no runtime dependency" — this issue mandates
   the SDK v2 swap and a new runtime dependency by design.
+
+### Done Report — Phase J
+
+**Changes:**
+- `install-into.sh` — added two artifact guards before any staging: exits 1 with "Run 'pnpm build'
+  in $project_root first." when `.codex/workflow-mcp/dist/server.js` or
+  `.codex/agents/dist/change-receipt.js` is missing. Replaced the blanket
+  `cp -R .codex/agents/.` copy with a scoped copy: the three TOML contracts, `WORKFLOW.md`,
+  `EVALS.md`, `EVAL_RESULTS.md` (each guarded by `-f`), and `dist/change-receipt.js` — no `.ts`
+  sources, no `tests/`. Target repos end up with exactly
+  `.codex/agents/{code_reviewer,committer,implementer}.toml`, `WORKFLOW.md`, `EVALS.md`,
+  `EVAL_RESULTS.md`, and `dist/change-receipt.js` (the path `git.ts` spawns).
+- `AGENTS.md` — added a build note to the tooling paragraph (TS sources under
+  `.codex/workflow-mcp/`, `pnpm build` emits the committed `dist/` artifacts Codex,
+  `install-into.sh`, and the tests run; `pnpm typecheck` before declaring changes complete).
+- `.codex/workflow-mcp/README.md` — added a "Build and typecheck" paragraph (sources are TS;
+  `pnpm build` compiles to the committed `dist/` mirror with entry `dist/server.js`; tests under
+  `tests/` compile to `dist/tests/`); `pnpm start` and state-location content unchanged.
+- Root `README.md` — setup block notes `pnpm build` must have run (it is part of `pnpm test`) so
+  the committed `dist/` artifacts are fresh before `./install-into.sh`.
+- `mcp-plan.md` — appended the supersession note at the top of the "Global rules" section:
+  the TypeScript/SDK-v2 migration replaced `@modelcontextprotocol/sdk` v1 with
+  `@modelcontextprotocol/server` v2 (plus `@modelcontextprotocol/client` and TypeScript tooling)
+  by design; the historical task list is otherwise untouched.
+- EVALS — no action: the contract changes across the migration are prompt-text/path-only and
+  receipt behavior is byte-identical, so no new EVALS scenarios were run and `EVAL_RESULTS.md` is
+  not updated.
+
+**Deviations / decisions (pre-documented in `issue-1-phase-j.md` §5–6 and the questions):**
+- The `.codex/config.toml` and `install-into.sh` server-path flips listed under this phase landed
+  earlier in Phase G (`issue-1-phase-g.md` §7); the Phase J spec's `.mjs` grep including
+  `mcp-plan.md` is interpreted to exclude it, because mcp-plan.md legitimately retains ~200
+  historical `.mjs` references by design (treated like `docs/archive/`). The grep passes on all
+  runnable docs/config files.
+- `issue-1-phase-j.md` was archived to `docs/archive/issue-1-phase-j.md` per the prior-phase
+  convention and committed in the same commit as the changes.
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs (no server code touched).
+- Full `pnpm test` — **154 tests, 0 fail**, unchanged.
+- Installer end-to-end (scratch git repo in `/tmp`): install succeeds; the target contains
+  exactly the scoped files with no `.ts` or `tests/`; the installed `dist/change-receipt.js`
+  runs and emits a valid receipt from the target root; the generated `.codex/config.toml` points
+  at `$project_root/.codex/workflow-mcp/dist/server.js`. Both guards verified independently:
+  a fake project missing each artifact exits 1 with the "Run 'pnpm build' ... first." message.
+- Greps clean: `rg -n '\.mjs' AGENTS.md README.md .codex/workflow-mcp/README.md
+  .codex/agents/WORKFLOW.md .codex/agents/*.toml .codex/config.toml install-into.sh` empty
+  (`mcp-plan.md` and `docs/archive/` excluded as historical); `pnpm build`/`pnpm typecheck`
+  present in `AGENTS.md`, `.codex/workflow-mcp/README.md`, and root `README.md`.
+- `git diff --check` clean; single commit `dd32268` (`install-into.sh`, `AGENTS.md`,
+  `README.md`, `.codex/workflow-mcp/README.md`, `mcp-plan.md`, and the archived
+  `docs/archive/issue-1-phase-j.md`); worktree clean at commit.
 
 ## Phase K — Verification
 
