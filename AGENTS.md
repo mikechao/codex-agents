@@ -2,8 +2,8 @@
 
 This is a Node 22+ ESM project managed with pnpm. The reusable Codex `implementer`,
 `code_reviewer`, and `committer` definitions live under `.codex/agents/`; the project-scoped
-configuration in `.codex/config.toml` registers the local workflow-state server. Treat
-`mcp-plan.md` as an ordered plan for future v2 work, not as documentation of current behavior.
+configuration in `.codex/config.toml` registers the local workflow-state server. The historical
+v2 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the TOML contracts, workflow documentation, MCP tool schemas and transitions, and
