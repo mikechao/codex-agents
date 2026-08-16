@@ -44,6 +44,12 @@ if [ ! -f "$project_root/.codex/agents/dist/change-receipt.js" ]; then
   echo "Run 'pnpm build' in $project_root first." >&2
   exit 1
 fi
+for file in code_reviewer.toml committer.toml implementer.toml WORKFLOW.md; do
+  if [ ! -f "$project_root/.codex/agents/$file" ]; then
+    echo "Required agent definition missing: $project_root/.codex/agents/$file" >&2
+    exit 1
+  fi
+done
 
 mkdir -p -- "$target/.codex"
 agents_staging=$(mktemp -d "$target/.codex/.agents.install.XXXXXX")

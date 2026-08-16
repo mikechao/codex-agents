@@ -1208,6 +1208,7 @@ test("every implementation status persists and advances or stops explicitly", ()
             acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "a" }],
             validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "v" }],
         };
+        const submittedReceipt = receipt(root);
         const submit = (created, status, options = {}) => store.submitImplementation({
             workflow_id: created.workflow.workflow_id,
             capability: created.capabilities.implementer,
@@ -1217,7 +1218,7 @@ test("every implementation status persists and advances or stops explicitly", ()
             agent_touched_paths: ["note.txt"],
             acceptance_results: results.acceptance_results,
             validation_results: results.validation_results,
-            implementation_receipt: receipt(root),
+            implementation_receipt: submittedReceipt,
             known_failures: options.knownFailures ?? [],
             finding_resolution_map: {},
         });
@@ -1248,7 +1249,7 @@ test("every implementation status persists and advances or stops explicitly", ()
         assert.equal(persisted.implementation_summary, "summary DONE");
         assert.deepEqual(persisted.acceptance_results, results.acceptance_results);
         assert.deepEqual(persisted.validation_results, results.validation_results);
-        assert.deepEqual(persisted.implementation_receipt, absentReceipt(root, ["note.txt"]));
+        assert.deepEqual(persisted.implementation_receipt, submittedReceipt);
         reopened.close();
     }
     finally {
@@ -1355,7 +1356,8 @@ test("stale implementation receipt is rejected and restart preserves submission 
         writeFileSync(join(root, "note.txt"), "changed after receipt\n");
         assert.equal(errorCategory(() => implementation(store, created, root, 0, "stale", {}, "DONE", { receipt: stale })), "ERROR_STALE_RECEIPT");
         assert.equal(store.get(id, "parent", caps.parent).version, 0);
-        const done = implementation(store, created, root, 0, "complete");
+        const submitted = receipt(root);
+        const done = implementation(store, created, root, 0, "complete", {}, "DONE", { receipt: submitted });
         assert.equal(done.phase, "REVIEWING");
         store.close();
         const reopened = new WorkflowStore({ repositoryRoot: root, databasePath: path });
@@ -1368,7 +1370,7 @@ test("stale implementation receipt is rejected and restart preserves submission 
         assert.deepEqual(persisted.validation_results, [
             { validation_id: "VAL-001", status: "passed", evidence: "validation evidence" },
         ]);
-        assert.deepEqual(persisted.implementation_receipt, absentReceipt(root, ["note.txt"]));
+        assert.deepEqual(persisted.implementation_receipt, submitted);
         reopened.close();
     }
     finally {

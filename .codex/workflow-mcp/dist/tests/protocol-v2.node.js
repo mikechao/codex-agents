@@ -34,7 +34,9 @@ async function start(root) {
         stderr: "pipe",
     });
     const stderr = { text: "" };
-    transport.stderr?.on("data", (chunk) => {
+    const stderrStream = transport.stderr;
+    assert.ok(stderrStream, "start(): StdioClientTransport must expose the piped stderr stream for the sanitization assertions");
+    stderrStream.on("data", (chunk) => {
         stderr.text += chunk.toString();
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
