@@ -22,7 +22,7 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
     const content = opencode(name);
     assert.match(content, /^---\n/, `${name} must start with YAML frontmatter`);
     assert.match(content, /^mode: subagent$/m, `${name} must be a subagent`);
-    assert.match(content, /^model: deepseek-v4-flash$/m, `${name} must pin the adapter model`);
+    assert.match(content, /^model: opencode-go\/deepseek-v4-flash$/m, `${name} must pin the OpenCode Go adapter model`);
     assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
     assert.match(
       content,
@@ -65,20 +65,80 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
 });
 
-test("committer cannot edit but may run bash for the external commit", () => {
+test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {
   const content = opencode("committer.md");
   assert.match(content, /^  edit: deny$/m, "committer must not modify source files");
-  assert.match(content, /^  bash: allow$/m, "committer needs bash for git add/commit");
+  assert.match(content, /^  bash:\n    "\*": deny$/m, "committer bash must fail closed");
+  for (const allowed of [
+    '"git status": allow',
+    '"git status *": allow',
+    '"git diff": allow',
+    '"git diff *": allow',
+    '"git log": allow',
+    '"git log *": allow',
+    '"git show *": allow',
+    '"git rev-parse": allow',
+    '"git rev-parse *": allow',
+    '"git ls-files": allow',
+    '"git ls-files *": allow',
+    '"git add *": allow',
+    '"git commit": allow',
+    '"git commit *": allow',
+    '"bun .codex/agents/change-receipt.ts *": allow',
+  ]) {
+    assert.ok(content.includes(allowed), `committer bash allowlist must include ${allowed}`);
+  }
+  for (const denied of [
+    "git add -p",
+    "git add -i",
+    "git commit --amend",
+    "git push",
+    "git rebase",
+    "git reset",
+    "git checkout",
+    "git switch",
+    "git restore",
+    "git rm",
+    "git mv",
+    "git clean",
+    "git stash",
+  ]) {
+    assert.ok(
+      content.includes(`"${denied}": deny`) && content.includes(`"${denied} *": deny`),
+      `committer bash must deny ${denied} with and without arguments`,
+    );
+  }
   assert.match(content, /^  workflow_state_workflow_prepare_commit: allow$/m);
   assert.match(content, /^  workflow_state_workflow_submit_commit_result: allow$/m);
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
 });
 
-test("implementer may edit but never touches commit or review tools", () => {
+test("implementer may edit but never stages, commits, or rewrites history", () => {
   const content = opencode("implementer.md");
   assert.match(content, /^  edit: allow$/m, "implementer must be able to edit the approved scope");
-  assert.match(content, /^  bash: allow$/m, "implementer runs validation commands");
+  assert.match(content, /^  bash:\n    "\*": allow$/m, "implementer bash must allow validation by default");
+  for (const denied of [
+    "git add",
+    "git commit",
+    "git push",
+    "git reset",
+    "git rebase",
+    "git checkout",
+    "git switch",
+    "git restore",
+    "git revert",
+    "git cherry-pick",
+    "git rm",
+    "git mv",
+    "git clean",
+    "git stash",
+  ]) {
+    assert.ok(
+      content.includes(`"${denied}": deny`) && content.includes(`"${denied} *": deny`),
+      `implementer bash must deny ${denied} with and without arguments`,
+    );
+  }
   assert.match(content, /^  workflow_state_workflow_submit_implementation: allow$/m);
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
@@ -86,16 +146,43 @@ test("implementer may edit but never touches commit or review tools", () => {
 });
 
 test("Codex and OpenCode contracts carry equivalent role behavior", () => {
+  const normalize = (body: string) =>
+    body.replace(/"Agent: [a-z_]+ \| Model: .*"/, '"Agent: <role> | Model: __HOST_IDENTITY__"');
   const bodies = new Map<string, string>();
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
     const markdown = opencode(`${role}.md`);
     const tomlBody = toml.split("developer_instructions = \"\"\"\n")[1].split("\n\"\"\"\n")[0];
     const markdownBody = markdown.split("---\n").slice(2).join("---\n").replace(/\n$/, "");
-    assert.equal(tomlBody, markdownBody, `${role} host bodies must be identical`);
+    assert.equal(
+      normalize(tomlBody),
+      normalize(markdownBody),
+      `${role} host bodies must differ only in the injected host identity`,
+    );
     bodies.set(role, tomlBody);
   }
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     assert.ok(bodies.get(role)!.includes("workflow_get"), `${role} must use the authoritative view`);
+  }
+});
+
+test("contract fragments are host-neutral and each host injects its own identity", () => {
+  const contractsDir = resolve(import.meta.dir, "../contracts");
+  for (const role of ["implementer", "code_reviewer", "committer"]) {
+    const contract = readFileSync(resolve(contractsDir, `${role}.md`), "utf8");
+    assert.ok(contract.includes("__HOST_IDENTITY__"), `${role} contract must carry the identity marker`);
+    assert.ok(!contract.includes("gpt-5.6"), `${role} contract must not hard-code a Codex model`);
+    assert.ok(!contract.includes("deepseek"), `${role} contract must not hard-code an OpenCode model`);
+    const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
+    assert.match(
+      toml,
+      /"Agent: \w+ \| Model: [^"|]+\| Reasoning: \w+"/,
+      `${role} Codex definition must announce the Codex model and reasoning effort`,
+    );
+    assert.match(
+      opencode(`${role}.md`),
+      /"Agent: \w+ \| Model: opencode-go\/deepseek-v4-flash"/,
+      `${role} OpenCode definition must announce the OpenCode Go provider/model ID`,
+    );
   }
 });

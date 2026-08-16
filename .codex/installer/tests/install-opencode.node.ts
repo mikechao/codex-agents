@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -225,15 +226,53 @@ test("install-into.ts refuses both opencode.json and opencode.jsonc", () => {
   }
 });
 
-test("install-into.ts refuses an existing .opencode/agents directory", () => {
+test("install-into.ts preserves unrelated existing OpenCode agents and installs the managed ones", () => {
   const { root, write } = fixture();
   try {
-    write(".opencode/agents/other.md", "---\ndescription: someone elses agent\n---\n");
+    write(".opencode/agents/docs-writer.md", "---\ndescription: someone elses agent\n---\n");
+    write(".opencode/agents/tools/keep.txt", "unrelated nested content\n");
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(join(root, ".opencode/agents/docs-writer.md"), "utf8"),
+      "---\ndescription: someone elses agent\n---\n",
+      "unrelated OpenCode agents must be preserved byte-for-byte",
+    );
+    assert.equal(
+      readFileSync(join(root, ".opencode/agents/tools/keep.txt"), "utf8"),
+      "unrelated nested content\n",
+      "unrelated nested content must be preserved",
+    );
+    for (const file of ["implementer.md", "code_reviewer.md", "committer.md"]) {
+      assert.ok(existsSync(join(root, ".opencode/agents", file)), `missing .opencode/agents/${file}`);
+    }
+    assert.ok(existsSync(join(root, ".codex/agents")), "codex agents must still be installed");
+    assert.ok(existsSync(join(root, "opencode.json")), "opencode config must still be registered");
+    assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")), "backup staging must be removed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts refuses a managed OpenCode agent name collision", () => {
+  const { root, write } = fixture();
+  try {
+    write(".opencode/agents/implementer.md", "---\ndescription: existing implementer\n---\n");
+    write(".opencode/agents/docs-writer.md", "---\ndescription: unrelated agent\n---\n");
     const result = runInstaller(root);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Refusing to replace existing OpenCode agent definitions/);
     assert.ok(!existsSync(join(root, ".codex/agents")));
     assert.ok(!existsSync(join(root, "opencode.json")));
+    assert.equal(
+      readFileSync(join(root, ".opencode/agents/implementer.md"), "utf8"),
+      "---\ndescription: existing implementer\n---\n",
+    );
+    assert.equal(
+      readFileSync(join(root, ".opencode/agents/docs-writer.md"), "utf8"),
+      "---\ndescription: unrelated agent\n---\n",
+    );
+    assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -329,6 +368,7 @@ test("commitBothHosts rolls back every completed step when any rename fails", ()
             opencodeConfigTarget,
             originalCodexConfig,
             originalOpenCodeConfig,
+            null,
             rename,
           ),
         /injected rename failure/,
@@ -381,6 +421,7 @@ test("commitBothHosts removes created config files when they did not exist befor
           opencodeConfigTarget,
           null,
           null,
+          null,
           rename,
         ),
       /injected opencode config failure/,
@@ -389,6 +430,73 @@ test("commitBothHosts removes created config files when they did not exist befor
     assert.ok(!existsSync(codexConfigTarget));
     assert.ok(!existsSync(opencodeAgentsTarget));
     assert.ok(!existsSync(opencodeConfigTarget));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("commitBothHosts restores a pre-existing OpenCode agents directory when a later rename fails", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexAgentsTarget = join(root, ".codex/agents");
+    const codexConfigTarget = join(root, ".codex/config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
+    mkdirSync(opencodeAgentsTarget, { recursive: true });
+    const unrelated = "---\ndescription: unrelated\n---\n";
+    writeFileSync(join(opencodeAgentsTarget, "docs-writer.md"), unrelated);
+    const originalCodexConfig = "[pre-existing codex]\n";
+    const originalOpenCodeConfig = '{"model":"kept"}\n';
+    writeFileSync(codexConfigTarget, originalCodexConfig);
+    writeFileSync(opencodeConfigTarget, originalOpenCodeConfig);
+    const backup = join(root, ".opencode-agents-backup");
+    cpSync(opencodeAgentsTarget, backup, { recursive: true });
+
+    const codexAgents = agentsDir("codex-agents-restore");
+    const codexConfig = staging("codex-config-restore");
+    const opencodeAgents = agentsDir("opencode-agents-restore");
+    const opencodeConfig = staging("opencode-config-restore");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeAgents, "docs-writer.md"), "---\ndescription: managed copy\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    const rename = (from: string, to: string) => {
+      if (to === opencodeConfigTarget) throw new Error("injected opencode config failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          originalCodexConfig,
+          originalOpenCodeConfig,
+          backup,
+          rename,
+        ),
+      /injected opencode config failure/,
+    );
+    assert.ok(!existsSync(codexAgentsTarget), "codex agents must be rolled back");
+    assert.equal(readFileSync(codexConfigTarget, "utf8"), originalCodexConfig, "codex config must be restored");
+    assert.equal(
+      readFileSync(opencodeConfigTarget, "utf8"),
+      originalOpenCodeConfig,
+      "opencode config must be restored",
+    );
+    assert.equal(
+      readFileSync(join(opencodeAgentsTarget, "docs-writer.md"), "utf8"),
+      unrelated,
+      "pre-existing opencode agents must be restored",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

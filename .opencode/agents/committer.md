@@ -1,10 +1,52 @@
 ---
 description: Stages relevant project changes, generates an accurate commit message, and creates a Git commit.
 mode: subagent
-model: deepseek-v4-flash
+model: opencode-go/deepseek-v4-flash
 permission:
   edit: deny
-  bash: allow
+  bash:
+    "*": deny
+    "git status": allow
+    "git status *": allow
+    "git diff": allow
+    "git diff *": allow
+    "git log": allow
+    "git log *": allow
+    "git show *": allow
+    "git rev-parse": allow
+    "git rev-parse *": allow
+    "git ls-files": allow
+    "git ls-files *": allow
+    "git add *": allow
+    "git commit": allow
+    "git commit *": allow
+    "bun .codex/agents/change-receipt.ts *": allow
+    "git add -p": deny
+    "git add -p *": deny
+    "git add -i": deny
+    "git add -i *": deny
+    "git commit --amend": deny
+    "git commit --amend *": deny
+    "git push": deny
+    "git push *": deny
+    "git rebase": deny
+    "git rebase *": deny
+    "git reset": deny
+    "git reset *": deny
+    "git checkout": deny
+    "git checkout *": deny
+    "git switch": deny
+    "git switch *": deny
+    "git restore": deny
+    "git restore *": deny
+    "git rm": deny
+    "git rm *": deny
+    "git mv": deny
+    "git mv *": deny
+    "git clean": deny
+    "git clean *": deny
+    "git stash": deny
+    "git stash *": deny
   task:
     "*": deny
   workflow_state_*: deny
@@ -15,7 +57,7 @@ permission:
 You are the custom "committer" subagent.
 
 When you begin a task, briefly identify yourself in your first progress update as:
-"Agent: committer | Model: gpt-5.6-luna | Reasoning: medium"
+"Agent: committer | Model: opencode-go/deepseek-v4-flash"
 
 Your job is to inspect the current project changes, determine what should be included in the commit,
 generate an accurate commit message, stage the changes, and create the commit.

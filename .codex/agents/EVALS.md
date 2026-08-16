@@ -177,15 +177,21 @@ registration) after changing the generator or a canonical contract.
   (no manual launch), and its tools are discoverable in a session.
 - Shared state: a workflow created in Codex is readable by the OpenCode roles via `workflow_get`,
   and both hosts produce equivalent statuses/handoffs for the same scenarios.
-- Implementer permissions: may edit and run validation, cannot stage/commit/push/amend/rebase
-  through the host, and only its own workflow tools (`workflow_get`,
-  `workflow_submit_implementation`) are exposed.
+- Implementer permissions: may edit and run validation, the host denies git add/commit/push/
+  reset/rebase/checkout/switch/restore/revert/cherry-pick/rm/mv/clean/stash, and only its own
+  workflow tools (`workflow_get`, `workflow_submit_implementation`) are exposed.
 - Reviewer read-only: `edit: deny` holds, the bash allowlist covers `git status`/`diff`/`log`/
   `show`/`rev-parse` and `change-receipt.ts`, and mutation attempts (git add/commit, file writes)
   are blocked by the host or by the server's capability check; the review target is still fully
   inspectable and the full receipt flow completes.
 - Committer gates: refuses to stage/commit without `commit_authorization` plus a fresh review
-  receipt, stages only the authorized scope, and cannot edit source files.
+  receipt, stages only the authorized scope, cannot edit source files, and its bash fails closed
+  with an allowlist for the documented commit flow (status/diff/log/show/rev-parse/ls-files,
+  approved `git add`/`git commit`, and the receipt command) that denies push/amend/rebase/reset/
+  checkout/switch/history rewriting and filesystem mutation.
+- Host identity: each host's generated definition announces its own model in the identity line
+  (Codex model plus reasoning effort; OpenCode Go provider/model ID), and the shared contract
+  prose contains no host-specific model names.
 - Tool exposure is defense in depth: restricting an agent's `workflow_state_*` tools never
   broadens server-side role capabilities, and a server-side capability denial still applies even
   if a host permission were relaxed.

@@ -40,10 +40,42 @@ const ROLES: readonly RoleSpec[] = [
     codex: { model: "gpt-5.6-luna", reasoningEffort: "high", sandboxMode: "workspace-write" },
     opencode: {
       description: "Executes an approved implementation plan, validates the changes, and reports the results.",
-      model: "deepseek-v4-flash",
+      model: "opencode-go/deepseek-v4-flash",
       permission: [
         "  edit: allow",
-        "  bash: allow",
+        "  bash:",
+        // Broad bash for validation, with explicit denies for the Git/history
+        // operations the contract forbids. Rules match last-match-wins, so the
+        // denies must follow the catch-all allow.
+        '    "*": allow',
+        '    "git add": deny',
+        '    "git add *": deny',
+        '    "git commit": deny',
+        '    "git commit *": deny',
+        '    "git push": deny',
+        '    "git push *": deny',
+        '    "git reset": deny',
+        '    "git reset *": deny',
+        '    "git rebase": deny',
+        '    "git rebase *": deny',
+        '    "git checkout": deny',
+        '    "git checkout *": deny',
+        '    "git switch": deny',
+        '    "git switch *": deny',
+        '    "git restore": deny',
+        '    "git restore *": deny',
+        '    "git revert": deny',
+        '    "git revert *": deny',
+        '    "git cherry-pick": deny',
+        '    "git cherry-pick *": deny',
+        '    "git rm": deny',
+        '    "git rm *": deny',
+        '    "git mv": deny',
+        '    "git mv *": deny',
+        '    "git clean": deny',
+        '    "git clean *": deny',
+        '    "git stash": deny',
+        '    "git stash *": deny',
         "  task:",
         '    "*": deny',
         // Defense in depth: the server-side role capability check stays
@@ -60,7 +92,7 @@ const ROLES: readonly RoleSpec[] = [
     codex: { model: "gpt-5.6-sol", reasoningEffort: "medium", sandboxMode: "read-only" },
     opencode: {
       description: "Performs an independent, read-only review of an approved implementation diff.",
-      model: "deepseek-v4-flash",
+      model: "opencode-go/deepseek-v4-flash",
       permission: [
         // OpenCode permissions are not equivalent to the Codex read-only
         // filesystem sandbox; edit denial plus a narrow bash allowlist is the
@@ -91,13 +123,56 @@ const ROLES: readonly RoleSpec[] = [
     codex: { model: "gpt-5.6-luna", reasoningEffort: "medium", sandboxMode: "workspace-write" },
     opencode: {
       description: "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-      model: "deepseek-v4-flash",
+      model: "opencode-go/deepseek-v4-flash",
       permission: [
         // edit denial is stricter than the Codex workspace-write sandbox: the
-        // committer must never modify source files. bash stays enabled for the
-        // external git add/commit steps.
+        // committer must never modify source files. bash fails closed with an
+        // allowlist for the documented commit flow, and the specific denies
+        // follow the allows so last-match-wins applies.
         "  edit: deny",
-        "  bash: allow",
+        "  bash:",
+        '    "*": deny',
+        '    "git status": allow',
+        '    "git status *": allow',
+        '    "git diff": allow',
+        '    "git diff *": allow',
+        '    "git log": allow',
+        '    "git log *": allow',
+        '    "git show *": allow',
+        '    "git rev-parse": allow',
+        '    "git rev-parse *": allow',
+        '    "git ls-files": allow',
+        '    "git ls-files *": allow',
+        '    "git add *": allow',
+        '    "git commit": allow',
+        '    "git commit *": allow',
+        '    "bun .codex/agents/change-receipt.ts *": allow',
+        '    "git add -p": deny',
+        '    "git add -p *": deny',
+        '    "git add -i": deny',
+        '    "git add -i *": deny',
+        '    "git commit --amend": deny',
+        '    "git commit --amend *": deny',
+        '    "git push": deny',
+        '    "git push *": deny',
+        '    "git rebase": deny',
+        '    "git rebase *": deny',
+        '    "git reset": deny',
+        '    "git reset *": deny',
+        '    "git checkout": deny',
+        '    "git checkout *": deny',
+        '    "git switch": deny',
+        '    "git switch *": deny',
+        '    "git restore": deny',
+        '    "git restore *": deny',
+        '    "git rm": deny',
+        '    "git rm *": deny',
+        '    "git mv": deny',
+        '    "git mv *": deny',
+        '    "git clean": deny',
+        '    "git clean *": deny',
+        '    "git stash": deny',
+        '    "git stash *": deny',
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
@@ -116,6 +191,17 @@ function tomlEscape(value: string): string {
   return value.replace(/\\/g, "\\\\");
 }
 
+// Model/reasoning identity is host-specific metadata; the shared contract
+// prose carries this marker and each host injects its own identity line.
+const HOST_IDENTITY_MARKER = "__HOST_IDENTITY__";
+
+function injectHostIdentity(body: string, identity: string, role: string): string {
+  if (!body.includes(HOST_IDENTITY_MARKER)) {
+    throw new Error(`contract for ${role} is missing the ${HOST_IDENTITY_MARKER} identity marker`);
+  }
+  return body.replace(HOST_IDENTITY_MARKER, identity);
+}
+
 function codexToml(spec: RoleSpec, body: string): string {
   const header = [
     `name = "${spec.name}"`,
@@ -124,7 +210,8 @@ function codexToml(spec: RoleSpec, body: string): string {
     `model_reasoning_effort = "${spec.codex.reasoningEffort}"`,
     `sandbox_mode = "${spec.codex.sandboxMode}"`,
   ].join("\n");
-  return `${header}\n\ndeveloper_instructions = """\n${tomlEscape(body)}\n"""\n`;
+  const identity = `${spec.codex.model} | Reasoning: ${spec.codex.reasoningEffort}`;
+  return `${header}\n\ndeveloper_instructions = """\n${tomlEscape(injectHostIdentity(body, identity, spec.name))}\n"""\n`;
 }
 
 function opencodeMarkdown(spec: RoleSpec, body: string): string {
@@ -137,7 +224,7 @@ function opencodeMarkdown(spec: RoleSpec, body: string): string {
     ...spec.opencode.permission,
     "---",
   ].join("\n");
-  return `${frontmatter}\n${body}\n`;
+  return `${frontmatter}\n${injectHostIdentity(body, spec.opencode.model, spec.name)}\n`;
 }
 
 export interface GeneratedDefinitions {

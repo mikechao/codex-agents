@@ -19,13 +19,21 @@ Host permission syntax differs and must not be treated as equivalent:
 
 - Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
   implementer and committer).
-- OpenCode has no filesystem sandbox. The reviewer instead gets `edit: deny` plus a narrow bash
-  allowlist (status/diff/log/show/rev-parse and the receipt command), the committer gets
-  `edit: deny` (stricter than Codex) with bash for the external `git add`/`git commit`, and every
-  OpenCode agent only exposes its own role's `workflow_state` tools (`workflow_state_*` deny plus
-  role-specific allows). These are host-level defense in depth for context size and isolation; the
-  server-side role capability, `expected_version`, and transition checks remain authoritative and
-  are unchanged between hosts.
+- OpenCode has no filesystem sandbox. The reviewer gets `edit: deny` plus a narrow bash allowlist
+  (status/diff/log/show/rev-parse and the receipt command); the committer gets `edit: deny` and a
+  fail-closed bash allowlist covering the documented commit flow (status/diff/log/show/rev-parse/
+  ls-files inspection, approved `git add`/`git commit`, and the receipt command) while denying
+  push/amend/rebase/reset/checkout/switch/history rewriting and filesystem mutation; the
+  implementer keeps broad bash for validation with explicit denies for staging, committing,
+  pushing, resetting, rebasing, checking out, switching, and the other mutating Git/history
+  commands. Every OpenCode agent only exposes its own role's `workflow_state` tools
+  (`workflow_state_*` deny plus role-specific allows). These are host-level defense in depth for
+  context size and isolation; the server-side role capability, `expected_version`, and transition
+  checks remain authoritative and are unchanged between hosts.
+- Model/reasoning identity is host metadata, not contract prose: each generated definition
+  announces its own identity line (Codex model plus reasoning effort in the TOML, the OpenCode Go
+  provider/model ID in the Markdown), injected by the generator in place of the contract's
+  `__HOST_IDENTITY__` marker.
 
 ## Authoritative MCP state
 

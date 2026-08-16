@@ -55,11 +55,13 @@ one all-or-nothing step:
   as a local MCP (`mcp.workflow_state`) in the project's `opencode.json` (or extends an existing
   `opencode.json`/`opencode.jsonc` without touching unrelated settings).
 
-It refuses to replace existing Codex or OpenCode agent definitions, refuses existing
-`workflow_state` registrations in either host, refuses malformed existing configuration, and
-rolls the whole installation back if any commit step fails, so a failed run never leaves only
-one host installed. OpenCode registers the server as a `type: "local"` STDIO process that
-OpenCode starts itself; no separate manual server launch is required.
+It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
+`code_reviewer.md`, or `committer.md` under `.opencode/agents/`, while preserving unrelated
+existing OpenCode agents; it refuses existing `workflow_state` registrations in either host,
+refuses malformed existing configuration, and rolls the whole installation back if any commit
+step fails, so a failed run never leaves only one host installed. OpenCode registers the server
+as a `type: "local"` STDIO process that OpenCode starts itself; no separate manual server launch
+is required.
 
 Restart or reload Codex, then verify it with:
 
@@ -70,12 +72,18 @@ codex mcp get workflow_state
 Restart or reload OpenCode, then verify that the `workflow_state` tools are visible in a session
 (e.g. `opencode run "list your available workflow_state tools"`). Both hosts share the same
 durable workflow state for the repository, so a workflow started in one host is visible in the
-other.
+other. The generated OpenCode definitions pin the `opencode-go/deepseek-v4-flash` model, so the
+OpenCode Go provider must be connected (`/connect`) or the per-agent model overridden for the
+subagent models to resolve.
 
 OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the reviewer
-gets `edit: deny` plus a narrow bash allowlist, the committer gets `edit: deny`, and each agent
-only exposes its own role's workflow tools. The server-side capability and version checks remain
-authoritative for both hosts.
+gets `edit: deny` plus a narrow bash allowlist; the committer gets `edit: deny` and a fail-closed
+bash allowlist for the documented commit flow (status/diff/log/show/rev-parse/ls-files
+inspection, approved `git add`/`git commit`, and the receipt command) that denies
+push/amend/rebase/reset/checkout/switch and filesystem mutation; the implementer keeps broad bash
+for validation with explicit denies for staging, committing, and history-rewriting commands; and
+each agent only exposes its own role's workflow tools. The server-side capability and version
+checks remain authoritative for both hosts.
 
 The target repository should also incorporate the custom-subagent policy from
 `.codex/agents/WORKFLOW.md` into its root `AGENTS.md`. The installer deliberately does not rewrite

@@ -123,11 +123,19 @@ interface CommitStep {
   staging: string;
   target: string;
   original: string | null;
+  originalDir: string | null;
 }
 
 function rollback(committed: readonly CommitStep[]): void {
   for (const step of committed.slice().reverse()) {
-    if (step.original === null) {
+    if (step.originalDir !== null) {
+      rmSync(step.target, { recursive: true, force: true });
+      try {
+        renameSync(step.originalDir, step.target);
+      } catch {
+        // Best-effort restore; the pre-mutation collision checks prevent data loss.
+      }
+    } else if (step.original === null) {
       rmSync(step.target, { recursive: true, force: true });
     } else {
       try {
@@ -150,21 +158,40 @@ export function commitBothHosts(
   opencodeConfigTarget: string,
   originalCodexConfig: string | null,
   originalOpenCodeConfig: string | null,
+  originalOpenCodeAgentsDir: string | null = null,
   rename: (from: string, to: string) => void = renameSync,
 ): void {
   const steps: readonly CommitStep[] = [
-    { staging: codexAgentsStaging, target: codexAgentsTarget, original: null },
-    { staging: codexConfigStaging, target: codexConfigTarget, original: originalCodexConfig },
-    { staging: opencodeAgentsStaging, target: opencodeAgentsTarget, original: null },
-    { staging: opencodeConfigStaging, target: opencodeConfigTarget, original: originalOpenCodeConfig },
+    { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
+    { staging: codexConfigStaging, target: codexConfigTarget, original: originalCodexConfig, originalDir: null },
+    {
+      staging: opencodeAgentsStaging,
+      target: opencodeAgentsTarget,
+      original: null,
+      originalDir: originalOpenCodeAgentsDir,
+    },
+    { staging: opencodeConfigStaging, target: opencodeConfigTarget, original: originalOpenCodeConfig, originalDir: null },
   ];
   const committed: CommitStep[] = [];
   try {
     for (const step of steps) {
+      // A pre-existing directory cannot be atomically renamed over; remove it
+      // first and rely on the backup snapshot for restore on any later failure.
+      if (step.originalDir !== null) {
+        rmSync(step.target, { recursive: true, force: true });
+      }
       rename(step.staging, step.target);
       committed.push(step);
     }
   } catch (cause) {
+    const failing = steps[committed.length];
+    if (failing !== undefined && failing.originalDir !== null) {
+      try {
+        renameSync(failing.originalDir, failing.target);
+      } catch {
+        // Best-effort restore; the pre-mutation collision checks prevent data loss.
+      }
+    }
     rollback(committed);
     throw cause;
   }
@@ -323,8 +350,17 @@ export function main(args: readonly string[]): number {
   if (hasWorkflowStateRegistration(config)) {
     error(`Refusing to replace existing workflow_state registration: ${config}`);
   }
-  if (existsSync(resolve(target, ".opencode/agents"))) {
-    error(`Refusing to replace existing OpenCode agent definitions: ${target}/.opencode/agents`);
+  const opencodeAgentsTarget = resolve(target, ".opencode/agents");
+  const opencodeAgentsExisting = existsSync(opencodeAgentsTarget);
+  if (opencodeAgentsExisting) {
+    for (const file of OPENCODE_COPY_SOURCE_FILES) {
+      const managedName = file.slice(".opencode/agents/".length);
+      if (existsSync(resolve(opencodeAgentsTarget, managedName))) {
+        error(
+          `Refusing to replace existing OpenCode agent definitions: ${resolve(opencodeAgentsTarget, managedName)}`,
+        );
+      }
+    }
   }
   const opencodeConfig = findOpenCodeConfig(target);
   if (opencodeConfig !== null && hasOpenCodeWorkflowStateRegistration(opencodeConfig)) {
@@ -361,11 +397,17 @@ export function main(args: readonly string[]): number {
   const configStaging = mkdtempSync(resolve(target, ".codex/.config.install."));
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
+  let opencodeAgentsBackup: string | null = null;
   try {
     for (const file of COPY_SOURCE_FILES) {
       if (existsSync(resolve(projectRoot, file))) {
         cpSync(resolve(projectRoot, file), resolve(agentsStaging, file.slice(".codex/agents/".length)));
       }
+    }
+    if (opencodeAgentsExisting) {
+      cpSync(opencodeAgentsTarget, opencodeAgentsStaging, { recursive: true });
+      opencodeAgentsBackup = mkdtempSync(resolve(target, ".opencode/.agents.backup."));
+      cpSync(opencodeAgentsTarget, opencodeAgentsBackup, { recursive: true });
     }
     for (const file of OPENCODE_COPY_SOURCE_FILES) {
       if (existsSync(resolve(projectRoot, file))) {
@@ -382,21 +424,28 @@ export function main(args: readonly string[]): number {
       stagedConfig,
       config,
       opencodeAgentsStaging,
-      resolve(target, ".opencode/agents"),
+      opencodeAgentsTarget,
       stagedOpenCodePath,
       opencodeConfigTarget,
       existing === "" ? null : existing.replace(/\n$/, ""),
       opencodeConfigOriginal,
+      opencodeAgentsBackup,
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
+    if (opencodeAgentsBackup !== null) {
+      rmSync(opencodeAgentsBackup, { recursive: true, force: true });
+    }
     throw cause;
   }
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
+  if (opencodeAgentsBackup !== null) {
+    rmSync(opencodeAgentsBackup, { recursive: true, force: true });
+  }
 
   process.stdout.write(`Installed Codex agents and workflow_state MCP registration into: ${target}\n`);
   process.stdout.write(`Installed OpenCode agents and workflow_state MCP registration into: ${target}\n`);
