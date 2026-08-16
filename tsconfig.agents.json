@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".codex/agents",
+    "outDir": ".codex/agents/dist"
+  },
+  "include": [".codex/agents/change-receipt.ts", ".codex/agents/tests/**/*.ts"]
+}

@@ -7,13 +7,20 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node --no-warnings .codex/workflow-mcp/server.mjs",
-    "test": "node --test .codex/agents/tests/*.node.mjs .codex/workflow-mcp/tests/*.node.mjs",
-    "test:agents": "node --test .codex/agents/tests/*.node.mjs",
-    "test:workflow-mcp": "node --test .codex/workflow-mcp/tests/*.node.mjs"
+    "start": "node --no-warnings .codex/workflow-mcp/dist/server.js",
+    "build": "tsc -p tsconfig.workflow-mcp.json && tsc -p tsconfig.agents.json",
+    "typecheck": "tsc --noEmit -p tsconfig.workflow-mcp.json && tsc --noEmit -p tsconfig.agents.json",
+    "test": "pnpm build && node --test .codex/workflow-mcp/dist/tests/*.node.js .codex/agents/dist/tests/*.node.js",
+    "test:agents": "pnpm build && node --test .codex/agents/dist/tests/*.node.js",
+    "test:workflow-mcp": "pnpm build && node --test .codex/workflow-mcp/dist/tests/*.node.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/server": "^2.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^22",
+    "typescript": "^7.0.2"
   },
   "packageManager": "pnpm@10.30.1"
 }
