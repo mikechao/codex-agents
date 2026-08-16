@@ -269,6 +269,63 @@ from the actual runtime code:
 - `migrateV1State` returns `WorkflowState` (legacy keys set); input validated via a
   `V1WorkflowState`-ish shape check as today.
 
+### Done Report — Phase E
+
+**Changes:**
+- Added `.codex/workflow-mcp/transitions.ts` — every signature from `issue-1-phase-e.md` §5: typed
+  `permittedNextActions(): WorkflowAction[]` (both filters kept), `roleView` role-literal overloads
+  returning `ParentView`/`ImplementerView`/`ReviewerView`/`CommitterView` (implementation resolves a
+  dynamic `Role` to `RoleView`), `createState` incl. the behavior-preserving `options.internal`
+  MCP-2.1-era path, all 12 transition functions, `LinkedFollowupPlan` + `linkedFollowupInput`/
+  `linkedFollowupChildState`, the four receipt-derived helpers, and the blind `migrateV1State` port
+  with the `V1WorkflowState` raw-shape interface.
+- Every transition captures `const args = exactKeys(input, ...)` and reads only `args`
+  (`input: unknown` is never indexed); `corrupt(): never` + `isObject`/`isStringArray` guards
+  narrow `migrateV1State`; `isoNow()` replaces `new Date().toISOString()`; `authorizeRepair`/
+  `linkedFollowupInput` use `findingIdList`; `recordCommit` adopts `!evidence.ok` narrowing and
+  keeps the defensive `MISMATCH_CATEGORIES.has` checks.
+- `transitions.mjs` replaced with the temporary shim `export * from "./dist/transitions.js";`; no
+  `.mjs` consumer or test file edited (`store.mjs`, `index.mjs`, `workflow.node.mjs` resolve through
+  the shim). Shim removed at Phase F.
+- Committed `.codex/workflow-mcp/dist/transitions.js` per the committed-`dist/` policy; runtime
+  export set verified identical to the pre-conversion `.mjs` (26 exports; `LinkedFollowupPlan` is
+  type-only and erased).
+
+**Deviations / decisions (all pre-documented in the Phase E spec §§6–7):**
+- `authorizeRepair`/`linkedFollowupInput` delegate the ID-list checks to `findingIdList` (identical
+  category + "finding IDs are invalid"); the `> blocking_findings.length` / one-bucket / existing-ID
+  / cycle-limit checks stay in-function.
+- `submitImplementation` stop branch stores `boundedString(args.summary, ...)` — behaviorally
+  identical because the same check already runs for `implementation_summary` on every status.
+- `resumeImplementation`'s stop-context check rewritten from `includes` to an explicit falsy + `!==`
+  chain (the `string|undefined` union cannot feed `string[].includes`); identical category/detail/order.
+- `roleView` indexes state through a single `as unknown as Record<string, unknown>` projection;
+  `blockingFindings`'s P3 defensive check casts `severity` to `FindingSeverity` to keep the runtime
+  check.
+- `migrateV1State` boundary casts are a superset of spec §6's list (`version`, `base_head`,
+  `approved_paths`/`changedPaths`, `implementation_status`, `phase`, `repair_authorized_ids`,
+  `authorized_optional_ids` in addition) — all on legacy data after the identical shape checks.
+- Per-function check ordering preserved, incl. `submitReview` (`ensurePhase` before `exactKeys`),
+  `finalizeRepairExhausted` (no object pre-check), and `recordCommit`
+  (exactKeys -> ensurePhase -> legacy gate).
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs.
+- Oracle (SDK-free subset, spec §0): `pnpm build && node --test
+  .codex/workflow-mcp/tests/git.node.mjs .codex/workflow-mcp/tests/lifecycle.node.mjs
+  .codex/workflow-mcp/tests/workflow.node.mjs` — **98 tests, 0 fail** (role-view projections,
+  permitted-actions, contract/creation, repair/commit, and lifecycle-restart tests all exercise
+  `transitions.ts` through the shim + `.mjs` store). The three SDK-importing test files remain
+  unloadable until Phase I (pre-existing, not a regression).
+- Runtime export parity: `Object.keys(import("./dist/transitions.js"))` === the 26 pre-conversion
+  `.mjs` exports.
+- No shim bypass: `rg -n 'transitions\.mjs' .codex` matches only `index.mjs` (barrel), `store.mjs`,
+  and the `.mjs` tests (expected until Phase F).
+- `migrateV1State`: no oracle coverage this phase (migration tests unloadable until Phase I) —
+  line-for-line port reviewed; **Phase I must run `migration.node.mjs`** to close the gap.
+- `git diff --check` clean; committed `transitions.ts` + shim + `dist/transitions.js` together;
+  worktree clean after the oracle build; committed `dist/` deterministic across rebuilds.
+
 ## Phase F — `store.ts`
 
 - `WorkflowStore` methods typed; `#row(): WorkflowRow` (cast from `node:sqlite` results after
