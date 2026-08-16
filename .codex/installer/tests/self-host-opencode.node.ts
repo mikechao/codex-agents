@@ -10,14 +10,32 @@ import {
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
 const relativeServerPath = ".codex/workflow-mcp/server.ts";
+const orchestrationPath = ".opencode/ORCHESTRATION.md";
 
 test("the repository's own opencode.json registers workflow_state exactly like the installer", () => {
   assert.ok(existsSync(selfHostConfig), `missing self-host config: ${selfHostConfig}`);
-  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as Record<string, unknown>;
-  const expected = JSON.parse(createOpenCodeConfig(relativeServerPath));
-  assert.deepEqual(parsed, expected);
+  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
+    $schema: string;
+    instructions: string[];
+    mcp: { workflow_state: Record<string, unknown> };
+  };
+  const expected = JSON.parse(createOpenCodeConfig(relativeServerPath)) as {
+    $schema: string;
+    mcp: { workflow_state: Record<string, unknown> };
+  };
+  assert.equal(parsed.$schema, expected.$schema);
+  assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
+});
+
+test("the repository's own opencode.json loads the primary-agent orchestration instructions", () => {
+  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as { instructions?: string[] };
+  assert.deepEqual(parsed.instructions, [orchestrationPath]);
+  assert.ok(
+    existsSync(resolve(repoRoot, orchestrationPath)),
+    `missing orchestration file: ${orchestrationPath}`,
+  );
 });
 
 test("the repository's own OpenCode registration keeps the installer server semantics", () => {

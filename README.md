@@ -59,6 +59,17 @@ same three agents from `.opencode/agents/` and registers the same server as a lo
 installer-generated registrations. The self-host OpenCode registration is checked into the
 repository and a test keeps it from silently diverging from the installer's registration shape.
 
+Direct OpenCode use also loads `.opencode/ORCHESTRATION.md` through the top-level `instructions`
+field, so the primary Build agent delegates implementation, review, remediation, and commit work to
+the `implementer`, `code_reviewer`, and `committer` subagents automatically. The Build agent creates
+(or reuses) the authoritative `workflow_state` workflow, captures the exact `workflow_id` returned
+by workflow creation, and passes that same `workflow_id` into every delegated subagent invocation so
+the ID never changes across implementer, reviewer, remediation, and committer handoffs. Subagents
+use the parent-supplied `workflow_id` for their authoritative `workflow_get` lookup; they never
+guess a missing ID or inspect MCP persistence to recover one, and a missing ID fails the handoff
+closed. Manually `@`-mentioning a subagent remains an override/debug path and must still carry the
+exact `workflow_id`.
+
 ## Install into another repository
 
 After `bun install`, run:
