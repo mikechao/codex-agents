@@ -1,11 +1,19 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { test } from "bun:test";
 import { createReceipt, safePaths } from "../change-receipt.js";
 
 const utility = resolve(import.meta.dirname, "..", "change-receipt.ts");
@@ -33,7 +41,10 @@ interface Receipt {
 }
 
 function git(root: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function repository(): string {
@@ -181,24 +192,27 @@ skipOnWindows("handles symlinks and changes to their link targets", () => {
   });
 });
 
-skipOnWindows("rejects a path nested under an escaping symlink parent regardless of leaf existence", () => {
-  withRepository((root) => {
-    writeFileSync(join(root, "base.txt"), "base\n");
-    commit(root);
-    const outside = mkdtempSync(join(tmpdir(), "change-receipt-outside-"));
-    try {
-      writeFileSync(join(outside, "present.txt"), "present\n");
-      symlinkSync(outside, join(root, "escape"));
-      for (const path of ["escape/present.txt", "escape/missing.txt"]) {
-        const result = run(root, [path]);
-        assert.notEqual(result.status, 0, path);
-        assert.equal(result.stderr, "ERROR_UNSAFE_PATH", path);
+skipOnWindows(
+  "rejects a path nested under an escaping symlink parent regardless of leaf existence",
+  () => {
+    withRepository((root) => {
+      writeFileSync(join(root, "base.txt"), "base\n");
+      commit(root);
+      const outside = mkdtempSync(join(tmpdir(), "change-receipt-outside-"));
+      try {
+        writeFileSync(join(outside, "present.txt"), "present\n");
+        symlinkSync(outside, join(root, "escape"));
+        for (const path of ["escape/present.txt", "escape/missing.txt"]) {
+          const result = run(root, [path]);
+          assert.notEqual(result.status, 0, path);
+          assert.equal(result.stderr, "ERROR_UNSAFE_PATH", path);
+        }
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(outside, { recursive: true, force: true });
-    }
-  });
-});
+    });
+  },
+);
 
 test("validates path safety independently of repository inspection", () => {
   const root = mkdtempSync(join(tmpdir(), "change-receipt-safety-"));
@@ -206,7 +220,9 @@ test("validates path safety independently of repository inspection", () => {
     assert.deepEqual(safePaths(root, ["b/c", "a", "d"]), ["a", "b/c", "d"]);
     assert.throws(() => safePaths(root, []), { message: "ERROR_EMPTY_PATHS" });
     assert.throws(() => safePaths(root, ["../outside.txt"]), { message: "ERROR_UNSAFE_PATH" });
-    assert.throws(() => safePaths(root, [resolve(root, "note.txt")]), { message: "ERROR_UNSAFE_PATH" });
+    assert.throws(() => safePaths(root, [resolve(root, "note.txt")]), {
+      message: "ERROR_UNSAFE_PATH",
+    });
     assert.throws(() => safePaths(root, ["a", "./a"]), { message: "ERROR_DUPLICATE_PATH" });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -246,10 +262,7 @@ test("reads tracked blobs larger than four MiB", () => {
     commit(root);
     const result = receipt(root, ["large.bin"]);
     assert.equal(result.paths[0].state, "unchanged");
-    assert.equal(
-      result.paths[0].digest,
-      createHash("sha256").update(content).digest("hex"),
-    );
+    assert.equal(result.paths[0].digest, createHash("sha256").update(content).digest("hex"));
   });
 });
 
@@ -295,7 +308,9 @@ test("library emits the absent entry only with allowAbsent opt-in", () => {
       message: "ERROR_UNTRACKED_PATH",
     });
     const absentReceipt = createReceipt(["new/file.txt"], root, { allowAbsent: true });
-    assert.deepEqual(absentReceipt.paths, [{ path: "new/file.txt", state: "absent", kind: "missing" }]);
+    assert.deepEqual(absentReceipt.paths, [
+      { path: "new/file.txt", state: "absent", kind: "missing" },
+    ]);
     assert.equal("mode" in absentReceipt.paths[0], false);
     assert.equal("digest" in absentReceipt.paths[0], false);
   });
@@ -305,11 +320,21 @@ test("library rejects unknown or non-boolean options", () => {
   withRepository((root) => {
     writeFileSync(join(root, "tracked.txt"), "tracked\n");
     commit(root);
-    const invalid: unknown[] = [null, true, [], { allowAbsent: "yes" }, { allowAbsent: 1 }, { bogus: true }];
+    const invalid: unknown[] = [
+      null,
+      true,
+      [],
+      { allowAbsent: "yes" },
+      { allowAbsent: 1 },
+      { bogus: true },
+    ];
     for (const options of invalid) {
-      assert.throws(() => createReceipt(["tracked.txt"], root, options as Record<string, unknown>), {
-        message: "ERROR_INVALID_ARGUMENTS",
-      });
+      assert.throws(
+        () => createReceipt(["tracked.txt"], root, options as Record<string, unknown>),
+        {
+          message: "ERROR_INVALID_ARGUMENTS",
+        },
+      );
     }
     const normalReceipt = createReceipt(["tracked.txt"], root, {});
     assert.equal(normalReceipt.paths[0].state, "unchanged");

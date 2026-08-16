@@ -2,13 +2,14 @@
 
 This is a Bun ESM project. Bun is required to run the local MCP server, the test suite, and the
 package manager (`bun install`/`bun run`); TypeScript/tsc handles static typechecking via
-`tsc --noEmit`. The reusable `implementer`, `code_reviewer`, and `committer` definitions are host
-adapters: Codex TOML under `.codex/agents/` and OpenCode Markdown under `.opencode/agents/` are
-both generated from the canonical host-neutral fragments in `.codex/agents/contracts/` by
-`bun run generate:agents`; the checked-in definitions must stay byte-identical to the generator
-output (`bun run test:agents` enforces this). The project-scoped configuration in
-`.codex/config.toml` registers the local workflow-state server for Codex; the root
-`opencode.json` registers the same server for direct OpenCode use of this repository, and
+`tsc --noEmit`; Biome owns formatting and linting for the TypeScript/JavaScript/JSON sources
+listed in the root `biome.json`. The reusable `implementer`, `code_reviewer`, and `committer`
+definitions are host adapters: Codex TOML under `.codex/agents/` and OpenCode Markdown under
+`.opencode/agents/` are both generated from the canonical host-neutral fragments in
+`.codex/agents/contracts/` by `bun run generate:agents`; the checked-in definitions must stay
+byte-identical to the generator output (`bun run test:agents` enforces this). The project-scoped
+configuration in `.codex/config.toml` registers the local workflow-state server for Codex; the
+root `opencode.json` registers the same server for direct OpenCode use of this repository, and
 `install-into.ts` registers it for OpenCode in target repositories. The historical v2
 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 
@@ -29,8 +30,18 @@ focused installer checks, and `bun run test:workflow-mcp` for focused server che
 `bun run test` suite before declaring any change complete.
 
 The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/` and run
-directly from source with Bun; there is no compiled `dist/` mirror. Run `bun run typecheck`
-before declaring changes complete.
+directly from source with Bun; there is no compiled `dist/` mirror.
+
+Biome is the single formatter/linter for the supported sources included in the root
+`biome.json` (the hidden `.codex/**/*.ts` tree, `install-into.ts`, and root JSON config).
+`bun run format` applies Biome formatting; `bun run format:check`, `bun run lint`, and
+`bun run check` are read-only gates that must never modify the working tree. TOML stays outside
+Biome: `.codex/agents/*.toml`, `.codex/config.toml`, and `bunfig.toml` continue to rely on
+`Bun.TOML.parse` and the existing semantic assertions.
+
+`bun run validate` (`bun run check && bun run typecheck && bun run test`) is the normal
+pre-completion/pre-commit validation gate and must leave the working tree unchanged. A change is
+complete only when Biome check, `tsc --noEmit`, and the full `bun run test` suite all pass.
 
 Subprocess execution keeps Node-compatible `node:child_process` (`execFileSync`/`spawnSync`)
 semantics: Bun's `spawnSync` does not throw on `maxBuffer` overflow (it SIGTERMs with no error),

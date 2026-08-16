@@ -1,7 +1,7 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { test } from "bun:test";
 import { generateDefinitions } from "../generate-host-definitions.js";
 
 const agentsDir = resolve(import.meta.dir, "..");
@@ -22,7 +22,11 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
     const content = opencode(name);
     assert.match(content, /^---\n/, `${name} must start with YAML frontmatter`);
     assert.match(content, /^mode: subagent$/m, `${name} must be a subagent`);
-    assert.match(content, /^model: opencode-go\/deepseek-v4-flash$/m, `${name} must pin the OpenCode Go adapter model`);
+    assert.match(
+      content,
+      /^model: opencode-go\/deepseek-v4-flash$/m,
+      `${name} must pin the OpenCode Go adapter model`,
+    );
     assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
     assert.match(
       content,
@@ -54,7 +58,16 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   ]) {
     assert.ok(content.includes(allowed), `reviewer bash allowlist must include ${allowed}`);
   }
-  for (const denied of ["add", "commit", "push", "reset", "rebase", "checkout", "switch", "restore"]) {
+  for (const denied of [
+    "add",
+    "commit",
+    "push",
+    "reset",
+    "rebase",
+    "checkout",
+    "switch",
+    "restore",
+  ]) {
     assert.ok(
       !new RegExp(`^\\s+"git ${denied}`).test(content),
       `reviewer bash must not allow git ${denied}`,
@@ -117,7 +130,11 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
 test("implementer may edit but never stages, commits, or rewrites history", () => {
   const content = opencode("implementer.md");
   assert.match(content, /^  edit: allow$/m, "implementer must be able to edit the approved scope");
-  assert.match(content, /^  bash:\n    "\*": allow$/m, "implementer bash must allow validation by default");
+  assert.match(
+    content,
+    /^  bash:\n    "\*": allow$/m,
+    "implementer bash must allow validation by default",
+  );
   for (const denied of [
     "git add",
     "git commit",
@@ -152,7 +169,7 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
     const markdown = opencode(`${role}.md`);
-    const tomlBody = toml.split("developer_instructions = \"\"\"\n")[1].split("\n\"\"\"\n")[0];
+    const tomlBody = toml.split('developer_instructions = """\n')[1].split('\n"""\n')[0];
     const markdownBody = markdown.split("---\n").slice(2).join("---\n").replace(/\n$/, "");
     assert.equal(
       normalize(tomlBody),
@@ -162,7 +179,10 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
     bodies.set(role, tomlBody);
   }
   for (const role of ["implementer", "code_reviewer", "committer"]) {
-    assert.ok(bodies.get(role)!.includes("workflow_get"), `${role} must use the authoritative view`);
+    assert.ok(
+      bodies.get(role)!.includes("workflow_get"),
+      `${role} must use the authoritative view`,
+    );
   }
 });
 
@@ -170,9 +190,15 @@ test("contract fragments are host-neutral and each host injects its own identity
   const contractsDir = resolve(import.meta.dir, "../contracts");
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     const contract = readFileSync(resolve(contractsDir, `${role}.md`), "utf8");
-    assert.ok(contract.includes("__HOST_IDENTITY__"), `${role} contract must carry the identity marker`);
+    assert.ok(
+      contract.includes("__HOST_IDENTITY__"),
+      `${role} contract must carry the identity marker`,
+    );
     assert.ok(!contract.includes("gpt-5.6"), `${role} contract must not hard-code a Codex model`);
-    assert.ok(!contract.includes("deepseek"), `${role} contract must not hard-code an OpenCode model`);
+    assert.ok(
+      !contract.includes("deepseek"),
+      `${role} contract must not hard-code an OpenCode model`,
+    );
     const toml = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
     assert.match(
       toml,

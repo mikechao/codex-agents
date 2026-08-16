@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 
+import type {
+  CallToolResult,
+  JSONValue,
+  ListToolsResult,
+  Tool,
+} from "@modelcontextprotocol/server";
 import { Server } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import type { CallToolResult, JSONValue, ListToolsResult, Tool } from "@modelcontextprotocol/server";
 import { fail, safeError } from "./errors.js";
-import { openStore } from "./store.js";
 import type { WorkflowStore } from "./store.js";
+import { openStore } from "./store.js";
 
 type JsonSchema = Record<string, JSONValue>;
 
@@ -279,8 +284,7 @@ export const tools: Tool[] = [
   },
   {
     name: "workflow_resume_implementation",
-    description:
-      "Resume an implementation context or block stop to its prior active phase.",
+    description: "Resume an implementation context or block stop to its prior active phase.",
     inputSchema: schema(
       {
         ...common.properties,
@@ -485,13 +489,7 @@ export const tools: Tool[] = [
           oneOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }],
         },
       },
-      [
-        ...common.required,
-        "attempt_id",
-        "outcome",
-        "commit_hash",
-        "failure_summary",
-      ],
+      [...common.required, "attempt_id", "outcome", "commit_hash", "failure_summary"],
     ),
     annotations: {
       title: "Submit commit result",
@@ -556,7 +554,7 @@ export function createServer(store: WorkflowStore = openStore()): Server {
   server.setRequestHandler("tools/call", async (request) => {
     try {
       const args = request.params.arguments ?? {};
-      let result;
+      let result: unknown;
       switch (request.params.name) {
         case "workflow_create":
           result = store.create(args);

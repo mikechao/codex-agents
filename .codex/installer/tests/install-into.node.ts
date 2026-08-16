@@ -1,17 +1,17 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  realpathSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { test } from "bun:test";
 import { commitStaged, hasWorkflowStateRegistration } from "../../../install-into.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
@@ -44,7 +44,11 @@ function runInstaller(target: string) {
   } catch (cause) {
     assert.ok(cause instanceof Error && "status" in cause);
     const failure = cause as Error & { status?: number; stdout?: string; stderr?: string };
-    return { status: failure.status ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
   }
 }
 
@@ -98,7 +102,7 @@ test("install-into.ts refuses an existing .codex/agents directory", () => {
 test("install-into.ts refuses an existing workflow_state table", () => {
   const { root, write } = fixture();
   try {
-    write(".codex/config.toml", "[mcp_servers.workflow_state]\ncommand = \"bun\"\n");
+    write(".codex/config.toml", '[mcp_servers.workflow_state]\ncommand = "bun"\n');
     const result = runInstaller(root);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Refusing to replace existing workflow_state registration/);
@@ -110,7 +114,7 @@ test("install-into.ts refuses an existing workflow_state table", () => {
 test("install-into.ts refuses an existing workflow_state scalar value", () => {
   const { root, write } = fixture();
   try {
-    write(".codex/config.toml", "[mcp_servers]\nworkflow_state = \"something\"\n");
+    write(".codex/config.toml", '[mcp_servers]\nworkflow_state = "something"\n');
     const result = runInstaller(root);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Refusing to replace existing workflow_state registration/);
@@ -134,12 +138,15 @@ test("install-into.ts refuses malformed existing TOML", () => {
 test("install-into.ts refuses an unparseable staged config instead of writing it", () => {
   const { root, write } = fixture();
   try {
-    write(".codex/config.toml", "mcp_servers = \"occupied\"\n");
+    write(".codex/config.toml", 'mcp_servers = "occupied"\n');
     const result = runInstaller(root);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Staged config is not valid TOML/);
     assert.ok(!existsSync(join(root, ".codex/agents")));
-    assert.equal(readFileSync(join(root, ".codex/config.toml"), "utf8"), "mcp_servers = \"occupied\"\n");
+    assert.equal(
+      readFileSync(join(root, ".codex/config.toml"), "utf8"),
+      'mcp_servers = "occupied"\n',
+    );
     assert.ok(!existsSync(join(root, ".codex/.agents.install.")));
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
   } finally {
@@ -165,9 +172,9 @@ test("hasWorkflowStateRegistration is presence-based", () => {
   try {
     const config = join(root, ".codex/config.toml");
     assert.equal(hasWorkflowStateRegistration(config), false);
-    write(".codex/config.toml", "[mcp_servers]\nworkflow_state = \"something\"\n");
+    write(".codex/config.toml", '[mcp_servers]\nworkflow_state = "something"\n');
     assert.equal(hasWorkflowStateRegistration(config), true);
-    write(".codex/config.toml", "workflow_state = \"top-level\"\n");
+    write(".codex/config.toml", 'workflow_state = "top-level"\n');
     assert.equal(hasWorkflowStateRegistration(config), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -209,9 +216,16 @@ test("commitStaged rolls back the agents directory when the config rename fails"
       if (to === config) throw new Error("injected rename failure");
       execFileSync("mv", [from, to], { stdio: "ignore" });
     };
-    assert.throws(() => commitStaged(agentsStaging, agentsTarget, stagedConfig, config, rename), /injected rename failure/);
+    assert.throws(
+      () => commitStaged(agentsStaging, agentsTarget, stagedConfig, config, rename),
+      /injected rename failure/,
+    );
     assert.ok(!existsSync(agentsTarget), "agents directory must be rolled back");
-    assert.equal(readFileSync(config, "utf8"), "keep me\n", "pre-existing config must be untouched");
+    assert.equal(
+      readFileSync(config, "utf8"),
+      "keep me\n",
+      "pre-existing config must be untouched",
+    );
     assert.ok(existsSync(stagedConfig), "staged config must remain staged");
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -1,8 +1,8 @@
+import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { Database } from "bun:sqlite";
 import { fail } from "./errors.js";
 import {
   createReceipt,
@@ -38,19 +38,6 @@ import {
   submitReview,
   validateWorkflowStateV2,
 } from "./transitions.js";
-import {
-  canonicalJson,
-  compareCapability,
-  exactKeys,
-  exactPaths,
-  expectedVersion,
-  hashCapability,
-  issueCapability,
-  isoNow,
-  objectDigest,
-  role,
-  workflowId,
-} from "./validation.js";
 import type {
   ActorRole,
   AuditEnvelope,
@@ -58,13 +45,10 @@ import type {
   AuditEventType,
   AuditOutcome,
   CapabilityHash,
-  CapabilityToken,
   ChangeReceipt,
   CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitVerification,
-  ExactRepoPath,
-  GitCommitSha,
   IsoTimestamp,
   LegacyAuditSummary,
   ParentView,
@@ -78,6 +62,19 @@ import type {
   WorkflowState,
   WorkflowVersion,
 } from "./types.js";
+import {
+  canonicalJson,
+  compareCapability,
+  exactKeys,
+  exactPaths,
+  expectedVersion,
+  hashCapability,
+  isoNow,
+  issueCapability,
+  objectDigest,
+  role,
+  workflowId,
+} from "./validation.js";
 
 export function resolveStatePath(root: string): string {
   const stableRoot = realpathSync(root);
@@ -238,65 +235,68 @@ export class WorkflowStore {
     if (typeof workflowId !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowId)) {
       fail("ERROR_NOT_FOUND", "workflow is not found");
     }
-    const row = this.db
-      .prepare("SELECT * FROM workflows WHERE workflow_id = ?")
-      .get(workflowId) as WorkflowRow | undefined;
+    const row = this.db.prepare("SELECT * FROM workflows WHERE workflow_id = ?").get(workflowId) as
+      | WorkflowRow
+      | undefined;
     if (!row) fail("ERROR_NOT_FOUND", "workflow is not found");
     parseState(row);
     return row;
   }
 
   #migrateLegacyRows(): void {
-    const rows = this.db.prepare("SELECT workflow_id, version, state_json FROM workflows").all() as
-      Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json">>;
+    const rows = this.db
+      .prepare("SELECT workflow_id, version, state_json FROM workflows")
+      .all() as Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json">>;
     if (rows.length === 0) return;
-    this.db.transaction(() => {
-      for (const row of rows) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(row.state_json);
-        } catch {
-          fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-        }
-        const schema = (parsed as { schema_version?: unknown }).schema_version;
-        const state = parsed as WorkflowState; // envelope/before view; migrateV1State revalidates
-        if (schema === 1) {
-          if (row.version !== (parsed as { version: number }).version) {
+    this.db
+      .transaction(() => {
+        for (const row of rows) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(row.state_json);
+          } catch {
             fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
           }
-          const next = migrateV1State(parsed);
-          validateWorkflowStateV2(next);
-          next.version = ((parsed as { version: number }).version + 1) as WorkflowVersion;
-          const now = isoNow();
-          const result = this.db
-            .prepare(
-              "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-            )
-            .run(
+          const schema = (parsed as { schema_version?: unknown }).schema_version;
+          const state = parsed as WorkflowState; // envelope/before view; migrateV1State revalidates
+          if (schema === 1) {
+            if (row.version !== (parsed as { version: number }).version) {
+              fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+            }
+            const next = migrateV1State(parsed);
+            validateWorkflowStateV2(next);
+            next.version = ((parsed as { version: number }).version + 1) as WorkflowVersion;
+            const now = isoNow();
+            const result = this.db
+              .prepare(
+                "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+              )
+              .run(
+                next.version,
+                JSON.stringify(next),
+                objectDigest(next),
+                now,
+                row.workflow_id,
+                row.version,
+              );
+            if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+            if (this.faultAfterMigrationUpdate)
+              fail("ERROR_INJECTED_FAILURE", "injected migration failure");
+            this.#audit(
+              row.workflow_id as WorkflowId,
               next.version,
-              JSON.stringify(next),
-              objectDigest(next),
-              now,
-              row.workflow_id,
-              row.version,
+              "WORKFLOW_MIGRATED",
+              "parent",
+              auditEnvelope(state, next, null, { outcome: next.phase }),
             );
-          if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-          if (this.faultAfterMigrationUpdate)
-            fail("ERROR_INJECTED_FAILURE", "injected migration failure");
-          this.#audit(
-            row.workflow_id as WorkflowId,
-            next.version,
-            "WORKFLOW_MIGRATED",
-            "parent",
-            auditEnvelope(state, next, null, { outcome: next.phase }),
-          );
-        } else if (schema === 2) {
-          validateWorkflowStateV2(parsed);
-        } else {
-          fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+          } else if (schema === 2) {
+            validateWorkflowStateV2(parsed);
+          } else {
+            fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+          }
         }
-      }
-    }).immediate();
+      })
+      .immediate();
   }
 
   #audit(
@@ -337,25 +337,27 @@ export class WorkflowStore {
     };
     const hashes = this.#capabilityHashes(capabilities);
     const now = isoNow();
-    const created = this.db.transaction(() => {
-      this.db
-        .prepare(
-          "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          workflowId,
-          JSON.stringify(state),
-          objectDigest(state),
-          hashes.parent,
-          hashes.implementer,
-          hashes.reviewer,
-          hashes.committer,
-          now,
-          now,
-        );
-      this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
-      return state;
-    }).immediate();
+    const created = this.db
+      .transaction(() => {
+        this.db
+          .prepare(
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            workflowId,
+            JSON.stringify(state),
+            objectDigest(state),
+            hashes.parent,
+            hashes.implementer,
+            hashes.reviewer,
+            hashes.committer,
+            now,
+            now,
+          );
+        this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
+        return state;
+      })
+      .immediate();
     return { workflow: roleView(created, "parent"), capabilities };
   }
 
@@ -405,35 +407,44 @@ export class WorkflowStore {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
     const id = workflowId(workflowIdValue); // brand at boundary; regex also inside #row
-    const { next, selectedRole } = this.db.transaction(() => {
-      const row = this.#row(id);
-      const selectedRole = this.#assertAuth(row, actorRole, token);
-      if (row.version !== expectedVersionNumber) {
-        fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      }
-      const current = parseState(row);
-      const next = action(current);
-      const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
-      next.version = nextVersion;
-      const now = isoNow();
-      const result = this.db
-        .prepare(
-          "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-        )
-        .run(nextVersion, JSON.stringify(next), objectDigest(next), now, id, expectedVersionNumber);
-      if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
-      this.#audit(
-        id,
-        nextVersion,
-        eventType,
-        selectedRole,
-        auditEnvelope(current, next, row.state_digest as StateDigest | null, {
-          outcome: resolvedOutcome,
-        }),
-      );
-      return { next, selectedRole };
-    }).immediate();
+    const { next, selectedRole } = this.db
+      .transaction(() => {
+        const row = this.#row(id);
+        const selectedRole = this.#assertAuth(row, actorRole, token);
+        if (row.version !== expectedVersionNumber) {
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        }
+        const current = parseState(row);
+        const next = action(current);
+        const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
+        next.version = nextVersion;
+        const now = isoNow();
+        const result = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(
+            nextVersion,
+            JSON.stringify(next),
+            objectDigest(next),
+            now,
+            id,
+            expectedVersionNumber,
+          );
+        if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
+        this.#audit(
+          id,
+          nextVersion,
+          eventType,
+          selectedRole,
+          auditEnvelope(current, next, row.state_digest as StateDigest | null, {
+            outcome: resolvedOutcome,
+          }),
+        );
+        return { next, selectedRole };
+      })
+      .immediate();
     return roleViewForRole(next, selectedRole);
   }
 
@@ -525,7 +536,8 @@ export class WorkflowStore {
         const next = submitReview(state, args);
         if (args.review_status === "APPROVED") {
           if (state.review_target.review_mode === "working_tree") {
-            if (!args.review_receipt) fail("ERROR_STALE_RECEIPT", "approved review requires receipt");
+            if (!args.review_receipt)
+              fail("ERROR_STALE_RECEIPT", "approved review requires receipt");
             verifyReviewReceipt(
               this.root,
               args.review_receipt as ChangeReceipt,
@@ -603,7 +615,11 @@ export class WorkflowStore {
 
   recordCommit(input: unknown): RoleView {
     const args = mutationInput(input);
-    exactKeys(args, ["workflow_id", "capability", "expected_version", "commit_hash"], "commit record");
+    exactKeys(
+      args,
+      ["workflow_id", "capability", "expected_version", "commit_hash"],
+      "commit record",
+    );
     return this.#mutate(
       args.workflow_id,
       "committer",
@@ -672,7 +688,11 @@ export class WorkflowStore {
 
   retryCommit(input: unknown): RoleView {
     const args = mutationInput(input);
-    exactKeys(args, ["workflow_id", "capability", "expected_version", "retry_context"], "commit retry");
+    exactKeys(
+      args,
+      ["workflow_id", "capability", "expected_version", "retry_context"],
+      "commit retry",
+    );
     return this.#mutate(
       args.workflow_id,
       "parent",
@@ -692,72 +712,84 @@ export class WorkflowStore {
     const args = mutationInput(input);
     const expectedVersionNumber = expectedVersion(args.expected_version);
     const id = workflowId(args.workflow_id);
-    const result = this.db.transaction(() => {
-      const row = this.#row(id);
-      this.#assertAuth(row, "parent", args.capability);
-      if (row.version !== expectedVersionNumber)
-        fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      const state = parseState(row);
-      const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
-      const childId = randomUUID() as WorkflowId;
-      const childState = linkedFollowupChildState(followup);
-      const childReceipt = createReceipt(this.root, childState.approved_paths, true);
-      if (childReceipt.base_head !== followup.base_head)
-        fail("ERROR_STALE_BASE", "scope base is stale");
-      childState.workflow_id = childId;
-      childState.initial_receipt = childReceipt;
-      childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-      const childCapabilities: RoleCapabilities = {
-        parent: issueCapability(),
-        implementer: issueCapability(),
-        reviewer: issueCapability(),
-        committer: issueCapability(),
-      };
-      const childHashes = this.#capabilityHashes(childCapabilities);
-      const now = isoNow();
-      this.db
-        .prepare(
-          "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
+    const result = this.db
+      .transaction(() => {
+        const row = this.#row(id);
+        this.#assertAuth(row, "parent", args.capability);
+        if (row.version !== expectedVersionNumber)
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const state = parseState(row);
+        const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
+        const childId = randomUUID() as WorkflowId;
+        const childState = linkedFollowupChildState(followup);
+        const childReceipt = createReceipt(this.root, childState.approved_paths, true);
+        if (childReceipt.base_head !== followup.base_head)
+          fail("ERROR_STALE_BASE", "scope base is stale");
+        childState.workflow_id = childId;
+        childState.initial_receipt = childReceipt;
+        childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
+        const childCapabilities: RoleCapabilities = {
+          parent: issueCapability(),
+          implementer: issueCapability(),
+          reviewer: issueCapability(),
+          committer: issueCapability(),
+        };
+        const childHashes = this.#capabilityHashes(childCapabilities);
+        const now = isoNow();
+        this.db
+          .prepare(
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            childId,
+            JSON.stringify(childState),
+            objectDigest(childState),
+            childHashes.parent,
+            childHashes.implementer,
+            childHashes.reviewer,
+            childHashes.committer,
+            now,
+            now,
+          );
+        this.#audit(
           childId,
-          JSON.stringify(childState),
-          objectDigest(childState),
-          childHashes.parent,
-          childHashes.implementer,
-          childHashes.reviewer,
-          childHashes.committer,
-          now,
-          now,
+          0,
+          "WORKFLOW_CREATED",
+          "parent",
+          auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
         );
-      this.#audit(
-        childId,
-        0,
-        "WORKFLOW_CREATED",
-        "parent",
-        auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
-      );
-      const next = { ...state, version: (expectedVersionNumber + 1) as WorkflowVersion };
-      const update = this.db
-        .prepare(
-          "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-        )
-        .run(next.version, JSON.stringify(next), objectDigest(next), now, id, expectedVersionNumber);
-      if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-      this.#audit(
-        id,
-        next.version,
-        "LINKED_FOLLOWUP_CREATED",
-        "parent",
-        auditEnvelope(state, next, row.state_digest as StateDigest | null, {
-          linked_workflow_id: childId,
-        }),
-      );
-      if (this.faultAfterLinkedChildInsert)
-        fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-      return { childState, childCapabilities };
-    }).immediate();
-    return { workflow: roleView(result.childState, "parent"), capabilities: result.childCapabilities };
+        const next = { ...state, version: (expectedVersionNumber + 1) as WorkflowVersion };
+        const update = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(
+            next.version,
+            JSON.stringify(next),
+            objectDigest(next),
+            now,
+            id,
+            expectedVersionNumber,
+          );
+        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        this.#audit(
+          id,
+          next.version,
+          "LINKED_FOLLOWUP_CREATED",
+          "parent",
+          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
+            linked_workflow_id: childId,
+          }),
+        );
+        if (this.faultAfterLinkedChildInsert)
+          fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
+        return { childState, childCapabilities };
+      })
+      .immediate();
+    return {
+      workflow: roleView(result.childState, "parent"),
+      capabilities: result.childCapabilities,
+    };
   }
 }
 

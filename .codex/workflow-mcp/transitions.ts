@@ -1,43 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
-import {
-  ACCEPTANCE_STATUSES,
-  MAX_CONTRACTS,
-  MAX_DETAIL,
-  MAX_FINDINGS,
-  MAX_PATHS,
-  MAX_TEXT,
-  RESOLUTION_STATUSES,
-  VALIDATION_STATUSES,
-  boundedString,
-  canonicalJson,
-  contractList,
-  evidenceResults,
-  exactKeys,
-  exactPaths,
-  findings,
-  findingIdList,
-  isoNow,
-  objectDigest,
-  optionalText,
-  repairCycle,
-  resolutionMap,
-  revision,
-  role,
-  stringList,
-  userAuthorization,
-} from "./validation.js";
 import type {
-  AcceptanceCriterion,
-  AcceptanceResult,
   BlockingFinding,
   ChangeReceipt,
   CommitAttemptId,
   CommitAuthorization,
   CommitMismatchCategory,
-  CommitPreparation,
   CommitPreparationEvidence,
   CommitResult,
+  CommitterView,
   CommitVerification,
   ExactRepoPath,
   FindingId,
@@ -46,21 +17,16 @@ import type {
   FindingSeverity,
   GitCommitSha,
   ImplementationStatus,
-  IsoTimestamp,
+  ImplementerView,
   OptionalFinding,
   ParentView,
-  ImplementerView,
-  ReviewerView,
-  CommitterView,
   RemediationContext,
+  ReviewerView,
   ReviewFinding,
   ReviewRange,
   ReviewTarget,
   Role,
   RoleView,
-  StopContext,
-  ValidationRequirement,
-  ValidationResult,
   WorkflowAction,
   WorkflowId,
   WorkflowPhase,
@@ -68,6 +34,33 @@ import type {
   WorkflowType,
   WorkflowVersion,
 } from "./types.js";
+import {
+  ACCEPTANCE_STATUSES,
+  boundedString,
+  canonicalJson,
+  contractList,
+  evidenceResults,
+  exactKeys,
+  exactPaths,
+  findingIdList,
+  findings,
+  isoNow,
+  MAX_CONTRACTS,
+  MAX_DETAIL,
+  MAX_FINDINGS,
+  MAX_PATHS,
+  MAX_TEXT,
+  objectDigest,
+  optionalText,
+  RESOLUTION_STATUSES,
+  repairCycle,
+  resolutionMap,
+  revision,
+  role,
+  stringList,
+  userAuthorization,
+  VALIDATION_STATUSES,
+} from "./validation.js";
 
 export const SCHEMA_VERSION = 2;
 
@@ -378,9 +371,7 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
   } else {
     const extra =
       actorRole === "reviewer" && state.workflow_type === "review_only"
-        ? ROLE_VIEW_EXTRA[actorRole].filter(
-            (key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key),
-          )
+        ? ROLE_VIEW_EXTRA[actorRole].filter((key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key))
         : ROLE_VIEW_EXTRA[actorRole];
     for (const key of extra) {
       if (key in raw) view[key] = clone(raw[key]);
@@ -615,8 +606,19 @@ export function createState(
   );
   state.validation_requirements =
     args.workflow_type === "review_only"
-      ? contractList(args.validation_requirements, "validation_requirements", "VAL", "validation_id", true)
-      : contractList(args.validation_requirements, "validation_requirements", "VAL", "validation_id");
+      ? contractList(
+          args.validation_requirements,
+          "validation_requirements",
+          "VAL",
+          "validation_id",
+          true,
+        )
+      : contractList(
+          args.validation_requirements,
+          "validation_requirements",
+          "VAL",
+          "validation_id",
+        );
   state.review_target = target;
   return state;
 }
@@ -695,7 +697,9 @@ export function submitImplementation(
   next.acceptance_results = acceptanceResults;
   next.validation_results = validationResults;
   // Documented producer cast: the store verified canonical equality with the fresh receipt first.
-  next.implementation_receipt = JSON.parse(JSON.stringify(freshReceipt ?? receipt)) as ChangeReceipt;
+  next.implementation_receipt = JSON.parse(
+    JSON.stringify(freshReceipt ?? receipt),
+  ) as ChangeReceipt;
   next.implementation_known_failures = knownFailures;
   next.finding_resolution_map = resolution;
   next.scope_changed_paths = scopeChangedPaths(state.initial_receipt, next.implementation_receipt);
@@ -911,11 +915,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
 }
 
 export function finalizeRepairExhausted(state: WorkflowState, input: unknown): WorkflowState {
-  const args = exactKeys(
-    input,
-    ["workflow_id", "capability", "expected_version"],
-    "repair exhaustion",
-  );
+  exactKeys(input, ["workflow_id", "capability", "expected_version"], "repair exhaustion");
   ensurePhase(state, "REPAIR_REQUIRED");
   if (state.repair_cycle < state.max_repair_cycles)
     fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
@@ -948,7 +948,7 @@ export function recordCommit(
   evidence: CommitVerification,
   input: unknown,
 ): WorkflowState {
-  const args = exactKeys(
+  exactKeys(
     input,
     ["workflow_id", "capability", "expected_version", "commit_hash"],
     "commit record",
@@ -993,11 +993,7 @@ export function prepareCommit(
   input: unknown,
   evidence: CommitPreparationEvidence,
 ): WorkflowState {
-  const args = exactKeys(
-    input,
-    ["workflow_id", "capability", "expected_version"],
-    "commit preparation",
-  );
+  exactKeys(input, ["workflow_id", "capability", "expected_version"], "commit preparation");
   ensurePhase(state, "COMMIT_AUTHORIZED");
   const next = clone(state);
   next.commit_preparation = {
@@ -1291,11 +1287,7 @@ export function migrateV1State(state: unknown): WorkflowState {
   if (!Number.isSafeInteger(v1.version) || v1.version < 0) corrupt();
   if (typeof v1.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(v1.workflow_id)) corrupt();
   if (typeof v1.phase !== "string" || !V1_PHASES.includes(v1.phase)) corrupt();
-  if (
-    typeof v1.objective !== "string" ||
-    v1.objective.length === 0 ||
-    v1.objective.length > 4000
-  )
+  if (typeof v1.objective !== "string" || v1.objective.length === 0 || v1.objective.length > 4000)
     corrupt();
   if (typeof v1.base_head !== "string" || !/^[0-9a-f]{40}$/u.test(v1.base_head)) corrupt();
   if (
@@ -1438,10 +1430,7 @@ function checkKeys(
   const actual = Object.keys(value).sort();
   const allowed = [...new Set([...required, ...optional])].sort();
   const needed = required.filter((key) => !optional.includes(key));
-  if (
-    actual.some((key) => !allowed.includes(key)) ||
-    needed.some((key) => !actual.includes(key))
-  ) {
+  if (actual.some((key) => !allowed.includes(key)) || needed.some((key) => !actual.includes(key))) {
     corrupt();
   }
 }
@@ -1476,20 +1465,11 @@ function stringArrayShape(value: unknown, maxItems: number, maxLength: number): 
 }
 
 function pathList(value: unknown, allowEmpty: boolean): void {
-  if (
-    !Array.isArray(value) ||
-    (!allowEmpty && value.length === 0) ||
-    value.length > MAX_PATHS
-  ) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > MAX_PATHS) {
     corrupt();
   }
   for (const path of value) {
-    if (
-      typeof path !== "string" ||
-      path.length === 0 ||
-      path.length > 300 ||
-      path.includes("\0")
-    ) {
+    if (typeof path !== "string" || path.length === 0 || path.length > 300 || path.includes("\0")) {
       corrupt();
     }
   }
@@ -1535,7 +1515,11 @@ function resolutionMapShape(value: unknown): void {
 function findingShape(value: unknown, expectedBlocking: boolean | undefined): void {
   if (!isObject(value)) corrupt();
   checkKeys(value, STATE_FINDING_KEYS);
-  if (typeof value.finding_id !== "string" || value.finding_id.length === 0 || value.finding_id.length > 80) {
+  if (
+    typeof value.finding_id !== "string" ||
+    value.finding_id.length === 0 ||
+    value.finding_id.length > 80
+  ) {
     corrupt();
   }
   if (!STATE_FINDING_SEVERITIES.has(value.severity)) corrupt();
@@ -1584,7 +1568,13 @@ function receiptPathShape(value: unknown): void {
 
 function receiptShape(value: unknown): void {
   if (!isObject(value)) corrupt();
-  checkKeys(value, ["schema_version", "base_head", "approved_paths", "paths", "overall_scope_hash"]);
+  checkKeys(value, [
+    "schema_version",
+    "base_head",
+    "approved_paths",
+    "paths",
+    "overall_scope_hash",
+  ]);
   if (value.schema_version !== 1) corrupt();
   sha40(value.base_head);
   pathList(value.approved_paths, false);
@@ -1754,7 +1744,8 @@ export function validateWorkflowStateV2(value: unknown): WorkflowState {
   }
   if (value.schema_version !== SCHEMA_VERSION) corrupt();
   if (!Number.isSafeInteger(value.version) || (value.version as number) < 0) corrupt();
-  if (typeof value.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(value.workflow_id)) corrupt();
+  if (typeof value.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(value.workflow_id))
+    corrupt();
   if (value.workflow_type !== "change" && value.workflow_type !== "review_only") corrupt();
   if (typeof value.legacy_v1 !== "boolean") corrupt();
   const legacyTolerant = value.legacy_v1 === true;
@@ -1767,7 +1758,11 @@ export function validateWorkflowStateV2(value: unknown): WorkflowState {
   reviewTargetShape(value.review_target);
   nullableReceipt(value.initial_receipt, legacyTolerant);
   pathList(value.dirty_baseline_paths, true);
-  if (!Number.isSafeInteger(value.repair_cycle) || (value.repair_cycle as number) < 0 || (value.repair_cycle as number) > 2) {
+  if (
+    !Number.isSafeInteger(value.repair_cycle) ||
+    (value.repair_cycle as number) < 0 ||
+    (value.repair_cycle as number) > 2
+  ) {
     corrupt();
   }
   if (

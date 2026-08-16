@@ -20,8 +20,9 @@ bun run test
 
 The project requires Bun 1.3 or newer for install, the MCP server, and the tests. Bun executes
 the TypeScript sources directly; TypeScript/tsc remains responsible for static typechecking via
-`tsc --noEmit`. There is no compiled `dist/` artifact step. Its own `.codex/config.toml` and root
-`opencode.json` register the server against this repository with Bun, so opening `codex-agents`
+`tsc --noEmit`, and Biome owns formatting and linting for the TypeScript/JSON sources listed in
+the root `biome.json`. There is no compiled `dist/` artifact step. Its own `.codex/config.toml` and
+root `opencode.json` register the server against this repository with Bun, so opening `codex-agents`
 directly in either host loads the three local agent definitions and auto-starts the
 `workflow_state` MCP server from the project config itself — no manual server launch is required.
 Runtime SQLite state is stored outside the repository under the user's Codex state directory.
@@ -38,7 +39,15 @@ bun run test:installer    # focused installer tests
 bun run test:workflow-mcp # focused workflow-state MCP server tests
 bun run test:coverage     # full suite with Bun coverage reporting
 bun run test:stress       # full suite, randomized order, each file run twice
+bun run format            # apply Biome formatting to supported sources
+bun run format:check      # check Biome formatting without modifying files
+bun run lint              # run Biome linting without modifying files
+bun run check             # complete Biome check (format + lint + import hygiene)
+bun run validate          # pre-completion gate: check + typecheck + full test suite
 ```
+
+TOML files (`.codex/agents/*.toml`, `.codex/config.toml`, `bunfig.toml`) stay outside Biome and
+continue to be validated through `Bun.TOML.parse` and the existing semantic assertions.
 
 ## Use this repository directly
 

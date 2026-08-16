@@ -1,11 +1,11 @@
+import { Database } from "bun:sqlite";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
-import { test } from "bun:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WorkflowError } from "../errors.js";
@@ -241,7 +241,10 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
     assert.equal(row.state_digest, objectDigest(raw));
     const events = store.audit(state.workflow_id, "parent", issued.get(state.workflow_id).parent);
     assert.equal(events.filter((event: any) => event.event_type === "WORKFLOW_MIGRATED").length, 1);
-    assert.equal(events.filter((event: any) => event.event_type === "WORKFLOW_MIGRATED")[0].version, 4);
+    assert.equal(
+      events.filter((event: any) => event.event_type === "WORKFLOW_MIGRATED")[0].version,
+      4,
+    );
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -255,13 +258,16 @@ test("maps STOPPED_BLOCKED phases and preserves other phases", () => {
     const states = [
       v1State({ phase: "STOPPED_BLOCKED", implementation_status: "BLOCKED" }),
       v1State({ phase: "STOPPED_BLOCKED", implementation_status: "DONE" }),
-      v1State({ phase: "COMMIT_AUTHORIZED", commit_authorization: { user_authorization: "legacy auth" } }),
+      v1State({
+        phase: "COMMIT_AUTHORIZED",
+        commit_authorization: { user_authorization: "legacy auth" },
+      }),
       v1State({ phase: "STOPPED_NEEDS_CONTEXT", implementation_status: "NEEDS_CONTEXT" }),
     ];
     const issued = createV1Database(path, states);
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-    const phases = states.map((state) =>
-      store.get(state.workflow_id, "parent", issued.get(state.workflow_id).parent).phase,
+    const phases = states.map(
+      (state) => store.get(state.workflow_id, "parent", issued.get(state.workflow_id).parent).phase,
     );
     assert.deepEqual(phases, [
       "STOPPED_IMPLEMENTATION_BLOCKED",
@@ -269,12 +275,16 @@ test("maps STOPPED_BLOCKED phases and preserves other phases", () => {
       "COMMIT_AUTHORIZED",
       "STOPPED_NEEDS_CONTEXT",
     ]);
-    const authorized = store.get(states[2].workflow_id, "parent", issued.get(states[2].workflow_id).parent);
+    const authorized = store.get(
+      states[2].workflow_id,
+      "parent",
+      issued.get(states[2].workflow_id).parent,
+    );
     assert.deepEqual(authorized.commit_authorization, { user_authorization: "legacy auth" });
     assert.equal(
-      store.audit(states[0].workflow_id, "parent", issued.get(states[0].workflow_id).parent).filter(
-        (event: any) => event.event_type === "WORKFLOW_MIGRATED",
-      ).length,
+      store
+        .audit(states[0].workflow_id, "parent", issued.get(states[0].workflow_id).parent)
+        .filter((event: any) => event.event_type === "WORKFLOW_MIGRATED").length,
       1,
     );
     store.close();
@@ -301,7 +311,9 @@ test("preserves capability hashes and enforces stale versions after migration", 
       errorCategory(() => store.get(state.workflow_id, "parent", "bad")),
       "ERROR_CAPABILITY_DENIED",
     );
-    const row = store.db.prepare("SELECT * FROM workflows WHERE workflow_id = ?").get(state.workflow_id) as any;
+    const row = store.db
+      .prepare("SELECT * FROM workflows WHERE workflow_id = ?")
+      .get(state.workflow_id) as any;
     assert.equal(row.parent_capability_hash, hashCapability(capabilities.parent));
     assert.equal(row.implementer_capability_hash, hashCapability(capabilities.implementer));
     assert.equal(row.reviewer_capability_hash, hashCapability(capabilities.reviewer));
@@ -436,9 +448,11 @@ test("preserves old audits byte-for-byte and appends one migration event", () =>
     ]);
     assert.equal(
       events[2].summary.state_digest_after,
-      (store.db
-        .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
-        .get(state.workflow_id) as any).state_digest,
+      (
+        store.db
+          .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
+          .get(state.workflow_id) as any
+      ).state_digest,
     );
     const after = store.db
       .prepare(
@@ -482,7 +496,10 @@ test("migration audit envelope uses the normative sanitized envelope", () => {
     assert.equal(events[0].summary.linked_workflow_id, null);
     assert.equal(events[0].summary.outcome, "STOPPED_REPAIR_EXHAUSTED");
     assert.ok(events[0].summary.changed_fields.includes("phase"));
-    assert.deepEqual(events[0].summary.changed_fields, [...events[0].summary.changed_fields].sort());
+    assert.deepEqual(
+      events[0].summary.changed_fields,
+      [...events[0].summary.changed_fields].sort(),
+    );
     const serialized = JSON.stringify(events);
     for (const prohibited of [
       "legacy objective",
@@ -491,13 +508,19 @@ test("migration audit envelope uses the normative sanitized envelope", () => {
       issued.get(state.workflow_id).parent,
       issued.get(state.workflow_id).implementer,
     ]) {
-      assert.equal(serialized.includes(prohibited), false, `migration audit contains ${prohibited}`);
+      assert.equal(
+        serialized.includes(prohibited),
+        false,
+        `migration audit contains ${prohibited}`,
+      );
     }
     assert.equal(
       events[0].summary.state_digest_after,
-      (store.db
-        .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
-        .get(state.workflow_id) as any).state_digest,
+      (
+        store.db
+          .prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?")
+          .get(state.workflow_id) as any
+      ).state_digest,
     );
     store.close();
   } finally {
@@ -511,7 +534,11 @@ test("migrates every v1 row in one batch with one event per row", () => {
     const path = join(root, "state.sqlite");
     const states = [
       v1State({ phase: "IMPLEMENTING" }),
-      v1State({ phase: "REVIEWING", implementation_status: "DONE", implementation_summary: "done" }),
+      v1State({
+        phase: "REVIEWING",
+        implementation_status: "DONE",
+        implementation_summary: "done",
+      }),
       v1State({ phase: "STOPPED_APPROVED", optional_findings: [], review_receipt: null }),
     ];
     const issued = createV1Database(path, states);
@@ -541,7 +568,12 @@ test("injected migration failure rolls back the whole batch", () => {
     createV1Database(path, [a, b]);
     assert.equal(
       errorCategory(
-        () => new WorkflowStore({ repositoryRoot: root, databasePath: path, faultAfterMigrationUpdate: true }),
+        () =>
+          new WorkflowStore({
+            repositoryRoot: root,
+            databasePath: path,
+            faultAfterMigrationUpdate: true,
+          }),
       ),
       "ERROR_INJECTED_FAILURE",
     );
@@ -565,7 +597,11 @@ test("reopening is idempotent and adds no second migration event", () => {
   const root = mkdtempSync(join(tmpdir(), "migration-reopen-"));
   try {
     const path = join(root, "state.sqlite");
-    const state = v1State({ phase: "REVIEWING", implementation_status: "DONE", implementation_summary: "done" });
+    const state = v1State({
+      phase: "REVIEWING",
+      implementation_status: "DONE",
+      implementation_summary: "done",
+    });
     const issued = createV1Database(path, [state]);
     const capabilities = issued.get(state.workflow_id);
     const first: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
@@ -584,7 +620,10 @@ test("reopening is idempotent and adds no second migration event", () => {
     assert.deepEqual(events2, events1);
     assert.deepEqual(migrated2, migrated1);
     assert.deepEqual(row2, row1);
-    assert.equal(events2.filter((event: any) => event.event_type === "WORKFLOW_MIGRATED").length, 1);
+    assert.equal(
+      events2.filter((event: any) => event.event_type === "WORKFLOW_MIGRATED").length,
+      1,
+    );
     assert.equal(row2.version, 1);
     second.close();
   } finally {
@@ -614,7 +653,13 @@ test("rejects malformed and unknown v1 schemas and rolls back the batch", () => 
       assert.deepEqual(JSON.parse(row.state_json), state);
     }
     assert.equal(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'WORKFLOW_MIGRATED'").get() as any).count,
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'WORKFLOW_MIGRATED'",
+          )
+          .get() as any
+      ).count,
       0,
     );
     db.close();
@@ -676,7 +721,10 @@ test("reopens a v1 COMMIT_AUTHORIZED fixture via STDIO and completes the allowed
     await client.connect(transport);
     try {
       const call = async (name: string, arguments_: any) =>
-        JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
+        JSON.parse(
+          ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
+            .text,
+        );
       const parent = await call("workflow_get", {
         workflow_id: state.workflow_id,
         role: "parent",

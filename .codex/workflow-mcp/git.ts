@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fail } from "./errors.js";
-import { canonicalJson, exactPaths } from "./validation.js";
 import type {
   ChangeReceipt,
   CommitMismatchCategory,
@@ -21,6 +20,7 @@ import type {
   ReviewRange,
   WorkflowState,
 } from "./types.js";
+import { canonicalJson, exactPaths } from "./validation.js";
 
 function git(root: string, args: readonly string[], maxBuffer = 4 * 1024 * 1024): string {
   try {
@@ -92,12 +92,7 @@ export function verifyRange(
   if (baseRevision === headRevision) {
     fail("ERROR_INVALID_REVISION", "range must be two distinct commits");
   }
-  const { status } = gitStatus(root, [
-    "merge-base",
-    "--is-ancestor",
-    baseRevision,
-    headRevision,
-  ]);
+  const { status } = gitStatus(root, ["merge-base", "--is-ancestor", baseRevision, headRevision]);
   if (status !== 0) fail("ERROR_NON_ANCESTOR", "base is not an ancestor of head");
   return { base_revision: baseRevision, head_revision: headRevision };
 }
@@ -141,7 +136,14 @@ export function reviewRange(root: string, target: CommitRangeReviewTarget): Revi
     if (!base && !head) {
       fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
     }
-    const kind: RangePathKind = base && head ? (base.object === head.object ? "unchanged" : "modified") : base ? "deleted" : "added";
+    const kind: RangePathKind =
+      base && head
+        ? base.object === head.object
+          ? "unchanged"
+          : "modified"
+        : base
+          ? "deleted"
+          : "added";
     return {
       path,
       kind,
@@ -234,7 +236,11 @@ export function createReceipt(
   return current;
 }
 
-export function verifyCommit(root: string, state: WorkflowState, commitHash: unknown): CommitVerification {
+export function verifyCommit(
+  root: string,
+  state: WorkflowState,
+  commitHash: unknown,
+): CommitVerification {
   if (typeof commitHash !== "string" || !/^[0-9a-f]{40}$/u.test(commitHash)) {
     return { ok: false, mismatch: "HEAD_CHANGED" };
   }
@@ -274,7 +280,10 @@ export function verifyCommit(root: string, state: WorkflowState, commitHash: unk
 
 export function stagedPaths(root: string): ExactRepoPath[] {
   const output = git(root, ["diff", "--cached", "--name-only", "-z"]);
-  return output.split("\0").filter((path) => path.length > 0).sort() as ExactRepoPath[];
+  return output
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .sort() as ExactRepoPath[];
 }
 
 export function stagedEntries(root: string): Map<ExactRepoPath, GitTreeEntry> {
@@ -324,7 +333,10 @@ export function writeTree(root: string): GitTreeSha {
   return tree as GitTreeSha;
 }
 
-export function prepareCommitReceipt(root: string, state: WorkflowState): CommitPreparationEvidence {
+export function prepareCommitReceipt(
+  root: string,
+  state: WorkflowState,
+): CommitPreparationEvidence {
   if (state.review_target?.review_mode !== "working_tree") {
     fail("ERROR_COMMIT_NOT_ALLOWED", "commit preparation requires a working-tree review");
   }
@@ -340,7 +352,10 @@ export function prepareCommitReceipt(root: string, state: WorkflowState): Commit
     .sort();
   const staged = stagedPaths(root);
   if (staged.length === 0) fail("ERROR_STAGED_SCOPE", "no paths are staged");
-  if (staged.length !== expectedPaths.length || staged.some((path, index) => path !== expectedPaths[index])) {
+  if (
+    staged.length !== expectedPaths.length ||
+    staged.some((path, index) => path !== expectedPaths[index])
+  ) {
     fail("ERROR_STAGED_SCOPE", "staged scope does not match the review receipt");
   }
   if (approvedResidue(root, state.approved_paths, staged).length > 0) {
@@ -391,7 +406,11 @@ function commitChangedPaths(
   return [...changed].sort();
 }
 
-export function verifyPreparedCommit(root: string, state: WorkflowState, commitHash: unknown): CommitMismatchCategory | null {
+export function verifyPreparedCommit(
+  root: string,
+  state: WorkflowState,
+  commitHash: unknown,
+): CommitMismatchCategory | null {
   if (typeof commitHash !== "string" || !/^[0-9a-f]{40}$/u.test(commitHash)) {
     return "HEAD_CHANGED";
   }

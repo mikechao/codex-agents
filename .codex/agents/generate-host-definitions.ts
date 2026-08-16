@@ -36,10 +36,12 @@ interface RoleSpec {
 const ROLES: readonly RoleSpec[] = [
   {
     name: "implementer",
-    description: "Executes an approved implementation plan, validates the changes, and reports the results.",
+    description:
+      "Executes an approved implementation plan, validates the changes, and reports the results.",
     codex: { model: "gpt-5.6-luna", reasoningEffort: "high", sandboxMode: "workspace-write" },
     opencode: {
-      description: "Executes an approved implementation plan, validates the changes, and reports the results.",
+      description:
+        "Executes an approved implementation plan, validates the changes, and reports the results.",
       model: "opencode-go/deepseek-v4-flash",
       permission: [
         "  edit: allow",
@@ -119,10 +121,12 @@ const ROLES: readonly RoleSpec[] = [
   },
   {
     name: "committer",
-    description: "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
+    description:
+      "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
     codex: { model: "gpt-5.6-luna", reasoningEffort: "medium", sandboxMode: "workspace-write" },
     opencode: {
-      description: "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
+      description:
+        "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
       model: "opencode-go/deepseek-v4-flash",
       permission: [
         // edit denial is stricter than the Codex workspace-write sandbox: the

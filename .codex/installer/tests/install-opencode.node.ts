@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -5,18 +6,14 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  realpathSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { test } from "bun:test";
-import {
-  commitBothHosts,
-  hasOpenCodeWorkflowStateRegistration,
-} from "../../../install-into.js";
+import { commitBothHosts, hasOpenCodeWorkflowStateRegistration } from "../../../install-into.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
 
@@ -48,7 +45,11 @@ function runInstaller(target: string) {
   } catch (cause) {
     assert.ok(cause instanceof Error && "status" in cause);
     const failure = cause as Error & { status?: number; stdout?: string; stderr?: string };
-    return { status: failure.status ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
   }
 }
 
@@ -67,13 +68,18 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.match(result.stdout, /Installed Codex agents/);
     assert.match(result.stdout, /Installed OpenCode agents/);
     for (const file of ["implementer.md", "code_reviewer.md", "committer.md"]) {
-      assert.ok(existsSync(join(root, ".opencode/agents", file)), `missing .opencode/agents/${file}`);
+      assert.ok(
+        existsSync(join(root, ".opencode/agents", file)),
+        `missing .opencode/agents/${file}`,
+      );
     }
     const { path, content } = installedOpenCodeConfig(root);
     assert.equal(basenameOf(path), "opencode.json");
     const parsed = JSON.parse(content) as {
       $schema: string;
-      mcp: { workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number } };
+      mcp: {
+        workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number };
+      };
     };
     assert.equal(parsed.$schema, "https://opencode.ai/config.json");
     const registration = parsed.mcp.workflow_state;
@@ -130,7 +136,7 @@ test("install-into.ts preserves comments and trailing commas in an existing open
       "opencode.jsonc",
       [
         "{",
-        '  // project model override',
+        "  // project model override",
         '  "model": "some-provider/some-model",',
         '  "mcp": {',
         "    // existing server, keep me",
@@ -149,7 +155,10 @@ test("install-into.ts preserves comments and trailing commas in an existing open
     assert.equal(basenameOf(path), "opencode.jsonc");
     assert.ok(content.includes("// project model override"), "existing comments must survive");
     assert.ok(content.includes("// existing server, keep me"), "existing comments must survive");
-    assert.ok(content.includes('"model": "some-provider/some-model"'), "unrelated keys must survive");
+    assert.ok(
+      content.includes('"model": "some-provider/some-model"'),
+      "unrelated keys must survive",
+    );
     const parsed = JSON.parse(content.replace(/\/\/.*$/gm, "").replace(/,\s*([}\]])/g, "$1"));
     assert.equal(parsed.mcp.other_server.type, "local");
     assert.equal(parsed.mcp.workflow_state.type, "local");
@@ -168,7 +177,10 @@ test("install-into.ts refuses an existing OpenCode workflow_state registration",
       write("opencode.jsonc", content);
       const result = runInstaller(root);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /Refusing to replace existing OpenCode workflow_state registration/);
+      assert.match(
+        result.stderr,
+        /Refusing to replace existing OpenCode workflow_state registration/,
+      );
       assert.ok(!existsSync(join(root, ".opencode/agents")));
       assert.ok(!existsSync(join(root, ".codex/agents")));
       assert.equal(readFileSync(join(root, "opencode.jsonc"), "utf8"), content);
@@ -244,11 +256,17 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
       "unrelated nested content must be preserved",
     );
     for (const file of ["implementer.md", "code_reviewer.md", "committer.md"]) {
-      assert.ok(existsSync(join(root, ".opencode/agents", file)), `missing .opencode/agents/${file}`);
+      assert.ok(
+        existsSync(join(root, ".opencode/agents", file)),
+        `missing .opencode/agents/${file}`,
+      );
     }
     assert.ok(existsSync(join(root, ".codex/agents")), "codex agents must still be installed");
     assert.ok(existsSync(join(root, "opencode.json")), "opencode config must still be registered");
-    assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")), "backup staging must be removed");
+    assert.ok(
+      !existsSync(join(root, ".opencode/.agents.backup.")),
+      "backup staging must be removed",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -341,7 +359,12 @@ test("commitBothHosts rolls back every completed step when any rename fails", ()
     writeFileSync(codexConfigTarget, originalCodexConfig);
     writeFileSync(opencodeConfigTarget, originalOpenCodeConfig);
 
-    const failurePoints = [codexAgentsTarget, codexConfigTarget, opencodeAgentsTarget, opencodeConfigTarget];
+    const failurePoints = [
+      codexAgentsTarget,
+      codexConfigTarget,
+      opencodeAgentsTarget,
+      opencodeConfigTarget,
+    ];
     for (const failingTarget of failurePoints) {
       const codexAgents = agentsDir(`codex-agents-${basenameOf(failingTarget)}`);
       const codexConfig = staging(`codex-config-${basenameOf(failingTarget)}`);
@@ -375,7 +398,11 @@ test("commitBothHosts rolls back every completed step when any rename fails", ()
       );
       assert.ok(!existsSync(codexAgentsTarget), "codex agents must be rolled back");
       assert.ok(!existsSync(opencodeAgentsTarget), "opencode agents must be rolled back");
-      assert.equal(readFileSync(codexConfigTarget, "utf8"), originalCodexConfig, "codex config must be restored");
+      assert.equal(
+        readFileSync(codexConfigTarget, "utf8"),
+        originalCodexConfig,
+        "codex config must be restored",
+      );
       assert.equal(
         readFileSync(opencodeConfigTarget, "utf8"),
         originalOpenCodeConfig,
@@ -486,7 +513,11 @@ test("commitBothHosts restores a pre-existing OpenCode agents directory when a l
       /injected opencode config failure/,
     );
     assert.ok(!existsSync(codexAgentsTarget), "codex agents must be rolled back");
-    assert.equal(readFileSync(codexConfigTarget, "utf8"), originalCodexConfig, "codex config must be restored");
+    assert.equal(
+      readFileSync(codexConfigTarget, "utf8"),
+      originalCodexConfig,
+      "codex config must be restored",
+    );
     assert.equal(
       readFileSync(opencodeConfigTarget, "utf8"),
       originalOpenCodeConfig,
@@ -562,10 +593,21 @@ test("commitBothHosts reports a failed backup restore and preserves the original
       },
     );
     assert.ok(existsSync(backup), "the backup must not be deleted when its restore fails");
-    assert.equal(readFileSync(join(backup, "docs-writer.md"), "utf8"), unrelated, "backup content must be intact");
-    assert.ok(!existsSync(opencodeAgentsTarget), "the unrecoverable agents target must not be left behind");
+    assert.equal(
+      readFileSync(join(backup, "docs-writer.md"), "utf8"),
+      unrelated,
+      "backup content must be intact",
+    );
+    assert.ok(
+      !existsSync(opencodeAgentsTarget),
+      "the unrecoverable agents target must not be left behind",
+    );
     assert.ok(!existsSync(codexAgentsTarget), "codex agents must still be rolled back");
-    assert.equal(readFileSync(codexConfigTarget, "utf8"), originalCodexConfig, "codex config must be restored");
+    assert.equal(
+      readFileSync(codexConfigTarget, "utf8"),
+      originalCodexConfig,
+      "codex config must be restored",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

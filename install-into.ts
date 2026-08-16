@@ -1,9 +1,19 @@
 #!/usr/bin/env bun
 
-import { spawnSync, TOML } from "bun";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, resolve } from "node:path";
-import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
+import { spawnSync, TOML } from "bun";
+import { applyEdits, modify, type ParseError, parse as parseJsonc } from "jsonc-parser";
 
 const REGISTRATION_SECTION = ["mcp_servers", "workflow_state"];
 const REQUIRED_SOURCE_FILES = [
@@ -144,7 +154,9 @@ function rollback(
       try {
         rmSync(step.target, { recursive: true, force: true });
       } catch (cause) {
-        failures.push(new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }));
+        failures.push(
+          new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }),
+        );
       }
       try {
         rename(step.originalDir, step.target);
@@ -160,7 +172,9 @@ function rollback(
       try {
         rmSync(step.target, { recursive: true, force: true });
       } catch (cause) {
-        failures.push(new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }));
+        failures.push(
+          new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }),
+        );
       }
     } else {
       try {
@@ -175,7 +189,9 @@ function rollback(
           recovery = "; original content could not be preserved";
         }
         failures.push(
-          new Error(`failed to restore ${step.target}: ${errorMessage(cause)}${recovery}`, { cause }),
+          new Error(`failed to restore ${step.target}: ${errorMessage(cause)}${recovery}`, {
+            cause,
+          }),
         );
       }
     }
@@ -200,14 +216,24 @@ export function commitBothHosts(
 ): void {
   const steps: readonly CommitStep[] = [
     { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
-    { staging: codexConfigStaging, target: codexConfigTarget, original: originalCodexConfig, originalDir: null },
+    {
+      staging: codexConfigStaging,
+      target: codexConfigTarget,
+      original: originalCodexConfig,
+      originalDir: null,
+    },
     {
       staging: opencodeAgentsStaging,
       target: opencodeAgentsTarget,
       original: null,
       originalDir: originalOpenCodeAgentsDir,
     },
-    { staging: opencodeConfigStaging, target: opencodeConfigTarget, original: originalOpenCodeConfig, originalDir: null },
+    {
+      staging: opencodeConfigStaging,
+      target: opencodeConfigTarget,
+      original: originalOpenCodeConfig,
+      originalDir: null,
+    },
   ];
   const committed: CommitStep[] = [];
   try {
@@ -262,7 +288,9 @@ function parseJsoncConfig(configPath: string, text: string): unknown {
     allowTrailingComma: !strict,
   });
   if (errors.length > 0) {
-    error(`Existing config is not valid ${strict ? "JSON" : "JSONC"}; refusing to modify: ${configPath}`);
+    error(
+      `Existing config is not valid ${strict ? "JSON" : "JSONC"}; refusing to modify: ${configPath}`,
+    );
   }
   return parsed;
 }
@@ -278,7 +306,9 @@ function objectValue(value: unknown, context: string): Record<string, unknown> |
 function deepEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((value, index) => deepEqual(value, right[index]));
+    return (
+      left.length === right.length && left.every((value, index) => deepEqual(value, right[index]))
+    );
   }
   if (left && right && typeof left === "object" && typeof right === "object") {
     const leftKeys = Object.keys(left).sort();
@@ -288,7 +318,10 @@ function deepEqual(left: unknown, right: unknown): boolean {
       leftKeys.every(
         (key, index) =>
           key === rightKeys[index] &&
-          deepEqual((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+          deepEqual(
+            (left as Record<string, unknown>)[key],
+            (right as Record<string, unknown>)[key],
+          ),
       )
     );
   }
@@ -311,14 +344,16 @@ export function openCodeMcpRegistration(serverPath: string): Record<string, unkn
 }
 
 export function createOpenCodeConfig(serverPath: string): string {
-  return JSON.stringify(
-    {
-      $schema: OPENCODE_CONFIG_SCHEMA,
-      mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
-    },
-    null,
-    2,
-  ) + "\n";
+  return (
+    JSON.stringify(
+      {
+        $schema: OPENCODE_CONFIG_SCHEMA,
+        mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
+      },
+      null,
+      2,
+    ) + "\n"
+  );
 }
 
 export function stageOpenCodeConfig(
@@ -328,34 +363,52 @@ export function stageOpenCodeConfig(
 ): string {
   if (existing === null) return createOpenCodeConfig(serverPath);
   const parsedExisting = objectValue(parseJsoncConfig(configPath, existing), "mcp") ?? {};
-  if (Object.prototype.hasOwnProperty.call(parsedExisting, "mcp")) {
+  if (Object.hasOwn(parsedExisting, "mcp")) {
     const mcp = objectValue(parsedExisting.mcp, "mcp");
-    if (mcp !== null && Object.prototype.hasOwnProperty.call(mcp, OPENCODE_SERVER_NAME)) {
+    if (mcp !== null && Object.hasOwn(mcp, OPENCODE_SERVER_NAME)) {
       error(`Refusing to replace existing OpenCode workflow_state registration: ${configPath}`);
     }
   }
-  const edits = modify(existing, ["mcp", OPENCODE_SERVER_NAME], openCodeMcpRegistration(serverPath), {
-    formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
-  });
+  const edits = modify(
+    existing,
+    ["mcp", OPENCODE_SERVER_NAME],
+    openCodeMcpRegistration(serverPath),
+    {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+    },
+  );
   const staged = applyEdits(existing, edits);
   const parsedStaged = objectValue(parseJsoncConfig(configPath, staged), "staged config");
   const stagedRecord = parsedStaged ?? {};
   if (!deepEqual(withoutKey(parsedExisting, "mcp"), withoutKey(stagedRecord, "mcp"))) {
-    error(`Staged OpenCode config would alter unrelated settings; refusing to install: ${configPath}`);
+    error(
+      `Staged OpenCode config would alter unrelated settings; refusing to install: ${configPath}`,
+    );
   }
   const existingMcp = objectValue(parsedExisting.mcp, "mcp") ?? {};
   const stagedMcp = objectValue(stagedRecord.mcp, "mcp") ?? {};
-  if (!deepEqual(withoutKey(existingMcp, OPENCODE_SERVER_NAME), withoutKey(stagedMcp, OPENCODE_SERVER_NAME))) {
-    error(`Staged OpenCode config would alter unrelated MCP settings; refusing to install: ${configPath}`);
+  if (
+    !deepEqual(
+      withoutKey(existingMcp, OPENCODE_SERVER_NAME),
+      withoutKey(stagedMcp, OPENCODE_SERVER_NAME),
+    )
+  ) {
+    error(
+      `Staged OpenCode config would alter unrelated MCP settings; refusing to install: ${configPath}`,
+    );
   }
   if (!deepEqual(stagedMcp[OPENCODE_SERVER_NAME], openCodeMcpRegistration(serverPath))) {
-    error(`Staged OpenCode workflow_state registration is invalid; refusing to install: ${configPath}`);
+    error(
+      `Staged OpenCode workflow_state registration is invalid; refusing to install: ${configPath}`,
+    );
   }
   if (configPath.endsWith(".json")) {
     try {
       JSON.parse(staged);
     } catch (cause) {
-      error(`Staged OpenCode config is not valid JSON; refusing to install: ${configPath} (${cause instanceof Error ? cause.message : String(cause)})`);
+      error(
+        `Staged OpenCode config is not valid JSON; refusing to install: ${configPath} (${cause instanceof Error ? cause.message : String(cause)})`,
+      );
     }
   }
   return staged;
@@ -363,11 +416,14 @@ export function stageOpenCodeConfig(
 
 export function hasOpenCodeWorkflowStateRegistration(configPath: string): boolean {
   if (!existsSync(configPath)) return false;
-  const parsed = objectValue(parseJsoncConfig(configPath, readFileSync(configPath, "utf8")), "config");
+  const parsed = objectValue(
+    parseJsoncConfig(configPath, readFileSync(configPath, "utf8")),
+    "config",
+  );
   const mcp = parsed === null ? undefined : parsed.mcp;
   if (mcp === undefined || mcp === null) return false;
   if (typeof mcp !== "object" || Array.isArray(mcp)) return false;
-  return Object.prototype.hasOwnProperty.call(mcp, OPENCODE_SERVER_NAME);
+  return Object.hasOwn(mcp, OPENCODE_SERVER_NAME);
 }
 
 export function findOpenCodeConfig(target: string): string | null {
@@ -415,7 +471,9 @@ export function main(args: readonly string[]): number {
     error(`Refusing to replace existing OpenCode workflow_state registration: ${opencodeConfig}`);
   }
   if (!bunVersionAtLeast(MINIMUM_BUN)) {
-    error(`Bun ${MINIMUM_BUN.join(".")} or newer is required to run the workflow_state server; found ${Bun.version}.`);
+    error(
+      `Bun ${MINIMUM_BUN.join(".")} or newer is required to run the workflow_state server; found ${Bun.version}.`,
+    );
   }
   for (const file of REQUIRED_SOURCE_FILES) {
     if (!existsSync(resolve(projectRoot, file))) {
@@ -432,12 +490,19 @@ export function main(args: readonly string[]): number {
   try {
     TOML.parse(stagedContent);
   } catch (cause) {
-    error(`Staged config is not valid TOML; refusing to install: ${config} (${cause instanceof Error ? cause.message : String(cause)})`);
+    error(
+      `Staged config is not valid TOML; refusing to install: ${config} (${cause instanceof Error ? cause.message : String(cause)})`,
+    );
   }
   const serverPath = resolve(projectRoot, ".codex/workflow-mcp/server.ts");
   const opencodeConfigTarget = opencodeConfig ?? resolve(target, "opencode.json");
-  const opencodeConfigOriginal = opencodeConfig === null ? null : readFileSync(opencodeConfig, "utf8");
-  const stagedOpenCode = stageOpenCodeConfig(opencodeConfigTarget, opencodeConfigOriginal, serverPath);
+  const opencodeConfigOriginal =
+    opencodeConfig === null ? null : readFileSync(opencodeConfig, "utf8");
+  const stagedOpenCode = stageOpenCodeConfig(
+    opencodeConfigTarget,
+    opencodeConfigOriginal,
+    serverPath,
+  );
 
   mkdirSync(resolve(target, ".codex"), { recursive: true });
   mkdirSync(resolve(target, ".opencode"), { recursive: true });
@@ -449,7 +514,10 @@ export function main(args: readonly string[]): number {
   try {
     for (const file of COPY_SOURCE_FILES) {
       if (existsSync(resolve(projectRoot, file))) {
-        cpSync(resolve(projectRoot, file), resolve(agentsStaging, file.slice(".codex/agents/".length)));
+        cpSync(
+          resolve(projectRoot, file),
+          resolve(agentsStaging, file.slice(".codex/agents/".length)),
+        );
       }
     }
     if (opencodeAgentsExisting) {
@@ -459,7 +527,10 @@ export function main(args: readonly string[]): number {
     }
     for (const file of OPENCODE_COPY_SOURCE_FILES) {
       if (existsSync(resolve(projectRoot, file))) {
-        cpSync(resolve(projectRoot, file), resolve(opencodeAgentsStaging, file.slice(".opencode/agents/".length)));
+        cpSync(
+          resolve(projectRoot, file),
+          resolve(opencodeAgentsStaging, file.slice(".opencode/agents/".length)),
+        );
       }
     }
     const stagedConfig = resolve(configStaging, "config.toml");
@@ -500,10 +571,16 @@ export function main(args: readonly string[]): number {
     rmSync(opencodeAgentsBackup, { recursive: true, force: true });
   }
 
-  process.stdout.write(`Installed Codex agents and workflow_state MCP registration into: ${target}\n`);
-  process.stdout.write(`Installed OpenCode agents and workflow_state MCP registration into: ${target}\n`);
+  process.stdout.write(
+    `Installed Codex agents and workflow_state MCP registration into: ${target}\n`,
+  );
+  process.stdout.write(
+    `Installed OpenCode agents and workflow_state MCP registration into: ${target}\n`,
+  );
   process.stdout.write("Restart or reload Codex, then run: codex mcp get workflow_state\n");
-  process.stdout.write("Restart or reload OpenCode, then verify the workflow_state tools are visible in a session.\n");
+  process.stdout.write(
+    "Restart or reload OpenCode, then verify the workflow_state tools are visible in a session.\n",
+  );
   return 0;
 }
 

@@ -1,10 +1,10 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "bun:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WorkflowStore } from "../store.js";
@@ -52,16 +52,15 @@ async function start(root: string) {
   const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
   const call = async (name: string, arguments_: any) =>
-    JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
+    JSON.parse(
+      ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
+        .text,
+    );
   const receipt = (paths: string[] = ["note.txt"]): any =>
     JSON.parse(
       execFileSync(
         process.execPath,
-        [
-          realpathSync(join(root, ".codex", "agents", "change-receipt.ts")),
-          "--",
-          ...paths,
-        ],
+        [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", ...paths],
         { cwd: root, encoding: "utf8" },
       ),
     );
@@ -610,11 +609,7 @@ test("safe errors over STDIO for role, version, phase, malformed fields, and ran
       "ERROR_INVALID_TRANSITION",
     );
     const badCreate = createInput(git, { objective: "protocol v2 bad create objective" });
-    await assertError(
-      "workflow_create",
-      { ...badCreate, bogus: true },
-      "ERROR_INVALID_SHAPE",
-    );
+    await assertError("workflow_create", { ...badCreate, bogus: true }, "ERROR_INVALID_SHAPE");
 
     const implemented = await call("workflow_submit_implementation", validImplement);
     assert.equal(implemented.phase, "REVIEWING");
@@ -652,7 +647,9 @@ test("safe errors over STDIO for role, version, phase, malformed fields, and ran
         approved_paths: ["added.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: [],
-        review_target: rangeTarget(git("rev-parse", "HEAD~1"), git("rev-parse", "HEAD"), ["added.txt"]),
+        review_target: rangeTarget(git("rev-parse", "HEAD~1"), git("rev-parse", "HEAD"), [
+          "added.txt",
+        ]),
       }),
     );
     const rangeWf = range.workflow;
@@ -723,8 +720,9 @@ class RawStdioClient {
   }
 
   #drain() {
-    let index;
-    while ((index = this.buffer.indexOf("\n")) >= 0) {
+    while (true) {
+      const index = this.buffer.indexOf("\n");
+      if (index < 0) break;
       const line = this.buffer.slice(0, index);
       this.buffer = this.buffer.slice(index + 1);
       if (!line) continue;
@@ -808,7 +806,10 @@ test("startup, requests, SIGINT, and SIGTERM keep stdout protocol-clean and stde
           capability: created.capabilities.parent,
         },
       });
-      assert.equal(JSON.parse(auditResponse.result.content[0].text)[0].event_type, "WORKFLOW_CREATED");
+      assert.equal(
+        JSON.parse(auditResponse.result.content[0].text)[0].event_type,
+        "WORKFLOW_CREATED",
+      );
       const unknownTool = await raw.request("tools/call", {
         name: "workflow_bogus",
         arguments: {},

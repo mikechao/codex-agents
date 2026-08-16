@@ -84,7 +84,12 @@ export function userAuthorization(value: unknown): string {
   return boundedString(value, "user_authorization", MAX_DETAIL);
 }
 
-export function stringList(value: unknown, name: string, maxItems = 50, maxLength = 2000): string[] {
+export function stringList(
+  value: unknown,
+  name: string,
+  maxItems = 50,
+  maxLength = 2000,
+): string[] {
   if (!Array.isArray(value) || value.length > maxItems)
     fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
   return value.map((item) => boundedString(item, name, maxLength));
@@ -126,7 +131,9 @@ export function safeValidation(value: unknown): unknown {
       const keys = Object.keys(record);
       if (keys.length > 20 || keys.some((key) => key.length > 80))
         fail("ERROR_INVALID_SHAPE", "validation object is invalid");
-      return Object.fromEntries(keys.map((key) => [key, sanitize(record[key], depth + 1)] as [string, unknown]));
+      return Object.fromEntries(
+        keys.map((key) => [key, sanitize(record[key], depth + 1)] as [string, unknown]),
+      );
     }
     fail("ERROR_INVALID_SHAPE", "validation value is invalid");
   };
@@ -227,7 +234,7 @@ export function exactKeys(
 
 export function findingIdList(
   value: unknown,
-  name: string,
+  _name: string,
   errorCategory: ErrorCategory,
 ): FindingId[] {
   if (
@@ -428,16 +435,8 @@ export function finding(value: unknown, index: number, expectedBlocking?: boolea
   return result as ReviewFinding;
 }
 
-export function findings(
-  value: unknown,
-  name: string,
-  expectedBlocking: true,
-): BlockingFinding[];
-export function findings(
-  value: unknown,
-  name: string,
-  expectedBlocking: false,
-): OptionalFinding[];
+export function findings(value: unknown, name: string, expectedBlocking: true): BlockingFinding[];
+export function findings(value: unknown, name: string, expectedBlocking: false): OptionalFinding[];
 export function findings(
   value: unknown,
   name: string,

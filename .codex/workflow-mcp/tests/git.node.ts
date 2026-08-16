@@ -1,9 +1,9 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "bun:test";
 import { WorkflowError } from "../errors.js";
 import {
   approvedResidue,
@@ -15,7 +15,12 @@ import {
   verifyRevision,
   writeTree,
 } from "../git.js";
-import type { CommitRangeReviewTarget, ExactRepoPath, GitCommitSha, WorkflowState } from "../types.js";
+import type {
+  CommitRangeReviewTarget,
+  ExactRepoPath,
+  GitCommitSha,
+  WorkflowState,
+} from "../types.js";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workflow-git-")));
@@ -46,7 +51,11 @@ function errorCategory(callback: () => void): string {
 }
 
 function target(base: string, head: string, paths: string[]): CommitRangeReviewTarget {
-  return { base_revision: base, head_revision: head, approved_paths: paths } as CommitRangeReviewTarget;
+  return {
+    base_revision: base,
+    head_revision: head,
+    approved_paths: paths,
+  } as CommitRangeReviewTarget;
 }
 
 test("verifyRevision accepts commits and rejects invalid, unknown, and non-commit revisions", () => {
@@ -59,8 +68,14 @@ test("verifyRevision accepts commits and rejects invalid, unknown, and non-commi
     const commit = git("rev-parse", "HEAD");
     const blob = git("rev-parse", "HEAD:a.txt");
     assert.equal(verifyRevision(root, commit as GitCommitSha), commit);
-    assert.equal(errorCategory(() => verifyRevision(root, "abc" as GitCommitSha)), "ERROR_INVALID_REVISION");
-    assert.equal(errorCategory(() => verifyRevision(root, blob as GitCommitSha)), "ERROR_INVALID_REVISION");
+    assert.equal(
+      errorCategory(() => verifyRevision(root, "abc" as GitCommitSha)),
+      "ERROR_INVALID_REVISION",
+    );
+    assert.equal(
+      errorCategory(() => verifyRevision(root, blob as GitCommitSha)),
+      "ERROR_INVALID_REVISION",
+    );
     assert.equal(
       errorCategory(() => verifyRevision(root, `${"0".repeat(39)}f` as GitCommitSha)),
       "ERROR_INVALID_REVISION",
@@ -85,9 +100,18 @@ test("verifyRange accepts ancestor ranges and rejects reversed and equal ranges"
     git("add", "-A");
     git("commit", "-qm", "head");
     const head = git("rev-parse", "HEAD");
-    assert.deepEqual(verifyRange(root, base as GitCommitSha, head as GitCommitSha), { base_revision: base, head_revision: head });
-    assert.equal(errorCategory(() => verifyRange(root, head as GitCommitSha, base as GitCommitSha)), "ERROR_NON_ANCESTOR");
-    assert.equal(errorCategory(() => verifyRange(root, base as GitCommitSha, base as GitCommitSha)), "ERROR_INVALID_REVISION");
+    assert.deepEqual(verifyRange(root, base as GitCommitSha, head as GitCommitSha), {
+      base_revision: base,
+      head_revision: head,
+    });
+    assert.equal(
+      errorCategory(() => verifyRange(root, head as GitCommitSha, base as GitCommitSha)),
+      "ERROR_NON_ANCESTOR",
+    );
+    assert.equal(
+      errorCategory(() => verifyRange(root, base as GitCommitSha, base as GitCommitSha)),
+      "ERROR_INVALID_REVISION",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -103,7 +127,6 @@ test("reviewRange rejects unknown and non-commit range revisions", () => {
     write("a.txt", "b\n");
     git("add", "-A");
     git("commit", "-qm", "head");
-    const head = git("rev-parse", "HEAD");
     const blob = git("rev-parse", "HEAD:a.txt");
     assert.equal(
       errorCategory(() => reviewRange(root, target(base, `${"0".repeat(40)}`, ["a.txt"]))),
@@ -226,11 +249,17 @@ test("reviewRange rejects directory and submodule paths", () => {
       const subCommit = execFileSync("git", ["-C", subrepo, "rev-parse", "HEAD"], {
         encoding: "utf8",
       }).trim();
-      execFileSync("git", ["-C", root, "update-index", "--add", "--cacheinfo", `160000,${subCommit},submod`], {
-        stdio: "ignore",
-      });
+      execFileSync(
+        "git",
+        ["-C", root, "update-index", "--add", "--cacheinfo", `160000,${subCommit},submod`],
+        {
+          stdio: "ignore",
+        },
+      );
       execFileSync("git", ["-C", root, "commit", "-qm", "add submodule"], { stdio: "ignore" });
-      const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
       assert.equal(
         errorCategory(() => reviewRange(root, target(base, head, ["dir"]))),
         "ERROR_INVALID_REVIEW_PATH",
@@ -295,9 +324,15 @@ test("approvedResidue flags untracked and unstaged approved paths only", () => {
     );
     git("add", "b.txt");
     git("add", "c.txt");
-    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)), []);
+    assert.deepEqual(
+      approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)),
+      [],
+    );
     write("stray.txt", "x\n");
-    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)), []);
+    assert.deepEqual(
+      approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)),
+      [],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -353,7 +388,10 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
       approved_paths: ["note.txt"],
       review_receipt: receipt,
     } as unknown as WorkflowState;
-    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_SCOPE");
+    assert.equal(
+      errorCategory(() => prepareCommitReceipt(root, state)),
+      "ERROR_STAGED_SCOPE",
+    );
     git("add", "note.txt");
     const prepared = prepareCommitReceipt(root, state);
     assert.equal(prepared.prepared_head, base);
@@ -365,20 +403,32 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
       encoding: "utf8",
     }).trim();
     git("update-index", "--cacheinfo", "100644", blob, "note.txt");
-    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_CONTENT");
+    assert.equal(
+      errorCategory(() => prepareCommitReceipt(root, state)),
+      "ERROR_STAGED_CONTENT",
+    );
 
     git("add", "note.txt");
     git("update-index", "--chmod=+x", "note.txt");
-    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_CONTENT");
+    assert.equal(
+      errorCategory(() => prepareCommitReceipt(root, state)),
+      "ERROR_STAGED_CONTENT",
+    );
 
     git("update-index", "--chmod=-x", "note.txt");
     write("note.txt", "v3\n");
     git("add", "note.txt");
-    assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STALE_RECEIPT");
+    assert.equal(
+      errorCategory(() => prepareCommitReceipt(root, state)),
+      "ERROR_STALE_RECEIPT",
+    );
 
     assert.equal(
       errorCategory(() =>
-        prepareCommitReceipt(root, { ...state, review_target: { review_mode: "commit_range" } } as unknown as WorkflowState),
+        prepareCommitReceipt(root, {
+          ...state,
+          review_target: { review_mode: "commit_range" },
+        } as unknown as WorkflowState),
       ),
       "ERROR_COMMIT_NOT_ALLOWED",
     );
