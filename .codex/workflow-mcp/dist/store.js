@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fail } from "./errors.js";
 import { createReceipt, currentHead, prepareCommitReceipt, repositoryRoot, reviewRange, verifyCommit, verifyCommitResult, verifyReviewReceipt, } from "./git.js";
-import { acceptConcerns, authorizeCommit, authorizeRepair, commitMismatch, createState, dirtyBaselinePaths, finalizeRepairExhausted, IMPLEMENTATION_STOP_PHASES, linkedFollowupChildState, linkedFollowupInput, migrateV1State, prepareCommit, rangeDirtyBaselinePaths, recordCommit, resumeImplementation, resumeReview, retryCommit, roleView, submitCommitResult, submitImplementation, submitReview, } from "./transitions.js";
+import { acceptConcerns, authorizeCommit, authorizeRepair, commitMismatch, createState, dirtyBaselinePaths, finalizeRepairExhausted, IMPLEMENTATION_STOP_PHASES, linkedFollowupChildState, linkedFollowupInput, migrateV1State, prepareCommit, rangeDirtyBaselinePaths, recordCommit, resumeImplementation, resumeReview, retryCommit, roleView, submitCommitResult, submitImplementation, submitReview, validateWorkflowStateV2, } from "./transitions.js";
 import { canonicalJson, compareCapability, exactKeys, exactPaths, expectedVersion, hashCapability, issueCapability, isoNow, objectDigest, role, workflowId, } from "./validation.js";
 export function resolveStatePath(root) {
     const stableRoot = realpathSync(root);
@@ -37,12 +37,20 @@ function auditEnvelope(before, after, digestBefore, options = {}) {
     };
 }
 function parseState(row) {
+    if (row.state_digest === null || row.state_digest === undefined) {
+        fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
+    }
+    let parsed;
     try {
-        return JSON.parse(row.state_json);
+        parsed = JSON.parse(row.state_json);
     }
     catch {
         fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
     }
+    if (row.state_digest !== objectDigest(parsed)) {
+        fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
+    }
+    return validateWorkflowStateV2(parsed);
 }
 // roleView's public overloads only accept literal roles; the store reaches the
 // implementation signature (which validates via `role`) with the Role from #assertAuth.
@@ -129,14 +137,6 @@ export class WorkflowStore {
         }
         return selectedRole;
     }
-    #verifyDigest(row) {
-        if (row.state_digest === null || row.state_digest === undefined) {
-            fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
-        }
-        if (row.state_digest !== objectDigest(parseState(row))) {
-            fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
-        }
-    }
     #row(workflowId) {
         if (typeof workflowId !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowId)) {
             fail("ERROR_NOT_FOUND", "workflow is not found");
@@ -146,7 +146,7 @@ export class WorkflowStore {
             .get(workflowId);
         if (!row)
             fail("ERROR_NOT_FOUND", "workflow is not found");
-        this.#verifyDigest(row);
+        parseState(row);
         return row;
     }
     #migrateLegacyRows() {
@@ -171,6 +171,7 @@ export class WorkflowStore {
                         fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
                     }
                     const next = migrateV1State(parsed);
+                    validateWorkflowStateV2(next);
                     next.version = (parsed.version + 1);
                     const now = isoNow();
                     const result = this.db
@@ -183,7 +184,10 @@ export class WorkflowStore {
                     this.#audit(row.workflow_id, next.version, "WORKFLOW_MIGRATED", "parent", auditEnvelope(state, next, null, { outcome: next.phase }));
                     migrated = true;
                 }
-                else if (schema !== 2) {
+                else if (schema === 2) {
+                    validateWorkflowStateV2(parsed);
+                }
+                else {
                     fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
                 }
             }

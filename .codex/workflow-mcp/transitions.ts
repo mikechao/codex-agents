@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
 import {
   ACCEPTANCE_STATUSES,
+  MAX_CONTRACTS,
+  MAX_DETAIL,
+  MAX_FINDINGS,
+  MAX_PATHS,
+  MAX_TEXT,
+  RESOLUTION_STATUSES,
   VALIDATION_STATUSES,
   boundedString,
   canonicalJson,
@@ -35,6 +41,7 @@ import type {
   CommitVerification,
   ExactRepoPath,
   FindingId,
+  FindingResolution,
   FindingResolutionMap,
   FindingSeverity,
   GitCommitSha,
@@ -138,6 +145,58 @@ const V1_STATE_KEYS: readonly string[] = [
   "commit_authorization",
   "commit_result",
   "repair_authorized_ids",
+  "authorized_optional_ids",
+  "user_authorization_summary",
+];
+
+const V2_STATE_KEYS: readonly string[] = [
+  "schema_version",
+  "version",
+  "workflow_id",
+  "workflow_type",
+  "legacy_v1",
+  "phase",
+  "objective",
+  "base_head",
+  "approved_paths",
+  "acceptance_criteria",
+  "validation_requirements",
+  "review_target",
+  "initial_receipt",
+  "dirty_baseline_paths",
+  "repair_cycle",
+  "max_repair_cycles",
+  "parent_workflow_id",
+  "source_workflow_id",
+  "linked_findings",
+  "remediation_context",
+  "implementation_summary",
+  "implementation_status",
+  "agent_touched_paths",
+  "scope_changed_paths",
+  "acceptance_results",
+  "validation_results",
+  "implementation_receipt",
+  "implementation_known_failures",
+  "finding_resolution_map",
+  "prior_finding_classifications",
+  "blocking_findings",
+  "optional_findings",
+  "review_receipt",
+  "stop_context",
+  "recovery_context",
+  "repair_authorized_ids",
+  "concern_acceptance",
+  "commit_authorization",
+  "commit_preparation",
+  "commit_result",
+];
+
+const V2_LEGACY_STATE_KEYS: readonly string[] = [
+  "legacy_evidence",
+  "implementation_changed_paths",
+  "implementation_acceptance_evidence",
+  "implementation_validation_evidence",
   "authorized_optional_ids",
   "user_authorization_summary",
 ];
@@ -755,9 +814,15 @@ export function submitReview(state: WorkflowState, input: unknown): WorkflowStat
   for (const [id, status] of Object.entries(classifications)) {
     if (status === "still_present") {
       const prior = state.blocking_findings.find((item) => item.finding_id === id);
-      const current = blockingFindings.find((item) => item.finding_id === id);
-      if (!current || !prior || current.severity !== prior.severity || current.blocking !== true) {
-        fail("ERROR_INVALID_FINDING", "still-present blocker changed bucket or severity");
+      if (prior) {
+        const current = blockingFindings.find((item) => item.finding_id === id);
+        if (!current || current.severity !== prior.severity || current.blocking !== true) {
+          fail("ERROR_INVALID_FINDING", "still-present blocker changed bucket or severity");
+        }
+        continue;
+      }
+      if (!optionalFindings.some((item) => item.finding_id === id)) {
+        fail("ERROR_INVALID_FINDING", "still-present optional finding changed bucket or severity");
       }
     }
   }
@@ -1338,4 +1403,434 @@ export function migrateV1State(state: unknown): WorkflowState {
       validation_evidence: [...v1.implementation_validation_evidence],
     },
   };
+}
+
+const STATE_FINDING_KEYS: readonly string[] = [
+  "finding_id",
+  "severity",
+  "blocking",
+  "file_and_line",
+  "failure_scenario",
+  "impact",
+  "violated_requirement",
+  "remediation",
+  "missing_or_inadequate_test",
+];
+
+const STATE_FINDING_SEVERITIES: ReadonlySet<unknown> = new Set(["P0", "P1", "P2", "P3"]);
+const GIT_MODES: ReadonlySet<unknown> = new Set(["100644", "100755", "120000"]);
+const IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set([
+  "DONE",
+  "DONE_WITH_CONCERNS",
+  "NEEDS_CONTEXT",
+  "BLOCKED",
+]);
+
+// Hand-written runtime validation for persisted schema-v2 states. Mirrors the migrateV1State
+// shape-check style: every failure is ERROR_STATE_CORRUPT. Legacy tolerance matches the fields
+// migrateV1State passes through from v1 rows (commit_authorization without authorized_at, commit
+// results without the v2 null counterparts, unvalidated parent_workflow_id strings).
+function checkKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): void {
+  const actual = Object.keys(value).sort();
+  const allowed = [...new Set([...required, ...optional])].sort();
+  const needed = required.filter((key) => !optional.includes(key));
+  if (
+    actual.some((key) => !allowed.includes(key)) ||
+    needed.some((key) => !actual.includes(key))
+  ) {
+    corrupt();
+  }
+}
+
+function bounded(value: unknown, max: number): void {
+  if (typeof value !== "string" || value.length === 0 || value.length > max) corrupt();
+}
+
+function nullableBounded(value: unknown, max: number): void {
+  if (value === null || value === undefined) return;
+  bounded(value, max);
+}
+
+function sha40(value: unknown): void {
+  if (typeof value !== "string" || !/^[0-9a-f]{40}$/u.test(value)) corrupt();
+}
+
+function sha64(value: unknown): void {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) corrupt();
+}
+
+function nullableString(value: unknown, max: number): void {
+  if (value === null || value === undefined) return;
+  bounded(value, max);
+}
+
+function stringArrayShape(value: unknown, maxItems: number, maxLength: number): void {
+  if (!Array.isArray(value) || value.length > maxItems) corrupt();
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0 || item.length > maxLength) corrupt();
+  }
+}
+
+function pathList(value: unknown, allowEmpty: boolean): void {
+  if (
+    !Array.isArray(value) ||
+    (!allowEmpty && value.length === 0) ||
+    value.length > MAX_PATHS
+  ) {
+    corrupt();
+  }
+  for (const path of value) {
+    if (
+      typeof path !== "string" ||
+      path.length === 0 ||
+      path.length > 300 ||
+      path.includes("\0")
+    ) {
+      corrupt();
+    }
+  }
+}
+
+function contractsShape(value: unknown, prefix: "AC" | "VAL"): void {
+  if (!Array.isArray(value) || value.length > MAX_CONTRACTS) corrupt();
+  const idField = prefix === "AC" ? "criterion_id" : "validation_id";
+  for (const item of value) {
+    if (!isObject(item)) corrupt();
+    checkKeys(item, [idField, "description"]);
+    const id = item[idField];
+    if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
+    bounded(item.description, MAX_TEXT);
+  }
+}
+
+function resultsShape(
+  value: unknown,
+  idField: "criterion_id" | "validation_id",
+  prefix: "AC" | "VAL",
+  statuses: ReadonlySet<string>,
+): void {
+  if (!Array.isArray(value) || value.length > MAX_CONTRACTS) corrupt();
+  for (const item of value) {
+    if (!isObject(item)) corrupt();
+    checkKeys(item, [idField, "status", "evidence"]);
+    const id = item[idField];
+    if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
+    if (!statuses.has(item.status as string)) corrupt();
+    bounded(item.evidence, MAX_DETAIL);
+  }
+}
+
+function resolutionMapShape(value: unknown): void {
+  if (!isObject(value)) corrupt();
+  for (const [id, status] of Object.entries(value)) {
+    if (id.length === 0 || id.length > 80) corrupt();
+    if (!RESOLUTION_STATUSES.has(status as FindingResolution)) corrupt();
+  }
+}
+
+function findingShape(value: unknown, expectedBlocking: boolean | undefined): void {
+  if (!isObject(value)) corrupt();
+  checkKeys(value, STATE_FINDING_KEYS);
+  if (typeof value.finding_id !== "string" || value.finding_id.length === 0 || value.finding_id.length > 80) {
+    corrupt();
+  }
+  if (!STATE_FINDING_SEVERITIES.has(value.severity)) corrupt();
+  if (value.blocking !== (value.severity !== "P3")) corrupt();
+  if (expectedBlocking !== undefined && value.blocking !== expectedBlocking) corrupt();
+  bounded(value.file_and_line, 300);
+  bounded(value.failure_scenario, MAX_DETAIL);
+  bounded(value.impact, MAX_DETAIL);
+  bounded(value.violated_requirement, MAX_DETAIL);
+  bounded(value.remediation, MAX_DETAIL);
+  bounded(value.missing_or_inadequate_test, MAX_DETAIL);
+}
+
+function findingsShape(value: unknown, expectedBlocking?: boolean): void {
+  if (!Array.isArray(value) || value.length > MAX_FINDINGS) corrupt();
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isObject(item) || typeof item.finding_id !== "string" || ids.has(item.finding_id)) {
+      corrupt();
+    }
+    ids.add(item.finding_id);
+    findingShape(item, expectedBlocking);
+  }
+}
+
+function receiptPathShape(value: unknown): void {
+  if (!isObject(value)) corrupt();
+  const path = value.path;
+  if (typeof path !== "string" || path.length === 0 || path.length > 300) corrupt();
+  const state = value.state;
+  if (state === "absent") {
+    checkKeys(value, ["path", "state", "kind"]);
+    if (value.kind !== "missing") corrupt();
+  } else if (state === "deleted") {
+    checkKeys(value, ["path", "state", "kind", "mode"]);
+    if (value.kind !== "missing" || !GIT_MODES.has(value.mode)) corrupt();
+  } else if (state === "added" || state === "modified" || state === "unchanged") {
+    checkKeys(value, ["path", "state", "kind", "mode", "digest"]);
+    if (!(value.kind === "file" || value.kind === "symlink")) corrupt();
+    if (!GIT_MODES.has(value.mode)) corrupt();
+    sha64(value.digest);
+  } else {
+    corrupt();
+  }
+}
+
+function receiptShape(value: unknown): void {
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["schema_version", "base_head", "approved_paths", "paths", "overall_scope_hash"]);
+  if (value.schema_version !== 1) corrupt();
+  sha40(value.base_head);
+  pathList(value.approved_paths, false);
+  if (!Array.isArray(value.paths) || value.paths.length > MAX_PATHS) corrupt();
+  for (const entry of value.paths) receiptPathShape(entry);
+  sha64(value.overall_scope_hash);
+}
+
+function nullableReceipt(value: unknown, legacyTolerant: boolean): void {
+  if (value === null || value === undefined) return;
+  if (legacyTolerant) {
+    // v1 guaranteed only "object or null" for receipts; migrated rows pass them through.
+    if (!isObject(value)) corrupt();
+    return;
+  }
+  receiptShape(value);
+}
+
+function reviewTargetShape(value: unknown): void {
+  if (!isObject(value)) corrupt();
+  checkKeys(value, [
+    "review_mode",
+    "base_revision",
+    "head_revision",
+    "approved_paths",
+    "include_staged",
+    "include_unstaged",
+    "include_untracked",
+  ]);
+  sha40(value.base_revision);
+  pathList(value.approved_paths, false);
+  if (value.review_mode === "working_tree") {
+    if (value.head_revision !== null) corrupt();
+    if (
+      value.include_staged !== true ||
+      value.include_unstaged !== true ||
+      value.include_untracked !== true
+    ) {
+      corrupt();
+    }
+  } else if (value.review_mode === "commit_range") {
+    sha40(value.head_revision);
+    if (
+      value.include_staged !== false ||
+      value.include_unstaged !== false ||
+      value.include_untracked !== false
+    ) {
+      corrupt();
+    }
+  } else {
+    corrupt();
+  }
+}
+
+function remediationContextShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["policy", "authorized_finding_ids", "repair_cycle", "user_authorization"]);
+  if (value.policy !== "explicitly_authorized") corrupt();
+  stringArrayShape(value.authorized_finding_ids, MAX_FINDINGS, 80);
+  if (value.repair_cycle !== 0) corrupt();
+  bounded(value.user_authorization, MAX_DETAIL);
+}
+
+function stopContextShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["status", "summary", "stopped_from"]);
+  if (value.status === "INCONCLUSIVE") {
+    if (value.stopped_from !== "REVIEWING") corrupt();
+  } else {
+    if (!IMPLEMENTATION_STATUSES.has(value.status)) corrupt();
+    if (value.stopped_from !== "IMPLEMENTING" && value.stopped_from !== "REPAIRING") {
+      corrupt();
+    }
+  }
+  bounded(value.summary, MAX_TEXT);
+}
+
+function recoveryContextShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["kind", "context", "recovered_at"]);
+  if (!(value.kind === "implementation" || value.kind === "review" || value.kind === "commit")) {
+    corrupt();
+  }
+  bounded(value.context, MAX_DETAIL);
+  bounded(value.recovered_at, 64);
+}
+
+function concernAcceptanceShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["user_authorization", "accepted_at"]);
+  bounded(value.user_authorization, MAX_DETAIL);
+  bounded(value.accepted_at, 64);
+}
+
+// Legacy tolerance: migrated v1 commit authorizations carried only user_authorization.
+function commitAuthorizationShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["user_authorization"], ["authorized_at"]);
+  bounded(value.user_authorization, MAX_DETAIL);
+  nullableBounded(value.authorized_at, 64);
+}
+
+function commitPreparationShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, [
+    "attempt_id",
+    "prepared_head",
+    "prepared_tree",
+    "expected_paths",
+    "review_receipt_digest",
+    "prepared_at",
+  ]);
+  bounded(value.attempt_id, 80);
+  sha40(value.prepared_head);
+  sha40(value.prepared_tree);
+  pathList(value.expected_paths, true);
+  sha64(value.review_receipt_digest);
+  bounded(value.prepared_at, 64);
+}
+
+// Legacy tolerance: migrated v1 commit results may omit the v2 null counterpart fields.
+function commitResultShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  if (value.outcome === "committed") {
+    checkKeys(value, ["outcome", "commit_hash"], ["failure_summary"]);
+    sha40(value.commit_hash);
+    if (value.failure_summary !== undefined && value.failure_summary !== null) corrupt();
+  } else if (value.outcome === "not_committed") {
+    checkKeys(value, ["outcome", "failure_summary"], ["commit_hash"]);
+    bounded(value.failure_summary, MAX_DETAIL);
+    if (value.commit_hash !== undefined && value.commit_hash !== null) corrupt();
+  } else if (value.outcome === "mismatch") {
+    checkKeys(value, ["outcome", "mismatch_category"]);
+    if (!MISMATCH_CATEGORIES.has(value.mismatch_category as CommitMismatchCategory)) corrupt();
+  } else {
+    corrupt();
+  }
+}
+
+function legacyEvidenceShape(value: unknown): void {
+  if (!isObject(value)) corrupt();
+  checkKeys(value, ["acceptance_evidence", "validation_evidence"]);
+  if (!isStringArray(value.acceptance_evidence) || !isStringArray(value.validation_evidence)) {
+    corrupt();
+  }
+}
+
+// Runtime validation of a parsed, digest-verified schema-v2 state before it enters the domain as
+// WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
+export function validateWorkflowStateV2(value: unknown): WorkflowState {
+  if (!isObject(value)) corrupt();
+  const actual = Object.keys(value).sort();
+  const required = [...V2_STATE_KEYS].sort();
+  const legacy = new Set(V2_LEGACY_STATE_KEYS);
+  if (
+    actual.some((key) => !required.includes(key) && !legacy.has(key)) ||
+    required.some((key) => !(key in value))
+  ) {
+    corrupt();
+  }
+  if (value.schema_version !== SCHEMA_VERSION) corrupt();
+  if (!Number.isSafeInteger(value.version) || (value.version as number) < 0) corrupt();
+  if (typeof value.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(value.workflow_id)) corrupt();
+  if (value.workflow_type !== "change" && value.workflow_type !== "review_only") corrupt();
+  if (typeof value.legacy_v1 !== "boolean") corrupt();
+  const legacyTolerant = value.legacy_v1 === true;
+  if (typeof value.phase !== "string" || !PHASES.includes(value.phase as WorkflowPhase)) corrupt();
+  bounded(value.objective, MAX_TEXT);
+  sha40(value.base_head);
+  pathList(value.approved_paths, false);
+  contractsShape(value.acceptance_criteria, "AC");
+  contractsShape(value.validation_requirements, "VAL");
+  reviewTargetShape(value.review_target);
+  nullableReceipt(value.initial_receipt, legacyTolerant);
+  pathList(value.dirty_baseline_paths, true);
+  if (!Number.isSafeInteger(value.repair_cycle) || (value.repair_cycle as number) < 0 || (value.repair_cycle as number) > 2) {
+    corrupt();
+  }
+  if (
+    !Number.isSafeInteger(value.max_repair_cycles) ||
+    (value.max_repair_cycles as number) < 0 ||
+    (value.max_repair_cycles as number) > 2
+  ) {
+    corrupt();
+  }
+  nullableString(value.parent_workflow_id, 100);
+  nullableString(value.source_workflow_id, 100);
+  findingsShape(value.linked_findings);
+  remediationContextShape(value.remediation_context);
+  nullableBounded(value.implementation_summary, MAX_TEXT);
+  if (
+    value.implementation_status !== null &&
+    !IMPLEMENTATION_STATUSES.has(value.implementation_status)
+  ) {
+    corrupt();
+  }
+  pathList(value.agent_touched_paths, true);
+  pathList(value.scope_changed_paths, true);
+  resultsShape(
+    value.acceptance_results,
+    "criterion_id",
+    "AC",
+    ACCEPTANCE_STATUSES as ReadonlySet<string>,
+  );
+  resultsShape(
+    value.validation_results,
+    "validation_id",
+    "VAL",
+    VALIDATION_STATUSES as ReadonlySet<string>,
+  );
+  nullableReceipt(value.implementation_receipt, legacyTolerant);
+  stringArrayShape(value.implementation_known_failures, 50, MAX_DETAIL);
+  resolutionMapShape(value.finding_resolution_map);
+  resolutionMapShape(value.prior_finding_classifications);
+  findingsShape(value.blocking_findings, true);
+  findingsShape(value.optional_findings, false);
+  nullableReceipt(value.review_receipt, legacyTolerant);
+  stopContextShape(value.stop_context);
+  recoveryContextShape(value.recovery_context);
+  stringArrayShape(value.repair_authorized_ids, MAX_FINDINGS, 80);
+  concernAcceptanceShape(value.concern_acceptance);
+  commitAuthorizationShape(value.commit_authorization);
+  commitPreparationShape(value.commit_preparation);
+  commitResultShape(value.commit_result);
+  if (value.legacy_evidence !== undefined) legacyEvidenceShape(value.legacy_evidence);
+  if (value.implementation_changed_paths !== undefined) {
+    pathList(value.implementation_changed_paths, true);
+  }
+  if (value.implementation_acceptance_evidence !== undefined) {
+    stringArrayShape(value.implementation_acceptance_evidence, 1000, 8000);
+  }
+  if (value.implementation_validation_evidence !== undefined) {
+    stringArrayShape(value.implementation_validation_evidence, 1000, 8000);
+  }
+  if (value.authorized_optional_ids !== undefined) {
+    stringArrayShape(value.authorized_optional_ids, MAX_FINDINGS, 80);
+  }
+  if (value.user_authorization_summary !== undefined && value.user_authorization_summary !== null) {
+    bounded(value.user_authorization_summary, MAX_TEXT);
+  }
+  return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }

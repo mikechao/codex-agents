@@ -146,6 +146,28 @@ test("enforces P3 stopping and blocking repair cycle limit", () => {
         rmSync(root, { recursive: true, force: true });
     }
 });
+test("approves a resolved blocker with a still-present optional finding remaining", () => {
+    const { root, git } = fixture();
+    try {
+        const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+        const created = create(store, root, git, { objective: "optional continuity" });
+        implementation(store, created, root, 0, "implemented");
+        const blocker = { finding_id: "B-1", severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+        const optional = { finding_id: "O-1", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
+        const first = review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], [optional]);
+        assert.equal(first.phase, "REPAIR_REQUIRED");
+        store.authorizeRepair({ workflow_id: created.workflow.workflow_id, capability: created.capabilities.parent, expected_version: 2, finding_ids: ["B-1"] });
+        implementation(store, created, root, 3, "fixed blocker", { "B-1": "resolved" });
+        const approved = review(store, created, root, 4, "APPROVED", [], [optional], { "B-1": "resolved", "O-1": "still_present" });
+        assert.equal(approved.phase, "STOPPED_APPROVED");
+        assert.deepEqual(approved.optional_findings, [optional]);
+        assert.deepEqual(approved.prior_finding_classifications, { "B-1": "resolved", "O-1": "still_present" });
+        store.close();
+    }
+    finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
 test("optional findings require a fresh linked workflow", () => {
     const { root, git } = fixture();
     try {
@@ -550,6 +572,43 @@ test("rejects digest and JSON tampering and preserves state on failed mutation",
         assert.equal(after.state_digest, objectDigest(JSON.parse(after.state_json)));
         assert.equal(store.get(id, "parent", created.capabilities.parent).phase, "REVIEWING");
         store.close();
+    }
+    finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
+test("rejects digest-consistent v2 rows that violate runtime validation", () => {
+    const { root, git } = fixture();
+    try {
+        const store = new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") });
+        const created = create(store, root, git, { objective: "runtime validate" });
+        const id = created.workflow.workflow_id;
+        const read = () => store.db.prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?").get(id);
+        const original = read();
+        const reinsert = (mutate) => {
+            const state = JSON.parse(original.state_json);
+            mutate(state);
+            store.db.prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?").run(JSON.stringify(state), objectDigest(state), id);
+        };
+        const blocked = () => store.get(id, "parent", created.capabilities.parent);
+        reinsert((state) => { state.phase = "NOT_A_PHASE"; });
+        assert.equal(errorCategory(blocked), "ERROR_STATE_CORRUPT");
+        reinsert((state) => { state.phase = "IMPLEMENTING"; });
+        const p3Blocker = { finding_id: "F-9", severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
+        reinsert((state) => { state.blocking_findings = [p3Blocker]; });
+        assert.equal(errorCategory(blocked), "ERROR_STATE_CORRUPT");
+        reinsert((state) => { state.blocking_findings = []; });
+        reinsert((state) => { state.extra_key = true; });
+        assert.equal(errorCategory(blocked), "ERROR_STATE_CORRUPT");
+        reinsert((state) => { delete state.extra_key; });
+        reinsert((state) => { state.commit_result = { outcome: "committed", commit_hash: "x".repeat(40), failure_summary: "tampered" }; });
+        assert.equal(errorCategory(blocked), "ERROR_STATE_CORRUPT");
+        reinsert((state) => { state.commit_result = null; });
+        assert.equal(blocked().phase, "IMPLEMENTING");
+        assert.deepEqual(read(), original);
+        reinsert((state) => { state.repair_cycle = 7; });
+        store.close();
+        assert.equal(errorCategory(() => new WorkflowStore({ repositoryRoot: root, databasePath: join(root, "state.sqlite") })), "ERROR_STATE_CORRUPT");
     }
     finally {
         rmSync(root, { recursive: true, force: true });

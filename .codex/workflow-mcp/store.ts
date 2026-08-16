@@ -36,6 +36,7 @@ import {
   submitCommitResult,
   submitImplementation,
   submitReview,
+  validateWorkflowStateV2,
 } from "./transitions.js";
 import {
   canonicalJson,
@@ -127,11 +128,19 @@ function auditEnvelope(
 }
 
 function parseState(row: WorkflowRow): WorkflowState {
+  if (row.state_digest === null || row.state_digest === undefined) {
+    fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
+  }
+  let parsed: unknown;
   try {
-    return JSON.parse(row.state_json) as WorkflowState;
+    parsed = JSON.parse(row.state_json);
   } catch {
     fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
   }
+  if (row.state_digest !== objectDigest(parsed)) {
+    fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
+  }
+  return validateWorkflowStateV2(parsed);
 }
 
 // roleView's public overloads only accept literal roles; the store reaches the
@@ -223,15 +232,6 @@ export class WorkflowStore {
     return selectedRole;
   }
 
-  #verifyDigest(row: WorkflowRow): void {
-    if (row.state_digest === null || row.state_digest === undefined) {
-      fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
-    }
-    if (row.state_digest !== objectDigest(parseState(row))) {
-      fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
-    }
-  }
-
   #row(workflowId: WorkflowId): WorkflowRow {
     if (typeof workflowId !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowId)) {
       fail("ERROR_NOT_FOUND", "workflow is not found");
@@ -240,7 +240,7 @@ export class WorkflowStore {
       .prepare("SELECT * FROM workflows WHERE workflow_id = ?")
       .get(workflowId) as WorkflowRow | undefined;
     if (!row) fail("ERROR_NOT_FOUND", "workflow is not found");
-    this.#verifyDigest(row);
+    parseState(row);
     return row;
   }
 
@@ -265,6 +265,7 @@ export class WorkflowStore {
             fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
           }
           const next = migrateV1State(parsed);
+          validateWorkflowStateV2(next);
           next.version = ((parsed as { version: number }).version + 1) as WorkflowVersion;
           const now = isoNow();
           const result = this.db
@@ -290,7 +291,9 @@ export class WorkflowStore {
             auditEnvelope(state, next, null, { outcome: next.phase }),
           );
           migrated = true;
-        } else if (schema !== 2) {
+        } else if (schema === 2) {
+          validateWorkflowStateV2(parsed);
+        } else {
           fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
         }
       }
