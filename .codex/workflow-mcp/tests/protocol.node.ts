@@ -23,9 +23,9 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const listed = await client.listTools();
@@ -44,7 +44,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.equal(JSON.parse((denied.content[0] as { text: string }).text).category, "ERROR_CAPABILITY_DENIED");
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
     const base = created.workflow;
-    const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
     const implemented = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 0, status: "DONE", summary: "implemented", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: initialReceipt, known_failures: [], finding_resolution_map: {} });
     assert.equal(implemented.phase, "REVIEWING");
     writeFileSync(join(root, "note.txt"), "after\n");
@@ -54,7 +54,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.equal(changes.phase, "REPAIR_REQUIRED");
     const repairing = await call("workflow_authorize_repair", { workflow_id: base.workflow_id, capability: created.capabilities.parent, expected_version: 2, finding_ids: ["PROTO-1"] });
     assert.equal(repairing.phase, "REPAIRING");
-    const receipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
     const repaired = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 3, status: "DONE", summary: "repaired", agent_touched_paths: ["note.txt"], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "repaired" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: receipt, known_failures: [], finding_resolution_map: { "PROTO-1": "resolved" } });
     assert.equal(repaired.phase, "REVIEWING");
     const approved = await call("workflow_submit_review", { workflow_id: base.workflow_id, capability: created.capabilities.reviewer, expected_version: 4, review_status: "APPROVED", blocking_findings: [], optional_findings: [], review_receipt: receipt, review_target: target, prior_finding_classifications: { "PROTO-1": "resolved" } });
@@ -81,9 +81,9 @@ test("role view projection over STDIO returns only role data without capabilitie
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const createdResult = await client.callTool({ name: "workflow_create", arguments: { workflow_type: "change", objective: "role view protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } } });
@@ -129,7 +129,7 @@ test("role view projection over STDIO returns only role data without capabilitie
 test("SIGINT and SIGTERM shutdown close the store and leave a reopenable database", async () => {
   const root = mkdtempSync(join(tmpdir(), "workflow-shutdown-"));
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const script = join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js");
+  const script = join(process.cwd(), ".codex", "workflow-mcp", "server.ts");
   try {
     git("init", "-q");
     git("config", "user.email", "workflow@example.invalid");
@@ -400,16 +400,16 @@ test("implementation stops resume and concerns over STDIO", async () => {
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const createdResult = await client.callTool({ name: "workflow_create", arguments: { workflow_type: "change", objective: "recover", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } } });
     const created = JSON.parse((createdResult.content[0] as { text: string }).text);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
     const base = created.workflow;
-    const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const initialReceipt = JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const stopped = await call("workflow_submit_implementation", { workflow_id: base.workflow_id, capability: created.capabilities.implementer, expected_version: 0, status: "NEEDS_CONTEXT", summary: "missing context", agent_touched_paths: [], acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }], validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }], implementation_receipt: initialReceipt, known_failures: [], finding_resolution_map: {} });
     assert.equal(stopped.phase, "STOPPED_NEEDS_CONTEXT");
@@ -449,13 +449,13 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (paths: string[]): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", ...paths], { cwd: root, encoding: "utf8" }));
+    const receipt = (paths: string[]): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", ...paths], { cwd: root, encoding: "utf8" }));
 
     const wtResult = await call("workflow_create", { workflow_type: "review_only", objective: "working-tree review only", approved_paths: ["note.txt"], acceptance_criteria: ["review criterion"], validation_requirements: [], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     assert.equal(wtResult.workflow.phase, "REVIEWING");
@@ -500,13 +500,13 @@ test("review resume and repair exhaustion over STDIO", async () => {
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const wtResult = await call("workflow_create", { workflow_type: "review_only", objective: "recover review", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: [], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const wt = wtResult.workflow;
@@ -548,13 +548,13 @@ test("linked follow-up over STDIO creates a self-contained child without source 
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (paths: string[]): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", ...paths], { cwd: root, encoding: "utf8" }));
+    const receipt = (paths: string[]): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", ...paths], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "linked protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -598,13 +598,13 @@ test("commit preparation over STDIO verifies the staged index and binds the auth
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "prepare protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -698,13 +698,13 @@ test("commit result success over STDIO records a verified external commit", asyn
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "commit result protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -752,13 +752,13 @@ test("not committed failure and retry over STDIO", async () => {
     mkdirSync(join(root, ".git", "hooks"), { recursive: true });
     writeFileSync(join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n");
     chmodSync(join(root, ".git", "hooks", "pre-commit"), 0o755);
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "retry protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -810,13 +810,13 @@ test("commit mismatch over STDIO stops terminally and leaves no retry", async ()
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "mismatch protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -859,13 +859,13 @@ test("v2 workflows deny legacy commit recording over STDIO", async () => {
     writeFileSync(join(root, "note.txt"), "before\n");
     git("add", ".");
     git("commit", "-qm", "fixture");
-    mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-    cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
-    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
+    const transport = new StdioClientTransport({ command: process.execPath, args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")], cwd: root, env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") }, stderr: "pipe" });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
     const call = async (name: string, arguments_: any) => JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
-    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
+    const receipt = (): any => JSON.parse(execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], { cwd: root, encoding: "utf8" }));
 
     const createdResult = await call("workflow_create", { workflow_type: "change", objective: "record deny protocol", approved_paths: ["note.txt"], acceptance_criteria: ["criterion"], validation_requirements: ["validation"], review_target: { review_mode: "working_tree", base_revision: git("rev-parse", "HEAD"), head_revision: null, approved_paths: ["note.txt"], include_staged: true, include_unstaged: true, include_untracked: true } });
     const created = createdResult.workflow;
@@ -1008,7 +1008,7 @@ test("obsolete names are absent and workflow_record_commit appears only in migra
     ".codex/agents/committer.toml",
     ".codex/agents/EVALS.md",
     ".codex/workflow-mcp/README.md",
-    ".codex/workflow-mcp/dist/server.js",
+    ".codex/workflow-mcp/server.ts",
   ];
   for (const file of ownedTexts) {
     const text = readFileSync(join(process.cwd(), file), "utf8");

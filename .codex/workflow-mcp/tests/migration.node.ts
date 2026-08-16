@@ -667,7 +667,7 @@ test("reopens a v1 COMMIT_AUTHORIZED fixture via STDIO and completes the allowed
 
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")],
+      args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")],
       cwd: root,
       env: { ...process.env, WORKFLOW_MCP_DB_PATH: db },
       stderr: "pipe",

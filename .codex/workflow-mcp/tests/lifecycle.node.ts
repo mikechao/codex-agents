@@ -27,8 +27,8 @@ function fixture() {
   writeFileSync(join(root, "note.txt"), "before\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
-  cpSync(join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"), join(root, ".codex", "agents", "dist", "change-receipt.js"));
+  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+  cpSync(join(process.cwd(), ".codex", "agents", "change-receipt.ts"), join(root, ".codex", "agents", "change-receipt.ts"));
   return { root, git };
 }
 
@@ -44,7 +44,7 @@ function rangeFixture() {
 
 function receipt(root: string): any {
   return JSON.parse(
-    execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], {
+    execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"], {
       cwd: root,
       encoding: "utf8",
     }),

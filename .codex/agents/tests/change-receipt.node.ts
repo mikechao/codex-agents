@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { test } from "bun:test";
 import { createReceipt, safePaths } from "../change-receipt.js";
 
-const utility = resolve(import.meta.dirname, "..", "change-receipt.js");
+const utility = resolve(import.meta.dirname, "..", "change-receipt.ts");
 
 interface RunResult {
   status: number | null;
@@ -96,6 +96,31 @@ function isErrno(error: unknown, code: string): boolean {
     (error as { code?: unknown }).code === code
   );
 }
+
+async function udsUnsupported(): Promise<boolean> {
+  if (process.platform === "win32") return true;
+  const dir = mkdtempSync(join(tmpdir(), "uds-probe-"));
+  const server = createServer();
+  const socketPath = join(dir, "socket");
+  let listening = false;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    listening = true;
+    return false;
+  } catch (error) {
+    if (isErrno(error, "EPERM") || isErrno(error, "ENOSYS")) return true;
+    throw error;
+  } finally {
+    if (listening) await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(socketPath, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const skipIfUdsUnsupported = test.skipIf(await udsUnsupported());
 
 test("reports modified tracked content and remains stable across git add", () => {
   withRepository((root) => {
@@ -367,7 +392,7 @@ test("CLI rejects duplicate or unknown flags and paths before the separator", ()
   });
 });
 
-skipOnWindows("rejects unsupported Unix-domain socket filesystem objects", async () => {
+skipIfUdsUnsupported("rejects unsupported Unix-domain socket filesystem objects", async () => {
   const root = repository();
   const socketPath = join(root, "socket");
   const server = createServer();
@@ -375,17 +400,10 @@ skipOnWindows("rejects unsupported Unix-domain socket filesystem objects", async
   try {
     writeFileSync(join(root, "tracked.txt"), "tracked\n");
     commit(root);
-    try {
-      await new Promise<void>((listenResolve, reject) => {
-        server.once("error", reject);
-        server.listen(socketPath, listenResolve);
-      });
-    } catch (error) {
-      if (isErrno(error, "EPERM") || isErrno(error, "ENOSYS")) {
-        return;
-      }
-      throw error;
-    }
+    await new Promise<void>((listenResolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, listenResolve);
+    });
     listening = true;
     const result = run(root, ["socket"]);
     assert.notEqual(result.status, 0);

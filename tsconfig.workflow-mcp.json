@@ -1,8 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "rootDir": ".codex/workflow-mcp",
-    "outDir": ".codex/workflow-mcp/dist"
-  },
+  "compilerOptions": {},
   "include": [".codex/workflow-mcp/**/*.ts"]
 }

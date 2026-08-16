@@ -7,12 +7,11 @@
     "bun": ">=1.3.0"
   },
   "scripts": {
-    "start": "bun --no-warnings .codex/workflow-mcp/dist/server.js",
-    "build": "tsc -p tsconfig.workflow-mcp.json && tsc -p tsconfig.agents.json",
+    "start": "bun --no-warnings .codex/workflow-mcp/server.ts",
     "typecheck": "tsc --noEmit -p tsconfig.workflow-mcp.json && tsc --noEmit -p tsconfig.agents.json",
-    "test": "bun run build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js ./.codex/agents/dist/tests/*.node.js",
-    "test:agents": "bun run build && bun test --timeout=60000 ./.codex/agents/dist/tests/*.node.js",
-    "test:workflow-mcp": "bun run build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js"
+    "test": "bun test --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts",
+    "test:agents": "bun test --timeout=60000 ./.codex/agents/tests/*.node.ts",
+    "test:workflow-mcp": "bun test --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0"

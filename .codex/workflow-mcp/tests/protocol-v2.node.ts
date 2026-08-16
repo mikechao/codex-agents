@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WorkflowStore } from "../store.js";
 
-const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js");
+const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "server.ts");
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "workflow-v2-"));
@@ -24,10 +24,10 @@ function fixture() {
   writeFileSync(join(root, "note.txt"), "before\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
+  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
   cpSync(
-    join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"),
-    join(root, ".codex", "agents", "dist", "change-receipt.js"),
+    join(process.cwd(), ".codex", "agents", "change-receipt.ts"),
+    join(root, ".codex", "agents", "change-receipt.ts"),
   );
   return { root, git };
 }
@@ -58,7 +58,7 @@ async function start(root: string) {
       execFileSync(
         process.execPath,
         [
-          realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")),
+          realpathSync(join(root, ".codex", "agents", "change-receipt.ts")),
           "--",
           ...paths,
         ],

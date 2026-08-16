@@ -214,7 +214,7 @@ export function createReceipt(
   expectedPaths: ReadonlyArray<ExactRepoPath>,
   allowAbsent = false,
 ): ChangeReceipt {
-  const script = join(root, ".codex", "agents", "dist", "change-receipt.js");
+  const script = join(root, ".codex", "agents", "change-receipt.ts");
   const args = allowAbsent ? ["--allow-absent", "--", ...expectedPaths] : ["--", ...expectedPaths];
   let current: ChangeReceipt;
   try {

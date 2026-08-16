@@ -9,9 +9,8 @@ Run it through the project-scoped `.codex/config.toml` or:
 bun run start
 ```
 
-Sources are TypeScript; `bun run build` compiles them to the committed `dist/` mirror (entry
-`dist/server.js`), and `bun run typecheck` runs strict checks. Bun runs the compiled server and the
-`bun test` runner executes the compiled tests under `dist/tests/`.
+Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
+`tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.
 
 State is stored in a stable, repository-hash-partitioned path under the user's Codex state area.
 Tests may pass an explicit database path. The server does not read PGlite, corpus data, browser

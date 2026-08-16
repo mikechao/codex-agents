@@ -38,14 +38,12 @@ if ! command -v bun >/dev/null 2>&1; then
   echo "Bun runtime not found on PATH; it is required to run the workflow_state server." >&2
   exit 1
 fi
-if [ ! -f "$project_root/.codex/workflow-mcp/dist/server.js" ]; then
-  echo "Compiled server artifact missing: $project_root/.codex/workflow-mcp/dist/server.js" >&2
-  echo "Run 'bun run build' in $project_root first." >&2
+if [ ! -f "$project_root/.codex/workflow-mcp/server.ts" ]; then
+  echo "Server source missing: $project_root/.codex/workflow-mcp/server.ts" >&2
   exit 1
 fi
-if [ ! -f "$project_root/.codex/agents/dist/change-receipt.js" ]; then
-  echo "Compiled receipt artifact missing: $project_root/.codex/agents/dist/change-receipt.js" >&2
-  echo "Run 'bun run build' in $project_root first." >&2
+if [ ! -f "$project_root/.codex/agents/change-receipt.ts" ]; then
+  echo "Receipt utility source missing: $project_root/.codex/agents/change-receipt.ts" >&2
   exit 1
 fi
 for file in code_reviewer.toml committer.toml implementer.toml WORKFLOW.md; do
@@ -64,13 +62,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p -- "$agents_staging/dist"
-for file in code_reviewer.toml committer.toml implementer.toml WORKFLOW.md EVALS.md EVAL_RESULTS.md; do
+mkdir -p -- "$agents_staging"
+for file in code_reviewer.toml committer.toml implementer.toml WORKFLOW.md EVALS.md EVAL_RESULTS.md change-receipt.ts; do
   if [ -f "$project_root/.codex/agents/$file" ]; then
     cp -- "$project_root/.codex/agents/$file" "$agents_staging/"
   fi
 done
-cp -- "$project_root/.codex/agents/dist/change-receipt.js" "$agents_staging/dist/"
 
 if [ -f "$config" ]; then
   cp -- "$config" "$config_staging"
@@ -81,7 +78,7 @@ cat >>"$config_staging" <<EOF_CONFIG
 # Local durable state for the reusable custom-agent workflow.
 [mcp_servers.workflow_state]
 command = "bun"
-args = ["--no-warnings", '$project_root/.codex/workflow-mcp/dist/server.js']
+args = ["--no-warnings", '$project_root/.codex/workflow-mcp/server.ts']
 startup_timeout_sec = 10
 tool_timeout_sec = 30
 required = false

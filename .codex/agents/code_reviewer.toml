@@ -43,7 +43,7 @@ Rules:
 - Inspect every part of the declared target. Return `INCONCLUSIVE` if any declared path, include
   class, revision, diff, or required context cannot be inspected or is contradictory.
 - For a `working_tree` review, run
-  `bun .codex/agents/dist/change-receipt.js -- <approved paths>` at review start and immediately
+  `bun .codex/agents/change-receipt.ts -- <approved paths>` at review start and immediately
   before the final response. The two complete metadata-only receipts must be identical. If they
   differ, or the receipt `base_head` does not equal the declared `base_revision`, return
   `INCONCLUSIVE`. Return the final receipt only with `APPROVED`; return no commit receipt for
