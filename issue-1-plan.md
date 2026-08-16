@@ -1,5 +1,7 @@
 # Issue 1 Plan: Migrate workflow-state MCP to TypeScript + MCP SDK v2
 
+**Status: DONE** — all phases (A–K) complete. See the Done Report at the end of this file.
+
 Behavior-preserving infrastructure migration of the local workflow-state MCP server from
 JavaScript (`.mjs`) to TypeScript and from `@modelcontextprotocol/sdk` v1 to the MCP TypeScript
 SDK v2 server package. No redesign of workflow semantics, agent contracts, state transitions,
@@ -674,7 +676,7 @@ import type { Tool } from "@modelcontextprotocol/server";
   `README.md`, `.codex/workflow-mcp/README.md`, `mcp-plan.md`, and the archived
   `docs/archive/issue-1-phase-j.md`); worktree clean at commit.
 
-## Phase K — Verification
+## Phase K — Verification  [DONE]
 
 Run in order:
 
@@ -692,6 +694,67 @@ Run in order:
    - `.mjs` entry-point references in `.codex/config.toml`, `install-into.sh`, `package.json`
      scripts, and docs.
 6. `git diff --check`; `git status --short` review; commit sources + `dist/` together.
+
+### Done Report — Phase K
+
+**Changes:** none — the final verification sweep executed against the committed end-state
+(`f24fb31`).
+
+**Verified (every acceptance criterion):**
+- `pnpm typecheck` — passes under both tsconfigs (strict, `typescript@7`).
+- `pnpm test:workflow-mcp` — **135/135**; `pnpm test:agents` — **19/19**; full `pnpm test` —
+  **154/154**.
+- Committed-dist determinism (K.3): `git status --short` is empty after `pnpm test` rebuilds
+  `dist/` — committed artifacts match fresh `tsc` output byte-for-byte.
+- STDIO smoke (K.4): raw JSON-RPC session against `dist/server.js` — `initialize` negotiates
+  `2025-11-25`, `tools/list` returns all 16 tools, `workflow_get` with a fabricated id resolves
+  `{ isError: true }` with `ERROR_NOT_FOUND`, SIGTERM exits 0, stdout carries only transport
+  frames, stderr is 0 bytes. (Run as a raw-STDIO session in place of `codex mcp get
+  workflow_state`, which requires an interactive Codex host.)
+- `rg` sweep (K.5): no `@modelcontextprotocol/sdk` in sources/tests/`package.json`/lockfile; no
+  `change-receipt\.mjs` in agent docs/TOMLs/installer; no `.mjs` entry references in config,
+  installer, scripts, or docs (`mcp-plan.md` and `docs/archive/` excluded as historical).
+- `git diff --check` clean; worktree clean.
+
+## Done Report — Issue 1
+
+**Outcome:** The workflow-state MCP server is now strict TypeScript on the MCP TypeScript SDK v2
+(`@modelcontextprotocol/server`), runs from a committed compiled `dist/server.js` artifact, and
+passes the full 154-test suite — with runtime validation, persisted-state compatibility, and every
+workflow/protocol behavior intact. All 18 acceptance criteria in the mapping above are met and
+were verified per phase and by the Phase K sweep.
+
+**Files changed:**
+- Tooling: `package.json`, `pnpm-lock.yaml`, `tsconfig.json`, `tsconfig.workflow-mcp.json`,
+  `tsconfig.agents.json`.
+- Server: `.codex/workflow-mcp/{types,errors,validation,git,store,transitions,server,index}.ts`
+  plus committed `dist/*.js` (sources + `tests/`).
+- Receipt CLI: `.codex/agents/change-receipt.ts`, committed `dist/change-receipt.js` +
+  `dist/tests/change-receipt.node.js`.
+- Tests: `.codex/workflow-mcp/tests/*.node.ts` (six files) + committed `dist/tests/*.node.js`.
+- Config/installer/docs: `.codex/config.toml`, `install-into.sh`, `AGENTS.md`, `README.md`,
+  `.codex/workflow-mcp/README.md`, `WORKFLOW.md`, the four agent TOMLs, `mcp-plan.md`
+  (supersession note).
+- Planning records: this plan plus `docs/archive/issue-1-phase-{b..j}.md`.
+
+**Deviations from the umbrella plan (all pre-documented in the per-phase specs):**
+- Receipt CLI spawn flip deferred from Phase D to Phase H, executed atomically with the compiled
+  `dist/change-receipt.js` artifact, test fixtures, and docs.
+- `.codex/config.toml` / `install-into.sh` server-path flips landed in Phase G (with the entry
+  conversion) rather than Phase J.
+- Temporary re-export `.mjs` shims bridged Phases C–G and were deleted at Phase I; the receipt CLI
+  (entry-guard path-sensitive) was deleted outright in Phase H with its test converted alongside.
+- `ErrorCategory` extended with `ERROR_STAGED_CONTENT` / `ERROR_STAGED_SCOPE` (grep-verified at
+  Phase B).
+- Per-phase verification ran the SDK-free `.mjs` test subset during Phases C–H (the
+  migration/protocol suites were unloadable until Phase I, when the full suite went green).
+- Phase K smoke used a raw STDIO JSON-RPC session instead of `codex mcp get workflow_state`.
+
+**Remaining follow-ups (out of scope, per the non-goals):**
+- `noUncheckedIndexedAccess` (Phase A note) — optional strictness follow-up.
+- Phase-specific `WorkflowState` discriminated unions — deliberately deferred second wave.
+- No EVALS scenarios were run; `EVAL_RESULTS.md` untouched (contract changes are prompt-text and
+  path-only; receipt behavior is byte-identical).
 
 ## Acceptance-criteria mapping
 
