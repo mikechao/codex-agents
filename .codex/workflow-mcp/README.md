@@ -6,11 +6,11 @@ committer workflow. It is a Bun STDIO MCP server, not an extension runtime or pr
 Run it through the project-scoped `.codex/config.toml` or:
 
 ```sh
-pnpm start
+bun run start
 ```
 
-Sources are TypeScript; `pnpm build` compiles them to the committed `dist/` mirror (entry
-`dist/server.js`), and `pnpm typecheck` runs strict checks. Bun runs the compiled server and the
+Sources are TypeScript; `bun run build` compiles them to the committed `dist/` mirror (entry
+`dist/server.js`), and `bun run typecheck` runs strict checks. Bun runs the compiled server and the
 `bun test` runner executes the compiled tests under `dist/tests/`.
 
 State is stored in a stable, repository-hash-partitioned path under the user's Codex state area.

@@ -40,12 +40,12 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 if [ ! -f "$project_root/.codex/workflow-mcp/dist/server.js" ]; then
   echo "Compiled server artifact missing: $project_root/.codex/workflow-mcp/dist/server.js" >&2
-  echo "Run 'pnpm build' in $project_root first." >&2
+  echo "Run 'bun run build' in $project_root first." >&2
   exit 1
 fi
 if [ ! -f "$project_root/.codex/agents/dist/change-receipt.js" ]; then
   echo "Compiled receipt artifact missing: $project_root/.codex/agents/dist/change-receipt.js" >&2
-  echo "Run 'pnpm build' in $project_root first." >&2
+  echo "Run 'bun run build' in $project_root first." >&2
   exit 1
 fi
 for file in code_reviewer.toml committer.toml implementer.toml WORKFLOW.md; do

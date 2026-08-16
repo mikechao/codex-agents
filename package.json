@@ -10,9 +10,9 @@
     "start": "bun --no-warnings .codex/workflow-mcp/dist/server.js",
     "build": "tsc -p tsconfig.workflow-mcp.json && tsc -p tsconfig.agents.json",
     "typecheck": "tsc --noEmit -p tsconfig.workflow-mcp.json && tsc --noEmit -p tsconfig.agents.json",
-    "test": "pnpm build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js ./.codex/agents/dist/tests/*.node.js",
-    "test:agents": "pnpm build && bun test --timeout=60000 ./.codex/agents/dist/tests/*.node.js",
-    "test:workflow-mcp": "pnpm build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js"
+    "test": "bun run build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js ./.codex/agents/dist/tests/*.node.js",
+    "test:agents": "bun run build && bun test --timeout=60000 ./.codex/agents/dist/tests/*.node.js",
+    "test:workflow-mcp": "bun run build && bun test --timeout=60000 ./.codex/workflow-mcp/dist/tests/*.node.js"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0"
@@ -23,5 +23,5 @@
     "@types/node": "^22",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@10.30.1"
+  "packageManager": "bun@1.3.13"
 }

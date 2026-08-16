@@ -6,19 +6,19 @@ workflow-state MCP server.
 ## Set up this project
 
 ```sh
-pnpm install
-pnpm test
+bun install
+bun run test
 ```
 
-The project requires Bun 1.3 or newer to run the MCP server and tests. pnpm remains the package
-manager, and TypeScript/tsc remains responsible for typechecking and building. `pnpm build` must
-have run so the committed `dist/` artifacts are fresh; it is part of `pnpm test`. Its own
+The project requires Bun 1.3 or newer for install, the MCP server, and the tests.
+TypeScript/tsc remains responsible for typechecking and building. `bun run build` must have run
+so the committed `dist/` artifacts are fresh; it is part of `bun run test`. Its own
 `.codex/config.toml` runs the server against this repository with Bun. Runtime SQLite state is
 stored outside the repository under the user's Codex state directory.
 
 ## Install into another repository
 
-After `pnpm install`, run:
+After `bun install`, run:
 
 ```sh
 ./install-into.sh /absolute/path/to/target-repository

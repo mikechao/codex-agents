@@ -1,11 +1,11 @@
 # AGENTS.md
 
-This is a Bun-runtime ESM project managed with pnpm. Bun is required to run the local MCP server
-and the test suite; pnpm remains the package manager, and TypeScript/tsc handles typechecking and
-building. The reusable Codex `implementer`, `code_reviewer`, and `committer` definitions live
-under `.codex/agents/`; the project-scoped configuration in `.codex/config.toml` registers the
-local workflow-state server. The historical v2 implementation spec and the TypeScript/SDK-v2
-migration records live under `docs/archive/`.
+This is a Bun ESM project. Bun is required to run the local MCP server, the test suite, and the
+package manager (`bun install`/`bun run`); TypeScript/tsc handles typechecking and building. The
+reusable Codex `implementer`, `code_reviewer`, and `committer` definitions live under
+`.codex/agents/`; the project-scoped configuration in `.codex/config.toml` registers the local
+workflow-state server. The historical v2 implementation spec and the TypeScript/SDK-v2 migration
+records live under `docs/archive/`.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the TOML contracts, workflow documentation, MCP tool schemas and transitions, and
@@ -17,9 +17,9 @@ repository-local, emit no non-protocol output on stdout, preserve append-only wo
 history, and keep role capabilities and optimistic version checks intact. Runtime SQLite state
 belongs outside the repository by default; tests may override its location explicitly.
 
-Use `pnpm test:agents` for focused receipt/agent checks and `pnpm test:workflow-mcp` for focused
-server checks. Run the full `pnpm test` suite before declaring any change complete.
+Use `bun run test:agents` for focused receipt/agent checks and `bun run test:workflow-mcp` for
+focused server checks. Run the full `bun run test` suite before declaring any change complete.
 
-The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/`; `pnpm build`
-emits the committed `dist/` artifacts that Codex, `install-into.sh`, and the tests run. Run
-`pnpm typecheck` before declaring changes complete.
+The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/`; `bun run
+build` emits the committed `dist/` artifacts that Codex, `install-into.sh`, and the tests run.
+Run `bun run typecheck` before declaring changes complete.
