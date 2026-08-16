@@ -16,6 +16,17 @@ so the committed `dist/` artifacts are fresh; it is part of `bun run test`. Its 
 `.codex/config.toml` runs the server against this repository with Bun. Runtime SQLite state is
 stored outside the repository under the user's Codex state directory.
 
+## Commands
+
+```sh
+bun run start             # launch the workflow_state MCP server on STDIO
+bun run build             # compile TypeScript to the committed dist/ mirrors
+bun run typecheck         # strict tsc checks without emitting
+bun run test              # full suite: build + agents + workflow-MCP tests
+bun run test:agents       # focused change-receipt tests
+bun run test:workflow-mcp # focused workflow-state MCP server tests
+```
+
 ## Install into another repository
 
 After `bun install`, run:
@@ -24,7 +35,7 @@ After `bun install`, run:
 ./install-into.sh /absolute/path/to/target-repository
 ```
 
-The installer requires a Git repository, refuses to replace an existing `.codex/agents`
+The installer requires Bun and a Git repository, refuses to replace an existing `.codex/agents`
 directory or `workflow_state` MCP registration, copies the agent definitions, and registers this
 project's server by absolute path. Restart or reload Codex afterward, then verify it with:
 
