@@ -393,7 +393,7 @@ from the actual runtime code:
   worktree clean after the oracle build.
 
 
-## Phase G — `server.ts` (SDK v2)
+## Phase G — `server.ts` (SDK v2)  [DONE]
 
 ```ts
 import { Server } from "@modelcontextprotocol/server";
@@ -415,6 +415,56 @@ import type { Tool } from "@modelcontextprotocol/server";
 - Error results stay `{ isError: true, content: [{type:"text",text:JSON.stringify(safeError(err))}] }`
   (still resolves normally; our handler never throws out).
 - `index.ts` keeps the public re-exports.
+
+### Done Report — Phase G
+
+**Changes:**
+- Added `.codex/workflow-mcp/server.ts` — every element from `issue-1-phase-g.md` §§2–6:
+  `Server` from the `@modelcontextprotocol/server` root and `StdioServerTransport` from
+  `/stdio`; `type JsonSchema = Record<string, JSONValue>`; the schema fragments
+  (`common`, `resolutionMapSchema`, `findingSchema`, `workingTreeReviewTargetSchema`,
+  `commitRangeReviewTargetSchema`, `createReviewTargetSchema`) annotated `JsonSchema`; the
+  `schema()` helper returning `Tool["inputSchema"]`; and `export const tools: Tool[]` with all 16
+  tools verbatim (names, descriptions, schemas, five-field `annotations`). `createServer(store =
+  openStore()): Server` registers the spec-method string form
+  `setRequestHandler("tools/list" / "tools/call")`, with the handler still reading
+  `request.params` and `arguments ?? {}`; `json()`/`errorResult(): CallToolResult` preserve
+  `{ isError: true, ... }` results; `instructions` text and `main()`/shutdown wiring/entry guard
+  (§5) ported verbatim. All 16 store dispatches unchanged.
+- Added `.codex/workflow-mcp/index.ts` — identical re-export surface to the deleted `index.mjs`.
+- Deleted `server.mjs` and `index.mjs` (no shims, §7 deviation); flipped the two remaining
+  server-entry references to `dist/server.js`: `.codex/config.toml:4` and `install-into.sh:57`
+  (umbrella plan had listed them under Phase J).
+- Committed `.codex/workflow-mcp/dist/{server,index}.js` per the committed-`dist/` policy;
+  the emitted `dist/server.js` keeps the shebang and the `import.meta.url` entry guard.
+
+**Deviations / decisions (pre-documented in the Phase G spec §§7, 9):**
+- Real deletion of the `.mjs` entries plus entry flips in this phase — no `server.mjs` shim.
+  Phase J now covers only docs, the EVALS note, the installer artifact guard, and the mcp-plan.md
+  notes.
+- `schema()` takes `required: string[]` rather than the spec's `readonly string[]`:
+  `Tool["inputSchema"]`'s zod-inferred `required` is the mutable `string[]`, so `readonly`
+  fails TS4104 (probe-verified against the installed v2 types; zero casts).
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs; `pnpm build` emits `dist/server.js` /
+  `dist/index.js`.
+- Oracle (SDK-free subset, spec §8.3): `pnpm build && node --test
+  .codex/workflow-mcp/tests/git.node.mjs .codex/workflow-mcp/tests/lifecycle.node.mjs
+  .codex/workflow-mcp/tests/workflow.node.mjs` — **98 tests, 0 fail**. The three SDK-importing
+  spawner tests remain unloadable until Phase I (pre-existing).
+- Raw-STDIO smoke test against the compiled entry (§8.4): `initialize` (2025-03-26) →
+  `notifications/initialized` → `tools/list` (all 16 tool names, first tool's `annotations`) →
+  `tools/call` `workflow_get` with a fabricated id (`isError` result, `ERROR_NOT_FOUND`) and an
+  unknown tool (`ERROR_UNKNOWN_TOOL`); SIGTERM exits 0; stdout contains only JSON-RPC frames.
+- `rg -n 'server\.mjs|index\.mjs' .codex install-into.sh .codex/config.toml package.json` matches
+  only historical docs (`docs/archive/`, `issue-1-plan.md`) and the unloadable spawner tests (Phase
+  I updates their spawn paths to `dist/server.js`); no `@modelcontextprotocol/sdk` references in
+  sources.
+- `git diff --check` clean; committed `server.ts` + `index.ts` + the deletions + `dist/` + the two
+  path flips together (`b7b3a84`); worktree clean after the oracle build. Note: `pnpm test`'s
+  `dist/tests/*.node.js` glob matches no files (pre-existing since Phase A; restored when tests
+  migrate in Phase I).
 
 ## Phase H — `change-receipt.ts`
 
@@ -438,10 +488,11 @@ import type { Tool } from "@modelcontextprotocol/server";
 
 ## Phase J — Config / installer / docs
 
-- `.codex/config.toml` args -> `[--no-warnings, ".codex/workflow-mcp/dist/server.js"]`.
-- `install-into.sh`:
-  - Server path -> `$project_root/.codex/workflow-mcp/dist/server.js`, plus a guard that errors
-    with "run `pnpm build`" if `dist/server.js` is missing.
+- **Server-entry path flips already landed in Phase G** (deviation, `issue-1-phase-g.md` §7):
+  `.codex/config.toml` args -> `[--no-warnings, ".codex/workflow-mcp/dist/server.js"]` and the
+  `install-into.sh` server path -> `$project_root/.codex/workflow-mcp/dist/server.js`. Remaining
+  installer scope:
+  - A guard that errors with "run `pnpm build`" if `dist/server.js` is missing.
   - **Scope the `.codex/agents` copy to runtime needs** instead of copying the whole directory:
     copy `dist/change-receipt.js`, the TOML contracts, `WORKFLOW.md`, `EVALS.md`, and
     `EVAL_RESULTS.md`. Do NOT copy `.ts` sources or `tests/` into target repos. The target must end
