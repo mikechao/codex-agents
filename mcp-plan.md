@@ -11,6 +11,10 @@ remain authoritative for untouched v1 behavior until the documentation cutover.
 
 ## Global rules
 
+> Superseded: the TypeScript/SDK-v2 migration (issue 1) replaced `@modelcontextprotocol/sdk` v1
+> with `@modelcontextprotocol/server` v2 (plus `@modelcontextprotocol/client` for tests and
+> TypeScript tooling) by design. See `docs/archive/issue-1-phase-*.md` for the per-phase records.
+
 - Keep Node 22+, ESM, `node:sqlite`, and the existing MCP SDK; add no runtime dependency.
 - Keep the repository-local STDIO server silent on stdout except for MCP protocol output. Runtime
   SQLite remains outside the repository; tests use explicit temporary databases.

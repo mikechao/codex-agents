@@ -17,3 +17,7 @@ belongs outside the repository by default; tests may override its location expli
 
 Use `pnpm test:agents` for focused receipt/agent checks and `pnpm test:workflow-mcp` for focused
 server checks. Run the full `pnpm test` suite before declaring any change complete.
+
+The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/`; `pnpm build`
+emits the committed `dist/` artifacts that Codex, `install-into.sh`, and the tests run. Run
+`pnpm typecheck` before declaring changes complete.

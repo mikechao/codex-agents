@@ -10,9 +10,10 @@ pnpm install
 pnpm test
 ```
 
-The project requires Node 22 or newer. Its own `.codex/config.toml` runs the server against this
-repository. Runtime SQLite state is stored outside the repository under the user's Codex state
-directory.
+The project requires Node 22 or newer. `pnpm build` must have run so the committed `dist/`
+artifacts are fresh; it is part of `pnpm test`. Its own `.codex/config.toml` runs the server
+against this repository. Runtime SQLite state is stored outside the repository under the user's
+Codex state directory.
 
 ## Install into another repository
 
