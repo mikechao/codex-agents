@@ -54,7 +54,7 @@ cat >>"$config_staging" <<EOF_CONFIG
 # Local durable state for the reusable custom-agent workflow.
 [mcp_servers.workflow_state]
 command = "node"
-args = ["--no-warnings", '$project_root/.codex/workflow-mcp/server.mjs']
+args = ["--no-warnings", '$project_root/.codex/workflow-mcp/dist/server.js']
 startup_timeout_sec = 10
 tool_timeout_sec = 30
 required = false

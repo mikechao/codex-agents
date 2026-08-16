@@ -1,15 +1,23 @@
 #!/usr/bin/env node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { fail, safeError } from "./errors.mjs";
-import { openStore } from "./store.mjs";
+import { Server } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import type { CallToolResult, JSONValue, ListToolsResult, Tool } from "@modelcontextprotocol/server";
+import { fail, safeError } from "./errors.js";
+import { openStore } from "./store.js";
+import type { WorkflowStore } from "./store.js";
+
+type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
   "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. The parent owns user and commit authorization; reviewers do not authorize commits; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
-const common = {
+const common: {
+  type: "object";
+  properties: Record<string, JSONValue>;
+  required: string[];
+  additionalProperties: false;
+} = {
   type: "object",
   properties: {
     workflow_id: { type: "string" },
@@ -20,7 +28,11 @@ const common = {
   additionalProperties: false,
 };
 
-function schema(properties, required, extra = {}) {
+function schema(
+  properties: Record<string, JSONValue>,
+  required: string[],
+  extra: Record<string, JSONValue> = {},
+): Tool["inputSchema"] {
   return {
     type: "object",
     properties: { ...properties },
@@ -30,12 +42,12 @@ function schema(properties, required, extra = {}) {
   };
 }
 
-const resolutionMapSchema = {
+const resolutionMapSchema: JsonSchema = {
   type: "object",
   additionalProperties: { type: "string", enum: ["resolved", "still_present", "superseded"] },
 };
 
-const findingSchema = {
+const findingSchema: JsonSchema = {
   type: "object",
   properties: {
     finding_id: { type: "string", minLength: 1, maxLength: 80 },
@@ -62,7 +74,7 @@ const findingSchema = {
   additionalProperties: false,
 };
 
-const workingTreeReviewTargetSchema = {
+const workingTreeReviewTargetSchema: JsonSchema = {
   type: "object",
   properties: {
     review_mode: { type: "string", enum: ["working_tree"] },
@@ -85,7 +97,7 @@ const workingTreeReviewTargetSchema = {
   additionalProperties: false,
 };
 
-const commitRangeReviewTargetSchema = {
+const commitRangeReviewTargetSchema: JsonSchema = {
   type: "object",
   properties: {
     review_mode: { type: "string", enum: ["commit_range"] },
@@ -108,11 +120,11 @@ const commitRangeReviewTargetSchema = {
   additionalProperties: false,
 };
 
-const createReviewTargetSchema = {
+const createReviewTargetSchema: JsonSchema = {
   oneOf: [workingTreeReviewTargetSchema, commitRangeReviewTargetSchema],
 };
 
-export const tools = [
+export const tools: Tool[] = [
   {
     name: "workflow_create",
     description:
@@ -526,22 +538,22 @@ export const tools = [
   },
 ];
 
-function json(value) {
+function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
 
-function errorResult(error) {
+function errorResult(error: unknown): CallToolResult {
   const safe = safeError(error);
   return { isError: true, content: [{ type: "text", text: JSON.stringify(safe) }] };
 }
 
-export function createServer(store = openStore()) {
+export function createServer(store: WorkflowStore = openStore()): Server {
   const server = new Server(
     { name: "workflow-state", version: "1.0.0" },
     { capabilities: { tools: {} }, instructions },
   );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => ({ tools }));
+  server.setRequestHandler("tools/call", async (request) => {
     try {
       const args = request.params.arguments ?? {};
       let result;
@@ -605,13 +617,13 @@ export function createServer(store = openStore()) {
   return server;
 }
 
-export async function main() {
+export async function main(): Promise<void> {
   const transport = new StdioServerTransport();
-  let store;
-  let server;
+  let store: WorkflowStore | undefined;
+  let server: Server | undefined;
   let shuttingDown = false;
   let connected = false;
-  const shutdown = async (exitCode = 0) => {
+  const shutdown = async (exitCode: number | null = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     try {
