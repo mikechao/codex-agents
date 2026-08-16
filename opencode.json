@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "workflow_state": {
+      "type": "local",
+      "command": [
+        "bun",
+        "--no-warnings",
+        ".codex/workflow-mcp/server.ts"
+      ],
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}

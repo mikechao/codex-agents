@@ -20,9 +20,11 @@ bun run test
 
 The project requires Bun 1.3 or newer for install, the MCP server, and the tests. Bun executes
 the TypeScript sources directly; TypeScript/tsc remains responsible for static typechecking via
-`tsc --noEmit`. There is no compiled `dist/` artifact step. Its own `.codex/config.toml` runs the
-server against this repository with Bun. Runtime SQLite state is stored outside the repository
-under the user's Codex state directory.
+`tsc --noEmit`. There is no compiled `dist/` artifact step. Its own `.codex/config.toml` and root
+`opencode.json` register the server against this repository with Bun, so opening `codex-agents`
+directly in either host loads the three local agent definitions and auto-starts the
+`workflow_state` MCP server from the project config itself — no manual server launch is required.
+Runtime SQLite state is stored outside the repository under the user's Codex state directory.
 
 ## Commands
 
@@ -37,6 +39,16 @@ bun run test:workflow-mcp # focused workflow-state MCP server tests
 bun run test:coverage     # full suite with Bun coverage reporting
 bun run test:stress       # full suite, randomized order, each file run twice
 ```
+
+## Use this repository directly
+
+Opening `codex-agents` itself in Codex loads the three agents from `.codex/agents/` and registers
+the local `workflow_state` MCP server via `.codex/config.toml`. Opening it in OpenCode loads the
+same three agents from `.opencode/agents/` and registers the same server as a local MCP
+(`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
+(`.codex/workflow-mcp/server.ts`, project-relative) and the same `enabled`/`timeout` semantics as
+installer-generated registrations. The self-host OpenCode registration is checked into the
+repository and a test keeps it from silently diverging from the installer's registration shape.
 
 ## Install into another repository
 

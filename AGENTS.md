@@ -7,9 +7,10 @@ adapters: Codex TOML under `.codex/agents/` and OpenCode Markdown under `.openco
 both generated from the canonical host-neutral fragments in `.codex/agents/contracts/` by
 `bun run generate:agents`; the checked-in definitions must stay byte-identical to the generator
 output (`bun run test:agents` enforces this). The project-scoped configuration in
-`.codex/config.toml` registers the local workflow-state server for Codex; `install-into.ts`
-registers the same server for OpenCode. The historical v2 implementation spec and the
-TypeScript/SDK-v2 migration records live under `docs/archive/`.
+`.codex/config.toml` registers the local workflow-state server for Codex; the root
+`opencode.json` registers the same server for direct OpenCode use of this repository, and
+`install-into.ts` registers it for OpenCode in target repositories. The historical v2
+implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the generated host definitions, workflow documentation, MCP tool schemas and
