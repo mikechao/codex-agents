@@ -44,6 +44,25 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
   }
 });
 
+test("the OpenCode orchestrator is a host-specific primary outside shared generation", () => {
+  const generatedPaths = Object.keys(generateDefinitions());
+  assert.ok(
+    !generatedPaths.some((path) => path.endsWith(".opencode/agents/orchestrator.md")),
+    "the OpenCode-only primary must not be generated as a shared role",
+  );
+  const content = opencode("orchestrator.md");
+  assert.match(content, /^mode: primary$/m);
+  assert.match(content, /^  edit: deny$/m);
+  assert.match(content, /^  task:\n    "\*": deny$/m);
+  for (const role of ["implementer", "code_reviewer", "committer"]) {
+    assert.match(content, new RegExp(`^    "${role}": allow$`, "m"));
+  }
+  assert.match(content, /^  workflow_state_\*: deny$/m);
+  assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
+  assert.ok(!content.includes("workflow_state_workflow_submit_review"));
+  assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
+});
+
 test("reviewer is read-only with a narrow bash allowlist", () => {
   const content = opencode("code_reviewer.md");
   assert.match(content, /^  edit: deny$/m, "reviewer must not edit");

@@ -26,6 +26,7 @@ const REQUIRED_SOURCE_FILES = [
   ".opencode/agents/code_reviewer.md",
   ".opencode/agents/committer.md",
   ".opencode/agents/implementer.md",
+  ".opencode/agents/orchestrator.md",
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
@@ -40,10 +41,12 @@ const OPENCODE_COPY_SOURCE_FILES = [
   ".opencode/agents/implementer.md",
   ".opencode/agents/code_reviewer.md",
   ".opencode/agents/committer.md",
+  ".opencode/agents/orchestrator.md",
 ];
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
+const OPENCODE_DEFAULT_AGENT = "orchestrator";
 
 function error(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -334,6 +337,13 @@ function withoutKey(value: Record<string, unknown>, key: string): Record<string,
   return copy;
 }
 
+function withoutKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return keys.reduce((result, key) => withoutKey(result, key), { ...value });
+}
+
 export function openCodeMcpRegistration(serverPath: string): Record<string, unknown> {
   return {
     type: "local",
@@ -348,6 +358,7 @@ export function createOpenCodeConfig(serverPath: string): string {
     JSON.stringify(
       {
         $schema: OPENCODE_CONFIG_SCHEMA,
+        default_agent: OPENCODE_DEFAULT_AGENT,
         mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
       },
       null,
@@ -369,18 +380,33 @@ export function stageOpenCodeConfig(
       error(`Refusing to replace existing OpenCode workflow_state registration: ${configPath}`);
     }
   }
-  const edits = modify(
-    existing,
-    ["mcp", OPENCODE_SERVER_NAME],
-    openCodeMcpRegistration(serverPath),
-    {
-      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
-    },
+  const formattingOptions = {
+    formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+  };
+  let staged = existing;
+  if (!Object.hasOwn(parsedExisting, "default_agent")) {
+    staged = applyEdits(
+      staged,
+      modify(staged, ["default_agent"], OPENCODE_DEFAULT_AGENT, formattingOptions),
+    );
+  }
+  staged = applyEdits(
+    staged,
+    modify(
+      staged,
+      ["mcp", OPENCODE_SERVER_NAME],
+      openCodeMcpRegistration(serverPath),
+      formattingOptions,
+    ),
   );
-  const staged = applyEdits(existing, edits);
   const parsedStaged = objectValue(parseJsoncConfig(configPath, staged), "staged config");
   const stagedRecord = parsedStaged ?? {};
-  if (!deepEqual(withoutKey(parsedExisting, "mcp"), withoutKey(stagedRecord, "mcp"))) {
+  if (
+    !deepEqual(
+      withoutKeys(parsedExisting, ["mcp", "default_agent"]),
+      withoutKeys(stagedRecord, ["mcp", "default_agent"]),
+    )
+  ) {
     error(
       `Staged OpenCode config would alter unrelated settings; refusing to install: ${configPath}`,
     );
@@ -400,6 +426,14 @@ export function stageOpenCodeConfig(
   if (!deepEqual(stagedMcp[OPENCODE_SERVER_NAME], openCodeMcpRegistration(serverPath))) {
     error(
       `Staged OpenCode workflow_state registration is invalid; refusing to install: ${configPath}`,
+    );
+  }
+  const expectedDefaultAgent = Object.hasOwn(parsedExisting, "default_agent")
+    ? parsedExisting.default_agent
+    : OPENCODE_DEFAULT_AGENT;
+  if (!deepEqual(stagedRecord.default_agent, expectedDefaultAgent)) {
+    error(
+      `Staged OpenCode default_agent would alter the existing preference; refusing to install: ${configPath}`,
     );
   }
   if (configPath.endsWith(".json")) {

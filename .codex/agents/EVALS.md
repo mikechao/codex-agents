@@ -169,23 +169,28 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 ## OpenCode host adapter
 
 Run in an installed OpenCode project (`.opencode/agents/` plus the `mcp.workflow_state` local
-registration) after changing the generator or a canonical contract.
+registration) after changing the orchestrator, installer, generator, or a canonical contract.
 
-- Direct Build implementation orchestration: in a fresh Build session, submit a non-trivial request
-  such as `Implement <issue>`. Confirm Build performs only bounded read-only preflight, does not
-  create source-level implementation TODOs or mutate repository files, creates or reuses the
-  authoritative workflow, captures the exact `workflow_id`, and automatically delegates to
-  `implementer` with its capability and current `expected_version`; confirm the implementer's first
+- Direct Orchestrator implementation: in a fresh Orchestrator session, submit a non-trivial request
+  such as `Implement <issue>`. Confirm it performs only bounded read-only preflight, does not create
+  source-level implementation TODOs or mutate repository files, creates or reuses the authoritative
+  workflow, captures the exact `workflow_id`, and automatically delegates to `implementer` in the
+  same turn with its capability and current `expected_version`; confirm the implementer's first
   authoritative action is `workflow_get` and that implementation occurs inside `implementer`.
-- Plan -> Build execution orchestration: run `/plan <non-trivial issue>`, allow Plan to finish a
-  detailed plan, then explicitly approve it with `implement the plan` (or equivalent). Confirm Plan
-  remains pre-workflow, Build performs only bounded read-only preflight after approval, does not
-  begin a second implementation investigation or mutate files, creates or reuses the authoritative
-  workflow, and automatically delegates the approved plan as execution context to `implementer`
-  with the exact `workflow_id`, capability, and current `expected_version`; confirm the
-  implementer's first authoritative action is `workflow_get`.
+- Plan -> Orchestrator execution: run `/plan <non-trivial issue>` in Plan, allow it to finish a
+  detailed plan without creating an implementation workflow, switch to Orchestrator, and say
+  `implement the plan`. Confirm Orchestrator does not perform a second planning pass or mutate files,
+  creates or reuses the workflow, and automatically delegates the approved plan as execution context
+  to `implementer` with the exact `workflow_id`, capability, and current `expected_version`.
+- Build independence: switch to the built-in Build agent and confirm it no longer receives project
+  instructions claiming it is the workflow orchestrator; Build remains available for deliberate
+  ordinary direct coding.
+- Orchestrator permissions: confirm `mode: primary`, `edit: deny`, fail-closed Task permissions that
+  allow only `implementer`, `code_reviewer`, and `committer`, read-only repository inspection, no Git
+  mutation commands, and only parent/orchestration `workflow_state` tools.
 - Subagent loading: OpenCode loads `implementer`, `code_reviewer`, and `committer` from
-  `.opencode/agents/` as subagents with `mode: subagent`, and each can be dispatched by the parent.
+  `.opencode/agents/` as `mode: subagent`, and Orchestrator can dispatch each without a manual
+  `@implementer` invocation.
 - MCP startup: OpenCode starts the `workflow_state` local server from the project config itself
   (no manual launch), and its tools are discoverable in a session.
 - Shared state: a workflow created in Codex is readable by the OpenCode roles via `workflow_get`,
@@ -215,6 +220,9 @@ registration) after changing the generator or a canonical contract.
   OpenCode role still ends its invocation with a non-empty normal assistant text report (the
   role-specific "final implementation/review/commit report", required for the committer whether
   the commit succeeded or failed); the generator-appended section is absent from the Codex TOML.
+- Default-agent installation policy: a new target or target config without `default_agent` starts in
+  Orchestrator; an explicit existing `default_agent` is preserved while the Orchestrator definition
+  is installed.
 
 ## Acceptance
 

@@ -1,7 +1,8 @@
 # codex-agents
 
 Reusable `implementer`, `code_reviewer`, and `committer` agent definitions with a local durable
-workflow-state MCP server, shared between Codex and OpenCode.
+workflow-state MCP server, shared between Codex and OpenCode. OpenCode also includes a dedicated
+`orchestrator` primary agent for coordinating those roles.
 
 The three role contracts live as host-neutral prose in `.codex/agents/contracts/`. Codex TOML
 definitions (`.codex/agents/*.toml`) and OpenCode Markdown definitions (`.opencode/agents/*.md`)
@@ -23,7 +24,7 @@ the TypeScript sources directly; TypeScript/tsc remains responsible for static t
 `tsc --noEmit`, and Biome owns formatting and linting for the TypeScript/JSON sources listed in
 the root `biome.json`. There is no compiled `dist/` artifact step. Its own `.codex/config.toml` and
 root `opencode.json` register the server against this repository with Bun, so opening `codex-agents`
-directly in either host loads the three local agent definitions and auto-starts the
+directly in either host loads the local agent definitions and auto-starts the
 `workflow_state` MCP server from the project config itself — no manual server launch is required.
 Runtime SQLite state is stored outside the repository under the user's Codex state directory.
 
@@ -51,24 +52,24 @@ continue to be validated through `Bun.TOML.parse` and the existing semantic asse
 
 ## Use this repository directly
 
-Opening `codex-agents` itself in Codex loads the three agents from `.codex/agents/` and registers
+Opening `codex-agents` itself in Codex loads the three shared agents from `.codex/agents/` and registers
 the local `workflow_state` MCP server via `.codex/config.toml`. Opening it in OpenCode loads the
-same three agents from `.opencode/agents/` and registers the same server as a local MCP
+same three subagents plus the `orchestrator` primary agent from `.opencode/agents/` and registers the same server as a local MCP
 (`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
 (`.codex/workflow-mcp/server.ts`, project-relative) and the same `enabled`/`timeout` semantics as
 installer-generated registrations. The self-host OpenCode registration is checked into the
 repository and a test keeps it from silently diverging from the installer's registration shape.
 
-Direct OpenCode use also loads `.opencode/ORCHESTRATION.md` through the top-level `instructions`
-field, so the primary Build agent delegates implementation, review, remediation, and commit work to
-the `implementer`, `code_reviewer`, and `committer` subagents automatically. The Build agent creates
-(or reuses) the authoritative `workflow_state` workflow, captures the exact `workflow_id` returned
-by workflow creation, and passes that same `workflow_id` into every delegated subagent invocation so
-the ID never changes across implementer, reviewer, remediation, and committer handoffs. Subagents
-use the parent-supplied `workflow_id` for their authoritative `workflow_get` lookup; they never
-guess a missing ID or inspect MCP persistence to recover one, and a missing ID fails the handoff
-closed. Manually `@`-mentioning a subagent remains an override/debug path and must still carry the
-exact `workflow_id`.
+OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
+`default_agent`. Use the normal primary-agent switcher (Tab by default) to select Plan for
+analysis/refinement or Build for deliberate ordinary direct coding. Plan does not create an
+implementation workflow; after approving a plan, switch to Orchestrator and say `implement the
+plan`. Orchestrator performs bounded read-only preflight, creates or reuses the authoritative
+workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after explicit user
+commit authorization—`committer`. It preserves the exact `workflow_id`, capability, and version
+through every handoff and cannot edit, stage, or commit itself. The pending Build-centered flow
+described by issue #12 should be revised to document Orchestrator before that issue is implemented
+or closed.
 
 ## Install into another repository
 
@@ -87,8 +88,13 @@ one all-or-nothing step:
   as a local MCP (`mcp.workflow_state`) in the project's `opencode.json` (or extends an existing
   `opencode.json`/`opencode.jsonc` without touching unrelated settings).
 
+For OpenCode, a new config or an existing config without `default_agent` defaults to
+`orchestrator`. An existing explicit `default_agent` is preserved; the orchestrator is still
+installed and can be selected with the primary-agent switcher. This prevents installation from
+overwriting a target project's deliberate default.
+
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
-`code_reviewer.md`, or `committer.md` under `.opencode/agents/`, while preserving unrelated
+`code_reviewer.md`, `committer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated
 existing OpenCode agents; it refuses existing `workflow_state` registrations in either host,
 refuses malformed existing configuration, and rolls the whole installation back if any commit
 step fails, so a failed run never leaves only one host installed. If the automatic rollback
@@ -111,7 +117,9 @@ other. The generated OpenCode definitions pin the `opencode-go/deepseek-v4-flash
 OpenCode Go provider must be connected (`/connect`) or the per-agent model overridden for the
 subagent models to resolve.
 
-OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the reviewer
+OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the orchestrator
+has `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
+to the three workflow subagents; the reviewer
 gets `edit: deny` plus a narrow bash allowlist; the committer gets `edit: deny` and a fail-closed
 bash allowlist for the documented commit flow (status/diff/log/show/rev-parse/ls-files
 inspection, approved `git add`/`git commit`, and the receipt command) that denies

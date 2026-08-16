@@ -10,65 +10,74 @@ import {
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
 const relativeServerPath = ".codex/workflow-mcp/server.ts";
-const orchestrationPath = ".opencode/ORCHESTRATION.md";
+const orchestratorPath = ".opencode/agents/orchestrator.md";
 
 test("the repository's own opencode.json registers workflow_state exactly like the installer", () => {
   assert.ok(existsSync(selfHostConfig), `missing self-host config: ${selfHostConfig}`);
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     $schema: string;
-    instructions: string[];
+    default_agent: string;
     mcp: { workflow_state: Record<string, unknown> };
   };
   const expected = JSON.parse(createOpenCodeConfig(relativeServerPath)) as {
     $schema: string;
+    default_agent: string;
     mcp: { workflow_state: Record<string, unknown> };
   };
   assert.equal(parsed.$schema, expected.$schema);
+  assert.equal(parsed.default_agent, expected.default_agent);
   assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
+  assert.equal(parsed.default_agent, "orchestrator");
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
 });
 
-test("the repository's own opencode.json loads the primary-agent orchestration instructions", () => {
-  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as { instructions?: string[] };
-  assert.deepEqual(parsed.instructions, [orchestrationPath]);
-  const orchestrationFile = resolve(repoRoot, orchestrationPath);
-  assert.ok(existsSync(orchestrationFile), `missing orchestration file: ${orchestrationPath}`);
-  const orchestration = readFileSync(orchestrationFile, "utf8");
-  const normalizedOrchestration = orchestration.replace(/\s+/gu, " ");
-  for (const guardrail of [
-    "## Build orchestrator boundary",
-    "Build is the orchestrator, not the implementer",
-    "must delegate the implementation to `implementer`",
-    "bounded, read-only preflight",
-    "must not become a second implementation-planning pass",
-    "For a direct Build request",
-    "Plan-mode work",
-    "implement the plan",
-    "approved plan is handoff context for `implementer`",
-    "must not edit source, configuration, or test files",
-    "source-level implementation TODOs",
-    "create or reuse the authoritative `workflow_state` workflow",
-    "capture the exact returned `workflow_id`",
-    "current `expected_version`",
-    "first authoritative action remains `workflow_get`",
-    "Build-side TODOs",
-    "trivial-edit exemption",
-  ]) {
-    assert.ok(normalizedOrchestration.includes(guardrail), `missing Build guardrail: ${guardrail}`);
+test("the repository's own OpenCode setup uses a dedicated primary orchestrator", () => {
+  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
+    default_agent?: string;
+    instructions?: string[];
+  };
+  assert.equal(parsed.default_agent, "orchestrator");
+  assert.equal(parsed.instructions, undefined, "Build must not receive global orchestration prose");
+  const orchestratorFile = resolve(repoRoot, orchestratorPath);
+  assert.ok(existsSync(orchestratorFile), `missing orchestrator: ${orchestratorPath}`);
+  const orchestrator = readFileSync(orchestratorFile, "utf8");
+  const normalized = orchestrator.replace(/\s+/gu, " ");
+  assert.match(orchestrator, /^mode: primary$/m);
+  assert.match(orchestrator, /^  edit: deny$/m);
+  assert.match(orchestrator, /^  task:\n    "\*": deny$/m);
+  for (const agent of ["implementer", "code_reviewer", "committer"]) {
+    assert.match(orchestrator, new RegExp(`^    "${agent}": allow$`, "m"));
   }
-  assert.ok(
-    normalizedOrchestration.includes("every non-trivial implementation request"),
-    "missing Build guardrail: every non-trivial implementation request",
-  );
-
-  const preflightIndex = normalizedOrchestration.indexOf("bounded, read-only preflight");
-  const workflowIndex = normalizedOrchestration.indexOf(
-    "creates or reuses the authoritative workflow",
-  );
-  const delegationIndex = normalizedOrchestration.indexOf("promptly delegates to `implementer`");
-  assert.ok(preflightIndex >= 0 && preflightIndex < workflowIndex);
-  assert.ok(workflowIndex < delegationIndex);
+  assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
+  for (const tool of [
+    "workflow_create",
+    "workflow_get",
+    "workflow_get_audit",
+    "workflow_authorize_repair",
+    "workflow_authorize_commit",
+  ]) {
+    assert.match(orchestrator, new RegExp(`^  workflow_state_${tool}: allow$`, "m"));
+  }
+  for (const forbidden of [
+    "workflow_submit_implementation",
+    "workflow_submit_review",
+    "workflow_prepare_commit",
+    "workflow_submit_commit_result",
+  ]) {
+    assert.ok(!orchestrator.includes(`workflow_state_${forbidden}`));
+  }
+  for (const phrase of [
+    "You are the OpenCode workflow orchestrator.",
+    "do not implement, independently review, stage, or commit",
+    "bounded, read-only preflight",
+    "exact returned `workflow_id`",
+    "implement the plan",
+    "stop at `STOPPED_APPROVED`",
+  ]) {
+    assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
+  }
+  assert.ok(!existsSync(resolve(repoRoot, ".opencode/ORCHESTRATION.md")));
 });
 
 test("the repository's own OpenCode registration keeps the installer server semantics", () => {

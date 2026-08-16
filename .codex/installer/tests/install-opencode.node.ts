@@ -67,7 +67,7 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed Codex agents/);
     assert.match(result.stdout, /Installed OpenCode agents/);
-    for (const file of ["implementer.md", "code_reviewer.md", "committer.md"]) {
+    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
         `missing .opencode/agents/${file}`,
@@ -77,11 +77,13 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(basenameOf(path), "opencode.json");
     const parsed = JSON.parse(content) as {
       $schema: string;
+      default_agent: string;
       mcp: {
         workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number };
       };
     };
     assert.equal(parsed.$schema, "https://opencode.ai/config.json");
+    assert.equal(parsed.default_agent, "orchestrator");
     const registration = parsed.mcp.workflow_state;
     assert.equal(registration.type, "local");
     assert.equal(registration.enabled, true);
@@ -123,7 +125,13 @@ test("install-into.ts preserves unrelated existing opencode.json configuration",
     assert.equal(parsed.autoupdate, false);
     assert.equal(parsed.mcp.other_server.command[0], "npx");
     assert.equal(parsed.mcp.workflow_state.type, "local");
-    assert.deepEqual(Object.keys(parsed).sort(), ["$schema", "autoupdate", "mcp", "model"]);
+    assert.deepEqual(Object.keys(parsed).sort(), [
+      "$schema",
+      "autoupdate",
+      "default_agent",
+      "mcp",
+      "model",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -255,7 +263,7 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
       "unrelated nested content\n",
       "unrelated nested content must be preserved",
     );
-    for (const file of ["implementer.md", "code_reviewer.md", "committer.md"]) {
+    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
         `missing .opencode/agents/${file}`,
@@ -273,26 +281,29 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
 });
 
 test("install-into.ts refuses a managed OpenCode agent name collision", () => {
-  const { root, write } = fixture();
-  try {
-    write(".opencode/agents/implementer.md", "---\ndescription: existing implementer\n---\n");
-    write(".opencode/agents/docs-writer.md", "---\ndescription: unrelated agent\n---\n");
-    const result = runInstaller(root);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Refusing to replace existing OpenCode agent definitions/);
-    assert.ok(!existsSync(join(root, ".codex/agents")));
-    assert.ok(!existsSync(join(root, "opencode.json")));
-    assert.equal(
-      readFileSync(join(root, ".opencode/agents/implementer.md"), "utf8"),
-      "---\ndescription: existing implementer\n---\n",
-    );
-    assert.equal(
-      readFileSync(join(root, ".opencode/agents/docs-writer.md"), "utf8"),
-      "---\ndescription: unrelated agent\n---\n",
-    );
-    assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  for (const [name, description] of [
+    ["implementer.md", "existing implementer"],
+    ["orchestrator.md", "existing orchestrator"],
+  ] as const) {
+    const { root, write } = fixture();
+    try {
+      const original = `---\ndescription: ${description}\n---\n`;
+      write(`.opencode/agents/${name}`, original);
+      write(".opencode/agents/docs-writer.md", "---\ndescription: unrelated agent\n---\n");
+      const result = runInstaller(root);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Refusing to replace existing OpenCode agent definitions/);
+      assert.ok(!existsSync(join(root, ".codex/agents")));
+      assert.ok(!existsSync(join(root, "opencode.json")));
+      assert.equal(readFileSync(join(root, `.opencode/agents/${name}`), "utf8"), original);
+      assert.equal(
+        readFileSync(join(root, ".opencode/agents/docs-writer.md"), "utf8"),
+        "---\ndescription: unrelated agent\n---\n",
+      );
+      assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

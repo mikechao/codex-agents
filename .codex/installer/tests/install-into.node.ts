@@ -67,10 +67,41 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
+    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
+      assert.ok(
+        existsSync(join(root, ".opencode/agents", file)),
+        `missing .opencode/agents/${file}`,
+      );
+    }
+    const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
+      default_agent: string;
+    };
+    assert.equal(opencodeConfig.default_agent, "orchestrator");
     const config = readFileSync(join(root, ".codex/config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.workflow_state\]/);
     assert.ok(!existsSync(join(root, ".codex/.agents.install.")));
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts preserves an existing OpenCode default_agent preference", () => {
+  const { root, write } = fixture();
+  try {
+    write(
+      "opencode.json",
+      '{\n  "$schema": "https://opencode.ai/config.json",\n  "default_agent": "plan"\n}\n',
+    );
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
+      default_agent: string;
+      mcp: Record<string, unknown>;
+    };
+    assert.equal(config.default_agent, "plan");
+    assert.ok(config.mcp.workflow_state);
+    assert.ok(existsSync(join(root, ".opencode/agents/orchestrator.md")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
