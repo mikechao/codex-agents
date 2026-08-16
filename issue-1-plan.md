@@ -93,7 +93,7 @@ lockfile/package.json; both `tsc -p` configs parse with exit 0; bare `tsc` is a 
 no-op (TS 7 reports TS18002, matching the plan's intent). Note `git status` also shows pre-existing
 untracked `issue-1-phase-b.md`/`issue-1-plan.md` — untouched.
 
-## Phase B — Domain types (new `.codex/workflow-mcp/types.ts`)
+## Phase B — Domain types (new `.codex/workflow-mcp/types.ts`)  [DONE]
 
 Pure types; validation functions (Phase C) are the only producers of branded values. Enumerated
 from the actual runtime code:
@@ -124,6 +124,32 @@ from the actual runtime code:
   `AuditEvent` (parsed). `AuditEnvelope`, `AuditEvent`.
 - **Commit domain:** `CommitAuthorization`, `CommitPreparation`, `CommitResult` (discriminated on
   `outcome`), and `CommitVerification` as the spec's `{ok:true,...}|{ok:false,mismatch}`.
+
+### Done Report — Phase B
+
+**Changes:**
+- Added `.codex/workflow-mcp/types.ts` — type-only module (`export type` only plus the `Brand`
+  helper), fully erasable and safe under `verbatimModuleSyntax`. Implements every type in the
+  `issue-1-phase-b.md` spec: `Brand` + 13 branded identity/value types (section 2), all core unions
+  including `WorkflowAction` (16 tool names) and `AuditEventType` (section 3), the `ReviewTarget`
+  discriminated union (section 4), findings/remediation (section 5), acceptance/validation
+  contracts and results (section 6), receipts and Git metadata (section 7), `WorkflowState` +
+  `StopContext`/`RecoveryContext`/`ConcernAcceptance` (section 8), the four concrete role views +
+  `RoleView`/`RoleCapabilities` (section 9), `WorkflowRow`/`AuditEventRow` persistence rows
+  (section 10), `AuditEnvelope`/`AuditEvent`/`LegacyAuditSummary` (section 11), and the commit
+  domain incl. `CommitPreparation`/`CommitResult`/`CommitVerification` (section 12).
+- **Deviation from the spec working set:** grep of the actual `ERROR_*` literals in
+  `.codex/workflow-mcp/*.mjs` + `.codex/agents/*.mjs` found two categories missing from the spec's
+  section 3 list, so `ErrorCategory` additionally includes `ERROR_STAGED_CONTENT` and
+  `ERROR_STAGED_SCOPE` (both flagged in-file). No runtime code imports `types.ts` yet, so the union
+  is not yet compile-enforced against `fail(...)` — that lands in Phase C.
+
+**Verified:**
+- `pnpm typecheck` passes for `types.ts` in isolation (empty other-module inputs under both
+  `tsconfig.workflow-mcp.json` and `tsconfig.agents.json`).
+- `git diff --check` clean.
+- No runtime behavior change: module added, nothing imports it (Phase C lands the producers,
+  D–F the consumers).
 
 ## Phase C — Runtime boundary typing (`errors.ts`, `validation.ts`)
 
