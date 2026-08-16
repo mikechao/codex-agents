@@ -151,7 +151,7 @@ from the actual runtime code:
 - No runtime behavior change: module added, nothing imports it (Phase C lands the producers,
   D–F the consumers).
 
-## Phase C — Runtime boundary typing (`errors.ts`, `validation.ts`)
+## Phase C — Runtime boundary typing (`errors.ts`, `validation.ts`)  [DONE]
 
 - `WorkflowError(category: ErrorCategory, detail?)`; `fail`, `safeError`, `isWorkflowError` typed.
 - Validation helpers become the trusted untrusted->typed boundary, taking `unknown` and returning
@@ -160,6 +160,40 @@ from the actual runtime code:
   `issueCapability(): CapabilityToken`, `hashCapability(): CapabilityHash`, `findings(): ReviewFinding[]`,
   `contractList`/`evidenceResults`, `exactKeys(): Record<string, unknown>`.
 - **No behavioral change**: all existing `ERROR_*` paths, limits, and ordering preserved.
+
+### Done Report — Phase C
+
+**Changes:**
+- Added `.codex/workflow-mcp/errors.ts` — `WorkflowError`, `SafeError`, `fail(...): never`,
+  `safeError`, `isWorkflowError`, exactly per `issue-1-phase-c.md` §2; `ErrorCategory` is `import
+  type` from `types.ts` (verbatim-module-safe), so every `fail(...)` literal is compile-enforced
+  against the union.
+- Added `.codex/workflow-mcp/validation.ts` — same names/values/detail strings/bounds as the
+  `.mjs` original (byte-identical `canonicalJson`/`objectDigest`); helpers take `unknown` and
+  return branded/typed values, with producer-side casts only (Phase B rule). New exports:
+  `workflowId(): WorkflowId` (throws `ERROR_NOT_FOUND` "workflow is not found" — matches
+  `store.#row`), `isoNow(): IsoTimestamp`, `findingIdList(value, name, errorCategory): FindingId[]`.
+  Overloads give `contractList`/`evidenceResults`/`finding(s)` concrete return types
+  (`AcceptanceCriterion[]`/`ValidationRequirement[]`, `AcceptanceResult[]`/`ValidationResult[]`,
+  `BlockingFinding[]`/`OptionalFinding[]`). `fail(): never` enables definite-assignment narrowing.
+- `errors.mjs`/`validation.mjs` replaced with temporary re-export shims
+  (`export * from "./dist/errors.js"` resp. `"./dist/validation.js"`); no consumer or test file
+  changed — imports resolve through the shims to the single compiled modules, preserving
+  `instanceof WorkflowError` identity. Shims are removed at Phase I (tests) / Phase G (server entry).
+- Committed `.codex/workflow-mcp/dist/{types,errors,validation}.js` per the committed-`dist/` policy.
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs.
+- Oracle `pnpm build && node --test .codex/workflow-mcp/tests/*.node.mjs`: **98/101 pass**. The 3
+  failures (`migration.node.mjs`, `protocol.node.mjs`, `protocol-v2.node.mjs`) are pre-existing on
+  committed Phase B — they import `@modelcontextprotocol/sdk`, which Phase A's dep swap left
+  unlinked; re-run with the Phase C changes stashed reproduces the identical 3 failures. This
+  resolves at Phase I when the tests migrate to `@modelcontextprotocol/client`.
+- No shim bypass: the only files referencing `dist/errors.js`/`dist/validation.js` are the two
+  shims; all `.mjs` consumers/tests still import the `.mjs` specifiers (per §1.2). Note: the §8
+  grep wording "matches only the shims" conflicts with §1.2's keep-the-`.mjs`-specifiers rule, so
+  the enforced check is the no-bypass one above.
+- `git diff --check` clean; committed `dist/` is deterministic (identical hashes across rebuilds).
 
 ## Phase D — `git.ts`
 
