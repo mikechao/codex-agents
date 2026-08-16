@@ -12,14 +12,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { WorkflowStore } from "../store.mjs";
-import { objectDigest } from "../validation.mjs";
+import { WorkflowStore } from "../store.js";
+import { objectDigest } from "../validation.js";
 
 const ROLES = ["parent", "implementer", "reviewer", "committer"];
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "workflow-state-"));
-  const git = (...args) =>
+  const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-q");
   git("config", "user.email", "workflow@example.invalid");
@@ -42,7 +42,7 @@ function rangeFixture() {
   return { root, git, base: git("rev-parse", "HEAD~1"), head: git("rev-parse", "HEAD") };
 }
 
-function receipt(root) {
+function receipt(root: string): any {
   return JSON.parse(
     execFileSync(process.execPath, [realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")), "--", "note.txt"], {
       cwd: root,
@@ -51,7 +51,7 @@ function receipt(root) {
   );
 }
 
-function workingTarget(baseHead, paths = ["note.txt"]) {
+function workingTarget(baseHead: string, paths: string[] = ["note.txt"]) {
   return {
     review_mode: "working_tree",
     base_revision: baseHead,
@@ -63,7 +63,7 @@ function workingTarget(baseHead, paths = ["note.txt"]) {
   };
 }
 
-function createInput(root, git, options = {}) {
+function createInput(root: string, git: (...args: string[]) => string, options: any = {}) {
   const approvedPaths = options.approved_paths ?? ["note.txt"];
   return {
     workflow_type: options.workflow_type ?? "change",
@@ -132,19 +132,19 @@ const EVENTS = {
   commitRetryResult: ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_SUBMITTED", "COMMIT_AUTHORIZED", "COMMIT_PREPARED", "COMMIT_RESULT_SUBMITTED", "COMMIT_RETRY_AUTHORIZED", "COMMIT_PREPARED", "COMMIT_RESULT_SUBMITTED"],
 };
 
-function blocker(id) {
+function blocker(id: string) {
   return { finding_id: id, severity: "P1", blocking: true, file_and_line: "note.txt:1", failure_scenario: "fails", impact: "bad", violated_requirement: "safe", remediation: "fix", missing_or_inadequate_test: "test" };
 }
 
-function optionalFinding(id) {
+function optionalFinding(id: string) {
   return { finding_id: id, severity: "P3", blocking: false, file_and_line: "note.txt:1", failure_scenario: "might fail", impact: "small", violated_requirement: "quality", remediation: "consider", missing_or_inadequate_test: "optional" };
 }
 
-function doCreate(ctx, options = {}) {
+function doCreate(ctx: any, options: any = {}) {
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
 }
 
-function doImplementation(ctx, version, options = {}) {
+function doImplementation(ctx: any, version: number, options: any = {}) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
@@ -153,12 +153,12 @@ function doImplementation(ctx, version, options = {}) {
     status: options.status ?? "DONE",
     summary: options.summary ?? "implemented",
     agent_touched_paths: options.touched ?? [],
-    acceptance_results: workflow.acceptance_criteria.map(({ criterion_id }) => ({
+    acceptance_results: workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
       criterion_id,
       status: options.criterionStatus ?? "satisfied",
       evidence: "acceptance evidence",
     })),
-    validation_results: workflow.validation_requirements.map(({ validation_id }) => ({
+    validation_results: workflow.validation_requirements.map(({ validation_id }: any) => ({
       validation_id,
       status: options.validationStatus ?? "passed",
       evidence: "validation evidence",
@@ -169,7 +169,7 @@ function doImplementation(ctx, version, options = {}) {
   });
 }
 
-function doReview(ctx, version, options = {}) {
+function doReview(ctx: any, version: number, options: any = {}) {
   const { workflow, capabilities } = ctx.created;
   const status = options.status ?? "APPROVED";
   ctx.store.submitReview({
@@ -185,37 +185,37 @@ function doReview(ctx, version, options = {}) {
   });
 }
 
-function doAuthorizeRepair(ctx, version, ids) {
+function doAuthorizeRepair(ctx: any, version: number, ids: string[]) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.authorizeRepair({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, finding_ids: ids });
 }
 
-function doResumeImplementation(ctx, version) {
+function doResumeImplementation(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.resumeImplementation({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, resume_context: "resumed" });
 }
 
-function doResumeReview(ctx, version) {
+function doResumeReview(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.resumeReview({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, resume_context: "resumed" });
 }
 
-function doAcceptConcerns(ctx, version) {
+function doAcceptConcerns(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.acceptConcerns({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, user_authorization: "user accepted concerns" });
 }
 
-function doAuthorizeCommit(ctx, version) {
+function doAuthorizeCommit(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.authorizeCommit({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, user_authorization: "user authorized commit" });
 }
 
-function doPrepareCommit(ctx, version) {
+function doPrepareCommit(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.prepared = ctx.store.prepareCommit({ workflow_id: workflow.workflow_id, capability: capabilities.committer, expected_version: version });
 }
 
-function doSubmitCommitResult(ctx, version, options) {
+function doSubmitCommitResult(ctx: any, version: number, options: any) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.submitCommitResult({
     workflow_id: workflow.workflow_id,
@@ -228,17 +228,17 @@ function doSubmitCommitResult(ctx, version, options) {
   });
 }
 
-function doRetryCommit(ctx, version) {
+function doRetryCommit(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.retryCommit({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version, retry_context: "retrying" });
 }
 
-function doFinalize(ctx, version) {
+function doFinalize(ctx: any, version: number) {
   const { workflow, capabilities } = ctx.created;
   ctx.store.finalizeRepairExhausted({ workflow_id: workflow.workflow_id, capability: capabilities.parent, expected_version: version });
 }
 
-function doLinkedFollowup(ctx, version, findingIds) {
+function doLinkedFollowup(ctx: any, version: number, findingIds: string[]) {
   const { workflow, capabilities } = ctx.created;
   ctx.child = ctx.store.createLinkedFollowup({
     workflow_id: workflow.workflow_id,
@@ -253,19 +253,19 @@ function doLinkedFollowup(ctx, version, findingIds) {
   });
 }
 
-function doStage(ctx) {
+function doStage(ctx: any) {
   ctx.git("add", "note.txt");
 }
 
-function doWriteChange(ctx) {
+function doWriteChange(ctx: any) {
   writeFileSync(join(ctx.root, "note.txt"), "changed\n");
 }
 
-function snap(wf, phase, version, actions, events) {
+function snap(wf: string, phase: string, version: number, actions: any, events: string[]) {
   return { wf, phase, version, actions, events };
 }
 
-function assertSnapshot(store, ctx, snap, label) {
+function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   const entry = snap.wf === "child" ? ctx.child : ctx.created;
   assert.ok(entry, `${label}: workflow exists`);
   const { workflow, capabilities } = entry;
@@ -284,7 +284,7 @@ function assertSnapshot(store, ctx, snap, label) {
   assert.equal(parsed.phase, snap.phase, `${label}: persisted state phase`);
   assert.equal(row.state_digest, objectDigest(parsed), `${label}: stored digest matches state`);
   const audit = store.audit(id, "parent", capabilities.parent);
-  assert.deepEqual(audit.map((event) => event.event_type), snap.events, `${label}: exact event sequence`);
+  assert.deepEqual(audit.map((event: any) => event.event_type), snap.events, `${label}: exact event sequence`);
   for (let index = 0; index < audit.length; index += 1) {
     if (index === 0) {
       assert.equal(audit[index].summary.state_digest_before, null, `${label}: first audit digest before`);
@@ -295,12 +295,12 @@ function assertSnapshot(store, ctx, snap, label) {
   assert.equal(audit[audit.length - 1].summary.state_digest_after, row.state_digest, `${label}: last audit digest equals stored digest`);
 }
 
-function scenario(name, steps, options = {}) {
+function scenario(name: string, steps: any[], options: any = {}) {
   test(name, () => {
     const base = options.fixture ? options.fixture() : fixture();
     const { root, git } = base;
     const dbPath = join(root, "state.sqlite");
-    let store = new WorkflowStore({ repositoryRoot: root, databasePath: dbPath });
+    let store: any = new WorkflowStore({ repositoryRoot: root, databasePath: dbPath });
     const ctx = { root, git, store, dbPath, created: null, child: null, prepared: null, ...base };
     try {
       for (const step of steps) {
@@ -330,7 +330,7 @@ scenario("clean change lifecycle ends committed", [
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
@@ -340,12 +340,12 @@ scenario("clean change lifecycle ends committed", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 1),
+    run: (ctx: any) => doReview(ctx, 1),
     snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
   },
   {
     name: "authorize commit",
-    run: (ctx) => doAuthorizeCommit(ctx, 2),
+    run: (ctx: any) => doAuthorizeCommit(ctx, 2),
     snapshots: [snap("parent", "COMMIT_AUTHORIZED", 3, ACTIONS.commitAuthorized, EVENTS.commitAuthorized)],
   },
   {
@@ -355,17 +355,17 @@ scenario("clean change lifecycle ends committed", [
   },
   {
     name: "prepare commit",
-    run: (ctx) => doPrepareCommit(ctx, 3),
+    run: (ctx: any) => doPrepareCommit(ctx, 3),
     snapshots: [snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared)],
   },
   {
     name: "external commit succeeds",
-    run: (ctx) => ctx.git("commit", "-qm", "lifecycle change"),
+    run: (ctx: any) => ctx.git("commit", "-qm", "lifecycle change"),
     snapshots: [snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared)],
   },
   {
     name: "submit committed result",
-    run: (ctx) => doSubmitCommitResult(ctx, 4, { outcome: "committed", commit_hash: ctx.git("rev-parse", "HEAD") }),
+    run: (ctx: any) => doSubmitCommitResult(ctx, 4, { outcome: "committed", commit_hash: ctx.git("rev-parse", "HEAD") }),
     snapshots: [snap("parent", "COMMITTED", 5, ACTIONS.none, EVENTS.commitResult)],
   },
 ]);
@@ -378,22 +378,22 @@ scenario("repair cycle and approval lifecycle", [
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
     name: "review changes requested",
-    run: (ctx) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
+    run: (ctx: any) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 2, ACTIONS.repairRequired, EVENTS.reviewSubmitted)],
   },
   {
     name: "authorize repair",
-    run: (ctx) => doAuthorizeRepair(ctx, 2, ["F-1"]),
+    run: (ctx: any) => doAuthorizeRepair(ctx, 2, ["F-1"]),
     snapshots: [snap("parent", "REPAIRING", 3, ACTIONS.repairing, EVENTS.repairAuthorized)],
   },
   {
     name: "implement repair done",
-    run: (ctx) => doImplementation(ctx, 3, { resolution: { "F-1": "resolved" } }),
+    run: (ctx: any) => doImplementation(ctx, 3, { resolution: { "F-1": "resolved" } }),
     snapshots: [snap("parent", "REVIEWING", 4, ACTIONS.reviewing, EVENTS.repairedSubmitted)],
   },
   {
@@ -403,7 +403,7 @@ scenario("repair cycle and approval lifecycle", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 4, { prior: { "F-1": "resolved" } }),
+    run: (ctx: any) => doReview(ctx, 4, { prior: { "F-1": "resolved" } }),
     snapshots: [snap("parent", "STOPPED_APPROVED", 5, ACTIONS.approved, EVENTS.repairedReview)],
   },
 ]);
@@ -416,52 +416,52 @@ scenario("both implementation resumes restore their prior phase", [
   },
   {
     name: "needs context from implementing: stop",
-    run: (ctx) => doImplementation(ctx, 0, { status: "NEEDS_CONTEXT", summary: "need context" }),
+    run: (ctx: any) => doImplementation(ctx, 0, { status: "NEEDS_CONTEXT", summary: "need context" }),
     snapshots: [snap("parent", "STOPPED_NEEDS_CONTEXT", 1, ACTIONS.needsContext, EVENTS.stopped)],
   },
   {
     name: "needs context from implementing: resume",
-    run: (ctx) => doResumeImplementation(ctx, 1),
+    run: (ctx: any) => doResumeImplementation(ctx, 1),
     snapshots: [snap("parent", "IMPLEMENTING", 2, ACTIONS.implementing, EVENTS.resumed)],
   },
   {
     name: "needs context from implementing: complete",
-    run: (ctx) => doImplementation(ctx, 2),
+    run: (ctx: any) => doImplementation(ctx, 2),
     snapshots: [snap("parent", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.resumedSubmitted)],
   },
   {
     name: "blocked from repairing: create",
-    run: (ctx) => doCreate(ctx, { max_repair_cycles: 2 }),
+    run: (ctx: any) => doCreate(ctx, { max_repair_cycles: 2 }),
     snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
   },
   {
     name: "blocked from repairing: implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
     name: "blocked from repairing: review changes requested",
-    run: (ctx) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
+    run: (ctx: any) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 2, ACTIONS.repairRequired, EVENTS.reviewSubmitted)],
   },
   {
     name: "blocked from repairing: authorize repair",
-    run: (ctx) => doAuthorizeRepair(ctx, 2, ["F-1"]),
+    run: (ctx: any) => doAuthorizeRepair(ctx, 2, ["F-1"]),
     snapshots: [snap("parent", "REPAIRING", 3, ACTIONS.repairing, EVENTS.repairAuthorized)],
   },
   {
     name: "blocked from repairing: stop blocked",
-    run: (ctx) => doImplementation(ctx, 3, { status: "BLOCKED", summary: "blocked", resolution: { "F-1": "still_present" } }),
+    run: (ctx: any) => doImplementation(ctx, 3, { status: "BLOCKED", summary: "blocked", resolution: { "F-1": "still_present" } }),
     snapshots: [snap("parent", "STOPPED_IMPLEMENTATION_BLOCKED", 4, ACTIONS.implementationBlocked, EVENTS.repairStopped)],
   },
   {
     name: "blocked from repairing: resume",
-    run: (ctx) => doResumeImplementation(ctx, 4),
+    run: (ctx: any) => doResumeImplementation(ctx, 4),
     snapshots: [snap("parent", "REPAIRING", 5, ACTIONS.repairing, EVENTS.repairResumed)],
   },
   {
     name: "blocked from repairing: complete",
-    run: (ctx) => doImplementation(ctx, 5, { resolution: { "F-1": "resolved" } }),
+    run: (ctx: any) => doImplementation(ctx, 5, { resolution: { "F-1": "resolved" } }),
     snapshots: [snap("parent", "REVIEWING", 6, ACTIONS.reviewing, EVENTS.repairResumedSubmitted)],
   },
 ]);
@@ -474,12 +474,12 @@ scenario("concern acceptance enters review and approves", [
   },
   {
     name: "implement with concerns",
-    run: (ctx) => doImplementation(ctx, 0, { status: "DONE_WITH_CONCERNS", summary: "done with concerns", knownFailures: ["flaky test"] }),
+    run: (ctx: any) => doImplementation(ctx, 0, { status: "DONE_WITH_CONCERNS", summary: "done with concerns", knownFailures: ["flaky test"] }),
     snapshots: [snap("parent", "STOPPED_CONCERNS", 1, ACTIONS.concerns, EVENTS.stopped)],
   },
   {
     name: "accept concerns",
-    run: (ctx) => doAcceptConcerns(ctx, 1),
+    run: (ctx: any) => doAcceptConcerns(ctx, 1),
     snapshots: [snap("parent", "REVIEWING", 2, ACTIONS.reviewing, EVENTS.concernsAccepted)],
   },
   {
@@ -489,7 +489,7 @@ scenario("concern acceptance enters review and approves", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 2),
+    run: (ctx: any) => doReview(ctx, 2),
     snapshots: [snap("parent", "STOPPED_APPROVED", 3, ACTIONS.approved, EVENTS.concernsReview)],
   },
 ]);
@@ -497,7 +497,7 @@ scenario("concern acceptance enters review and approves", [
 scenario("both review-only modes approve without implementation", [
   {
     name: "working-tree review-only: create",
-    run: (ctx) => doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] }),
+    run: (ctx: any) => doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] }),
     snapshots: [snap("parent", "REVIEWING", 0, ACTIONS.reviewing, EVENTS.created)],
   },
   {
@@ -507,12 +507,12 @@ scenario("both review-only modes approve without implementation", [
   },
   {
     name: "working-tree review-only: approve",
-    run: (ctx) => doReview(ctx, 0),
+    run: (ctx: any) => doReview(ctx, 0),
     snapshots: [snap("parent", "STOPPED_APPROVED", 1, ACTIONS.approved, EVENTS.reviewOnlyReview)],
   },
   {
     name: "commit-range review-only: create",
-    run: (ctx) =>
+    run: (ctx: any) =>
       doCreate(ctx, {
         workflow_type: "review_only",
         validation_requirements: [],
@@ -531,7 +531,7 @@ scenario("both review-only modes approve without implementation", [
   },
   {
     name: "commit-range review-only: approve",
-    run: (ctx) => doReview(ctx, 0, { target: ctx.created.workflow.review_target, receipt: null }),
+    run: (ctx: any) => doReview(ctx, 0, { target: ctx.created.workflow.review_target, receipt: null }),
     snapshots: [snap("parent", "STOPPED_APPROVED", 1, ACTIONS.approvedRange, EVENTS.reviewOnlyReview)],
   },
 ], { fixture: rangeFixture });
@@ -544,17 +544,17 @@ scenario("inconclusive review resumes and approves", [
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
     name: "review inconclusive",
-    run: (ctx) => doReview(ctx, 1, { status: "INCONCLUSIVE", receipt: null }),
+    run: (ctx: any) => doReview(ctx, 1, { status: "INCONCLUSIVE", receipt: null }),
     snapshots: [snap("parent", "STOPPED_INCONCLUSIVE", 2, ACTIONS.inconclusive, EVENTS.reviewSubmitted)],
   },
   {
     name: "resume review",
-    run: (ctx) => doResumeReview(ctx, 2),
+    run: (ctx: any) => doResumeReview(ctx, 2),
     snapshots: [snap("parent", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.inconclusiveResumed)],
   },
   {
@@ -564,7 +564,7 @@ scenario("inconclusive review resumes and approves", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 3),
+    run: (ctx: any) => doReview(ctx, 3),
     snapshots: [snap("parent", "STOPPED_APPROVED", 4, ACTIONS.approved, EVENTS.inconclusiveReview)],
   },
 ]);
@@ -577,7 +577,7 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   },
   {
     name: "optional from approved: implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
@@ -587,12 +587,12 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   },
   {
     name: "optional from approved: approve with optional finding",
-    run: (ctx) => doReview(ctx, 1, { optional: [optionalFinding("F-OPT")] }),
+    run: (ctx: any) => doReview(ctx, 1, { optional: [optionalFinding("F-OPT")] }),
     snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
   },
   {
     name: "optional from approved: link optional child",
-    run: (ctx) => doLinkedFollowup(ctx, 2, ["F-OPT"]),
+    run: (ctx: any) => doLinkedFollowup(ctx, 2, ["F-OPT"]),
     snapshots: [
       snap("parent", "STOPPED_APPROVED", 3, ACTIONS.approved, EVENTS.approvedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
@@ -600,42 +600,42 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   },
   {
     name: "blocker from exhausted: create",
-    run: (ctx) => doCreate(ctx, { max_repair_cycles: 1 }),
+    run: (ctx: any) => doCreate(ctx, { max_repair_cycles: 1 }),
     snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
   },
   {
     name: "blocker from exhausted: implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
     name: "blocker from exhausted: review changes requested",
-    run: (ctx) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-BLK")] }),
+    run: (ctx: any) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-BLK")] }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 2, ACTIONS.repairRequired, EVENTS.reviewSubmitted)],
   },
   {
     name: "blocker from exhausted: authorize repair",
-    run: (ctx) => doAuthorizeRepair(ctx, 2, ["F-BLK"]),
+    run: (ctx: any) => doAuthorizeRepair(ctx, 2, ["F-BLK"]),
     snapshots: [snap("parent", "REPAIRING", 3, ACTIONS.repairing, EVENTS.repairAuthorized)],
   },
   {
     name: "blocker from exhausted: implement still present",
-    run: (ctx) => doImplementation(ctx, 3, { resolution: { "F-BLK": "still_present" } }),
+    run: (ctx: any) => doImplementation(ctx, 3, { resolution: { "F-BLK": "still_present" } }),
     snapshots: [snap("parent", "REVIEWING", 4, ACTIONS.reviewing, EVENTS.repairedSubmitted)],
   },
   {
     name: "blocker from exhausted: review changes requested again",
-    run: (ctx) => doReview(ctx, 4, { status: "CHANGES_REQUESTED", blocking: [blocker("F-BLK")], prior: { "F-BLK": "still_present" } }),
+    run: (ctx: any) => doReview(ctx, 4, { status: "CHANGES_REQUESTED", blocking: [blocker("F-BLK")], prior: { "F-BLK": "still_present" } }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview)],
   },
   {
     name: "blocker from exhausted: finalize exhausted",
-    run: (ctx) => doFinalize(ctx, 5),
+    run: (ctx: any) => doFinalize(ctx, 5),
     snapshots: [snap("parent", "STOPPED_REPAIR_EXHAUSTED", 6, ACTIONS.exhausted, EVENTS.repairExhausted)],
   },
   {
     name: "blocker from exhausted: link blocker child",
-    run: (ctx) => doLinkedFollowup(ctx, 6, ["F-BLK"]),
+    run: (ctx: any) => doLinkedFollowup(ctx, 6, ["F-BLK"]),
     snapshots: [
       snap("parent", "STOPPED_REPAIR_EXHAUSTED", 7, ACTIONS.exhausted, EVENTS.exhaustedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
@@ -646,37 +646,37 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
 scenario("repair exhaustion is terminal at the max cycle", [
   {
     name: "create change workflow",
-    run: (ctx) => doCreate(ctx, { max_repair_cycles: 1 }),
+    run: (ctx: any) => doCreate(ctx, { max_repair_cycles: 1 }),
     snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
     name: "review changes requested",
-    run: (ctx) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
+    run: (ctx: any) => doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")] }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 2, ACTIONS.repairRequired, EVENTS.reviewSubmitted)],
   },
   {
     name: "authorize repair",
-    run: (ctx) => doAuthorizeRepair(ctx, 2, ["F-1"]),
+    run: (ctx: any) => doAuthorizeRepair(ctx, 2, ["F-1"]),
     snapshots: [snap("parent", "REPAIRING", 3, ACTIONS.repairing, EVENTS.repairAuthorized)],
   },
   {
     name: "implement still present",
-    run: (ctx) => doImplementation(ctx, 3, { resolution: { "F-1": "still_present" } }),
+    run: (ctx: any) => doImplementation(ctx, 3, { resolution: { "F-1": "still_present" } }),
     snapshots: [snap("parent", "REVIEWING", 4, ACTIONS.reviewing, EVENTS.repairedSubmitted)],
   },
   {
     name: "review changes requested again",
-    run: (ctx) => doReview(ctx, 4, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")], prior: { "F-1": "still_present" } }),
+    run: (ctx: any) => doReview(ctx, 4, { status: "CHANGES_REQUESTED", blocking: [blocker("F-1")], prior: { "F-1": "still_present" } }),
     snapshots: [snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview)],
   },
   {
     name: "finalize repair exhausted",
-    run: (ctx) => doFinalize(ctx, 5),
+    run: (ctx: any) => doFinalize(ctx, 5),
     snapshots: [snap("parent", "STOPPED_REPAIR_EXHAUSTED", 6, ACTIONS.exhausted, EVENTS.repairExhausted)],
   },
 ]);
@@ -689,7 +689,7 @@ scenario("commit failure is retryable and then succeeds", [
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
@@ -699,12 +699,12 @@ scenario("commit failure is retryable and then succeeds", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 1),
+    run: (ctx: any) => doReview(ctx, 1),
     snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
   },
   {
     name: "authorize commit",
-    run: (ctx) => doAuthorizeCommit(ctx, 2),
+    run: (ctx: any) => doAuthorizeCommit(ctx, 2),
     snapshots: [snap("parent", "COMMIT_AUTHORIZED", 3, ACTIONS.commitAuthorized, EVENTS.commitAuthorized)],
   },
   {
@@ -714,12 +714,12 @@ scenario("commit failure is retryable and then succeeds", [
   },
   {
     name: "prepare commit",
-    run: (ctx) => doPrepareCommit(ctx, 3),
+    run: (ctx: any) => doPrepareCommit(ctx, 3),
     snapshots: [snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared)],
   },
   {
     name: "external commit rejected by hook",
-    run: (ctx) => {
+    run: (ctx: any) => {
       let failed = false;
       try {
         ctx.git("commit", "-qm", "rejected");
@@ -732,27 +732,27 @@ scenario("commit failure is retryable and then succeeds", [
   },
   {
     name: "submit not-committed result",
-    run: (ctx) => doSubmitCommitResult(ctx, 4, { outcome: "not_committed", failure_summary: "pre-commit hook rejected" }),
+    run: (ctx: any) => doSubmitCommitResult(ctx, 4, { outcome: "not_committed", failure_summary: "pre-commit hook rejected" }),
     snapshots: [snap("parent", "STOPPED_NOT_COMMITTED", 5, ACTIONS.notCommitted, EVENTS.commitResult)],
   },
   {
     name: "retry commit",
-    run: (ctx) => doRetryCommit(ctx, 5),
+    run: (ctx: any) => doRetryCommit(ctx, 5),
     snapshots: [snap("parent", "COMMIT_AUTHORIZED", 6, ACTIONS.commitAuthorized, EVENTS.commitRetried)],
   },
   {
     name: "prepare commit again",
-    run: (ctx) => doPrepareCommit(ctx, 6),
+    run: (ctx: any) => doPrepareCommit(ctx, 6),
     snapshots: [snap("parent", "COMMIT_PREPARED", 7, ACTIONS.commitPrepared, EVENTS.commitReprepared)],
   },
   {
     name: "external commit succeeds",
-    run: (ctx) => ctx.git("commit", "-qm", "retried commit"),
+    run: (ctx: any) => ctx.git("commit", "-qm", "retried commit"),
     snapshots: [snap("parent", "COMMIT_PREPARED", 7, ACTIONS.commitPrepared, EVENTS.commitReprepared)],
   },
   {
     name: "submit committed result",
-    run: (ctx) => doSubmitCommitResult(ctx, 7, { outcome: "committed", commit_hash: ctx.git("rev-parse", "HEAD") }),
+    run: (ctx: any) => doSubmitCommitResult(ctx, 7, { outcome: "committed", commit_hash: ctx.git("rev-parse", "HEAD") }),
     snapshots: [snap("parent", "COMMITTED", 8, ACTIONS.none, EVENTS.commitRetryResult)],
   },
 ], {
@@ -773,7 +773,7 @@ scenario("commit mismatch stops terminally", [
   },
   {
     name: "implement done",
-    run: (ctx) => doImplementation(ctx, 0),
+    run: (ctx: any) => doImplementation(ctx, 0),
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
@@ -783,12 +783,12 @@ scenario("commit mismatch stops terminally", [
   },
   {
     name: "review approved",
-    run: (ctx) => doReview(ctx, 1),
+    run: (ctx: any) => doReview(ctx, 1),
     snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
   },
   {
     name: "authorize commit",
-    run: (ctx) => doAuthorizeCommit(ctx, 2),
+    run: (ctx: any) => doAuthorizeCommit(ctx, 2),
     snapshots: [snap("parent", "COMMIT_AUTHORIZED", 3, ACTIONS.commitAuthorized, EVENTS.commitAuthorized)],
   },
   {
@@ -798,17 +798,17 @@ scenario("commit mismatch stops terminally", [
   },
   {
     name: "prepare commit",
-    run: (ctx) => doPrepareCommit(ctx, 3),
+    run: (ctx: any) => doPrepareCommit(ctx, 3),
     snapshots: [snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared)],
   },
   {
     name: "external commit moves head",
-    run: (ctx) => ctx.git("commit", "-qm", "committed anyway"),
+    run: (ctx: any) => ctx.git("commit", "-qm", "committed anyway"),
     snapshots: [snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared)],
   },
   {
     name: "submit stale committed claim",
-    run: (ctx) => doSubmitCommitResult(ctx, 4, { outcome: "committed", commit_hash: ctx.created.workflow.base_head }),
+    run: (ctx: any) => doSubmitCommitResult(ctx, 4, { outcome: "committed", commit_hash: ctx.created.workflow.base_head }),
     snapshots: [snap("parent", "STOPPED_COMMIT_MISMATCH", 5, ACTIONS.none, EVENTS.commitResult)],
   },
 ]);

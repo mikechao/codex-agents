@@ -5,15 +5,15 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { WorkflowStore } from "../store.mjs";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { WorkflowStore } from "../store.js";
 
-const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "server.mjs");
+const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js");
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "workflow-v2-"));
-  const git = (...args) =>
+  const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -24,15 +24,15 @@ function fixture() {
   writeFileSync(join(root, "note.txt"), "before\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+  mkdirSync(join(root, ".codex", "agents", "dist"), { recursive: true });
   cpSync(
-    join(process.cwd(), ".codex", "agents", "change-receipt.mjs"),
-    join(root, ".codex", "agents", "change-receipt.mjs"),
+    join(process.cwd(), ".codex", "agents", "dist", "change-receipt.js"),
+    join(root, ".codex", "agents", "dist", "change-receipt.js"),
   );
   return { root, git };
 }
 
-async function start(root) {
+async function start(root: string) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--no-warnings", SERVER],
@@ -46,14 +46,14 @@ async function start(root) {
   });
   const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
-  const call = async (name, arguments_) =>
-    JSON.parse((await client.callTool({ name, arguments: arguments_ })).content[0].text);
-  const receipt = (paths = ["note.txt"]) =>
+  const call = async (name: string, arguments_: any) =>
+    JSON.parse(((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string }).text);
+  const receipt = (paths: string[] = ["note.txt"]): any =>
     JSON.parse(
       execFileSync(
         process.execPath,
         [
-          realpathSync(join(root, ".codex", "agents", "change-receipt.mjs")),
+          realpathSync(join(root, ".codex", "agents", "dist", "change-receipt.js")),
           "--",
           ...paths,
         ],
@@ -63,7 +63,7 @@ async function start(root) {
   return { client, transport, call, receipt, stderr };
 }
 
-function workingTarget(baseHead, paths = ["note.txt"]) {
+function workingTarget(baseHead: string, paths: string[] = ["note.txt"]) {
   return {
     review_mode: "working_tree",
     base_revision: baseHead,
@@ -75,7 +75,7 @@ function workingTarget(baseHead, paths = ["note.txt"]) {
   };
 }
 
-function rangeTarget(base, head, paths) {
+function rangeTarget(base: string, head: string, paths: string[]) {
   return {
     review_mode: "commit_range",
     base_revision: base,
@@ -87,7 +87,7 @@ function rangeTarget(base, head, paths) {
   };
 }
 
-function createInput(git, options = {}) {
+function createInput(git: (...args: string[]) => string, options: any = {}) {
   const approvedPaths = options.approved_paths ?? ["note.txt"];
   return {
     workflow_type: options.workflow_type ?? "change",
@@ -100,7 +100,7 @@ function createInput(git, options = {}) {
   };
 }
 
-function implementInput(workflowId, caps, version, overrides = {}) {
+function implementInput(workflowId: string, caps: any, version: number, overrides: any = {}) {
   return {
     workflow_id: workflowId,
     capability: caps.implementer,
@@ -117,7 +117,7 @@ function implementInput(workflowId, caps, version, overrides = {}) {
   };
 }
 
-function reviewInput(workflowId, caps, version, overrides = {}) {
+function reviewInput(workflowId: string, caps: any, version: number, overrides: any = {}) {
   return {
     workflow_id: workflowId,
     capability: caps.reviewer,
@@ -132,7 +132,7 @@ function reviewInput(workflowId, caps, version, overrides = {}) {
   };
 }
 
-function finding(id, overrides = {}) {
+function finding(id: string, overrides: any = {}) {
   return {
     finding_id: id,
     severity: "P1",
@@ -148,8 +148,8 @@ function finding(id, overrides = {}) {
 }
 
 function assertSanitizedStderr(
-  stderrText,
-  { capabilities = [], objectives = [], auths = [], findingTexts = [], paths = [] } = {},
+  stderrText: string,
+  { capabilities = [], objectives = [], auths = [], findingTexts = [], paths = [] }: any = {},
 ) {
   for (const token of [...capabilities, ...objectives, ...auths, ...findingTexts, ...paths]) {
     assert.equal(stderrText.includes(token), false, `stderr leaks ${JSON.stringify(token)}`);
@@ -237,7 +237,7 @@ test("change workflow drives an external commit to COMMITTED over STDIO", async 
       capability: caps.parent,
     });
     assert.deepEqual(
-      audit.map((event) => event.event_type),
+      audit.map((event: any) => event.event_type),
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
@@ -384,7 +384,7 @@ test("range review to linked change and approval over STDIO", async () => {
       capability: range.capabilities.parent,
     });
     assert.deepEqual(
-      parentAudit.map((event) => event.event_type),
+      parentAudit.map((event: any) => event.event_type),
       ["WORKFLOW_CREATED", "REVIEW_SUBMITTED", "LINKED_FOLLOWUP_CREATED"],
     );
     assert.equal(parentAudit[2].summary.linked_workflow_id, child.workflow_id);
@@ -534,7 +534,7 @@ test("repair through stop, resume, and exhaustion over STDIO", async () => {
       capability: caps.parent,
     });
     assert.deepEqual(
-      audit.map((event) => event.event_type),
+      audit.map((event: any) => event.event_type),
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
@@ -567,10 +567,10 @@ test("repair through stop, resume, and exhaustion over STDIO", async () => {
 test("safe errors over STDIO for role, version, phase, malformed fields, and range commit denial", async () => {
   const { root, git } = fixture();
   const { client, transport, call, receipt, stderr } = await start(root);
-  const assertError = async (name, arguments_, category) => {
+  const assertError = async (name: string, arguments_: any, category: string) => {
     const result = await client.callTool({ name, arguments: arguments_ });
     assert.equal(result.isError, true);
-    assert.equal(JSON.parse(result.content[0].text).category, category);
+    assert.equal(JSON.parse((result.content[0] as { text: string }).text).category, category);
   };
   try {
     const denialObjective = "protocol v2 denial objective";
@@ -685,7 +685,16 @@ test("safe errors over STDIO for role, version, phase, malformed fields, and ran
 });
 
 class RawStdioClient {
-  constructor(root, dbPath) {
+  proc: any;
+  stdout: string;
+  stderr: string;
+  frames: any[];
+  invalid: string[];
+  pending: Map<number, (message: any) => void>;
+  buffer: string;
+  nextId: number;
+
+  constructor(root: string, dbPath: string) {
     this.proc = spawn(process.execPath, ["--no-warnings", SERVER], {
       cwd: root,
       env: { ...process.env, WORKFLOW_MCP_DB_PATH: dbPath },
@@ -698,12 +707,12 @@ class RawStdioClient {
     this.pending = new Map();
     this.buffer = "";
     this.nextId = 1;
-    this.proc.stdout.on("data", (chunk) => {
+    this.proc.stdout.on("data", (chunk: any) => {
       this.stdout += chunk.toString();
       this.buffer += chunk.toString();
       this.#drain();
     });
-    this.proc.stderr.on("data", (chunk) => {
+    this.proc.stderr.on("data", (chunk: any) => {
       this.stderr += chunk.toString();
     });
   }
@@ -714,7 +723,7 @@ class RawStdioClient {
       const line = this.buffer.slice(0, index);
       this.buffer = this.buffer.slice(index + 1);
       if (!line) continue;
-      let message;
+      let message: any;
       try {
         message = JSON.parse(line);
       } catch {
@@ -732,11 +741,11 @@ class RawStdioClient {
     }
   }
 
-  notify(method, params) {
+  notify(method: string, params: any) {
     this.proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 
-  request(method, params) {
+  request(method: string, params: any): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -755,7 +764,7 @@ class RawStdioClient {
 test("startup, requests, SIGINT, and SIGTERM keep stdout protocol-clean and stderr sanitized", async () => {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     const { root, git } = fixture();
-    let raw;
+    let raw: RawStdioClient | undefined;
     try {
       const db = join(root, "state.sqlite");
       raw = new RawStdioClient(root, db);
@@ -768,7 +777,7 @@ test("startup, requests, SIGINT, and SIGTERM keep stdout protocol-clean and stde
       assert.equal(initialize.result.protocolVersion, "2024-11-05");
       raw.notify("notifications/initialized", {});
       const list = await raw.request("tools/list", {});
-      assert.ok(list.result.tools.some((tool) => tool.name === "workflow_create"));
+      assert.ok(list.result.tools.some((tool: any) => tool.name === "workflow_create"));
 
       const createResponse = await raw.request("tools/call", {
         name: "workflow_create",

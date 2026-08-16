@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { WorkflowError } from "../errors.mjs";
+import { WorkflowError } from "../errors.js";
 import {
   approvedResidue,
   prepareCommitReceipt,
@@ -14,11 +14,12 @@ import {
   verifyRange,
   verifyRevision,
   writeTree,
-} from "../git.mjs";
+} from "../git.js";
+import type { CommitRangeReviewTarget, ExactRepoPath, GitCommitSha, WorkflowState } from "../types.js";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workflow-git-")));
-  const git = (...args) =>
+  const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -26,7 +27,7 @@ function fixture() {
   git("init", "-q");
   git("config", "user.email", "workflow@example.invalid");
   git("config", "user.name", "Workflow Tests");
-  const write = (path, content) => {
+  const write = (path: string, content: string) => {
     const directory = join(root, path.split("/").slice(0, -1).join("/"));
     if (directory !== root) mkdirSync(directory, { recursive: true });
     writeFileSync(join(root, path), content);
@@ -34,7 +35,7 @@ function fixture() {
   return { root, git, write };
 }
 
-function errorCategory(callback) {
+function errorCategory(callback: () => void): string {
   try {
     callback();
   } catch (error) {
@@ -44,8 +45,8 @@ function errorCategory(callback) {
   assert.fail("expected workflow error");
 }
 
-function target(base, head, paths) {
-  return { base_revision: base, head_revision: head, approved_paths: paths };
+function target(base: string, head: string, paths: string[]): CommitRangeReviewTarget {
+  return { base_revision: base, head_revision: head, approved_paths: paths } as CommitRangeReviewTarget;
 }
 
 test("verifyRevision accepts commits and rejects invalid, unknown, and non-commit revisions", () => {
@@ -57,15 +58,15 @@ test("verifyRevision accepts commits and rejects invalid, unknown, and non-commi
     git("commit", "-qm", "base");
     const commit = git("rev-parse", "HEAD");
     const blob = git("rev-parse", "HEAD:a.txt");
-    assert.equal(verifyRevision(root, commit), commit);
-    assert.equal(errorCategory(() => verifyRevision(root, "abc")), "ERROR_INVALID_REVISION");
-    assert.equal(errorCategory(() => verifyRevision(root, blob)), "ERROR_INVALID_REVISION");
+    assert.equal(verifyRevision(root, commit as GitCommitSha), commit);
+    assert.equal(errorCategory(() => verifyRevision(root, "abc" as GitCommitSha)), "ERROR_INVALID_REVISION");
+    assert.equal(errorCategory(() => verifyRevision(root, blob as GitCommitSha)), "ERROR_INVALID_REVISION");
     assert.equal(
-      errorCategory(() => verifyRevision(root, `${"0".repeat(39)}f`)),
+      errorCategory(() => verifyRevision(root, `${"0".repeat(39)}f` as GitCommitSha)),
       "ERROR_INVALID_REVISION",
     );
     assert.equal(
-      errorCategory(() => verifyRevision(root, "1234567890ABCDEF")),
+      errorCategory(() => verifyRevision(root, "1234567890ABCDEF" as GitCommitSha)),
       "ERROR_INVALID_REVISION",
     );
   } finally {
@@ -84,9 +85,9 @@ test("verifyRange accepts ancestor ranges and rejects reversed and equal ranges"
     git("add", "-A");
     git("commit", "-qm", "head");
     const head = git("rev-parse", "HEAD");
-    assert.deepEqual(verifyRange(root, base, head), { base_revision: base, head_revision: head });
-    assert.equal(errorCategory(() => verifyRange(root, head, base)), "ERROR_NON_ANCESTOR");
-    assert.equal(errorCategory(() => verifyRange(root, base, base)), "ERROR_INVALID_REVISION");
+    assert.deepEqual(verifyRange(root, base as GitCommitSha, head as GitCommitSha), { base_revision: base, head_revision: head });
+    assert.equal(errorCategory(() => verifyRange(root, head as GitCommitSha, base as GitCommitSha)), "ERROR_NON_ANCESTOR");
+    assert.equal(errorCategory(() => verifyRange(root, base as GitCommitSha, base as GitCommitSha)), "ERROR_INVALID_REVISION");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -138,7 +139,7 @@ test("reviewRange classifies unchanged, added, deleted, and modified paths", () 
     );
     assert.equal(result.base_revision, base);
     assert.equal(result.head_revision, head);
-    const byPath = new Map(result.paths.map((entry) => [entry.path, entry]));
+    const byPath: Map<string, any> = new Map(result.paths.map((entry) => [entry.path, entry]));
     assert.equal(byPath.get("unchanged.txt").kind, "unchanged");
     assert.equal(byPath.get("modified.txt").kind, "modified");
     assert.equal(byPath.get("deleted.txt").kind, "deleted");
@@ -164,7 +165,7 @@ test("reviewRange accepts both rename paths when both are authorized", () => {
     git("commit", "-qm", "head");
     const head = git("rev-parse", "HEAD");
     const result = reviewRange(root, target(base, head, ["old.txt", "new.txt"]));
-    const byPath = new Map(result.paths.map((entry) => [entry.path, entry]));
+    const byPath: Map<string, any> = new Map(result.paths.map((entry) => [entry.path, entry]));
     assert.equal(byPath.get("old.txt").kind, "deleted");
     assert.equal(byPath.get("new.txt").kind, "added");
     assert.equal(byPath.get("old.txt").base.object, byPath.get("new.txt").head.object);
@@ -261,14 +262,14 @@ test("stagedPaths and stagedEntries reflect the full index and staged content", 
     git("add", "mod.txt");
     git("add", "add.txt");
     assert.deepEqual(stagedPaths(root), ["add.txt", "del.txt", "mod.txt"]);
-    const entries = stagedEntries(root);
+    const entries: Map<string, any> = stagedEntries(root);
     assert.equal(entries.has("add.txt"), true);
     assert.equal(entries.has("mod.txt"), true);
     assert.equal(entries.has("del.txt"), false);
     assert.equal(entries.get("mod.txt").mode, "100644");
     assert.match(entries.get("mod.txt").object, /^[0-9a-f]{40}$/u);
     git("update-index", "--chmod=+x", "mod.txt");
-    assert.equal(stagedEntries(root).get("mod.txt").mode, "100755");
+    assert.equal(stagedEntries(root).get("mod.txt" as ExactRepoPath)!.mode, "100755");
     git("commit", "-qm", "second");
     assert.deepEqual(stagedPaths(root), []);
     assert.deepEqual([...stagedEntries(root).keys()].sort(), ["add.txt", "mod.txt", "mode.txt"]);
@@ -289,14 +290,14 @@ test("approvedResidue flags untracked and unstaged approved paths only", () => {
     write("c.txt", "new\n");
     git("add", "a.txt");
     assert.deepEqual(
-      approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)),
+      approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)),
       ["b.txt", "c.txt"],
     );
     git("add", "b.txt");
     git("add", "c.txt");
-    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)), []);
+    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)), []);
     write("stray.txt", "x\n");
-    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"], stagedPaths(root)), []);
+    assert.deepEqual(approvedResidue(root, ["a.txt", "b.txt", "c.txt"] as ExactRepoPath[], stagedPaths(root)), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -351,7 +352,7 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
       base_head: base,
       approved_paths: ["note.txt"],
       review_receipt: receipt,
-    };
+    } as unknown as WorkflowState;
     assert.equal(errorCategory(() => prepareCommitReceipt(root, state)), "ERROR_STAGED_SCOPE");
     git("add", "note.txt");
     const prepared = prepareCommitReceipt(root, state);
@@ -377,7 +378,7 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
 
     assert.equal(
       errorCategory(() =>
-        prepareCommitReceipt(root, { ...state, review_target: { review_mode: "commit_range" } }),
+        prepareCommitReceipt(root, { ...state, review_target: { review_mode: "commit_range" } } as unknown as WorkflowState),
       ),
       "ERROR_COMMIT_NOT_ALLOWED",
     );
