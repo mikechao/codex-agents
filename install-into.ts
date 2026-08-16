@@ -126,25 +126,61 @@ interface CommitStep {
   originalDir: string | null;
 }
 
-function rollback(committed: readonly CommitStep[]): void {
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// Rollback is itself failure-prone; a swallowed restore failure can destroy the
+// only copy of pre-existing data. Every rollback step reports its failures so
+// the caller can surface them together with the original install failure.
+function rollback(
+  committed: readonly CommitStep[],
+  rename: (from: string, to: string) => void = renameSync,
+  writeFile: (path: string, content: string) => void = writeFileSync,
+): Error[] {
+  const failures: Error[] = [];
   for (const step of committed.slice().reverse()) {
     if (step.originalDir !== null) {
-      rmSync(step.target, { recursive: true, force: true });
       try {
-        renameSync(step.originalDir, step.target);
-      } catch {
-        // Best-effort restore; the pre-mutation collision checks prevent data loss.
+        rmSync(step.target, { recursive: true, force: true });
+      } catch (cause) {
+        failures.push(new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }));
+      }
+      try {
+        rename(step.originalDir, step.target);
+      } catch (cause) {
+        failures.push(
+          new Error(
+            `failed to restore ${step.target} from ${step.originalDir}: ${errorMessage(cause)}`,
+            { cause },
+          ),
+        );
       }
     } else if (step.original === null) {
-      rmSync(step.target, { recursive: true, force: true });
+      try {
+        rmSync(step.target, { recursive: true, force: true });
+      } catch (cause) {
+        failures.push(new Error(`failed to remove ${step.target}: ${errorMessage(cause)}`, { cause }));
+      }
     } else {
       try {
-        writeFileSync(step.target, step.original);
-      } catch {
-        // Best-effort restore; the pre-mutation collision checks prevent data loss.
+        writeFile(step.target, step.original);
+      } catch (cause) {
+        const recoveryPath = `${step.target}.recover`;
+        let recovery: string;
+        try {
+          writeFileSync(recoveryPath, step.original);
+          recovery = `; original content preserved at ${recoveryPath}`;
+        } catch {
+          recovery = "; original content could not be preserved";
+        }
+        failures.push(
+          new Error(`failed to restore ${step.target}: ${errorMessage(cause)}${recovery}`, { cause }),
+        );
       }
     }
   }
+  return failures;
 }
 
 export function commitBothHosts(
@@ -160,6 +196,7 @@ export function commitBothHosts(
   originalOpenCodeConfig: string | null,
   originalOpenCodeAgentsDir: string | null = null,
   rename: (from: string, to: string) => void = renameSync,
+  writeFile: (path: string, content: string) => void = writeFileSync,
 ): void {
   const steps: readonly CommitStep[] = [
     { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
@@ -184,16 +221,27 @@ export function commitBothHosts(
       committed.push(step);
     }
   } catch (cause) {
+    const failures = rollback(committed, rename, writeFile);
     const failing = steps[committed.length];
     if (failing !== undefined && failing.originalDir !== null) {
       try {
-        renameSync(failing.originalDir, failing.target);
-      } catch {
-        // Best-effort restore; the pre-mutation collision checks prevent data loss.
+        rename(failing.originalDir, failing.target);
+      } catch (restoreCause) {
+        failures.push(
+          new Error(
+            `failed to restore ${failing.target} from ${failing.originalDir}: ${errorMessage(restoreCause)}`,
+            { cause: restoreCause },
+          ),
+        );
       }
     }
-    rollback(committed);
-    throw cause;
+    if (failures.length === 0) {
+      throw cause;
+    }
+    throw new Error(
+      `${errorMessage(cause)}\nRollback was incomplete:\n${failures.map((failure) => `- ${failure.message}`).join("\n")}`,
+      { cause },
+    );
   }
 }
 
@@ -436,8 +484,13 @@ export function main(args: readonly string[]): number {
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
-    if (opencodeAgentsBackup !== null) {
-      rmSync(opencodeAgentsBackup, { recursive: true, force: true });
+    // Never delete a pre-existing-agents backup on the failure path: a backup
+    // that still exists was not restored, and it is the only copy of the user's
+    // original agents. It is removed only on the success path above.
+    if (opencodeAgentsBackup !== null && existsSync(opencodeAgentsBackup)) {
+      process.stderr.write(
+        `Rollback could not restore the original OpenCode agents; the backup remains at: ${opencodeAgentsBackup}\n`,
+      );
     }
     throw cause;
   }

@@ -502,6 +502,154 @@ test("commitBothHosts restores a pre-existing OpenCode agents directory when a l
   }
 });
 
+test("commitBothHosts reports a failed backup restore and preserves the original backup", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexAgentsTarget = join(root, ".codex/agents");
+    const codexConfigTarget = join(root, ".codex/config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
+    mkdirSync(opencodeAgentsTarget, { recursive: true });
+    const unrelated = "---\ndescription: unrelated\n---\n";
+    writeFileSync(join(opencodeAgentsTarget, "docs-writer.md"), unrelated);
+    const originalCodexConfig = "[pre-existing codex]\n";
+    const originalOpenCodeConfig = '{"model":"kept"}\n';
+    writeFileSync(codexConfigTarget, originalCodexConfig);
+    writeFileSync(opencodeConfigTarget, originalOpenCodeConfig);
+    const backup = join(root, ".opencode-agents-backup");
+    cpSync(opencodeAgentsTarget, backup, { recursive: true });
+
+    const codexAgents = agentsDir("codex-agents-backup-fail");
+    const codexConfig = staging("codex-config-backup-fail");
+    const opencodeAgents = agentsDir("opencode-agents-backup-fail");
+    const opencodeConfig = staging("opencode-config-backup-fail");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeAgents, "docs-writer.md"), "---\ndescription: managed copy\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    const rename = (from: string, to: string) => {
+      if (to === opencodeConfigTarget) throw new Error("injected opencode config failure");
+      if (from === backup) throw new Error("injected backup restore failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          originalCodexConfig,
+          originalOpenCodeConfig,
+          backup,
+          rename,
+        ),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return (
+          message.includes("injected opencode config failure") &&
+          message.includes("Rollback was incomplete") &&
+          message.includes("failed to restore") &&
+          message.includes(backup)
+        );
+      },
+    );
+    assert.ok(existsSync(backup), "the backup must not be deleted when its restore fails");
+    assert.equal(readFileSync(join(backup, "docs-writer.md"), "utf8"), unrelated, "backup content must be intact");
+    assert.ok(!existsSync(opencodeAgentsTarget), "the unrecoverable agents target must not be left behind");
+    assert.ok(!existsSync(codexAgentsTarget), "codex agents must still be rolled back");
+    assert.equal(readFileSync(codexConfigTarget, "utf8"), originalCodexConfig, "codex config must be restored");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("commitBothHosts reports a failed config restore and preserves the original content", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexAgentsTarget = join(root, ".codex/agents");
+    const codexConfigTarget = join(root, ".codex/config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
+    mkdirSync(join(root, ".opencode"), { recursive: true });
+    const originalCodexConfig = "[pre-existing codex]\n";
+    const originalOpenCodeConfig = '{"model":"kept"}\n';
+    writeFileSync(codexConfigTarget, originalCodexConfig);
+    writeFileSync(opencodeConfigTarget, originalOpenCodeConfig);
+
+    const codexAgents = agentsDir("codex-agents-config-fail");
+    const codexConfig = staging("codex-config-config-fail");
+    const opencodeAgents = agentsDir("opencode-agents-config-fail");
+    const opencodeConfig = staging("opencode-config-config-fail");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    const rename = (from: string, to: string) => {
+      if (to === opencodeConfigTarget) throw new Error("injected opencode config failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+    const writeFile = (path: string, content: string) => {
+      if (path === codexConfigTarget) throw new Error("injected config restore failure");
+      writeFileSync(path, content);
+    };
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          originalCodexConfig,
+          originalOpenCodeConfig,
+          null,
+          rename,
+          writeFile,
+        ),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return (
+          message.includes("injected opencode config failure") &&
+          message.includes("Rollback was incomplete") &&
+          message.includes("failed to restore") &&
+          message.includes("config.toml.recover")
+        );
+      },
+    );
+    assert.ok(
+      existsSync(join(root, ".codex/config.toml.recover")),
+      "the original config must be preserved",
+    );
+    assert.equal(
+      readFileSync(join(root, ".codex/config.toml.recover"), "utf8"),
+      originalCodexConfig,
+      "the recovery file must contain the exact original config",
+    );
+    assert.equal(
+      readFileSync(opencodeConfigTarget, "utf8"),
+      originalOpenCodeConfig,
+      "opencode config must be untouched",
+    );
+    assert.ok(!existsSync(codexAgentsTarget), "created codex agents must be removed");
+    assert.ok(!existsSync(opencodeAgentsTarget), "created opencode agents must be removed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function basenameOf(path: string): string {
   return path.split("/").pop() ?? path;
 }

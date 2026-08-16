@@ -59,9 +59,12 @@ It refuses to replace existing Codex agent definitions or any existing `implemen
 `code_reviewer.md`, or `committer.md` under `.opencode/agents/`, while preserving unrelated
 existing OpenCode agents; it refuses existing `workflow_state` registrations in either host,
 refuses malformed existing configuration, and rolls the whole installation back if any commit
-step fails, so a failed run never leaves only one host installed. OpenCode registers the server
-as a `type: "local"` STDIO process that OpenCode starts itself; no separate manual server launch
-is required.
+step fails, so a failed run never leaves only one host installed. If the automatic rollback
+itself fails, it is reported alongside the original failure: the original OpenCode agents stay
+preserved in a backup directory named in the error, and the original content of a config file
+that could not be restored is preserved next to it as `<config>.recover`. OpenCode registers the
+server as a `type: "local"` STDIO process that OpenCode starts itself; no separate manual server
+launch is required.
 
 Restart or reload Codex, then verify it with:
 
