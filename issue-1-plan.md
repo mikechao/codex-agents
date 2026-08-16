@@ -522,9 +522,10 @@ import type { Tool } from "@modelcontextprotocol/server";
 - `git diff --check` clean; committed `change-receipt.ts`, the converted test, `git.ts`, the
   three test edits, docs, and `dist/` together (`f51ff37`); worktree clean at commit.
 
-## Phase I — Tests
+## Phase I — Tests  [DONE]
 
-- **Workflow-MCP tests -> `.node.ts`** (7 files, ~7k lines). Mechanical edits:
+- **Workflow-MCP tests -> `.node.ts`** (6 files, ~7k lines; the agents receipt test already
+  landed in Phase H). Mechanical edits:
   - SDK imports -> `@modelcontextprotocol/client` and `@modelcontextprotocol/client/stdio`.
   - Module imports `../*.mjs` -> `../*.js`.
   - Server spawn path -> `join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")`.
@@ -534,7 +535,68 @@ import type { Tool } from "@modelcontextprotocol/server";
     rejection is the only client-side change and tests only call known tools). Pragmatic `as` casts
     at `JSON.parse`/`ContentBlock` boundaries.
 - **Agents receipt test -> `.node.ts`**: import compiled module, spawn compiled CLI path.
+  **Landed in Phase H** (`issue-1-phase-h.md`).
 - No test logic weakened; full suite is the regression oracle.
+
+### Done Report — Phase I
+
+**Changes:**
+- Converted all six workflow-MCP test files (`git`, `lifecycle`, `workflow`, `migration`,
+  `protocol`, `protocol-v2`) `.node.mjs` -> `.node.ts`; the existing
+  `tsconfig.workflow-mcp.json` include compiles them to committed `dist/tests/*.node.js`.
+- SDK imports -> `@modelcontextprotocol/client` + `@modelcontextprotocol/client/stdio`; module
+  imports `../*.mjs` -> `../*.js`; `protocol.node.ts` imports `{ tools }` from `../server.js`
+  (compiled module — `dist/tools` shape identical).
+- Server spawn paths -> `join(process.cwd(), ".codex", "workflow-mcp", "dist", "server.js")`
+  (protocol: 12 references incl. the SIGINT/SIGTERM `script` const; protocol-v2: `SERVER` const;
+  migration: 1). Receipt fixture copy/spawn -> `.codex/agents/dist/change-receipt.js` (fixture
+  `mkdirSync` -> `.codex/agents/dist`). Doc-consistency list (protocol.node.ts:1011) ->
+  `.codex/workflow-mcp/dist/server.js`.
+- Deleted the five shims (`errors`/`git`/`store`/`transitions`/`validation.mjs`) and the six
+  `.mjs` tests — no `.mjs` importer remains; zero `.mjs` files or references remain under
+  `.codex/`.
+- The three previously-unloadable suites (migration, protocol, protocol-v2) run for the first
+  time since Phase A and pass — the definitive SDK-v2 wire-compatibility gate, closing the
+  migration-coverage gaps flagged in Phases E/F.
+
+**Deviations / decisions (pre-documented in `issue-1-phase-i.md` §2 and verified by probe):**
+- Tool-`inputSchema` deep assertions cast the schema object `as any` per schema-contract test
+  (~10 sites; ~80 JSON-schema keyword assertions). v2's `Tool["inputSchema"]` types `properties`
+  as `Record<string, JSONValue>`, so `.minimum`/`.pattern`/`.enum`/`.items`/`.oneOf` etc. are not
+  reachable; runtime `additionalProperties: false` and the keywords are preserved verbatim (the
+  v2 type simply does not declare them).
+- `content[0]` cast `(result.content[0] as { text: string }).text` at every
+  `JSON.parse(...content[0].text)` site, and `createTool.annotations?.readOnlyHint` /
+  `?.destructiveHint` (v2 `annotations` fields optional) — per spec §2.
+- `WorkflowStore` values typed `any` in the tests: `store.db` is `private`, and store methods
+  return the `RoleView` union lacking the view-specific fields the tests assert on. Store method
+  inputs are already `unknown`, so this mirrors the untyped `.mjs` semantics exactly; no
+  assertion changed.
+- SQLite row reads cast `as any` at the `.get(...)` boundary
+  (`Record<string, SQLOutputValue> | undefined`); helpers annotated mechanically
+  (`git(...args: string[])`, `receipt(root: string)`, `target(...)`, fixture functions,
+  `parseToml(source: string)`, protocol-v2 `RawStdioClient` fields).
+- Spec-table count corrections: protocol has 12 server-spawn references (not "x7"); migration
+  has no receipt usage (the spec table's receipt flips did not exist there).
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs, now covering all test files.
+- `pnpm build` emits `dist/tests/*.node.js` for all six files; committed per the
+  committed-`dist/` policy.
+- Full `pnpm test` — **154 tests, 0 fail** (previously 117 loadable + 3 unloadable), including
+  the previously-unloadable migration (reopen/rollback/fault-injection), protocol (full STDIO
+  tool flow, tool-schema contracts, doc-consistency), and protocol-v2 (raw-STDIO stdout/stderr
+  cleanliness) suites. Per-test case counts are identical to the pre-migration suite — no test
+  added, removed, or weakened.
+- `pnpm test:workflow-mcp` — **135 tests, 0 fail**; `pnpm test:agents` — **19 tests, 0 fail**.
+- STDIO cleanliness re-verified by protocol-v2's own assertions (stdout = transport frames only;
+  stderr contains no capability/objective/auth/finding/receipt/SQL/stack).
+- Greps clean: `rg -n '\.mjs' .codex` empty; `rg -n '@modelcontextprotocol/sdk'` matches only
+  plan/archive docs; `rg -n 'server\.mjs|change-receipt\.mjs' .codex install-into.sh
+  .codex/config.toml` empty.
+- `git diff --check` clean; worktree clean after `pnpm test` (deterministic `tsc` output);
+  single commit `c41bfd5` (six converted test files, the five shim deletions + six `.mjs` test
+  deletions, `dist/` sources + tests, and `issue-1-phase-i.md`).
 
 ## Phase J — Config / installer / docs
 
