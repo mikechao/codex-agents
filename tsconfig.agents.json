@@ -1,5 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {},
-  "include": [".codex/agents/change-receipt.ts", ".codex/agents/tests/**/*.ts"]
+  "include": [
+    ".codex/agents/change-receipt.ts",
+    ".codex/agents/generate-host-definitions.ts",
+    ".codex/agents/tests/**/*.ts"
+  ]
 }

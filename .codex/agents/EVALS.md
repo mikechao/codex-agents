@@ -166,6 +166,32 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 - Shutdown lifecycle: client disconnect, SIGINT, and SIGTERM close transport/store exactly once,
   exit promptly, preserve protocol cleanliness, and leave a reopenable database.
 
+## OpenCode host adapter
+
+Run in an installed OpenCode project (`.opencode/agents/` plus the `mcp.workflow_state` local
+registration) after changing the generator or a canonical contract.
+
+- Subagent loading: OpenCode loads `implementer`, `code_reviewer`, and `committer` from
+  `.opencode/agents/` as subagents with `mode: subagent`, and each can be dispatched by the parent.
+- MCP startup: OpenCode starts the `workflow_state` local server from the project config itself
+  (no manual launch), and its tools are discoverable in a session.
+- Shared state: a workflow created in Codex is readable by the OpenCode roles via `workflow_get`,
+  and both hosts produce equivalent statuses/handoffs for the same scenarios.
+- Implementer permissions: may edit and run validation, cannot stage/commit/push/amend/rebase
+  through the host, and only its own workflow tools (`workflow_get`,
+  `workflow_submit_implementation`) are exposed.
+- Reviewer read-only: `edit: deny` holds, the bash allowlist covers `git status`/`diff`/`log`/
+  `show`/`rev-parse` and `change-receipt.ts`, and mutation attempts (git add/commit, file writes)
+  are blocked by the host or by the server's capability check; the review target is still fully
+  inspectable and the full receipt flow completes.
+- Committer gates: refuses to stage/commit without `commit_authorization` plus a fresh review
+  receipt, stages only the authorized scope, and cannot edit source files.
+- Tool exposure is defense in depth: restricting an agent's `workflow_state_*` tools never
+  broadens server-side role capabilities, and a server-side capability denial still applies even
+  if a host permission were relaxed.
+- Contract parity: `bun run generate:agents` is idempotent and the checked-in Codex/OpenCode
+  definitions remain byte-identical to its output.
+
 ## Acceptance
 
 An agent contract passes when every scenario produces the expected scope, mutation behavior, status,

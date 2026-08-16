@@ -3,9 +3,29 @@
 This file defines the authoritative MCP-based workflow and routing. The workflow-state server's role
 views carry all handoff state; agent prompts carry only the workflow ID, the role capability, the
 expected version, and the instruction to read the role's own view. Detailed role behavior remains in
-the TOML contracts beside this file. All paths are repository-relative exact file paths; directories
+the role contracts beside this file. All paths are repository-relative exact file paths; directories
 and globs are not valid. The parent agent owns scope, review decisions, repair-loop counting, commit
 authorization, and linked follow-up creation.
+
+## Host adapters
+
+The same three roles are available in Codex and OpenCode. The host-neutral role prose lives in
+`.codex/agents/contracts/`; `bun run generate:agents` emits the Codex TOML definitions
+(`.codex/agents/`) and the OpenCode Markdown definitions (`.opencode/agents/`) from it, and the
+agents test suite fails on drift. Both hosts launch the same Bun/TypeScript `workflow_state` server
+and share its durable per-repository state.
+
+Host permission syntax differs and must not be treated as equivalent:
+
+- Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
+  implementer and committer).
+- OpenCode has no filesystem sandbox. The reviewer instead gets `edit: deny` plus a narrow bash
+  allowlist (status/diff/log/show/rev-parse and the receipt command), the committer gets
+  `edit: deny` (stricter than Codex) with bash for the external `git add`/`git commit`, and every
+  OpenCode agent only exposes its own role's `workflow_state` tools (`workflow_state_*` deny plus
+  role-specific allows). These are host-level defense in depth for context size and isolation; the
+  server-side role capability, `expected_version`, and transition checks remain authoritative and
+  are unchanged between hosts.
 
 ## Authoritative MCP state
 

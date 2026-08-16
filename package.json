@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "bun --no-warnings .codex/workflow-mcp/server.ts",
+    "generate:agents": "bun .codex/agents/generate-host-definitions.ts --write",
     "typecheck": "tsc --noEmit -p tsconfig.workflow-mcp.json && tsc --noEmit -p tsconfig.agents.json && tsc --noEmit -p tsconfig.installer.json",
     "test": "bun test --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts",
     "test:agents": "bun test --timeout=60000 ./.codex/agents/tests/*.node.ts",
@@ -17,7 +18,8 @@
     "test:stress": "bun test --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/*.node.ts ./.codex/agents/tests/*.node.ts ./.codex/installer/tests/*.node.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "^2.0.0"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

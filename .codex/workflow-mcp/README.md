@@ -3,11 +3,16 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
-Run it through the project-scoped `.codex/config.toml` or:
+Run it through the project-scoped `.codex/config.toml` (Codex) or the `workflow_state` local MCP
+registration that `install-into.ts` writes into the project's `opencode.json`/`opencode.jsonc`
+(OpenCode), or directly:
 
 ```sh
 bun run start
 ```
+
+Both hosts start this same Bun/TypeScript STDIO server themselves and share its
+repository-hash-partitioned durable state, so workflows are interchangeable between hosts.
 
 Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
 `tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.
@@ -75,14 +80,16 @@ workflows always use `workflow_prepare_commit` plus `workflow_submit_commit_resu
 ## Bootstrap and reload
 
 This installation uses the previously authorized prompt/receipt bootstrap. After changing the
-project configuration, commit the config and restart/reload Codex. Manually starting the STDIO
-process does not inject tools into an already-running host. Before treating MCP state as
-authoritative, use a safe read-only check: reload the project, list available MCP tools, verify
-that `workflow_state` exposes `workflow_get`, `workflow_get_audit`, and the mutation tools, and
-inspect the server initialization instructions. Do not send capabilities or mutate state during
-this smoke test.
+project configuration, commit the config and restart/reload the host (Codex and/or OpenCode).
+Manually starting the STDIO process does not inject tools into an already-running host. Before
+treating MCP state as authoritative, use a safe read-only check: reload the project, list
+available MCP tools, verify that `workflow_state` exposes `workflow_get`, `workflow_get_audit`,
+and the mutation tools, and inspect the server initialization instructions. Do not send
+capabilities or mutate state during this smoke test.
 
 Before reload, fail closed for non-trivial work and ask whether the user wants prompt-only
 degraded mode. After reload, the parent may use MCP as authoritative only when the tools and
 instructions are visible. `default_tools_approval_mode = "prompt"` keeps workflow tool calls
-approval-sensitive in Codex; the server still enforces role capabilities and versions.
+approval-sensitive in Codex; OpenCode agents instead gate the same tools per role through
+permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces role capabilities
+and versions for both hosts.
