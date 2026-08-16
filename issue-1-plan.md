@@ -195,15 +195,68 @@ from the actual runtime code:
   the enforced check is the no-bypass one above.
 - `git diff --check` clean; committed `dist/` is deterministic (identical hashes across rebuilds).
 
-## Phase D — `git.ts`
+## Phase D — `git.ts`  [DONE]
 
 - Typed helpers (`currentHead(): GitCommitSha`, `writeTree(): GitTreeSha`, `treeEntry`,
   `reviewRange(): ReviewRange`, `createReceipt(): ChangeReceipt`, `prepareCommitReceipt`,
   `verifyCommit` -> `CommitVerification`, `verifyPreparedCommit`/`verifyCommitResult` ->
   `CommitMismatchCategory | null`).
-- Spawn path for the receipt CLI -> `join(root, ".codex", "agents", "dist", "change-receipt.js")`.
+- Spawn path for the receipt CLI -> `join(root, ".codex", "agents", "dist", "change-receipt.js")`
+  (deferred to Phase H, see Done Report).
 - `verifyCommit` refactored internally to the `ok`-discriminated `CommitVerification`; consumers
   (`store.recordCommit`) adapt (internal only — persisted `commit_result` wire shape unchanged).
+
+### Done Report — Phase D
+
+**Changes:**
+- Added `.codex/workflow-mcp/git.ts` — every helper from `issue-1-phase-d.md` §§2–3, typed with the
+  domain/branded values from `types.ts`: `currentHead(): GitCommitSha`, `repositoryRoot(): string`,
+  `verifyRevision(): GitCommitSha`, `verifyRange()`, `reviewRange(target: CommitRangeReviewTarget): ReviewRange`,
+  `verifyReviewReceipt()`/`createReceipt(): ChangeReceipt`, `stagedPaths()`/`stagedEntries()`,
+  `approvedResidue()`, `writeTree(): GitTreeSha`, `prepareCommitReceipt(): CommitPreparationEvidence`,
+  `verifyPreparedCommit()`/`verifyCommitResult(): CommitMismatchCategory | null`, and
+  `verifyCommit(): CommitVerification` — refactored to the `ok`-discriminated shape (§4). The
+  additive `ok` field keeps the still-`.mjs` consumers (`store.recordCommit` ->
+  `transitions.recordCommit`) working unchanged; they discriminate on `evidence.mismatch`/`commit_hash`
+  presence. Internal helpers `git`/`gitStatus`/`treeEntry`/`treeEntries`/`normalizeMode`/`digest`/
+  `blobDigest`/`commitChangedPaths` typed, `GitLsTreeRecord` kept private (§2). Producer-side casts
+  only, per the Phase B rule (§6); `commitChangedPaths` keeps its `ERROR_COMMIT_MISMATCH` checks and
+  `R`/`C` handling.
+- `git.mjs` replaced with the temporary shim `export * from "./dist/git.js";`; no `.mjs` consumer or
+  test file edited (they resolve through the shim). Shim removed at Phase F.
+- Committed `.codex/workflow-mcp/dist/git.js` per the committed-`dist/` policy.
+
+**Deviations from the umbrella plan (both pre-documented in the Phase D spec):**
+- Receipt CLI spawn path NOT flipped to `.codex/agents/dist/change-receipt.js` — deferred to Phase H
+  (spec §7), when the compiled artifact exists and all copy/spawn/docs paths flip atomically.
+- `verifyCommit`/`verifyPreparedCommit`/`verifyCommitResult` take `commitHash: unknown` /
+  `input: Record<string, unknown>` — the existing regex/`typeof`/`outcome` checks are the untrusted
+  boundary (spec §3 notes; no Phase F casts needed).
+
+**Spec-implementation notes (behavior-preserving typing details not spelled out in the spec):**
+- `reviewRange`'s `kind` ternary widened to `string`; annotated `RangePathKind` (no cast, §6 rule).
+- `prepareCommitReceipt` dereferences `state.review_receipt.paths` after passing it to
+  `verifyReviewReceipt`; added a null guard that throws the identical `ERROR_STALE_RECEIPT`
+  ("receipt scope or base is stale") that the old code produced via `verifyReviewReceipt`'s
+  `!receipt` check.
+- `createReceipt` re-throws child `ERROR_*` categories from stderr — required `ErrorCategory` type
+  import for the `fail(category, ...)` cast.
+
+**Verified:**
+- `pnpm typecheck` passes under both tsconfigs.
+- Oracle (SDK-free subset, per spec §0): `pnpm build && node --test
+  .codex/workflow-mcp/tests/git.node.mjs .codex/workflow-mcp/tests/lifecycle.node.mjs
+  .codex/workflow-mcp/tests/workflow.node.mjs` — **98 tests, 0 fail**; the three SDK-importing test
+  files remain unloadable until Phase I (pre-existing, not a regression). The suite covers the
+  spot checks: `verifyRange`/`reviewRange` deep-equal assertions, `stagedPaths`/`stagedEntries`
+  mode/content assertions, `prepareCommitReceipt` staging checks, and legacy `recordCommit`
+  commit/mismatch paths via the `.mjs` store.
+- Compiled `dist/git.js` export set identical to the pre-conversion `git.mjs`; module import emits
+  no non-protocol output.
+- No shim bypass: `rg -n 'git\.mjs' .codex` matches only the still-`.mjs` consumers (`store.mjs`)
+  and the `.mjs` tests (transitions.mjs consumes git via `recordCommit` evidence, not imports).
+- `git diff --check` clean; committed `git.ts` + shim + `dist/git.js` together (`31dce7b`); worktree
+  clean after the oracle build.
 
 ## Phase E — `transitions.ts`
 
