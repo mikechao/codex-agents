@@ -101,7 +101,7 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(registration.timeout, 30000);
     assert.equal(registration.command[0], "bun");
     assert.equal(registration.command[1], "--no-warnings");
-    assert.ok(registration.command[2].endsWith(".codex/workflow-mcp/server.ts"));
+    assert.ok(registration.command[2].endsWith(".codex/workflow-mcp/bootstrap.ts"));
     assert.ok(registration.command[2].startsWith("/"), "server path must be absolute");
     assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
@@ -115,7 +115,7 @@ test("install-into.ts preserves unrelated existing opencode.json configuration",
   try {
     write(
       "opencode.json",
-      JSON.stringify(
+      `${JSON.stringify(
         {
           $schema: "https://opencode.ai/config.json",
           model: "some-provider/some-model",
@@ -126,7 +126,7 @@ test("install-into.ts preserves unrelated existing opencode.json configuration",
         },
         null,
         2,
-      ) + "\n",
+      )}\n`,
     );
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);

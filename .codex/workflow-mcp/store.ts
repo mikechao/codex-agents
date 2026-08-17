@@ -49,6 +49,7 @@ import type {
   CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitVerification,
+  GitCommitSha,
   IsoTimestamp,
   LegacyAuditSummary,
   ParentView,
@@ -87,6 +88,24 @@ export interface WorkflowStoreOptions {
   databasePath?: string;
   faultAfterLinkedChildInsert?: boolean;
   faultAfterMigrationUpdate?: boolean;
+  /** Immutable runtime identity supplied by bootstrap for newly created workflows. */
+  runtimeId?: string;
+  runtimeRevision?: string;
+}
+
+export interface RuntimeAffinity {
+  runtime_id: string | null;
+  runtime_revision: string | null;
+}
+
+function runtimeAffinityPair(
+  runtimeId: string | null,
+  runtimeRevision: string | null,
+): RuntimeAffinity {
+  if ((runtimeId === null) !== (runtimeRevision === null)) {
+    fail("ERROR_RUNTIME_RECOVERY", "workflow runtime affinity is incomplete");
+  }
+  return { runtime_id: runtimeId, runtime_revision: runtimeRevision };
 }
 
 function mutationInput(value: unknown): Record<string, unknown> {
@@ -149,6 +168,8 @@ export class WorkflowStore {
   readonly path: string;
   readonly faultAfterLinkedChildInsert: boolean;
   readonly faultAfterMigrationUpdate: boolean;
+  readonly runtimeId: string | null;
+  readonly runtimeRevision: GitCommitSha | null;
   private db: Database;
   private closed = false;
 
@@ -158,6 +179,17 @@ export class WorkflowStore {
       options.databasePath ?? (process.env.WORKFLOW_MCP_DB_PATH || resolveStatePath(this.root));
     this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
     this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
+    const runtimeId = options.runtimeId ?? process.env.WORKFLOW_MCP_RUNTIME_ID ?? null;
+    const runtimeRevision =
+      options.runtimeRevision ?? process.env.WORKFLOW_MCP_RUNTIME_REVISION ?? null;
+    if (runtimeId !== null && !/^[0-9a-f]{64}$/u.test(runtimeId))
+      fail("ERROR_RUNTIME_ISOLATION", "runtime identity is invalid");
+    if (runtimeRevision !== null && !/^[0-9a-f]{40}$/u.test(runtimeRevision))
+      fail("ERROR_RUNTIME_ISOLATION", "runtime revision is invalid");
+    if ((runtimeId === null) !== (runtimeRevision === null))
+      fail("ERROR_RUNTIME_ISOLATION", "runtime identity is incomplete");
+    this.runtimeId = runtimeId;
+    this.runtimeRevision = runtimeRevision as GitCommitSha | null;
     if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
     // counts are not checked in this version); every query here binds positionally.
@@ -267,6 +299,8 @@ export class WorkflowStore {
               fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
             }
             const next = migrateV1State(parsed);
+            next.runtime_id = this.runtimeId;
+            next.runtime_revision = this.runtimeRevision;
             validateWorkflowStateV2(next);
             next.version = ((parsed as { version: number }).version + 1) as WorkflowVersion;
             const now = isoNow();
@@ -293,6 +327,34 @@ export class WorkflowStore {
               auditEnvelope(state, next, null, { outcome: next.phase }),
             );
           } else if (schema === 2) {
+            // v2 rows created before runtime affinity existed are safely upgraded in place. They
+            // remain unowned until the first host using a current immutable runtime opens them.
+            if (
+              typeof parsed === "object" &&
+              parsed !== null &&
+              !("runtime_id" in parsed) &&
+              !("runtime_revision" in parsed)
+            ) {
+              const next = {
+                ...(parsed as WorkflowState),
+                runtime_id: null,
+                runtime_revision: null,
+              };
+              validateWorkflowStateV2(next);
+              const result = this.db
+                .prepare(
+                  "UPDATE workflows SET state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+                )
+                .run(
+                  JSON.stringify(next),
+                  objectDigest(next),
+                  isoNow(),
+                  row.workflow_id,
+                  row.version,
+                );
+              if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
+              parsed = next;
+            }
             validateWorkflowStateV2(parsed);
           } else {
             fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
@@ -321,6 +383,8 @@ export class WorkflowStore {
     const head = currentHead(this.root);
     const workflowId = randomUUID() as WorkflowId;
     const state = createState(input, this.root, head);
+    state.runtime_id = this.runtimeId;
+    state.runtime_revision = this.runtimeRevision;
     if (state.review_target.review_mode === "working_tree") {
       const initialReceipt = createReceipt(this.root, state.approved_paths, true);
       if (initialReceipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
@@ -370,6 +434,54 @@ export class WorkflowStore {
     const row = this.#row(id);
     const selectedRole = this.#assertAuth(row, actorRole, token);
     return roleViewForRole(parseState(row), selectedRole);
+  }
+
+  /** Read only the persisted owning runtime; used by the bootstrap supervisor before auth. */
+  runtimeAffinity(workflowIdValue: unknown): RuntimeAffinity {
+    this.#ensureOpen();
+    const id = workflowId(workflowIdValue);
+    const state = parseState(this.#row(id));
+    return runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+  }
+
+  /** Bind a pre-affinity v2 row to this host's current immutable runtime on first use. */
+  adoptRuntime(workflowIdValue: unknown): RuntimeAffinity {
+    this.#ensureOpen();
+    const id = workflowId(workflowIdValue);
+    if (this.runtimeId === null || this.runtimeRevision === null) {
+      fail("ERROR_RUNTIME_RECOVERY", "current immutable runtime is unavailable for adoption");
+    }
+    return this.db
+      .transaction(() => {
+        const row = this.#row(id);
+        const state = parseState(row);
+        const current = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+        if (current.runtime_id !== null || current.runtime_revision !== null) return current;
+        const next = {
+          ...state,
+          runtime_id: this.runtimeId,
+          runtime_revision: this.runtimeRevision,
+          version: (row.version + 1) as WorkflowVersion,
+        };
+        validateWorkflowStateV2(next);
+        const result = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(next.version, JSON.stringify(next), objectDigest(next), isoNow(), id, row.version);
+        if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        this.#audit(
+          id,
+          next.version,
+          "WORKFLOW_MIGRATED",
+          "parent",
+          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
+            outcome: next.phase,
+          }),
+        );
+        return { runtime_id: next.runtime_id, runtime_revision: next.runtime_revision };
+      })
+      .immediate();
   }
 
   audit(workflowIdValue: unknown, actorRole: unknown, token: unknown): AuditEvent[] {
@@ -725,10 +837,14 @@ export class WorkflowStore {
         const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
         const childId = randomUUID() as WorkflowId;
         const childState = linkedFollowupChildState(followup);
+        const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+        childState.runtime_id = parentAffinity.runtime_id;
+        childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
+        childState.workflow_id = childId;
+        validateWorkflowStateV2(childState);
         const childReceipt = createReceipt(this.root, childState.approved_paths, true);
         if (childReceipt.base_head !== followup.base_head)
           fail("ERROR_STALE_BASE", "scope base is stale");
-        childState.workflow_id = childId;
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
         const childCapabilities: RoleCapabilities = {

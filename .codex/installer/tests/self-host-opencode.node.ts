@@ -9,7 +9,7 @@ import {
 
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
-const relativeServerPath = ".codex/workflow-mcp/server.ts";
+const relativeServerPath = ".codex/workflow-mcp/bootstrap.ts";
 const orchestratorPath = ".opencode/agents/orchestrator.md";
 
 test("the repository's own opencode.json registers workflow_state exactly like the installer", () => {

@@ -438,6 +438,8 @@ test("preserves old audits byte-for-byte and appends one migration event", () =>
       "recovery_context",
       "remediation_context",
       "review_target",
+      "runtime_id",
+      "runtime_revision",
       "schema_version",
       "scope_changed_paths",
       "source_workflow_id",

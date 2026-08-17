@@ -11,8 +11,10 @@ registration that `install-into.ts` writes into the project's `opencode.json`/`o
 bun run start
 ```
 
-Both hosts start this same Bun/TypeScript STDIO server themselves and share its
-repository-hash-partitioned durable state, so workflows are interchangeable between hosts.
+Both hosts start the `bootstrap.ts` supervisor. The supervisor resolves the provider checkout's
+current committed runtime, launches only its immutable artifact, and proxies requests for older
+unfinished workflows to the artifact that owns them. The hosts share repository-hash-partitioned
+durable state, so workflows are interchangeable between hosts.
 
 Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
 `tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.
@@ -46,9 +48,19 @@ revision selector from the identity. Therefore selector-only differences that re
 trusted inputs, and unrelated repository changes, do not change the ID.
 
 This abstraction owns revision resolution, trusted-input fingerprinting, packaging, validation, and
-cache publication. Issue #17 owns workflow persistence, runtime affinity, restart/promotion,
-hot-swapping, cache GC, capability/receipt semantics, and installer behavior; it should persist the
-returned `runtime_id` and launch `runtimePath` without depending on packaging internals.
+cache publication. The supervisor persists the returned `runtime_id` plus committed provider
+revision on every new workflow. A provider commit never hot-swaps an already running child; after a
+host restart the new default artifact is promoted for new workflows while affinity routes existing
+workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
+with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability or receipt errors.
+
+## A-to-B dogfooding lifecycle
+
+The self-hosted regression is deliberately chronological: start the host on committed runtime A,
+create a workflow, edit approved runtime paths and commit them as B, verify the running A child is
+unchanged, then restart the host. Bootstrap promotes B for new workflows and routes the unfinished
+A workflow to a recovered A child. Installed hosts use the same absolute provider bootstrap and
+therefore exercise the identical lifecycle.
 
 ## Authoritative role views
 

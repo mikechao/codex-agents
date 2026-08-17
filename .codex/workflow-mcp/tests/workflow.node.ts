@@ -328,6 +328,8 @@ test("optional findings require a fresh linked workflow", () => {
     const store: any = new WorkflowStore({
       repositoryRoot: root,
       databasePath: ":memory:",
+      runtimeId: "a".repeat(64),
+      runtimeRevision: git("rev-parse", "HEAD"),
     });
     const created = create(store, root, git, { objective: "optional" });
     implementation(store, created, root, 0, "implemented");
@@ -386,6 +388,8 @@ test("optional findings require a fresh linked workflow", () => {
         .get(linked.workflow.workflow_id).state_json,
     );
     assert.deepEqual(childState.linked_findings, [optional]);
+    assert.equal(childState.runtime_id, "a".repeat(64));
+    assert.equal(childState.runtime_revision, created.workflow.base_head);
     assert.deepEqual(childState.remediation_context, {
       policy: "explicitly_authorized",
       authorized_finding_ids: ["F-3"],
@@ -1916,6 +1920,8 @@ const COMMON_KEYS = [
 ];
 const PARENT_EXTRA_KEYS = [
   "legacy_v1",
+  "runtime_id",
+  "runtime_revision",
   "base_head",
   "acceptance_criteria",
   "validation_requirements",

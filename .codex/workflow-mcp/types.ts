@@ -134,7 +134,10 @@ export type ErrorCategory =
   | "ERROR_NOT_REPOSITORY"
   | "ERROR_DIRECTORY_PATH"
   | "ERROR_UNSUPPORTED_FILE_TYPE"
-  | "ERROR_INVALID_ARGUMENTS";
+  | "ERROR_INVALID_ARGUMENTS"
+  | "ERROR_RUNTIME_ISOLATION"
+  | "ERROR_RUNTIME_RECOVERY"
+  | "ERROR_RUNTIME_ARTIFACT";
 
 export type AuditEventType =
   | "WORKFLOW_CREATED"
@@ -292,6 +295,9 @@ export interface WorkflowState {
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
   legacy_v1: boolean;
+  /** Immutable runtime that owns this workflow. Null is retained for pre-affinity legacy rows. */
+  runtime_id: string | null;
+  runtime_revision: GitCommitSha | null;
   phase: WorkflowPhase;
   objective: string;
   base_head: GitCommitSha;

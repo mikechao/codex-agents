@@ -1930,12 +1930,12 @@ test("project config.toml registers the workflow_state server with Bun and exact
   const server = parsed.mcp_servers?.workflow_state;
   assert.ok(server, "config.toml must register mcp_servers.workflow_state");
   assert.equal(server.command, "bun");
-  assert.deepEqual(server.args, ["--no-warnings", ".codex/workflow-mcp/server.ts"]);
+  assert.deepEqual(server.args, ["--no-warnings", ".codex/workflow-mcp/bootstrap.ts"]);
   const serverPath = server.args?.[server.args.length - 1];
   assert.ok(typeof serverPath === "string" && serverPath.length > 0);
   assert.ok(
-    serverPath.endsWith(".codex/workflow-mcp/server.ts"),
-    "args must point at the server source",
+    serverPath.endsWith(".codex/workflow-mcp/bootstrap.ts"),
+    "args must point at the runtime bootstrap",
   );
   assert.equal(existsSync(join(process.cwd(), serverPath)), true, "server source must exist");
   assert.equal(typeof server.startup_timeout_sec, "number");

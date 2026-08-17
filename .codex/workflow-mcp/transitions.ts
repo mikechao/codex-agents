@@ -148,6 +148,8 @@ const V2_STATE_KEYS: readonly string[] = [
   "workflow_id",
   "workflow_type",
   "legacy_v1",
+  "runtime_id",
+  "runtime_revision",
   "phase",
   "objective",
   "base_head",
@@ -409,6 +411,8 @@ function baseState({
     workflow_id: null,
     workflow_type: workflowType,
     legacy_v1: false,
+    runtime_id: null,
+    runtime_revision: null,
     phase: workflowType === "review_only" ? "REVIEWING" : "IMPLEMENTING",
     objective,
     base_head: baseHead,
@@ -1342,6 +1346,8 @@ export function migrateV1State(state: unknown): WorkflowState {
     workflow_id: v1.workflow_id as WorkflowId,
     workflow_type: "change",
     legacy_v1: true,
+    runtime_id: null,
+    runtime_revision: null,
     phase,
     objective: v1.objective,
     base_head: v1.base_head as GitCommitSha,
@@ -1748,6 +1754,9 @@ export function validateWorkflowStateV2(value: unknown): WorkflowState {
     corrupt();
   if (value.workflow_type !== "change" && value.workflow_type !== "review_only") corrupt();
   if (typeof value.legacy_v1 !== "boolean") corrupt();
+  if (value.runtime_id !== null && !/^[0-9a-f]{64}$/u.test(String(value.runtime_id))) corrupt();
+  if (value.runtime_revision !== null) sha40(value.runtime_revision);
+  if ((value.runtime_id === null) !== (value.runtime_revision === null)) corrupt();
   const legacyTolerant = value.legacy_v1 === true;
   if (typeof value.phase !== "string" || !PHASES.includes(value.phase as WorkflowPhase)) corrupt();
   bounded(value.objective, MAX_TEXT);

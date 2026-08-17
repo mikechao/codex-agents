@@ -4,7 +4,7 @@
   "mcp": {
     "workflow_state": {
       "type": "local",
-      "command": ["bun", "--no-warnings", ".codex/workflow-mcp/server.ts"],
+      "command": ["bun", "--no-warnings", ".codex/workflow-mcp/bootstrap.ts"],
       "enabled": true,
       "timeout": 30000
     }
