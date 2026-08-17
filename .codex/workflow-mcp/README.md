@@ -21,6 +21,35 @@ State is stored in a stable, repository-hash-partitioned path under the user's C
 Tests may pass an explicit database path. The server does not read PGlite, corpus data, browser
 storage, or portable backups, and emits no logs on stdout.
 
+## Runtime artifacts
+
+`materializeRuntimeArtifact(repositoryRoot, revision)` (also exported as
+`resolveRuntimeArtifact`) resolves a full committed Git revision to a deterministic `runtime_id`
+and an absolute `runtimePath`. The trusted manifest is deliberately narrow: it contains the server's
+local import closure, both receipt modules, and the committed `package.json`/`bun.lock` dependency
+metadata. Literal string dynamic imports are supported and included in the committed closure;
+non-literal dynamic imports are rejected. It reads those bytes from Git, never from dirty checkout
+files, rejects committed runtime symlinks, and rejects missing local imports rather than silently
+producing an incomplete runtime.
+
+Artifacts are installed and validated in a staging directory, then atomically renamed into an
+external content-addressed cache under `~/.codex/state/workflow-mcp/runtime-artifacts` (or an
+explicit external cache root). A completion marker and manifest are checked on every reuse, so a
+partial or corrupted entry is rebuilt. Cache entries may not be symlinks, and validation and reuse
+reject cache or artifact paths that escape the external cache/artifact boundary or resolve back into
+the supervised repository. The returned artifact is self-contained, including its committed source
+closure and production dependencies, and can be launched with Bun using `runtimePath` while keeping
+the supervised repository as the working directory.
+
+`runtime_id` hashes the trusted runtime closure and committed package metadata while excluding the
+revision selector from the identity. Therefore selector-only differences that resolve to the same
+trusted inputs, and unrelated repository changes, do not change the ID.
+
+This abstraction owns revision resolution, trusted-input fingerprinting, packaging, validation, and
+cache publication. Issue #17 owns workflow persistence, runtime affinity, restart/promotion,
+hot-swapping, cache GC, capability/receipt semantics, and installer behavior; it should persist the
+returned `runtime_id` and launch `runtimePath` without depending on packaging internals.
+
 ## Authoritative role views
 
 The parent creates a workflow and passes each role only its one-time capability together with the

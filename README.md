@@ -28,6 +28,15 @@ directly in either host loads the local agent definitions and auto-starts the
 `workflow_state` MCP server from the project config itself — no manual server launch is required.
 Runtime SQLite state is stored outside the repository under the user's Codex state directory.
 
+The Workflow MCP runtime can be materialized independently from a committed revision with
+`resolveRuntimeArtifact` from `.codex/workflow-mcp/index.ts`. It returns a deterministic `runtime_id`
+and absolute Bun `runtimePath` from an external, content-addressed cache. The `runtime_id` hashes the
+trusted runtime closure and committed package metadata while excluding the revision selector, so
+selector-only differences that resolve to the same trusted inputs and unrelated repository changes
+do not change the ID. Dirty checkout edits do not affect the committed runtime. Issue #17 can persist
+that ID and launch the returned path, while runtime packaging remains separate from workflow
+persistence, affinity, promotion, hot swapping, and cache GC.
+
 ## Commands
 
 ```sh
