@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -64,6 +65,12 @@ function installedOpenCodeConfig(root: string) {
   return { path, content: readFileSync(path, "utf8") };
 }
 
+function openCodeAgentsBackups(root: string) {
+  const opencode = join(root, ".opencode");
+  if (!existsSync(opencode)) return [];
+  return readdirSync(opencode).filter((name) => name.startsWith(".agents.backup."));
+}
+
 test("install-into.ts installs OpenCode agents and the workflow_state MCP registration", () => {
   const { root } = fixture();
   try {
@@ -96,7 +103,7 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(registration.command[1], "--no-warnings");
     assert.ok(registration.command[2].endsWith(".codex/workflow-mcp/server.ts"));
     assert.ok(registration.command[2].startsWith("/"), "server path must be absolute");
-    assert.ok(existsSync(join(root, ".opencode/.agents.install.")) === false);
+    assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -275,10 +282,7 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
     }
     assert.ok(existsSync(join(root, ".codex/agents")), "codex agents must still be installed");
     assert.ok(existsSync(join(root, "opencode.json")), "opencode config must still be registered");
-    assert.ok(
-      !existsSync(join(root, ".opencode/.agents.backup.")),
-      "backup staging must be removed",
-    );
+    assert.deepEqual(openCodeAgentsBackups(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -304,7 +308,7 @@ test("install-into.ts refuses a managed OpenCode agent name collision", () => {
         readFileSync(join(root, ".opencode/agents/docs-writer.md"), "utf8"),
         "---\ndescription: unrelated agent\n---\n",
       );
-      assert.ok(!existsSync(join(root, ".opencode/.agents.backup.")));
+      assert.deepEqual(openCodeAgentsBackups(root), []);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
