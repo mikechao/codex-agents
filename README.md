@@ -61,15 +61,15 @@ installer-generated registrations. The self-host OpenCode registration is checke
 repository and a test keeps it from silently diverging from the installer's registration shape.
 
 OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
-`default_agent`. Use the normal primary-agent switcher (Tab by default) to select Plan for
-analysis/refinement or Build for deliberate ordinary direct coding. Plan does not create an
-implementation workflow; after approving a plan, switch to Orchestrator and say `implement the
-plan`. Orchestrator performs bounded read-only preflight, creates or reuses the authoritative
-workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after explicit user
-commit authorization—`committer`. It preserves the exact `workflow_id`, capability, and version
-through every handoff and cannot edit, stage, or commit itself. The pending Build-centered flow
-described by issue #12 should be revised to document Orchestrator before that issue is implemented
-or closed.
+`default_agent`. See the [OpenCode orchestration flow](docs/opencode-orchestration-flow.md) for the
+current architecture and handoff sequence. Use the normal primary-agent switcher (Tab by default)
+to select Plan for analysis/refinement or Build for deliberate ordinary direct coding. Plan does not
+create an implementation workflow; after approving a plan, switch to Orchestrator and say
+`implement the plan`. Orchestrator performs bounded read-only preflight, creates or reuses the
+authoritative workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after
+explicit user commit authorization—`committer`. It preserves the exact `workflow_id`, capability,
+and version through every handoff and cannot edit, stage, or commit itself. Build remains an
+independent direct-coding option rather than the workflow control plane.
 
 ## Install into another repository
 

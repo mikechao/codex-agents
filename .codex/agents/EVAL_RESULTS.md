@@ -31,6 +31,16 @@ observed_deviation: none
 ```
 
 ```yaml
+date: 2026-08-16
+agent_contract_commit: 8b96ab39f5577f2d922e9f2bb7c790b812bd73f8
+model: opencode-go/gpt-5.6-luna
+scenario: Plan -> Orchestrator execution
+result: PASS
+evidence: Plan completed without creating an implementation workflow; Orchestrator reused the approved plan, performed bounded preflight without mutation, and delegated implementation with the exact workflow identity. The implementer's first authoritative action was workflow_get.
+observed_deviation: none
+```
+
+```yaml
 date: 2026-08-14
 agent_contract_commit: 704d17e31c6233d593859ee5490e610e2a17cc50
 model: gpt-5.6-sol, medium reasoning
