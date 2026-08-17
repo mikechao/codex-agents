@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import { WorkflowError } from "../errors.js";
 import { currentHead } from "../git.js";
 import { materializeRuntimeArtifact } from "../runtime-artifact.js";
-import { resolveOwningRuntime } from "../runtime-supervisor.js";
+import { RuntimeSupervisor, resolveOwningRuntime } from "../runtime-supervisor.js";
 import { WorkflowStore } from "../store.js";
 import { fixture } from "./test-fixtures.js";
 
@@ -70,7 +70,6 @@ describe("Workflow MCP runtime supervision", () => {
   });
 
   test("routes an A workflow back to A after promotion to B and restart", async () => {
-    const provider = mkdtempSync(join(tmpdir(), "workflow-runtime-provider-"));
     const target = fixture();
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-cache-"));
     const databasePath = join(mkdtempSync(join(tmpdir(), "workflow-runtime-db-")), "state.sqlite");
@@ -87,30 +86,30 @@ describe("Workflow MCP runtime supervision", () => {
       });
     `;
     const git = (...args: string[]) =>
-      execFileSync("git", ["-C", provider, ...args], { encoding: "utf8" }).trim();
+      execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
     const writeProvider = (label: string) => {
-      mkdirSync(join(provider, ".codex", "workflow-mcp"), { recursive: true });
-      mkdirSync(join(provider, ".codex", "agents"), { recursive: true });
-      writeFileSync(join(provider, ".codex/workflow-mcp/server.ts"), server(label));
+      mkdirSync(join(target.root, ".codex", "workflow-mcp"), { recursive: true });
+      mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
+      writeFileSync(join(target.root, ".codex/workflow-mcp/server.ts"), server(label));
       cpSync(
         join(process.cwd(), ".codex/agents/change-receipt.ts"),
-        join(provider, ".codex/agents/change-receipt.ts"),
+        join(target.root, ".codex/agents/change-receipt.ts"),
       );
       cpSync(
         join(process.cwd(), ".codex/agents/change-receipt.ts"),
-        join(provider, ".codex/agents/receipt.ts"),
+        join(target.root, ".codex/agents/receipt.ts"),
       );
       writeFileSync(
-        join(provider, "package.json"),
+        join(target.root, "package.json"),
         '{"name":"runtime-fixture","type":"module","dependencies":{}}\n',
       );
-      writeFileSync(join(provider, "bun.lock"), "{}\n");
+      writeFileSync(join(target.root, "bun.lock"), "{}\n");
     };
     const start = (bunExecutable?: string) => {
       const script = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeModule)};
         new RuntimeSupervisor(${JSON.stringify({
           repositoryRoot: target.root,
-          providerRoot: provider,
+          providerRoot: target.root,
           databasePath,
           cacheRoot,
           installDependencies: false,
@@ -158,14 +157,11 @@ describe("Workflow MCP runtime supervision", () => {
     };
 
     try {
-      execFileSync("git", ["-C", provider, "init", "-q"]);
-      git("config", "user.email", "workflow@example.invalid");
-      git("config", "user.name", "Workflow Tests");
       writeProvider("A");
       git("add", ".");
       git("commit", "-qm", "runtime A");
-      const revisionA = currentHead(provider);
-      const artifactA = materializeRuntimeArtifact(provider, revisionA, {
+      const revisionA = currentHead(target.root);
+      const artifactA = materializeRuntimeArtifact(target.root, revisionA, {
         cacheRoot,
         installDependencies: false,
       });
@@ -225,8 +221,8 @@ describe("Workflow MCP runtime supervision", () => {
         "A",
       );
       await active.stop();
-      const revisionB = currentHead(provider);
-      const artifactB = materializeRuntimeArtifact(provider, revisionB, {
+      const revisionB = currentHead(target.root);
+      const artifactB = materializeRuntimeArtifact(target.root, revisionB, {
         cacheRoot,
         installDependencies: false,
       });
@@ -283,7 +279,6 @@ describe("Workflow MCP runtime supervision", () => {
       assert.equal(failure.error.data.category, "ERROR_RUNTIME_RECOVERY");
       await failed.stop();
     } finally {
-      rmSync(provider, { recursive: true, force: true });
       rmSync(target.root, { recursive: true, force: true });
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(dirname(databasePath), { recursive: true, force: true });
@@ -408,6 +403,36 @@ describe("Workflow MCP runtime supervision", () => {
       resolveOwningRuntime(process.cwd(), { runtime_id: null, runtime_revision: null });
     } catch (error) {
       expect((error as WorkflowError).category).toBe("ERROR_RUNTIME_RECOVERY");
+    }
+  });
+
+  test("rejects a cross-repository supervisor before materializing or opening state", () => {
+    const provider = fixture();
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-mismatch-cache-"));
+    const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-mismatch-db-"));
+    const databasePath = join(databaseRoot, "state.sqlite");
+    try {
+      assert.throws(
+        () =>
+          new RuntimeSupervisor({
+            repositoryRoot: target.root,
+            providerRoot: provider.root,
+            cacheRoot,
+            databasePath,
+            installDependencies: false,
+          }),
+        (error: unknown) => {
+          return error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION";
+        },
+      );
+      assert.deepEqual(readdirSync(cacheRoot), []);
+      assert.deepEqual(readdirSync(databaseRoot), []);
+    } finally {
+      rmSync(provider.root, { recursive: true, force: true });
+      rmSync(target.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(databaseRoot, { recursive: true, force: true });
     }
   });
 

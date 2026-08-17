@@ -127,6 +127,12 @@ export class RuntimeSupervisor {
     this.providerRoot = repositoryRoot(
       options.providerRoot ?? process.env.WORKFLOW_MCP_PROVIDER_ROOT ?? this.root,
     );
+    if (this.providerRoot !== this.root) {
+      throw runtimeFailure(
+        "ERROR_RUNTIME_ISOLATION",
+        "supervised and provider repository roots do not match",
+      );
+    }
     this.defaultRuntime = resolveCurrentRuntime({
       ...options,
       providerRoot: this.providerRoot,
