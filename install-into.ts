@@ -139,6 +139,12 @@ interface CommitStep {
   originalDir: string | null;
 }
 
+export type OpenCodeAgentsBackupState = "unused" | "in-use" | "restored" | "unrecoverable";
+
+export interface CommitRecoveryState {
+  openCodeAgentsBackup: OpenCodeAgentsBackupState;
+}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -150,6 +156,7 @@ function rollback(
   committed: readonly CommitStep[],
   rename: (from: string, to: string) => void = renameSync,
   writeFile: (path: string, content: string) => void = writeFileSync,
+  recoveryState?: CommitRecoveryState,
 ): Error[] {
   const failures: Error[] = [];
   for (const step of committed.slice().reverse()) {
@@ -163,7 +170,13 @@ function rollback(
       }
       try {
         rename(step.originalDir, step.target);
+        if (recoveryState !== undefined) {
+          recoveryState.openCodeAgentsBackup = "restored";
+        }
       } catch (cause) {
+        if (recoveryState !== undefined) {
+          recoveryState.openCodeAgentsBackup = "unrecoverable";
+        }
         failures.push(
           new Error(
             `failed to restore ${step.target} from ${step.originalDir}: ${errorMessage(cause)}`,
@@ -216,6 +229,7 @@ export function commitBothHosts(
   originalOpenCodeAgentsDir: string | null = null,
   rename: (from: string, to: string) => void = renameSync,
   writeFile: (path: string, content: string) => void = writeFileSync,
+  recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" },
 ): void {
   const steps: readonly CommitStep[] = [
     { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
@@ -245,17 +259,20 @@ export function commitBothHosts(
       // first and rely on the backup snapshot for restore on any later failure.
       if (step.originalDir !== null) {
         rmSync(step.target, { recursive: true, force: true });
+        recoveryState.openCodeAgentsBackup = "in-use";
       }
       rename(step.staging, step.target);
       committed.push(step);
     }
   } catch (cause) {
-    const failures = rollback(committed, rename, writeFile);
+    const failures = rollback(committed, rename, writeFile, recoveryState);
     const failing = steps[committed.length];
     if (failing !== undefined && failing.originalDir !== null) {
       try {
         rename(failing.originalDir, failing.target);
+        recoveryState.openCodeAgentsBackup = "restored";
       } catch (restoreCause) {
+        recoveryState.openCodeAgentsBackup = "unrecoverable";
         failures.push(
           new Error(
             `failed to restore ${failing.target} from ${failing.originalDir}: ${errorMessage(restoreCause)}`,
@@ -272,6 +289,25 @@ export function commitBothHosts(
       { cause },
     );
   }
+}
+
+export function cleanupOpenCodeAgentsBackup(
+  backup: string | null,
+  recoveryState: CommitRecoveryState,
+  remove: (path: string) => void = (path) => rmSync(path, { recursive: true, force: true }),
+  exists: (path: string) => boolean = existsSync,
+  report: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
+): void {
+  if (backup === null) return;
+  if (recoveryState.openCodeAgentsBackup === "unrecoverable") {
+    if (exists(backup)) {
+      report(
+        `Rollback could not restore the original OpenCode agents; the backup remains at: ${backup}`,
+      );
+    }
+    return;
+  }
+  remove(backup);
 }
 
 function isGitRepository(target: string): boolean {
@@ -545,6 +581,7 @@ export function main(args: readonly string[]): number {
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
   let opencodeAgentsBackup: string | null = null;
+  const recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" };
   try {
     for (const file of COPY_SOURCE_FILES) {
       if (existsSync(resolve(projectRoot, file))) {
@@ -583,20 +620,16 @@ export function main(args: readonly string[]): number {
       existing === "" ? null : existing.replace(/\n$/, ""),
       opencodeConfigOriginal,
       opencodeAgentsBackup,
+      renameSync,
+      writeFileSync,
+      recoveryState,
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
-    // Never delete a pre-existing-agents backup on the failure path: a backup
-    // that still exists was not restored, and it is the only copy of the user's
-    // original agents. It is removed only on the success path above.
-    if (opencodeAgentsBackup !== null && existsSync(opencodeAgentsBackup)) {
-      process.stderr.write(
-        `Rollback could not restore the original OpenCode agents; the backup remains at: ${opencodeAgentsBackup}\n`,
-      );
-    }
+    cleanupOpenCodeAgentsBackup(opencodeAgentsBackup, recoveryState);
     throw cause;
   }
   rmSync(configStaging, { recursive: true, force: true });

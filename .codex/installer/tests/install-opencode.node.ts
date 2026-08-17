@@ -13,7 +13,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { commitBothHosts, hasOpenCodeWorkflowStateRegistration } from "../../../install-into.js";
+import {
+  cleanupOpenCodeAgentsBackup,
+  commitBothHosts,
+  hasOpenCodeWorkflowStateRegistration,
+} from "../../../install-into.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
 
@@ -544,6 +548,74 @@ test("commitBothHosts restores a pre-existing OpenCode agents directory when a l
   }
 });
 
+test("commitBothHosts marks an unused backup for cleanup when an earlier commit fails", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexAgentsTarget = join(root, ".codex/agents");
+    const codexConfigTarget = join(root, ".codex/config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
+    mkdirSync(opencodeAgentsTarget, { recursive: true });
+    const unrelated = "---\ndescription: unrelated\n---\n";
+    writeFileSync(join(opencodeAgentsTarget, "docs-writer.md"), unrelated);
+    const backup = join(root, ".opencode-agents-backup");
+    cpSync(opencodeAgentsTarget, backup, { recursive: true });
+
+    const codexAgents = agentsDir("codex-agents-before-opencode");
+    const codexConfig = staging("codex-config-before-opencode");
+    const opencodeAgents = agentsDir("opencode-agents-before-opencode");
+    const opencodeConfig = staging("opencode-config-before-opencode");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    const rename = (from: string, to: string) => {
+      if (to === codexConfigTarget) throw new Error("injected codex config failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+    const recoveryState = { openCodeAgentsBackup: "unused" as const };
+
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          null,
+          null,
+          backup,
+          rename,
+          writeFileSync,
+          recoveryState,
+        ),
+      /injected codex config failure/,
+    );
+    assert.equal(recoveryState.openCodeAgentsBackup, "unused");
+    assert.equal(readFileSync(join(opencodeAgentsTarget, "docs-writer.md"), "utf8"), unrelated);
+    assert.ok(existsSync(backup), "the unused backup exists before cleanup");
+
+    const warnings: string[] = [];
+    cleanupOpenCodeAgentsBackup(
+      backup,
+      recoveryState,
+      (path) => rmSync(path, { recursive: true, force: true }),
+      existsSync,
+      (message) => warnings.push(message),
+    );
+    assert.deepEqual(warnings, [], "unused backups must not report a recovery failure");
+    assert.ok(!existsSync(backup), "the redundant backup must be removed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("commitBothHosts reports a failed backup restore and preserves the original backup", () => {
   const { root, staging, agentsDir } = commitFixture();
   try {
@@ -577,6 +649,7 @@ test("commitBothHosts reports a failed backup restore and preserves the original
       if (from === backup) throw new Error("injected backup restore failure");
       execFileSync("mv", [from, to], { stdio: "ignore" });
     };
+    const recoveryState = { openCodeAgentsBackup: "unused" as const };
     assert.throws(
       () =>
         commitBothHosts(
@@ -592,6 +665,8 @@ test("commitBothHosts reports a failed backup restore and preserves the original
           originalOpenCodeConfig,
           backup,
           rename,
+          writeFileSync,
+          recoveryState,
         ),
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -603,7 +678,21 @@ test("commitBothHosts reports a failed backup restore and preserves the original
         );
       },
     );
+    assert.equal(recoveryState.openCodeAgentsBackup, "unrecoverable");
     assert.ok(existsSync(backup), "the backup must not be deleted when its restore fails");
+    const warnings: string[] = [];
+    cleanupOpenCodeAgentsBackup(
+      backup,
+      recoveryState,
+      () => {
+        throw new Error("the unrecoverable backup must not be removed");
+      },
+      existsSync,
+      (message) => warnings.push(message),
+    );
+    assert.deepEqual(warnings, [
+      `Rollback could not restore the original OpenCode agents; the backup remains at: ${backup}`,
+    ]);
     assert.equal(
       readFileSync(join(backup, "docs-writer.md"), "utf8"),
       unrelated,
