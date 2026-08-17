@@ -13,6 +13,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { currentHead } from "../git.js";
 import {
   isValidRuntimeArtifact,
@@ -142,6 +144,121 @@ describe("Workflow MCP runtime artifacts", () => {
     } finally {
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("assigns distinct identities to distinct committed runtime inputs", () => {
+    const fixture = gitFixture({
+      "package.json": '{"name":"fixture","dependencies":{}}\n',
+      "bun.lock": '{"lockfileVersion":1}\n',
+      ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+      ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+      ".codex/workflow-mcp/server.ts": 'export const server = "first";\n',
+    });
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-trusted-change-cache-"));
+    try {
+      const first = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot,
+        installDependencies: false,
+      });
+      writeFileSync(
+        join(fixture.root, ".codex/workflow-mcp/server.ts"),
+        'export const server = "second";\n',
+      );
+      execFileSync("git", ["add", ".codex/workflow-mcp/server.ts"], { cwd: fixture.root });
+      execFileSync("git", ["commit", "-q", "-m", "trusted runtime change"], { cwd: fixture.root });
+      const secondRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: fixture.root,
+        encoding: "utf8",
+      }).trim();
+      const second = materializeRuntimeArtifact(fixture.root, secondRevision, {
+        cacheRoot,
+        installDependencies: false,
+      });
+
+      expect(secondRevision).not.toBe(fixture.revision);
+      expect(second.runtime_id).not.toBe(first.runtime_id);
+      expect(second.cachePath).not.toBe(first.cachePath);
+      expect(isValidRuntimeArtifact(first)).toBe(true);
+      expect(isValidRuntimeArtifact(second)).toBe(true);
+      expect(readFileSync(first.runtimePath, "utf8")).toContain('server = "first"');
+      expect(readFileSync(second.runtimePath, "utf8")).toContain('server = "second"');
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("materializes committed content despite dirty trusted runtime files", () => {
+    const fixture = gitFixture({
+      "package.json": '{"name":"fixture","dependencies":{}}\n',
+      "bun.lock": '{"lockfileVersion":1}\n',
+      ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+      ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+      ".codex/workflow-mcp/server.ts": 'export const server = "committed";\n',
+    });
+    const initialCacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-clean-cache-"));
+    const freshCacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-dirty-cache-"));
+    try {
+      const committed = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot: initialCacheRoot,
+        installDependencies: false,
+      });
+      const committedContent = readFileSync(committed.runtimePath, "utf8");
+      writeFileSync(
+        join(fixture.root, ".codex/workflow-mcp/server.ts"),
+        'export const server = "dirty checkout";\n',
+      );
+
+      const isolated = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot: freshCacheRoot,
+        installDependencies: false,
+      });
+
+      expect(isolated.runtime_id).toBe(committed.runtime_id);
+      expect(isolated.manifest.revision).toBe(fixture.revision);
+      expect(isolated.reused).toBe(false);
+      expect(readFileSync(isolated.runtimePath, "utf8")).toBe(committedContent);
+      expect(readFileSync(isolated.runtimePath, "utf8")).not.toContain("dirty checkout");
+      expect(isValidRuntimeArtifact(isolated)).toBe(true);
+    } finally {
+      rmSync(initialCacheRoot, { recursive: true, force: true });
+      rmSync(freshCacheRoot, { recursive: true, force: true });
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("launches the materialized server without runtime sources in its checkout", async () => {
+    const repository = process.cwd();
+    const revision = currentHead(repository);
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-server-cache-"));
+    const isolated = gitFixture({ "README.md": "runtime isolation fixture\n" });
+    let transport: StdioClientTransport | undefined;
+    let client: Client | undefined;
+    try {
+      const artifact = materializeRuntimeArtifact(repository, revision, { cacheRoot });
+      expect(existsSync(join(isolated.root, ".codex/workflow-mcp/server.ts"))).toBe(false);
+      expect(existsSync(join(isolated.root, ".codex/agents/change-receipt.ts"))).toBe(false);
+
+      transport = new StdioClientTransport({
+        command: process.execPath,
+        args: ["--no-warnings", artifact.runtimePath],
+        cwd: isolated.root,
+        env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(isolated.root, "state.sqlite") },
+        stderr: "pipe",
+      });
+      client = new Client(
+        { name: "runtime-artifact-test", version: "1.0.0" },
+        { capabilities: {} },
+      );
+      await client.connect(transport);
+      const listed = await client.listTools();
+      expect(listed.tools.some((tool) => tool.name === "workflow_create")).toBe(true);
+    } finally {
+      await client?.close();
+      await transport?.close();
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(isolated.root, { recursive: true, force: true });
     }
   });
 
