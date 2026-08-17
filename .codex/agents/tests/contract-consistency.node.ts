@@ -21,15 +21,34 @@ const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");
 
 test("OpenCode definitions are subagents with host-native permissions", () => {
+  const expectedModels: Record<string, string> = {
+    implementer: "opencode-go/gpt-5.6-luna",
+    code_reviewer: "opencode-go/deepseek-v4-flash",
+    committer: "opencode-go/deepseek-v4-flash",
+  };
   for (const name of ["implementer.md", "code_reviewer.md", "committer.md"]) {
+    const role = name.replace(/\.md$/, "");
     const content = opencode(name);
     assert.match(content, /^---\n/, `${name} must start with YAML frontmatter`);
     assert.match(content, /^mode: subagent$/m, `${name} must be a subagent`);
     assert.match(
       content,
-      /^model: opencode-go\/deepseek-v4-flash$/m,
-      `${name} must pin the OpenCode Go adapter model`,
+      new RegExp(`^model: ${expectedModels[role]}$`, "m"),
+      `${name} must pin its configured OpenCode model`,
     );
+    if (role === "implementer") {
+      assert.match(
+        content,
+        /^model: opencode-go\/gpt-5\.6-luna\nreasoningEffort: high$/m,
+        "implementer must pin high reasoning effort after its model",
+      );
+    } else {
+      assert.doesNotMatch(
+        content,
+        /^reasoningEffort:/m,
+        `${name} must not configure reasoning effort`,
+      );
+    }
     assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
     assert.match(
       content,
@@ -303,10 +322,12 @@ test("contract fragments are host-neutral and each host injects its own identity
       /"Agent: \w+ \| Model: [^"|]+\| Reasoning: \w+"/,
       `${role} Codex definition must announce the Codex model and reasoning effort`,
     );
+    const expectedModel =
+      role === "implementer" ? "opencode-go/gpt-5.6-luna" : "opencode-go/deepseek-v4-flash";
     assert.match(
       opencode(`${role}.md`),
-      /"Agent: \w+ \| Model: opencode-go\/deepseek-v4-flash"/,
-      `${role} OpenCode definition must announce the OpenCode Go provider/model ID`,
+      new RegExp(`"Agent: ${role} \\| Model: ${expectedModel}"`),
+      `${role} OpenCode definition must announce its OpenCode Go provider/model ID`,
     );
   }
 });

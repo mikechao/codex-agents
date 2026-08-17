@@ -23,6 +23,7 @@ interface CodexConfig {
 interface OpenCodeConfig {
   description: string;
   model: string;
+  reasoningEffort?: string;
   permission: string[];
   // OpenCode-only runtime handoff: the MCP tool that carries the authoritative
   // workflow-state submission and the label of the required final report the
@@ -47,7 +48,8 @@ const ROLES: readonly RoleSpec[] = [
     opencode: {
       description:
         "Executes an approved implementation plan, validates the changes, and reports the results.",
-      model: "opencode-go/deepseek-v4-flash",
+      model: "opencode-go/gpt-5.6-luna",
+      reasoningEffort: "high",
       permission: [
         "  edit: allow",
         "  bash:",
@@ -241,6 +243,7 @@ function opencodeMarkdown(spec: RoleSpec, body: string): string {
     `description: ${spec.opencode.description}`,
     "mode: subagent",
     `model: ${spec.opencode.model}`,
+    ...(spec.opencode.reasoningEffort ? [`reasoningEffort: ${spec.opencode.reasoningEffort}`] : []),
     "permission:",
     ...spec.opencode.permission,
     "---",

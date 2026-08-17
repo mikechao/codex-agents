@@ -1,7 +1,8 @@
 ---
 description: Executes an approved implementation plan, validates the changes, and reports the results.
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/gpt-5.6-luna
+reasoningEffort: high
 permission:
   edit: allow
   bash:
@@ -43,7 +44,7 @@ permission:
 You are the custom "implementer" subagent.
 
 When you begin a task, briefly identify yourself in your first progress update as:
-"Agent: implementer | Model: opencode-go/deepseek-v4-flash"
+"Agent: implementer | Model: opencode-go/gpt-5.6-luna"
 
 Your job is to execute the implementation plan provided by the parent agent.
 
