@@ -1,13 +1,22 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import {
   approvedResidue,
   prepareCommitReceipt,
+  repositoryRoot,
   reviewRange,
   stagedEntries,
   stagedPaths,
@@ -78,6 +87,21 @@ test("verifyRevision accepts commits and rejects invalid, unknown, and non-commi
       "ERROR_INVALID_REVISION",
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("repositoryRoot canonicalizes nested paths and symlink aliases", () => {
+  const { root } = fixture();
+  const alias = mkdtempSync(join(tmpdir(), "workflow-git-alias-"));
+  try {
+    const nested = join(root, "nested", "path");
+    mkdirSync(nested, { recursive: true });
+    symlinkSync(root, join(alias, "repository"), "dir");
+    assert.equal(repositoryRoot(nested), realpathSync(root));
+    assert.equal(repositoryRoot(join(alias, "repository", "nested")), realpathSync(root));
+  } finally {
+    rmSync(alias, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -11,11 +11,19 @@ registration that `install-into.ts` writes into the project's `opencode.json`/`o
 bun run start
 ```
 
-Both hosts materialize `bootstrap.ts` from the provider checkout's committed `HEAD` before starting
-it; a dirty checkout copy cannot replace the launcher. The supervisor then resolves the provider's
-committed runtime, launches only its immutable artifact, and proxies requests for older unfinished
-workflows to the artifact that owns them. The hosts share repository-hash-partitioned durable state,
-so workflows are interchangeable between hosts.
+When this repository hosts itself, both host registrations materialize `bootstrap.ts` from the
+provider checkout's committed `HEAD` before starting it; a dirty checkout copy cannot replace the
+launcher. The bootstrap requires the supervised and provider paths to resolve to the same canonical
+Git root, then the supervisor resolves the provider's committed runtime and launches only its
+immutable artifact. It proxies requests for older unfinished workflows to the artifact that owns
+them. The hosts share repository-hash-partitioned durable state, so workflows are interchangeable
+between hosts.
+
+Installed repositories use a different boundary: their Codex and OpenCode registrations invoke the
+provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does not copy the
+bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-artifact
+affinity or promotion lifecycle; the direct server operates on the target repository's Git and
+durable state.
 
 Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
 `tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.
@@ -55,13 +63,13 @@ host restart the new default artifact is promoted for new workflows while affini
 workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
 with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability or receipt errors.
 
-## A-to-B dogfooding lifecycle
+## Self-host A-to-B dogfooding lifecycle
 
-The self-hosted regression is deliberately chronological: start the host on committed runtime A,
+The self-hosted regression is deliberately chronological: start the self-hosted host on committed runtime A,
 create a workflow, edit approved runtime paths and commit them as B, verify the running A child is
 unchanged, then restart the host. Bootstrap promotes B for new workflows and routes the unfinished
-A workflow to a recovered A child. Installed hosts use the same absolute provider bootstrap and
-therefore exercise the identical lifecycle.
+A workflow to a recovered A child. Installed hosts intentionally do not exercise this lifecycle:
+they invoke the provider server directly and do not persist runtime affinity.
 
 ## Authoritative role views
 

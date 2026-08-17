@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { WorkflowError } from "./errors.js";
-import { currentHead } from "./git.js";
+import { currentHead, repositoryRoot } from "./git.js";
 import {
   materializeRuntimeArtifact,
   type RuntimeArtifact,
@@ -123,8 +123,10 @@ export class RuntimeSupervisor {
 
   constructor(options: RuntimeSupervisorOptions = {}) {
     this.options = options;
-    this.root = options.repositoryRoot ?? process.cwd();
-    this.providerRoot = options.providerRoot ?? process.env.WORKFLOW_MCP_PROVIDER_ROOT ?? this.root;
+    this.root = repositoryRoot(options.repositoryRoot ?? process.cwd());
+    this.providerRoot = repositoryRoot(
+      options.providerRoot ?? process.env.WORKFLOW_MCP_PROVIDER_ROOT ?? this.root,
+    );
     this.defaultRuntime = resolveCurrentRuntime({
       ...options,
       providerRoot: this.providerRoot,

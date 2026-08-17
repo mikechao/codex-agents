@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  createOpenCodeConfig,
   hasOpenCodeWorkflowStateRegistration,
   trustedBootstrapCommand,
 } from "../../../install-into.js";
@@ -13,17 +12,24 @@ const selfHostConfig = resolve(repoRoot, "opencode.json");
 const relativeServerPath = ".codex/workflow-mcp/bootstrap.ts";
 const orchestratorPath = ".opencode/agents/orchestrator.md";
 
-test("the repository's own opencode.json registers workflow_state exactly like the installer", () => {
+test("the repository's own opencode.json registers the supervised self-host server", () => {
   assert.ok(existsSync(selfHostConfig), `missing self-host config: ${selfHostConfig}`);
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     $schema: string;
     default_agent: string;
     mcp: { workflow_state: Record<string, unknown> };
   };
-  const expected = JSON.parse(createOpenCodeConfig(relativeServerPath)) as {
-    $schema: string;
-    default_agent: string;
-    mcp: { workflow_state: Record<string, unknown> };
+  const expected = {
+    $schema: "https://opencode.ai/config.json",
+    default_agent: "orchestrator",
+    mcp: {
+      workflow_state: {
+        type: "local",
+        command: trustedBootstrapCommand(relativeServerPath),
+        enabled: true,
+        timeout: 30000,
+      },
+    },
   };
   assert.equal(parsed.$schema, expected.$schema);
   assert.equal(parsed.default_agent, expected.default_agent);

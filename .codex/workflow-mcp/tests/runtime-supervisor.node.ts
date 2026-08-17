@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -283,8 +291,8 @@ describe("Workflow MCP runtime supervision", () => {
   });
 
   test("bootstrap executes committed supervisor source despite dirty launcher and supervisor files", async () => {
-    const provider = mkdtempSync(join(tmpdir(), "workflow-bootstrap-provider-"));
     const target = fixture();
+    const provider = target.root;
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-bootstrap-cache-"));
     const databasePath = join(
       mkdtempSync(join(tmpdir(), "workflow-bootstrap-db-")),
@@ -386,7 +394,6 @@ describe("Workflow MCP runtime supervision", () => {
       child.stdin!.end();
       await new Promise<void>((resolve) => child.once("close", () => resolve()));
     } finally {
-      rmSync(provider, { recursive: true, force: true });
       rmSync(target.root, { recursive: true, force: true });
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(dirname(databasePath), { recursive: true, force: true });
@@ -401,6 +408,43 @@ describe("Workflow MCP runtime supervision", () => {
       resolveOwningRuntime(process.cwd(), { runtime_id: null, runtime_revision: null });
     } catch (error) {
       expect((error as WorkflowError).category).toBe("ERROR_RUNTIME_RECOVERY");
+    }
+  });
+
+  test("bootstrap rejects a provider from a different canonical repository before materialization", () => {
+    const provider = fixture();
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-bootstrap-mismatch-cache-"));
+    const source = join(process.cwd(), ".codex/workflow-mcp");
+    try {
+      cpSync(source, join(provider.root, ".codex/workflow-mcp"), { recursive: true });
+      provider.git("add", ".");
+      provider.git("commit", "-qm", "provider");
+      const command = `bootstrap=$(mktemp) && trap 'rm -f "$bootstrap"' EXIT && git -C ${JSON.stringify(provider.root)} show HEAD:.codex/workflow-mcp/bootstrap.ts >"$bootstrap" && bun --no-warnings "$bootstrap"`;
+      let stderr = "";
+      assert.throws(
+        () =>
+          execFileSync("sh", ["-c", command], {
+            cwd: target.root,
+            env: {
+              ...process.env,
+              WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT: provider.root,
+              WORKFLOW_MCP_RUNTIME_CACHE_ROOT: cacheRoot,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        (error: unknown) => {
+          const cause = error as { stderr?: Buffer };
+          stderr = cause.stderr?.toString() ?? "";
+          return true;
+        },
+      );
+      assert.match(stderr, /roots do not match/);
+      assert.deepEqual(readdirSync(cacheRoot), []);
+    } finally {
+      rmSync(provider.root, { recursive: true, force: true });
+      rmSync(target.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
     }
   });
 });

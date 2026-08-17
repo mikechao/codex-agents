@@ -31,6 +31,11 @@ function committedRevision(root: string): string {
   return revision;
 }
 
+function canonicalRepositoryRoot(path: string): string {
+  const topLevel = git(path, ["rev-parse", "--show-toplevel"]).toString("utf8").trim();
+  return realpathSync(topLevel);
+}
+
 function assertRegularTrustedFiles(root: string, revision: string): void {
   const tree = git(root, ["ls-tree", "-r", "-z", revision, "--", ...TRUSTED_PATHS])
     .toString("utf8")
@@ -75,7 +80,11 @@ function materializeCommittedSupervisor(root: string, revision: string): string 
 }
 
 function launchCommittedSupervisor(providerRoot: string): number {
-  const root = realpathSync(providerRoot);
+  const root = canonicalRepositoryRoot(providerRoot);
+  const supervisedRoot = canonicalRepositoryRoot(process.cwd());
+  if (root !== supervisedRoot) {
+    throw new Error("committed runtime supervisor and supervised repository roots do not match");
+  }
   const revision = committedRevision(root);
   const staging = materializeCommittedSupervisor(root, revision);
   const supervisor = join(staging, "source/.codex/workflow-mcp/runtime-supervisor.ts");

@@ -17,9 +17,6 @@ import { applyEdits, modify, type ParseError, parse as parseJsonc } from "jsonc-
 
 const REGISTRATION_SECTION = ["mcp_servers", "workflow_state"];
 const REQUIRED_SOURCE_FILES = [
-  ".codex/workflow-mcp/bootstrap.ts",
-  ".codex/workflow-mcp/runtime-supervisor.ts",
-  ".codex/workflow-mcp/runtime-artifact.ts",
   ".codex/workflow-mcp/server.ts",
   ".codex/agents/change-receipt.ts",
   ".codex/agents/code_reviewer.toml",
@@ -90,7 +87,7 @@ function tomlString(value: string): string {
 }
 
 function registrationBlock(projectRoot: string): string {
-  const command = trustedBootstrapCommand(resolve(projectRoot, ".codex/workflow-mcp/bootstrap.ts"));
+  const command = providerServerCommand(resolve(projectRoot, ".codex/workflow-mcp/server.ts"));
   return [
     "# Local durable state for the reusable custom-agent workflow.",
     "[mcp_servers.workflow_state]",
@@ -406,10 +403,14 @@ export function trustedBootstrapCommand(serverPath: string): string[] {
   ];
 }
 
+export function providerServerCommand(serverPath: string): string[] {
+  return ["bun", resolve(serverPath)];
+}
+
 export function openCodeMcpRegistration(serverPath: string): Record<string, unknown> {
   return {
     type: "local",
-    command: trustedBootstrapCommand(serverPath),
+    command: providerServerCommand(serverPath),
     enabled: true,
     timeout: 30000,
   };
@@ -588,7 +589,7 @@ export function main(args: readonly string[]): number {
       `Staged config is not valid TOML; refusing to install: ${config} (${cause instanceof Error ? cause.message : String(cause)})`,
     );
   }
-  const serverPath = resolve(projectRoot, ".codex/workflow-mcp/bootstrap.ts");
+  const serverPath = resolve(projectRoot, ".codex/workflow-mcp/server.ts");
   const opencodeConfigTarget = opencodeConfig ?? resolve(target, "opencode.json");
   const opencodeConfigOriginal =
     opencodeConfig === null ? null : readFileSync(opencodeConfig, "utf8");

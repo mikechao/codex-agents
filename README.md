@@ -91,11 +91,16 @@ After `bun install`, run:
 The installer requires Bun 1.3 or newer and a Git repository and installs both host adapters in
 one all-or-nothing step:
 
-- Codex: copies the agent definitions into `.codex/agents/` and registers this project's server
-  by absolute path in `.codex/config.toml`.
-- OpenCode: copies the agent definitions into `.opencode/agents/` and registers the same server
-  as a local MCP (`mcp.workflow_state`) in the project's `opencode.json` (or extends an existing
-  `opencode.json`/`opencode.jsonc` without touching unrelated settings).
+- Codex: copies the agent definitions into `.codex/agents/` and registers this project's committed
+  `.codex/workflow-mcp/server.ts` by absolute path in `.codex/config.toml`.
+- OpenCode: copies the agent definitions into `.opencode/agents/` and registers that same absolute
+  provider server directly as a local MCP (`mcp.workflow_state`) in the project's
+  `opencode.json` (or extends an existing `opencode.json`/`opencode.jsonc` without touching
+  unrelated settings).
+
+Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
+sources. Their direct provider-server registration has no runtime-artifact affinity lifecycle; the
+server uses the target repository's Git and durable state normally.
 
 For OpenCode, a new config or an existing config without `default_agent` defaults to
 `orchestrator`. An existing explicit `default_agent` is preserved; the orchestrator is still
@@ -110,8 +115,8 @@ step fails, so a failed run never leaves only one host installed. If the automat
 itself fails, it is reported alongside the original failure: the original OpenCode agents stay
 preserved in a backup directory named in the error, and the original content of a config file
 that could not be restored is preserved next to it as `<config>.recover`. OpenCode registers the
-server as a `type: "local"` STDIO process that OpenCode starts itself; no separate manual server
-launch is required.
+absolute provider server as a `type: "local"` STDIO process that OpenCode starts itself; no
+separate manual server launch is required.
 
 Restart or reload Codex, then verify it with:
 

@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { TOML } from "bun";
 import { commitStaged, hasWorkflowStateRegistration } from "../../../install-into.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
@@ -73,12 +74,27 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `missing .opencode/agents/${file}`,
       );
     }
+    for (const file of [
+      ".codex/workflow-mcp/server.ts",
+      ".codex/workflow-mcp/bootstrap.ts",
+      ".codex/workflow-mcp/runtime-supervisor.ts",
+      ".codex/workflow-mcp/runtime-artifact.ts",
+    ]) {
+      assert.ok(!existsSync(join(root, file)), `runtime source must not be installed: ${file}`);
+    }
     const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
     };
     assert.equal(opencodeConfig.default_agent, "orchestrator");
     const config = readFileSync(join(root, ".codex/config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.workflow_state\]/);
+    const parsed = TOML.parse(config) as {
+      mcp_servers: { workflow_state: { command: string; args: string[] } };
+    };
+    assert.equal(parsed.mcp_servers.workflow_state.command, "bun");
+    assert.deepEqual(parsed.mcp_servers.workflow_state.args, [
+      resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
+    ]);
     assert.ok(!existsSync(join(root, ".codex/.agents.install.")));
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
   } finally {

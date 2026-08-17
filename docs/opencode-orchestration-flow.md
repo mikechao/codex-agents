@@ -37,12 +37,19 @@ The authoritative server is the source of truth. Every worker handoff carries ex
 - `capability`: that worker's one-time role capability; and
 - `expected_version`: the current optimistic-concurrency version from the parent view.
 
-The registered MCP command first materializes the bootstrap supervisor from the provider repository's
-committed `HEAD`, rather than executing the mutable checkout copy. That supervisor materializes the
-provider repository's committed runtime through the runtime-artifact API, launches that immutable path,
-and records runtime affinity with each workflow. A restart promotes the current committed runtime for
-new workflows; requests for unfinished workflows are routed to their persisted owning artifact. Editing
-or committing the provider checkout never hot-swaps a running artifact.
+For this repository's self-host registration, the MCP command first materializes the bootstrap
+supervisor from the provider repository's committed `HEAD`, rather than executing the mutable
+checkout copy. Bootstrap fails closed unless the supervised and provider paths resolve to the same
+canonical Git root. The supervisor then materializes the provider's committed runtime through the
+runtime-artifact API, launches that immutable path, and records runtime affinity with each workflow.
+A restart promotes the current committed runtime for new workflows; requests for unfinished workflows
+are routed to their persisted owning artifact. Editing or committing the provider checkout never
+hot-swaps a running artifact.
+
+Installed repositories have a deliberately simpler boundary: Codex and OpenCode invoke the
+provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does not copy the
+bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-affinity
+lifecycle; its direct server uses the target repository's Git and durable state.
 
 The capability is role-specific and is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the parent view and uses its returned version and permitted
@@ -150,9 +157,11 @@ that is not part of the approved implementation; it is not an excuse to continue
 These paths preserve the same authoritative identity and require the corresponding parent
 transition.
 
-For self-hosting and installed hosts, the regression scenario is A -> edit approved runtime paths ->
-test/review -> commit B -> restart -> create a new workflow under B -> resume the unfinished workflow
-under A. Missing or mismatched artifacts stop with dedicated runtime isolation/recovery errors.
+For self-hosting, the regression scenario is A -> edit approved runtime paths -> test/review -> commit
+B -> restart -> create a new workflow under B -> resume the unfinished workflow under A. Missing or
+mismatched artifacts stop with dedicated runtime isolation/recovery errors. Installed hosts do not
+promote runtime artifacts or resume runtime affinity; they execute the provider server directly for
+the target repository.
 
 ## Boundary summary
 

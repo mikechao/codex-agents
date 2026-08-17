@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { createReceipt as createInProcessReceipt } from "../agents/change-receipt.js";
 import { fail } from "./errors.js";
 import type {
@@ -63,7 +64,7 @@ export function currentHead(root: string): GitCommitSha {
 }
 
 export function repositoryRoot(cwd: string): string {
-  return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
+  return realpathSync(git(cwd, ["rev-parse", "--show-toplevel"]).trim());
 }
 
 export function verifyRevision(root: string, revision: string): GitCommitSha {
