@@ -158,11 +158,14 @@ export class WorkflowStore {
       options.databasePath ?? (process.env.WORKFLOW_MCP_DB_PATH || resolveStatePath(this.root));
     this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
     this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
-    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+    if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
     // counts are not checked in this version); every query here binds positionally.
     this.db = new Database(this.path, { strict: true });
-    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+    if (this.path !== ":memory:")
+      this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+    else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
+    this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (
         workflow_id TEXT PRIMARY KEY,

@@ -1,42 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
+import { fixture, receipt } from "./test-fixtures.js";
 
 const ROLES = ["parent", "implementer", "reviewer", "committer"];
-
-function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "workflow-state-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-q");
-  git("config", "user.email", "workflow@example.invalid");
-  git("config", "user.name", "Workflow Tests");
-  writeFileSync(join(root, "note.txt"), "before\n");
-  git("add", ".");
-  git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
-  cpSync(
-    join(process.cwd(), ".codex", "agents", "change-receipt.ts"),
-    join(root, ".codex", "agents", "change-receipt.ts"),
-  );
-  return { root, git };
-}
 
 function rangeFixture() {
   const { root, git } = fixture();
@@ -46,19 +16,6 @@ function rangeFixture() {
   git("add", "-A");
   git("commit", "-qm", "range head");
   return { root, git, base: git("rev-parse", "HEAD~1"), head: git("rev-parse", "HEAD") };
-}
-
-function receipt(root: string): any {
-  return JSON.parse(
-    execFileSync(
-      process.execPath,
-      [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", "note.txt"],
-      {
-        cwd: root,
-        encoding: "utf8",
-      },
-    ),
-  );
 }
 
 function workingTarget(baseHead: string, paths: string[] = ["note.txt"]) {

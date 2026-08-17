@@ -154,29 +154,30 @@ export function safePaths(root: string, inputs: string[]): string[] {
   return approvedPaths;
 }
 
-function headEntry(root: string, path: string): HeadEntry | null {
+function headEntries(root: string, paths: readonly string[]): Map<string, HeadEntry> {
   let output: string;
   try {
-    output = runGit(root, ["--literal-pathspecs", "ls-tree", "-z", "-r", "HEAD", "--", path]);
+    output = runGit(root, ["--literal-pathspecs", "ls-tree", "-z", "-r", "HEAD", "--", ...paths]);
   } catch {
     throw new Error("ERROR_GIT");
   }
 
+  const entries = new Map<string, HeadEntry>();
   for (const record of output.split("\0")) {
     if (!record) continue;
     const separator = record.indexOf("\t");
     if (separator < 0) continue;
     const fields = record.slice(0, separator).split(" ");
     const entryPath = record.slice(separator + 1);
-    if (entryPath !== path || fields.length !== 3 || fields[1] !== "blob") continue;
+    if (!paths.includes(entryPath) || fields.length !== 3 || fields[1] !== "blob") continue;
     const mode = normalizeMode(fields[0]);
-    return {
+    entries.set(entryPath, {
       mode,
       kind: mode === "120000" ? "symlink" : "file",
       digest: digest(readGitBlob(root, fields[2])),
-    };
+    });
   }
-  return null;
+  return entries;
 }
 
 function normalizeMode(mode: string): GitMode {
@@ -291,8 +292,9 @@ function createReceiptAtRoot(
   const allowAbsent = options.allowAbsent === true;
   const headRevision = requireHead(root);
   const approvedPaths = safePaths(root, inputs);
+  const heads = headEntries(root, approvedPaths);
   const paths = approvedPaths.map((path): ReceiptEntry => {
-    const head = headEntry(root, path);
+    const head = heads.get(path) ?? null;
     let current: ReceiptEntry;
     try {
       current = currentMetadata(root, path, head);

@@ -1,36 +1,16 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { createReceipt } from "../../agents/receipt.js";
 import { WorkflowStore } from "../store.js";
+import { fixture } from "./test-fixtures.js";
 
 const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "server.ts");
-
-function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "workflow-v2-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-q");
-  git("config", "user.email", "workflow@example.invalid");
-  git("config", "user.name", "Workflow Tests");
-  writeFileSync(join(root, "note.txt"), "before\n");
-  git("add", ".");
-  git("commit", "-qm", "fixture");
-  mkdirSync(join(root, ".codex", "agents"), { recursive: true });
-  cpSync(
-    join(process.cwd(), ".codex", "agents", "change-receipt.ts"),
-    join(root, ".codex", "agents", "change-receipt.ts"),
-  );
-  return { root, git };
-}
 
 async function start(root: string) {
   const transport = new StdioClientTransport({
@@ -56,14 +36,7 @@ async function start(root: string) {
       ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
         .text,
     );
-  const receipt = (paths: string[] = ["note.txt"]): any =>
-    JSON.parse(
-      execFileSync(
-        process.execPath,
-        [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", ...paths],
-        { cwd: root, encoding: "utf8" },
-      ),
-    );
+  const receipt = (paths: string[] = ["note.txt"]): any => createReceipt(paths, root);
   return { client, transport, call, receipt, stderr };
 }
 

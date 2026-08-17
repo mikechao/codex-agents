@@ -21,17 +21,10 @@ import type {
   GitCommitSha,
   WorkflowState,
 } from "../types.js";
+import { emptyFixture } from "./test-fixtures.js";
 
 function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "workflow-git-")));
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-q");
-  git("config", "user.email", "workflow@example.invalid");
-  git("config", "user.name", "Workflow Tests");
+  const { root, git } = emptyFixture();
   const write = (path: string, content: string) => {
     const directory = join(root, path.split("/").slice(0, -1).join("/"));
     if (directory !== root) mkdirSync(directory, { recursive: true });

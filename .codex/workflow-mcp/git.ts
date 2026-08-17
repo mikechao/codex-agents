@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { createReceipt as createInProcessReceipt } from "../agents/change-receipt.js";
 import { fail } from "./errors.js";
 import type {
   ChangeReceipt,
@@ -216,24 +216,13 @@ export function createReceipt(
   expectedPaths: ReadonlyArray<ExactRepoPath>,
   allowAbsent = false,
 ): ChangeReceipt {
-  const script = join(root, ".codex", "agents", "change-receipt.ts");
-  const args = allowAbsent ? ["--allow-absent", "--", ...expectedPaths] : ["--", ...expectedPaths];
-  let current: ChangeReceipt;
   try {
-    current = JSON.parse(
-      execFileSync(process.execPath, [script, ...args], {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 16 * 1024 * 1024,
-      }),
-    ) as ChangeReceipt;
+    return createInProcessReceipt([...expectedPaths], root, { allowAbsent }) as ChangeReceipt;
   } catch (error) {
-    const category = String((error as { stderr?: unknown })?.stderr ?? "").trim();
+    const category = error instanceof Error ? error.message : "";
     if (/^ERROR_[A-Z_]+$/u.test(category)) fail(category as ErrorCategory, "receipt rejected");
     fail("ERROR_RECEIPT_UNAVAILABLE", "receipt could not be recomputed");
   }
-  return current;
 }
 
 export function verifyCommit(
