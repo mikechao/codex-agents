@@ -103,7 +103,8 @@ const ROLES: readonly RoleSpec[] = [
     codex: { model: "gpt-5.6-sol", reasoningEffort: "medium", sandboxMode: "read-only" },
     opencode: {
       description: "Performs an independent, read-only review of an approved implementation diff.",
-      model: "opencode-go/deepseek-v4-flash",
+      model: "opencode-go/gpt-5.6-luna",
+      reasoningEffort: "high",
       permission: [
         // OpenCode permissions are not equivalent to the Codex read-only
         // filesystem sandbox; edit denial plus a narrow bash allowlist is the
@@ -138,7 +139,8 @@ const ROLES: readonly RoleSpec[] = [
     opencode: {
       description:
         "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-      model: "opencode-go/deepseek-v4-flash",
+      model: "opencode-go/gpt-5.6-luna",
+      reasoningEffort: "low",
       permission: [
         // edit denial is stricter than the Codex workspace-write sandbox: the
         // committer must never modify source files. bash fails closed with an

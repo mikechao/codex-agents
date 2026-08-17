@@ -23,8 +23,13 @@ const opencode = (name: string) =>
 test("OpenCode definitions are subagents with host-native permissions", () => {
   const expectedModels: Record<string, string> = {
     implementer: "opencode-go/gpt-5.6-luna",
-    code_reviewer: "opencode-go/deepseek-v4-flash",
-    committer: "opencode-go/deepseek-v4-flash",
+    code_reviewer: "opencode-go/gpt-5.6-luna",
+    committer: "opencode-go/gpt-5.6-luna",
+  };
+  const expectedReasoning: Record<string, string> = {
+    implementer: "high",
+    code_reviewer: "high",
+    committer: "low",
   };
   for (const name of ["implementer.md", "code_reviewer.md", "committer.md"]) {
     const role = name.replace(/\.md$/, "");
@@ -36,19 +41,11 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
       new RegExp(`^model: ${expectedModels[role]}$`, "m"),
       `${name} must pin its configured OpenCode model`,
     );
-    if (role === "implementer") {
-      assert.match(
-        content,
-        /^model: opencode-go\/gpt-5\.6-luna\nreasoningEffort: high$/m,
-        "implementer must pin high reasoning effort after its model",
-      );
-    } else {
-      assert.doesNotMatch(
-        content,
-        /^reasoningEffort:/m,
-        `${name} must not configure reasoning effort`,
-      );
-    }
+    assert.match(
+      content,
+      new RegExp(`^reasoningEffort: ${expectedReasoning[role]}$`, "m"),
+      `${name} must pin its configured reasoning effort`,
+    );
     assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
     assert.match(
       content,
@@ -322,8 +319,7 @@ test("contract fragments are host-neutral and each host injects its own identity
       /"Agent: \w+ \| Model: [^"|]+\| Reasoning: \w+"/,
       `${role} Codex definition must announce the Codex model and reasoning effort`,
     );
-    const expectedModel =
-      role === "implementer" ? "opencode-go/gpt-5.6-luna" : "opencode-go/deepseek-v4-flash";
+    const expectedModel = "opencode-go/gpt-5.6-luna";
     assert.match(
       opencode(`${role}.md`),
       new RegExp(`"Agent: ${role} \\| Model: ${expectedModel}"`),

@@ -113,9 +113,10 @@ codex mcp get workflow_state
 Restart or reload OpenCode, then verify that the `workflow_state` tools are visible in a session
 (e.g. `opencode run "list your available workflow_state tools"`). Both hosts share the same
 durable workflow state for the repository, so a workflow started in one host is visible in the
-other. The generated OpenCode definitions pin `opencode-go/gpt-5.6-luna` for the implementer and
-`opencode-go/deepseek-v4-flash` for the reviewer and committer, so the OpenCode Go provider must be
-connected (`/connect`) or the per-agent models overridden for the subagent models to resolve.
+other. The generated OpenCode definitions pin `opencode-go/gpt-5.6-luna` for the implementer, reviewer,
+and committer (with high reasoning for the implementer and reviewer, and low reasoning for the
+committer), so the OpenCode Go provider must be connected (`/connect`) or the per-agent models
+overridden for the subagent models to resolve.
 
 OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the orchestrator
 has `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
