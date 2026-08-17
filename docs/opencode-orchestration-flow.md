@@ -37,12 +37,12 @@ The authoritative server is the source of truth. Every worker handoff carries ex
 - `capability`: that worker's one-time role capability; and
 - `expected_version`: the current optimistic-concurrency version from the parent view.
 
-The registered MCP command is a bootstrap supervisor rather than the mutable checkout's authority
-source. It materializes the provider repository's committed runtime through the runtime-artifact API,
-launches that immutable path, and records runtime affinity with each workflow. A restart promotes the
-current committed runtime for new workflows; requests for unfinished workflows are routed to their
-persisted owning artifact. Editing or committing the provider checkout never hot-swaps a running
-artifact.
+The registered MCP command first materializes the bootstrap supervisor from the provider repository's
+committed `HEAD`, rather than executing the mutable checkout copy. That supervisor materializes the
+provider repository's committed runtime through the runtime-artifact API, launches that immutable path,
+and records runtime affinity with each workflow. A restart promotes the current committed runtime for
+new workflows; requests for unfinished workflows are routed to their persisted owning artifact. Editing
+or committing the provider checkout never hot-swaps a running artifact.
 
 The capability is role-specific and is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the parent view and uses its returned version and permitted

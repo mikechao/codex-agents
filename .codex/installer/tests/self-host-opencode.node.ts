@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import {
   createOpenCodeConfig,
   hasOpenCodeWorkflowStateRegistration,
+  trustedBootstrapCommand,
 } from "../../../install-into.js";
 
 const repoRoot = resolve(import.meta.dir, "../../../");
@@ -88,9 +89,6 @@ test("the repository's own OpenCode registration keeps the installer server sema
   assert.equal(registration.type, "local");
   assert.equal(registration.enabled, true);
   assert.equal(registration.timeout, 30000);
-  assert.deepEqual(registration.command, ["bun", "--no-warnings", relativeServerPath]);
-  assert.ok(
-    existsSync(resolve(repoRoot, registration.command[2])),
-    "the registered server path must exist in the repository",
-  );
+  assert.deepEqual(registration.command, trustedBootstrapCommand(relativeServerPath));
+  assert.ok(existsSync(resolve(repoRoot, relativeServerPath)), "the bootstrap source must exist");
 });

@@ -65,7 +65,7 @@ Opening `codex-agents` itself in Codex loads the three shared agents from `.code
 the local `workflow_state` bootstrap supervisor via `.codex/config.toml`. Opening it in OpenCode loads the
 same three subagents plus the `orchestrator` primary agent from `.opencode/agents/` and registers the same server as a local MCP
 (`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
-  (`.codex/workflow-mcp/bootstrap.ts`, project-relative) and the same `enabled`/`timeout` semantics as
+  (a temporary copy materialized from `git show HEAD:.codex/workflow-mcp/bootstrap.ts`) and the same `enabled`/`timeout` semantics as
 installer-generated registrations. The self-host OpenCode registration is checked into the
 repository and a test keeps it from silently diverging from the installer's registration shape.
 

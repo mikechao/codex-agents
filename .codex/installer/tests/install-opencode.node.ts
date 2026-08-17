@@ -18,6 +18,7 @@ import {
   cleanupOpenCodeAgentsBackup,
   commitBothHosts,
   hasOpenCodeWorkflowStateRegistration,
+  trustedBootstrapCommand,
 } from "../../../install-into.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
@@ -99,10 +100,12 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(registration.type, "local");
     assert.equal(registration.enabled, true);
     assert.equal(registration.timeout, 30000);
-    assert.equal(registration.command[0], "bun");
-    assert.equal(registration.command[1], "--no-warnings");
-    assert.ok(registration.command[2].endsWith(".codex/workflow-mcp/bootstrap.ts"));
-    assert.ok(registration.command[2].startsWith("/"), "server path must be absolute");
+    assert.deepEqual(
+      registration.command,
+      trustedBootstrapCommand(
+        resolve(import.meta.dir, "../../../.codex/workflow-mcp/bootstrap.ts"),
+      ),
+    );
     assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
   } finally {

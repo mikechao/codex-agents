@@ -11,10 +11,11 @@ registration that `install-into.ts` writes into the project's `opencode.json`/`o
 bun run start
 ```
 
-Both hosts start the `bootstrap.ts` supervisor. The supervisor resolves the provider checkout's
-current committed runtime, launches only its immutable artifact, and proxies requests for older
-unfinished workflows to the artifact that owns them. The hosts share repository-hash-partitioned
-durable state, so workflows are interchangeable between hosts.
+Both hosts materialize `bootstrap.ts` from the provider checkout's committed `HEAD` before starting
+it; a dirty checkout copy cannot replace the launcher. The supervisor then resolves the provider's
+committed runtime, launches only its immutable artifact, and proxies requests for older unfinished
+workflows to the artifact that owns them. The hosts share repository-hash-partitioned durable state,
+so workflows are interchangeable between hosts.
 
 Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
 `tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.

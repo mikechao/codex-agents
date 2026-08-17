@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -274,6 +274,117 @@ describe("Workflow MCP runtime supervision", () => {
       const failure = await failed.request(4, "initialize");
       assert.equal(failure.error.data.category, "ERROR_RUNTIME_RECOVERY");
       await failed.stop();
+    } finally {
+      rmSync(provider, { recursive: true, force: true });
+      rmSync(target.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(dirname(databasePath), { recursive: true, force: true });
+    }
+  });
+
+  test("bootstrap executes committed supervisor source despite dirty launcher and supervisor files", async () => {
+    const provider = mkdtempSync(join(tmpdir(), "workflow-bootstrap-provider-"));
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-bootstrap-cache-"));
+    const databasePath = join(
+      mkdtempSync(join(tmpdir(), "workflow-bootstrap-db-")),
+      "state.sqlite",
+    );
+    const workflowSource = join(process.cwd(), ".codex/workflow-mcp");
+    const agentsSource = join(process.cwd(), ".codex/agents");
+    const server = `
+      import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, label: "committed", runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID }) + "\\n");
+      });
+    `;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", provider, ...args], { encoding: "utf8" }).trim();
+    const bootstrap = join(provider, ".codex/workflow-mcp/bootstrap.ts");
+    const supervisor = join(provider, ".codex/workflow-mcp/runtime-supervisor.ts");
+    const committedServer = join(provider, ".codex/workflow-mcp/server.ts");
+    try {
+      cpSync(workflowSource, join(provider, ".codex/workflow-mcp"), { recursive: true });
+      mkdirSync(join(provider, ".codex/agents"), { recursive: true });
+      cpSync(
+        join(agentsSource, "change-receipt.ts"),
+        join(provider, ".codex/agents/change-receipt.ts"),
+      );
+      cpSync(join(agentsSource, "receipt.ts"), join(provider, ".codex/agents/receipt.ts"));
+      writeFileSync(committedServer, server);
+      writeFileSync(
+        join(provider, "package.json"),
+        '{"name":"bootstrap-fixture","type":"module","dependencies":{}}\n',
+      );
+      writeFileSync(join(provider, "bun.lock"), "{}\n");
+      execFileSync("git", ["-C", provider, "init", "-q"]);
+      git("config", "user.email", "workflow@example.invalid");
+      git("config", "user.name", "Workflow Tests");
+      git("add", ".");
+      git("commit", "-qm", "committed bootstrap");
+
+      writeFileSync(
+        bootstrap,
+        `${readFileSync(bootstrap, "utf8")}\nprocess.stderr.write("dirty bootstrap\\n");\n`,
+      );
+      writeFileSync(supervisor, 'process.stdout.write("dirty supervisor\\n");\n');
+      writeFileSync(committedServer, `${server}\nprocess.stdout.write("dirty server\\n");\n`);
+
+      const child = spawn(
+        "sh",
+        [
+          "-c",
+          `export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT=${JSON.stringify(provider)}; bootstrap=$(mktemp) && trap 'rm -f "$bootstrap"' EXIT && git -C ${JSON.stringify(provider)} show HEAD:.codex/workflow-mcp/bootstrap.ts >"$bootstrap" && bun --no-warnings "$bootstrap"; status=$?; exit "$status"`,
+        ],
+        {
+          cwd: target.root,
+          env: {
+            ...process.env,
+            WORKFLOW_MCP_DB_PATH: databasePath,
+            WORKFLOW_MCP_PROVIDER_ROOT: "/definitely/not-the-provider",
+            WORKFLOW_MCP_RUNTIME_CACHE_ROOT: cacheRoot,
+            WORKFLOW_MCP_INSTALL_DEPENDENCIES: "0",
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      const reader = createInterface({ input: child.stdout! });
+      let stderr = "";
+      child.stderr!.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      const pending = new Map<string | number, (value: any) => void>();
+      reader.on("line", (line) => {
+        try {
+          const response = JSON.parse(line);
+          const resolve = response.id === undefined ? undefined : pending.get(response.id);
+          if (resolve) {
+            pending.delete(response.id);
+            resolve(response);
+          }
+        } catch {
+          // A malformed child line is not a response for this protocol test.
+        }
+      });
+      const response = new Promise<any>((resolve, reject) => {
+        pending.set(1, resolve);
+        child.stdin!.write(
+          '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n',
+          (error) => error && reject(error),
+        );
+        setTimeout(() => {
+          if (pending.delete(1)) reject(new Error(`bootstrap request timed out: ${stderr}`));
+        }, 10_000);
+      });
+      assert.equal((await response).label, "committed");
+      assert.ok(!stderr.includes("dirty bootstrap"));
+      assert.ok(!stderr.includes("dirty supervisor"));
+      assert.ok(!stderr.includes("dirty server"));
+      reader.close();
+      child.stdin!.end();
+      await new Promise<void>((resolve) => child.once("close", () => resolve()));
     } finally {
       rmSync(provider, { recursive: true, force: true });
       rmSync(target.root, { recursive: true, force: true });

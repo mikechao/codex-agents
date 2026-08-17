@@ -1924,20 +1924,17 @@ test("agent contracts parse as TOML and reference the authoritative v2 view and 
   }
 });
 
-test("project config.toml registers the workflow_state server with Bun and exact source paths", () => {
+test("project config.toml registers an immutable committed workflow_state bootstrap", () => {
   const text = readFileSync(join(process.cwd(), ".codex", "config.toml"), "utf8");
   const parsed = TOML.parse(text) as WorkflowStateConfig;
   const server = parsed.mcp_servers?.workflow_state;
   assert.ok(server, "config.toml must register mcp_servers.workflow_state");
-  assert.equal(server.command, "bun");
-  assert.deepEqual(server.args, ["--no-warnings", ".codex/workflow-mcp/bootstrap.ts"]);
-  const serverPath = server.args?.[server.args.length - 1];
-  assert.ok(typeof serverPath === "string" && serverPath.length > 0);
-  assert.ok(
-    serverPath.endsWith(".codex/workflow-mcp/bootstrap.ts"),
-    "args must point at the runtime bootstrap",
-  );
-  assert.equal(existsSync(join(process.cwd(), serverPath)), true, "server source must exist");
+  assert.equal(server.command, "sh");
+  assert.deepEqual(server.args, [
+    "-c",
+    'export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT="$PWD"; bootstrap=$(mktemp) && trap \'rm -f "$bootstrap"\' EXIT && git show HEAD:.codex/workflow-mcp/bootstrap.ts >"$bootstrap" && bun --no-warnings "$bootstrap"; status=$?; exit "$status"',
+  ]);
+  assert.equal(existsSync(join(process.cwd(), ".codex/workflow-mcp/bootstrap.ts")), true);
   assert.equal(typeof server.startup_timeout_sec, "number");
   assert.ok((server.startup_timeout_sec ?? 0) >= 1);
   assert.equal(typeof server.tool_timeout_sec, "number");

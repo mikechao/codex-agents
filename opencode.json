@@ -4,7 +4,11 @@
   "mcp": {
     "workflow_state": {
       "type": "local",
-      "command": ["bun", "--no-warnings", ".codex/workflow-mcp/bootstrap.ts"],
+      "command": [
+        "sh",
+        "-c",
+        "export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT=\"$PWD\"; bootstrap=$(mktemp) && trap 'rm -f \"$bootstrap\"' EXIT && git show HEAD:.codex/workflow-mcp/bootstrap.ts >\"$bootstrap\" && bun --no-warnings \"$bootstrap\"; status=$?; exit \"$status\""
+      ],
       "enabled": true,
       "timeout": 30000
     }

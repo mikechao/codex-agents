@@ -90,11 +90,12 @@ function tomlString(value: string): string {
 }
 
 function registrationBlock(projectRoot: string): string {
+  const command = trustedBootstrapCommand(resolve(projectRoot, ".codex/workflow-mcp/bootstrap.ts"));
   return [
     "# Local durable state for the reusable custom-agent workflow.",
     "[mcp_servers.workflow_state]",
-    'command = "bun"',
-    `args = ["--no-warnings", ${tomlString(resolve(projectRoot, ".codex/workflow-mcp/bootstrap.ts"))}]`,
+    `command = ${tomlString(command[0])}`,
+    `args = [${command.slice(1).map(tomlString).join(", ")}]`,
     "startup_timeout_sec = 10",
     "tool_timeout_sec = 30",
     "required = false",
@@ -383,10 +384,32 @@ function withoutKeys(
   return keys.reduce((result, key) => withoutKey(result, key), { ...value });
 }
 
+function shellString(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function trustedBootstrapCommand(serverPath: string): string[] {
+  const bootstrapPath = serverPath.replaceAll("\\", "/");
+  const suffix = "/.codex/workflow-mcp/bootstrap.ts";
+  const providerRoot = bootstrapPath.endsWith(suffix)
+    ? bootstrapPath.slice(0, -suffix.length) || "."
+    : ".";
+  const rootPrefix =
+    providerRoot === "."
+      ? 'export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT="$PWD"; '
+      : `export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT=${shellString(providerRoot)}; `;
+  const gitRoot = providerRoot === "." ? "" : `-C ${shellString(providerRoot)} `;
+  return [
+    "sh",
+    "-c",
+    `${rootPrefix}bootstrap=$(mktemp) && trap 'rm -f "$bootstrap"' EXIT && git ${gitRoot}show HEAD:.codex/workflow-mcp/bootstrap.ts >"$bootstrap" && bun --no-warnings "$bootstrap"; status=$?; exit "$status"`,
+  ];
+}
+
 export function openCodeMcpRegistration(serverPath: string): Record<string, unknown> {
   return {
     type: "local",
-    command: ["bun", "--no-warnings", serverPath],
+    command: trustedBootstrapCommand(serverPath),
     enabled: true,
     timeout: 30000,
   };
