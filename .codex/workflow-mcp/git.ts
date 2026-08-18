@@ -205,7 +205,7 @@ export function verifyReviewReceipt(
   ) {
     fail("ERROR_STALE_RECEIPT", "receipt scope or base is stale");
   }
-  const current = createReceipt(root, expectedPaths);
+  const current = createReceipt(root, expectedPaths, true);
   if (current.base_head !== baseHead) fail("ERROR_STALE_RECEIPT", "receipt base is stale");
   if (canonicalJson(current) !== canonicalJson(receipt))
     fail("ERROR_STALE_RECEIPT", "receipt content is stale");

@@ -393,7 +393,9 @@ export type ParentView = RoleViewCommon &
     | "implementation_receipt"
     | "review_receipt"
     | "commit_preparation"
-  >;
+  > & {
+    commit_preparation: CommitPreparationView | null;
+  };
 
 export interface ImplementerView extends RoleViewCommon {
   acceptance_criteria: AcceptanceCriterion[];

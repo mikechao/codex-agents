@@ -567,6 +567,87 @@ test("approved receipt gates commit and commit evidence", () => {
   }
 });
 
+test("absent approved paths remain authorized through commit preparation", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: ":memory:",
+    });
+    const approvedPaths = ["note.txt", "planned.txt"];
+    const created = create(store, root, git, {
+      objective: "absent path commit",
+      approved_paths: approvedPaths,
+    });
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+
+    const implemented = implementation(store, created, root, 0, "implemented");
+    assert.equal(implemented.phase, "REVIEWING");
+    writeFileSync(join(root, "note.txt"), "modified\n");
+
+    const target = workingTarget(created.workflow.base_head, approvedPaths);
+    const started = store.beginReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 1,
+    });
+    assert.equal(started.version, 2);
+    const approved = store.submitReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      review_target: target,
+      prior_finding_classifications: {},
+    });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    const approvedReceipt = rawState(store, id).review_receipt;
+    assert.deepEqual(
+      approvedReceipt.paths.map(({ path, state, kind }: any) => ({ path, state, kind })),
+      [
+        { path: "note.txt", state: "modified", kind: "file" },
+        { path: "planned.txt", state: "absent", kind: "missing" },
+      ],
+    );
+
+    writeFileSync(join(root, "planned.txt"), "created after approval\n");
+    assert.equal(
+      errorCategory(() =>
+        store.authorizeCommit({
+          workflow_id: id,
+          capability: caps.parent,
+          expected_version: 3,
+          user_authorization: "authorized",
+        }),
+      ),
+      "ERROR_STALE_RECEIPT",
+    );
+    unlinkSync(join(root, "planned.txt"));
+
+    const authorized = store.authorizeCommit({
+      workflow_id: id,
+      capability: caps.parent,
+      expected_version: 3,
+      user_authorization: "authorized",
+    });
+    assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({
+      workflow_id: id,
+      capability: caps.committer,
+      expected_version: 4,
+    });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
+    assert.deepEqual(prepared.commit_preparation.expected_paths, ["note.txt"]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("implementation statuses stop explicitly and require complete repair continuity", () => {
   const { root, git } = fixture();
   const path = join(root, "status.sqlite");
@@ -4416,6 +4497,8 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
     const parentAfter = reopened.get(id, "parent", caps.parent);
     assert.equal(parentAfter.phase, "COMMIT_PREPARED");
     assert.deepEqual(parentAfter.commit_preparation, prepared.commit_preparation);
+    assert.equal("review_receipt_digest" in parentAfter.commit_preparation, false);
+    assert.deepEqual(parentAfter.commit_preparation.expected_paths, approved);
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
