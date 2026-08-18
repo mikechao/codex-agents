@@ -157,7 +157,9 @@ function immutableRuntimeKey(
       return null;
     if (readFileSync(markerPath, "utf8").trim() !== runtimeId) return null;
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as RuntimeManifest;
-    if (manifest.revision !== runtimeRevision) return null;
+    // The manifest revision records the artifact's historical materialization. Content-addressed
+    // reuse intentionally ignores it; the requested launch revision is authenticated below by
+    // HMAC(runtime_id, runtime_revision, nonce).
     const artifact: RuntimeArtifact = {
       runtime_id: runtimeId,
       runtimePath: join(artifactRoot, manifest.entrypoint),

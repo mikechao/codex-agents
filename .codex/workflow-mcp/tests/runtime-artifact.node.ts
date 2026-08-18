@@ -124,6 +124,7 @@ describe("Workflow MCP runtime artifacts", () => {
         cacheRoot,
         installDependencies: false,
       });
+      const storedManifest = readFileSync(join(first.cachePath, ".runtime-manifest.json"), "utf8");
       writeFileSync(join(fixture.root, "unrelated.txt"), "unrelated\n");
       execFileSync("git", ["add", "unrelated.txt"], { cwd: fixture.root });
       execFileSync("git", ["commit", "-q", "-m", "unrelated"], { cwd: fixture.root });
@@ -141,6 +142,10 @@ describe("Workflow MCP runtime artifacts", () => {
       expect(second.runtime_id).toBe(first.runtime_id);
       expect(second.cachePath).toBe(first.cachePath);
       expect(second.reused).toBe(true);
+      expect(readFileSync(join(second.cachePath, ".runtime-manifest.json"), "utf8")).toBe(
+        storedManifest,
+      );
+      expect(JSON.parse(storedManifest).revision).toBe(fixture.revision);
     } finally {
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(fixture.root, { recursive: true, force: true });

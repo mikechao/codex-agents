@@ -56,6 +56,10 @@ the supervised repository as the working directory.
 revision selector from the identity. Therefore selector-only differences that resolve to the same
 trusted inputs, and unrelated repository changes, do not change the ID.
 
+The manifest's `revision` is historical materialization metadata and is intentionally not part of
+artifact reuse validation. A reused artifact is launched for the requested revision, which remains
+bound to that launch by the ephemeral HMAC attestation.
+
 This abstraction owns revision resolution, trusted-input fingerprinting, packaging, validation, and
 cache publication. The supervisor persists the returned `runtime_id` plus committed provider
 revision on every new workflow. A provider commit never hot-swaps an already running child; after a

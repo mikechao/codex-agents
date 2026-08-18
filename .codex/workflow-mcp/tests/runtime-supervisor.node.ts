@@ -740,6 +740,210 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
+  test("reuses the A artifact for B while authenticating both real-runtime launches", async () => {
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-reuse-cache-"));
+    const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-reuse-db-"));
+    const databasePath = join(databaseRoot, "state.sqlite");
+    const runtimeModule = pathToFileURL(
+      join(process.cwd(), ".codex/workflow-mcp/runtime-supervisor.ts"),
+    ).href;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
+    const copyProvider = () => {
+      cpSync(join(process.cwd(), ".codex/workflow-mcp"), join(target.root, ".codex/workflow-mcp"), {
+        recursive: true,
+      });
+      cpSync(join(process.cwd(), ".codex/agents"), join(target.root, ".codex/agents"), {
+        recursive: true,
+      });
+      cpSync(join(process.cwd(), "package.json"), join(target.root, "package.json"));
+      cpSync(join(process.cwd(), "bun.lock"), join(target.root, "bun.lock"));
+    };
+    const start = () => {
+      const script = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeModule)}; new RuntimeSupervisor(${JSON.stringify(
+        {
+          repositoryRoot: target.root,
+          providerRoot: target.root,
+          databasePath,
+          cacheRoot,
+          installDependencies: true,
+        },
+      )}).run();`;
+      const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const reader = createInterface({ input: child.stdout! });
+      const pending = new Map<string | number, (value: any) => void>();
+      reader.on("line", (line) => {
+        try {
+          const response = JSON.parse(line);
+          const resolve = response.id === undefined ? undefined : pending.get(response.id);
+          if (resolve) {
+            pending.delete(response.id);
+            resolve(response);
+          }
+        } catch {
+          // The supervisor should only forward JSON-RPC, but malformed output is not a response.
+        }
+      });
+      const request = (id: number, method: string, params?: Record<string, unknown>) =>
+        new Promise<any>((resolve, reject) => {
+          pending.set(id, resolve);
+          child.stdin!.write(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              method,
+              ...(params ? { params } : {}),
+            })}\n`,
+            (error) => error && reject(error),
+          );
+          setTimeout(() => {
+            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
+          }, 10_000);
+        });
+      const callTool = async (id: number, name: string, args: Record<string, unknown>) => {
+        const response = await request(id, "tools/call", { name, arguments: args });
+        const result = response.result as { content: Array<{ text: string }>; isError?: boolean };
+        const body = JSON.parse(result.content[0]!.text) as Record<string, any>;
+        return { response, result, body };
+      };
+      const stop = async () => {
+        reader.close();
+        child.stdin!.end();
+        await new Promise<void>((resolve) => child.once("close", () => resolve()));
+      };
+      return { child, request, callTool, stop };
+    };
+    const createArgs = (objective: string, revision: string) => ({
+      workflow_type: "change",
+      objective,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["criterion"],
+      validation_requirements: ["validation"],
+      review_target: {
+        review_mode: "working_tree",
+        base_revision: revision,
+        head_revision: null,
+        approved_paths: ["note.txt"],
+        include_staged: true,
+        include_unstaged: true,
+        include_untracked: true,
+      },
+    });
+    const submitImplementation = (workflowId: string, capability: string) => ({
+      workflow_id: workflowId,
+      capability,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    let first: ReturnType<typeof start> | undefined;
+    let second: ReturnType<typeof start> | undefined;
+    try {
+      copyProvider();
+      git("add", ".");
+      git("commit", "-qm", "runtime A");
+      const revisionA = currentHead(target.root);
+      first = start();
+      const initializedA = await first.request(1, "initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "runtime-reuse-test", version: "1.0.0" },
+      });
+      expect(initializedA.result).toBeDefined();
+      first.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const createdA = await first.callTool(
+        2,
+        "workflow_create",
+        createArgs("runtime A", revisionA),
+      );
+      expect(createdA.result.isError).toBeUndefined();
+      const workflowA = createdA.body.workflow as { workflow_id: string };
+      const capabilitiesA = createdA.body.capabilities as Record<string, string>;
+      await first.stop();
+      first = undefined;
+
+      writeFileSync(join(target.root, "unrelated-runtime-change.txt"), "B\n");
+      git("add", ".");
+      git("commit", "-qm", "runtime B");
+      const revisionB = currentHead(target.root);
+      const artifactA = materializeRuntimeArtifact(target.root, revisionA, { cacheRoot });
+      const storedManifest = readFileSync(
+        join(artifactA.cachePath, ".runtime-manifest.json"),
+        "utf8",
+      );
+      const artifactB = materializeRuntimeArtifact(target.root, revisionB, { cacheRoot });
+      expect(revisionB).not.toBe(revisionA);
+      expect(artifactB.runtime_id).toBe(artifactA.runtime_id);
+      expect(artifactB.cachePath).toBe(artifactA.cachePath);
+      expect(artifactB.reused).toBe(true);
+      expect(readFileSync(join(artifactB.cachePath, ".runtime-manifest.json"), "utf8")).toBe(
+        storedManifest,
+      );
+      expect(JSON.parse(storedManifest).revision).toBe(revisionA);
+
+      second = start();
+      const initializedB = await second.request(3, "initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "runtime-reuse-test", version: "1.0.0" },
+      });
+      expect(initializedB.result).toBeDefined();
+      second.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const createdB = await second.callTool(
+        4,
+        "workflow_create",
+        createArgs("runtime B", revisionB),
+      );
+      expect(createdB.result.isError).toBeUndefined();
+      const workflowB = createdB.body.workflow as { workflow_id: string };
+      const capabilitiesB = createdB.body.capabilities as Record<string, string>;
+      const fetchedB = await second.callTool(5, "workflow_get", {
+        workflow_id: workflowB.workflow_id,
+        role: "parent",
+        capability: capabilitiesB.parent,
+      });
+      expect(fetchedB.result.isError).toBeUndefined();
+      expect(fetchedB.body.workflow_id).toBe(workflowB.workflow_id);
+      const implementedB = await second.callTool(
+        6,
+        "workflow_submit_implementation",
+        submitImplementation(workflowB.workflow_id, capabilitiesB.implementer),
+      );
+      expect(implementedB.result.isError).toBeUndefined();
+      expect(implementedB.body.phase).toBe("REVIEWING");
+      const fetchedBAfterMutation = await second.callTool(7, "workflow_get", {
+        workflow_id: workflowB.workflow_id,
+        role: "parent",
+        capability: capabilitiesB.parent,
+      });
+      expect(fetchedBAfterMutation.result.isError).toBeUndefined();
+      const fetchedA = await second.callTool(8, "workflow_get", {
+        workflow_id: workflowA.workflow_id,
+        role: "parent",
+        capability: capabilitiesA.parent,
+      });
+      expect(fetchedA.result.isError).toBeUndefined();
+      expect(fetchedA.body.workflow_id).toBe(workflowA.workflow_id);
+      expect(JSON.stringify(fetchedB.body)).not.toContain("ERROR_RUNTIME_ISOLATION");
+      expect(JSON.stringify(implementedB.body)).not.toContain("ERROR_RUNTIME_ISOLATION");
+      expect(JSON.stringify(fetchedA.body)).not.toContain("ERROR_RUNTIME_ISOLATION");
+    } finally {
+      await first?.stop().catch(() => {});
+      await second?.stop().catch(() => {});
+      rmSync(target.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(databaseRoot, { recursive: true, force: true });
+    }
+  });
+
   test("bootstrap executes committed supervisor source despite dirty launcher and supervisor files", async () => {
     const target = fixture();
     const provider = target.root;
