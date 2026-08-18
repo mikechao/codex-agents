@@ -11,6 +11,37 @@ import { tools } from "../server.js";
 import { WorkflowStore } from "../store.js";
 import { fixture, receipt as makeReceipt } from "./test-fixtures.js";
 
+function makeLegacyCompatibleCall(client: Client) {
+  const versionOffsets = new Map<string, number>();
+  return async (name: string, arguments_: any) => {
+    const args = { ...arguments_ };
+    const workflowId = args.workflow_id;
+    if (typeof args.expected_version === "number" && workflowId) {
+      args.expected_version += versionOffsets.get(workflowId) ?? 0;
+    }
+    if (name === "workflow_submit_implementation") delete args.implementation_receipt;
+    if (name === "workflow_submit_review") {
+      const legacyReceipt = Object.hasOwn(args, "review_receipt");
+      delete args.review_receipt;
+      if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+        await client.callTool({
+          name: "workflow_begin_review",
+          arguments: {
+            workflow_id: workflowId,
+            capability: args.capability,
+            expected_version: args.expected_version,
+          },
+        });
+        versionOffsets.set(workflowId, (versionOffsets.get(workflowId) ?? 0) + 1);
+        args.expected_version += 1;
+      }
+    }
+    return JSON.parse(
+      ((await client.callTool({ name, arguments: args })).content[0] as { text: string }).text,
+    );
+  };
+}
+
 test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () => {
   const { root, git } = fixture();
   try {
@@ -61,11 +92,34 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
       JSON.parse((denied.content[0] as { text: string }).text).category,
       "ERROR_CAPABILITY_DENIED",
     );
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
+    const versionOffsets = new Map<string, number>();
+    const call = async (name: string, arguments_: any) => {
+      const args = { ...arguments_ };
+      const workflowId = args.workflow_id;
+      if (typeof args.expected_version === "number" && workflowId) {
+        args.expected_version += versionOffsets.get(workflowId) ?? 0;
+      }
+      if (name === "workflow_submit_implementation") delete args.implementation_receipt;
+      if (name === "workflow_submit_review") {
+        const legacyReceipt = Object.hasOwn(args, "review_receipt");
+        delete args.review_receipt;
+        if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+          await client.callTool({
+            name: "workflow_begin_review",
+            arguments: {
+              workflow_id: workflowId,
+              capability: args.capability,
+              expected_version: args.expected_version,
+            },
+          });
+          versionOffsets.set(workflowId, (versionOffsets.get(workflowId) ?? 0) + 1);
+          args.expected_version += 1;
+        }
+      }
+      return JSON.parse(
+        ((await client.callTool({ name, arguments: args })).content[0] as { text: string }).text,
       );
+    };
     const base = created.workflow;
     const initialReceipt = makeReceipt(root);
     const implemented = await call("workflow_submit_implementation", {
@@ -227,7 +281,7 @@ test("role view projection over STDIO returns only role data without capabilitie
     const implementer = await get("implementer", created.capabilities.implementer);
     assert.equal(implementer.phase, "IMPLEMENTING");
     assert.deepEqual(implementer.permitted_next_actions, ["workflow_submit_implementation"]);
-    assert.equal("initial_receipt" in implementer, true);
+    assert.equal("initial_receipt" in implementer, false);
     assert.equal("acceptance_criteria" in implementer, true);
     assert.equal("review_receipt" in implementer, false);
     assert.equal("optional_findings" in implementer, false);
@@ -235,7 +289,7 @@ test("role view projection over STDIO returns only role data without capabilitie
 
     const reviewer = await get("reviewer", created.capabilities.reviewer);
     assert.equal("initial_receipt" in reviewer, false);
-    assert.equal("review_receipt" in reviewer, true);
+    assert.equal("review_receipt" in reviewer, false);
     assert.equal("commit_authorization" in reviewer, false);
 
     const committer = await get("committer", created.capabilities.committer);
@@ -243,7 +297,7 @@ test("role view projection over STDIO returns only role data without capabilitie
     assert.equal("commit_authorization" in committer, true);
 
     const parent = await get("parent", created.capabilities.parent);
-    assert.equal("initial_receipt" in parent, true);
+    assert.equal("initial_receipt" in parent, false);
     assert.equal("commit_authorization" in parent, true);
     for (const view of [implementer, reviewer, committer, parent]) {
       const serialized = JSON.stringify(view);
@@ -372,7 +426,6 @@ test("exact implementation tool schema matches the normative contract", () => {
     "capability",
     "expected_version",
     "finding_resolution_map",
-    "implementation_receipt",
     "known_failures",
     "status",
     "summary",
@@ -388,7 +441,6 @@ test("exact implementation tool schema matches the normative contract", () => {
     "agent_touched_paths",
     "acceptance_results",
     "validation_results",
-    "implementation_receipt",
     "known_failures",
     "finding_resolution_map",
   ]);
@@ -579,11 +631,7 @@ test("implementation stops resume and concerns over STDIO", async () => {
       },
     });
     const created = JSON.parse((createdResult.content[0] as { text: string }).text);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const base = created.workflow;
     const initialReceipt = makeReceipt(root);
 
@@ -696,11 +744,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (paths: string[]): any => makeReceipt(root, paths);
 
     const wtResult = await call("workflow_create", {
@@ -732,7 +776,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
           capability: wtResult.capabilities.reviewer,
         })
       ).permitted_next_actions,
-      ["workflow_submit_review"],
+      ["workflow_begin_review"],
     );
     const wtApproved = await call("workflow_submit_review", {
       workflow_id: wt.workflow_id,
@@ -776,7 +820,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
       },
     });
     assert.equal(rangeResult.workflow.phase, "REVIEWING");
-    assert.equal(rangeResult.workflow.initial_receipt, null);
+    assert.equal("initial_receipt" in rangeResult.workflow, false);
     const range = rangeResult.workflow;
     const rangeApproved = await call("workflow_submit_review", {
       workflow_id: range.workflow_id,
@@ -790,7 +834,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
       prior_finding_classifications: {},
     });
     assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
-    assert.equal(rangeApproved.review_receipt, null);
+    assert.equal("review_receipt" in rangeApproved, false);
     assert.deepEqual(
       (
         await call("workflow_get", {
@@ -834,11 +878,7 @@ test("review resume and repair exhaustion over STDIO", async () => {
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const wtResult = await call("workflow_create", {
@@ -973,7 +1013,7 @@ test("review resume and repair exhaustion over STDIO", async () => {
       arguments: {
         workflow_id: chg.workflow_id,
         capability: chgResult.capabilities.parent,
-        expected_version: 3,
+        expected_version: 4,
         resume_context: "x",
       },
     });
@@ -1001,11 +1041,7 @@ test("linked follow-up over STDIO creates a self-contained child without source 
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (paths: string[]): any => makeReceipt(root, paths);
 
     const createdResult = await call("workflow_create", {
@@ -1121,7 +1157,7 @@ test("linked follow-up over STDIO creates a self-contained child without source 
       role: "parent",
       capability: createdResult.capabilities.parent,
     });
-    assert.equal(parentView.version, 3);
+    assert.equal(parentView.version, 4);
     const audit = await call("workflow_get_audit", {
       workflow_id: created.workflow_id,
       role: "parent",
@@ -1149,11 +1185,7 @@ test("commit preparation over STDIO verifies the staged index and binds the auth
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const createdResult = await call("workflow_create", {
@@ -1229,7 +1261,7 @@ test("commit preparation over STDIO verifies the staged index and binds the auth
     assert.deepEqual(prepared.commit_preparation.expected_paths, ["note.txt"]);
     assert.match(prepared.commit_preparation.attempt_id, /^[0-9a-f-]{36}$/u);
     assert.match(prepared.commit_preparation.prepared_at, /^[0-9]{4}-/u);
-    assert.equal(prepared.commit_preparation.review_receipt_digest.length, 64);
+    assert.equal("review_receipt_digest" in prepared.commit_preparation, false);
     assert.deepEqual(
       (
         await call("workflow_get", {
@@ -1324,11 +1356,7 @@ test("commit result success over STDIO records a verified external commit", asyn
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const createdResult = await call("workflow_create", {
@@ -1440,7 +1468,7 @@ test("commit result success over STDIO records a verified external commit", asyn
       arguments: {
         workflow_id: created.workflow_id,
         capability: caps.parent,
-        expected_version: 5,
+        expected_version: 6,
         retry_context: "x",
       },
     });
@@ -1471,11 +1499,7 @@ test("not committed failure and retry over STDIO", async () => {
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const createdResult = await call("workflow_create", {
@@ -1629,11 +1653,7 @@ test("commit mismatch over STDIO stops terminally and leaves no retry", async ()
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const createdResult = await call("workflow_create", {
@@ -1732,7 +1752,7 @@ test("commit mismatch over STDIO stops terminally and leaves no retry", async ()
       arguments: {
         workflow_id: created.workflow_id,
         capability: caps.parent,
-        expected_version: 5,
+        expected_version: 6,
         retry_context: "x",
       },
     });
@@ -1770,11 +1790,7 @@ test("v2 workflows deny legacy commit recording over STDIO", async () => {
     });
     const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-    const call = async (name: string, arguments_: any) =>
-      JSON.parse(
-        ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-          .text,
-      );
+    const call = makeLegacyCompatibleCall(client);
     const receipt = (): any => makeReceipt(root);
 
     const createdResult = await call("workflow_create", {
@@ -1840,7 +1856,7 @@ test("v2 workflows deny legacy commit recording over STDIO", async () => {
       arguments: {
         workflow_id: created.workflow_id,
         capability: caps.committer,
-        expected_version: 3,
+        expected_version: 4,
         commit_hash: git("rev-parse", "HEAD"),
       },
     });

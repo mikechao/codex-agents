@@ -186,7 +186,7 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
       include_unstaged: true,
       include_untracked: true,
     });
-    assert.equal(migrated.initial_receipt, null);
+    assert.equal("initial_receipt" in migrated, false);
     assert.deepEqual(migrated.dirty_baseline_paths, []);
     assert.equal(migrated.repair_cycle, 0);
     assert.equal(migrated.max_repair_cycles, 2);
@@ -200,13 +200,13 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
     assert.deepEqual(migrated.scope_changed_paths, ["note.txt"]);
     assert.deepEqual(migrated.acceptance_results, []);
     assert.deepEqual(migrated.validation_results, []);
-    assert.deepEqual(migrated.implementation_receipt, { base_head: "a".repeat(40) });
+    assert.equal("implementation_receipt" in migrated, false);
     assert.deepEqual(migrated.implementation_known_failures, ["flaky"]);
     assert.deepEqual(migrated.finding_resolution_map, { "BLK-1": "resolved" });
     assert.deepEqual(migrated.prior_finding_classifications, {});
     assert.deepEqual(migrated.blocking_findings, []);
     assert.deepEqual(migrated.optional_findings, []);
-    assert.equal(migrated.review_receipt, null);
+    assert.equal("review_receipt" in migrated, false);
     assert.equal(migrated.stop_context, null);
     assert.equal(migrated.recovery_context, null);
     assert.deepEqual(migrated.repair_authorized_ids, []);
@@ -437,6 +437,7 @@ test("preserves old audits byte-for-byte and appends one migration event", () =>
       "linked_findings",
       "recovery_context",
       "remediation_context",
+      "review_start_receipt",
       "review_target",
       "runtime_id",
       "runtime_revision",
@@ -633,6 +634,59 @@ test("reopening is idempotent and adds no second migration event", () => {
   }
 });
 
+test("rejects tampered v2 compatibility rows before rewriting their digest", () => {
+  const root = mkdtempSync(join(tmpdir(), "migration-v2-corrupt-"));
+  try {
+    const path = join(root, "state.sqlite");
+    const state = v1State({
+      phase: "REVIEWING",
+      implementation_status: "DONE",
+      implementation_summary: "done",
+    });
+    createV1Database(path, [state]);
+    const migrated: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    migrated.close();
+
+    const db = new Database(path);
+    const original = db
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(state.workflow_id) as any;
+    const compatibilityState = JSON.parse(original.state_json);
+    delete compatibilityState.review_start_receipt;
+    const compatibilityJson = JSON.stringify(compatibilityState);
+    const compatibilityDigest = objectDigest(compatibilityState);
+    db.prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?").run(
+      compatibilityJson,
+      compatibilityDigest,
+      state.workflow_id,
+    );
+
+    compatibilityState.objective = "tampered";
+    const tamperedJson = JSON.stringify(compatibilityState);
+    db.prepare("UPDATE workflows SET state_json = ? WHERE workflow_id = ?").run(
+      tamperedJson,
+      state.workflow_id,
+    );
+    db.close();
+
+    assert.equal(
+      errorCategory(() => new WorkflowStore({ repositoryRoot: root, databasePath: path })),
+      "ERROR_STATE_CORRUPT",
+    );
+    const afterDb = new Database(path);
+    const after = afterDb
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(state.workflow_id) as any;
+    assert.equal(after.state_json, tamperedJson);
+    assert.equal(after.state_digest, compatibilityDigest);
+    assert.equal(after.state_digest, objectDigest(JSON.parse(compatibilityJson)));
+    assert.equal("review_start_receipt" in JSON.parse(after.state_json), false);
+    afterDb.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects malformed and unknown v1 schemas and rolls back the batch", () => {
   const root = mkdtempSync(join(tmpdir(), "migration-corrupt-"));
   try {
@@ -735,9 +789,7 @@ test("reopens a v1 COMMIT_AUTHORIZED fixture via STDIO and completes the allowed
       assert.equal(parent.legacy_v1, true);
       assert.equal(parent.phase, "COMMIT_AUTHORIZED");
       assert.equal(parent.version, 1);
-      assert.equal(parent.review_receipt.base_head, base);
-      assert.equal(parent.review_receipt.paths[0].digest, digest);
-      assert.equal(parent.review_receipt.paths[0].state, "modified");
+      assert.equal("review_receipt" in parent, false);
       const committer = await call("workflow_get", {
         workflow_id: state.workflow_id,
         role: "committer",

@@ -22,14 +22,14 @@ const opencode = (name: string) =>
 
 test("OpenCode definitions are subagents with host-native permissions", () => {
   const expectedModels: Record<string, string> = {
-    implementer: "opencode-go/gpt-5.6-luna",
-    code_reviewer: "opencode-go/gpt-5.6-luna",
-    committer: "opencode-go/gpt-5.6-luna",
+    implementer: "openai/gpt-5.6-luna",
+    code_reviewer: "openai/gpt-5.6-luna",
+    committer: "openai/gpt-5.6-luna",
   };
   const expectedReasoning: Record<string, string> = {
     implementer: "high",
     code_reviewer: "high",
-    committer: "low",
+    committer: "high",
   };
   for (const name of ["implementer.md", "code_reviewer.md", "committer.md"]) {
     const role = name.replace(/\.md$/, "");
@@ -112,6 +112,7 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     );
   }
   assert.match(content, /^  workflow_state_workflow_submit_review: allow$/m);
+  assert.match(content, /^  workflow_state_workflow_begin_review: allow$/m);
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
 });
@@ -319,7 +320,7 @@ test("contract fragments are host-neutral and each host injects its own identity
       /"Agent: \w+ \| Model: [^"|]+\| Reasoning: \w+"/,
       `${role} Codex definition must announce the Codex model and reasoning effort`,
     );
-    const expectedModel = "opencode-go/gpt-5.6-luna";
+    const expectedModel = "openai/gpt-5.6-luna";
     assert.match(
       opencode(`${role}.md`),
       new RegExp(`"Agent: ${role} \\| Model: ${expectedModel}"`),

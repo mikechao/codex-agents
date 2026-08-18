@@ -31,11 +31,34 @@ async function start(root: string) {
   });
   const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
-  const call = async (name: string, arguments_: any) =>
-    JSON.parse(
-      ((await client.callTool({ name, arguments: arguments_ })).content[0] as { text: string })
-        .text,
+  const versionOffsets = new Map<string, number>();
+  const call = async (name: string, arguments_: any) => {
+    const args = { ...arguments_ };
+    const workflowId = args.workflow_id;
+    if (typeof args.expected_version === "number" && workflowId) {
+      args.expected_version += versionOffsets.get(workflowId) ?? 0;
+    }
+    if (name === "workflow_submit_implementation") delete args.implementation_receipt;
+    if (name === "workflow_submit_review") {
+      const legacyReceipt = Object.hasOwn(args, "review_receipt");
+      delete args.review_receipt;
+      if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+        await client.callTool({
+          name: "workflow_begin_review",
+          arguments: {
+            workflow_id: workflowId,
+            capability: args.capability,
+            expected_version: args.expected_version,
+          },
+        });
+        versionOffsets.set(workflowId, (versionOffsets.get(workflowId) ?? 0) + 1);
+        args.expected_version += 1;
+      }
+    }
+    return JSON.parse(
+      ((await client.callTool({ name, arguments: args })).content[0] as { text: string }).text,
     );
+  };
   const receipt = (paths: string[] = ["note.txt"]): any => createReceipt(paths, root);
   return { client, transport, call, receipt, stderr };
 }
@@ -87,7 +110,6 @@ function implementInput(workflowId: string, caps: any, version: number, override
     agent_touched_paths: [],
     acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }],
     validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }],
-    implementation_receipt: null,
     known_failures: [],
     finding_resolution_map: {},
     ...overrides,
@@ -102,7 +124,6 @@ function reviewInput(workflowId: string, caps: any, version: number, overrides: 
     review_status: "APPROVED",
     blocking_findings: [],
     optional_findings: [],
-    review_receipt: null,
     review_target: null,
     prior_finding_classifications: {},
     ...overrides,
@@ -170,7 +191,7 @@ test("change workflow drives an external commit to COMMITTED over STDIO", async 
       reviewInput(wf.workflow_id, caps, 1, { review_receipt: receipt(), review_target: target }),
     );
     assert.equal(approved.phase, "STOPPED_APPROVED");
-    assert.equal(approved.version, 2);
+    assert.equal(approved.version, 3);
 
     const authorized = await call("workflow_authorize_commit", {
       workflow_id: wf.workflow_id,
@@ -218,6 +239,7 @@ test("change workflow drives an external commit to COMMITTED over STDIO", async 
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
+        "REVIEW_STARTED",
         "REVIEW_SUBMITTED",
         "COMMIT_AUTHORIZED",
         "COMMIT_PREPARED",
@@ -264,7 +286,7 @@ test("range review to linked change and approval over STDIO", async () => {
     );
     const rangeWf = range.workflow;
     assert.equal(rangeWf.phase, "REVIEWING");
-    assert.equal(rangeWf.initial_receipt, null);
+    assert.equal("initial_receipt" in rangeWf, false);
 
     const optional = finding("RANGE-OPT-1", { severity: "P3", blocking: false });
     const approved = await call(
@@ -515,11 +537,13 @@ test("repair through stop, resume, and exhaustion over STDIO", async () => {
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
+        "REVIEW_STARTED",
         "REVIEW_SUBMITTED",
         "REPAIR_AUTHORIZED",
         "IMPLEMENTATION_STOPPED",
         "IMPLEMENTATION_RESUMED",
         "IMPLEMENTATION_SUBMITTED",
+        "REVIEW_STARTED",
         "REVIEW_SUBMITTED",
         "REPAIR_EXHAUSTED",
       ],
@@ -579,7 +603,7 @@ test("safe errors over STDIO for role, version, phase, malformed fields, and ran
         review_receipt: receipt(),
         review_target: workingTarget(wf.base_head),
       }),
-      "ERROR_INVALID_TRANSITION",
+      "ERROR_INVALID_REVIEW",
     );
     const badCreate = createInput(git, { objective: "protocol v2 bad create objective" });
     await assertError("workflow_create", { ...badCreate, bogus: true }, "ERROR_INVALID_SHAPE");

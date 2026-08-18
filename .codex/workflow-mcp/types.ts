@@ -66,7 +66,7 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All 16 tool names (from `server.ts` `tools`).
+// All 17 tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
   | "workflow_get"
@@ -74,6 +74,7 @@ export type WorkflowAction =
   | "workflow_submit_implementation"
   | "workflow_resume_implementation"
   | "workflow_accept_concerns"
+  | "workflow_begin_review"
   | "workflow_submit_review"
   | "workflow_authorize_repair"
   | "workflow_resume_review"
@@ -146,6 +147,7 @@ export type AuditEventType =
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"
   | "CONCERNS_ACCEPTED"
+  | "REVIEW_STARTED"
   | "REVIEW_SUBMITTED"
   | "REPAIR_AUTHORIZED"
   | "REVIEW_RESUMED"
@@ -306,6 +308,7 @@ export interface WorkflowState {
   validation_requirements: ValidationRequirement[];
   review_target: ReviewTarget;
   initial_receipt: ChangeReceipt | null;
+  review_start_receipt: ChangeReceipt | null;
   dirty_baseline_paths: ExactRepoPath[];
   repair_cycle: number; // runtime-validated 0..2
   max_repair_cycles: number; // runtime-validated 0..2
@@ -374,6 +377,8 @@ export interface RoleViewCommon {
   permitted_next_actions: WorkflowAction[];
 }
 
+export type CommitPreparationView = Omit<CommitPreparation, "review_receipt_digest">;
+
 export type ParentView = RoleViewCommon &
   Omit<
     WorkflowState,
@@ -383,18 +388,21 @@ export type ParentView = RoleViewCommon &
     | "implementation_validation_evidence"
     | "authorized_optional_ids"
     | "user_authorization_summary"
+    | "initial_receipt"
+    | "review_start_receipt"
+    | "implementation_receipt"
+    | "review_receipt"
+    | "commit_preparation"
   >;
 
 export interface ImplementerView extends RoleViewCommon {
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
-  initial_receipt: ChangeReceipt | null;
   dirty_baseline_paths: ExactRepoPath[];
   linked_findings: ReviewFinding[];
   remediation_context: RemediationContext | null;
   implementation_summary: string | null;
   implementation_status: ImplementationStatus | null;
-  implementation_receipt: ChangeReceipt | null;
   implementation_known_failures: string[];
   agent_touched_paths: ExactRepoPath[];
   scope_changed_paths: ExactRepoPath[];
@@ -411,7 +419,6 @@ export interface ImplementerView extends RoleViewCommon {
 export type ImplementerHandoffView = {
   implementation_summary: string | null;
   implementation_status: ImplementationStatus | null;
-  implementation_receipt: ChangeReceipt | null;
   implementation_known_failures: string[];
   agent_touched_paths: ExactRepoPath[];
   scope_changed_paths: ExactRepoPath[];
@@ -428,7 +435,6 @@ export interface ReviewerViewBase extends RoleViewCommon {
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;
   concern_acceptance: ConcernAcceptance | null;
-  review_receipt: ChangeReceipt | null;
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;
 }
@@ -444,7 +450,6 @@ export interface CommitterView extends RoleViewCommon {
   scope_changed_paths: ExactRepoPath[];
   implementation_summary: string | null;
   implementation_status: ImplementationStatus | null;
-  implementation_receipt: ChangeReceipt | null;
   implementation_known_failures: string[];
   acceptance_results: AcceptanceResult[];
   validation_results: ValidationResult[];
@@ -452,9 +457,8 @@ export interface CommitterView extends RoleViewCommon {
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;
   concern_acceptance: ConcernAcceptance | null;
-  review_receipt: ChangeReceipt | null;
   commit_authorization: CommitAuthorization | null;
-  commit_preparation: CommitPreparation | null;
+  commit_preparation: CommitPreparationView | null;
   commit_result: CommitResult | null;
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;

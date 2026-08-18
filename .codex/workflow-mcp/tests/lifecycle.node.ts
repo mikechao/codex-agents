@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
-import { fixture, receipt } from "./test-fixtures.js";
+import { fixture } from "./test-fixtures.js";
 
 const ROLES = ["parent", "implementer", "reviewer", "committer"];
 
@@ -59,7 +59,13 @@ const ACTIONS = {
     reviewer: [],
     committer: [],
   },
-  reviewing: { parent: [], implementer: [], reviewer: ["workflow_submit_review"], committer: [] },
+  reviewing: { parent: [], implementer: [], reviewer: ["workflow_begin_review"], committer: [] },
+  reviewingRange: {
+    parent: [],
+    implementer: [],
+    reviewer: ["workflow_submit_review"],
+    committer: [],
+  },
   repairRequired: {
     parent: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
     implementer: [],
@@ -309,6 +315,7 @@ function optionalFinding(id: string) {
 }
 
 function doCreate(ctx: any, options: any = {}) {
+  ctx.reviewVersionOffset = 0;
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
 }
 
@@ -317,7 +324,7 @@ function doImplementation(ctx: any, version: number, options: any = {}) {
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
     capability: capabilities.implementer,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     status: options.status ?? "DONE",
     summary: options.summary ?? "implemented",
     agent_touched_paths: options.touched ?? [],
@@ -331,7 +338,6 @@ function doImplementation(ctx: any, version: number, options: any = {}) {
       status: options.validationStatus ?? "passed",
       evidence: "validation evidence",
     })),
-    implementation_receipt: options.receipt ?? receipt(ctx.root),
     known_failures: options.knownFailures ?? [],
     finding_resolution_map: options.resolution ?? {},
   });
@@ -340,19 +346,23 @@ function doImplementation(ctx: any, version: number, options: any = {}) {
 function doReview(ctx: any, version: number, options: any = {}) {
   const { workflow, capabilities } = ctx.created;
   const status = options.status ?? "APPROVED";
+  const expectedVersion = version + ctx.reviewVersionOffset;
+  if (workflow.review_target?.review_mode !== "commit_range") {
+    ctx.store.beginReview({
+      workflow_id: workflow.workflow_id,
+      capability: capabilities.reviewer,
+      expected_version: expectedVersion,
+    });
+    ctx.reviewVersionOffset += 1;
+  }
   ctx.store.submitReview({
     workflow_id: workflow.workflow_id,
     capability: capabilities.reviewer,
-    expected_version: version,
+    expected_version:
+      expectedVersion + (workflow.review_target?.review_mode === "commit_range" ? 0 : 1),
     review_status: status,
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
-    review_receipt:
-      options.receipt === undefined
-        ? status === "APPROVED"
-          ? receipt(ctx.root)
-          : null
-        : options.receipt,
     review_target: options.target ?? workingTarget(workflow.base_head),
     prior_finding_classifications: options.prior ?? {},
   });
@@ -363,7 +373,7 @@ function doAuthorizeRepair(ctx: any, version: number, ids: string[]) {
   ctx.store.authorizeRepair({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     finding_ids: ids,
   });
 }
@@ -373,7 +383,7 @@ function doResumeImplementation(ctx: any, version: number) {
   ctx.store.resumeImplementation({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     resume_context: "resumed",
   });
 }
@@ -383,7 +393,7 @@ function doResumeReview(ctx: any, version: number) {
   ctx.store.resumeReview({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     resume_context: "resumed",
   });
 }
@@ -393,7 +403,7 @@ function doAcceptConcerns(ctx: any, version: number) {
   ctx.store.acceptConcerns({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     user_authorization: "user accepted concerns",
   });
 }
@@ -403,7 +413,7 @@ function doAuthorizeCommit(ctx: any, version: number) {
   ctx.store.authorizeCommit({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     user_authorization: "user authorized commit",
   });
 }
@@ -413,7 +423,7 @@ function doPrepareCommit(ctx: any, version: number) {
   ctx.prepared = ctx.store.prepareCommit({
     workflow_id: workflow.workflow_id,
     capability: capabilities.committer,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
   });
 }
 
@@ -422,7 +432,7 @@ function doSubmitCommitResult(ctx: any, version: number, options: any) {
   ctx.store.submitCommitResult({
     workflow_id: workflow.workflow_id,
     capability: capabilities.committer,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     attempt_id: options.attemptId ?? ctx.prepared.commit_preparation.attempt_id,
     outcome: options.outcome,
     commit_hash: options.commit_hash ?? null,
@@ -435,7 +445,7 @@ function doRetryCommit(ctx: any, version: number) {
   ctx.store.retryCommit({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     retry_context: "retrying",
   });
 }
@@ -445,7 +455,7 @@ function doFinalize(ctx: any, version: number) {
   ctx.store.finalizeRepairExhausted({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
   });
 }
 
@@ -454,7 +464,7 @@ function doLinkedFollowup(ctx: any, version: number, findingIds: string[]) {
   ctx.child = ctx.store.createLinkedFollowup({
     workflow_id: workflow.workflow_id,
     capability: capabilities.parent,
-    expected_version: version,
+    expected_version: version + ctx.reviewVersionOffset,
     objective: "linked child",
     approved_paths: ["note.txt"],
     acceptance_criteria: ["child criterion"],
@@ -481,10 +491,15 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   assert.ok(entry, `${label}: workflow exists`);
   const { workflow, capabilities } = entry;
   const id = workflow.workflow_id;
+  const expectedVersion =
+    snap.version +
+    (entry === ctx.created && workflow.review_target?.review_mode === "working_tree"
+      ? ctx.reviewVersionOffset
+      : 0);
   for (const role of ROLES) {
     const view = store.get(id, role, capabilities[role]);
     assert.equal(view.phase, snap.phase, `${label}: ${role} phase`);
-    assert.equal(view.version, snap.version, `${label}: ${role} version`);
+    assert.equal(view.version, expectedVersion, `${label}: ${role} version`);
     assert.deepEqual(
       view.permitted_next_actions,
       snap.actions[role],
@@ -496,14 +511,21 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
     .get(id);
   assert.ok(row, `${label}: persisted row exists`);
   const parsed = JSON.parse(row.state_json);
-  assert.equal(row.version, snap.version, `${label}: persisted row version`);
-  assert.equal(parsed.version, snap.version, `${label}: persisted state version`);
+  assert.equal(row.version, expectedVersion, `${label}: persisted row version`);
+  assert.equal(parsed.version, expectedVersion, `${label}: persisted state version`);
   assert.equal(parsed.phase, snap.phase, `${label}: persisted state phase`);
   assert.equal(row.state_digest, objectDigest(parsed), `${label}: stored digest matches state`);
   const audit = store.audit(id, "parent", capabilities.parent);
   assert.deepEqual(
     audit.map((event: any) => event.event_type),
-    snap.events,
+    snap.events.flatMap((event: string) =>
+      event === "REVIEW_SUBMITTED" &&
+      entry === ctx.created &&
+      workflow.review_target?.review_mode === "working_tree" &&
+      ctx.reviewVersionOffset > 0
+        ? ["REVIEW_STARTED", event]
+        : [event],
+    ),
     `${label}: exact event sequence`,
   );
   for (let index = 0; index < audit.length; index += 1) {
@@ -534,7 +556,17 @@ function scenario(name: string, steps: any[], options: any = {}) {
     const { root, git } = base;
     const dbPath = join(root, "state.sqlite");
     let store: any = new WorkflowStore({ repositoryRoot: root, databasePath: dbPath });
-    const ctx = { root, git, store, dbPath, created: null, child: null, prepared: null, ...base };
+    const ctx = {
+      root,
+      git,
+      store,
+      dbPath,
+      created: null,
+      child: null,
+      prepared: null,
+      reviewVersionOffset: 0,
+      ...base,
+    };
     try {
       for (const step of steps) {
         step.run(ctx);
@@ -800,7 +832,7 @@ scenario(
             include_untracked: false,
           },
         }),
-      snapshots: [snap("parent", "REVIEWING", 0, ACTIONS.reviewing, EVENTS.created)],
+      snapshots: [snap("parent", "REVIEWING", 0, ACTIONS.reviewingRange, EVENTS.created)],
     },
     {
       name: "commit-range review-only: approve",

@@ -55,7 +55,8 @@ The capability is role-specific and is never guessed, regenerated, or replaced. 
 the next role, Orchestrator refreshes the parent view and uses its returned version and permitted
 actions. Each worker's first authoritative action is its own `workflow_get` using those handoff
 values. The returned role view supplies that worker's objective, scope, criteria, evidence, receipts,
-repair context, and next actions; the prompt does not duplicate them.
+repair context, and next actions; receipt data and digests remain internal to Workflow MCP, and the
+prompt does not duplicate them.
 
 Workers perform their role and submit a terminal MCP result through their role-specific submission
 tool. After a successful terminal submission, the OpenCode adapter also requires a non-empty normal
@@ -82,8 +83,9 @@ server's returned `expected_version` is always authoritative. Review approval st
 commit authorization, and optional findings do not authorize extra remediation.
 
 After explicit user authorization, Orchestrator authorizes the commit in the workflow, refreshes the
-parent view, and dispatches the committer. The committer compares the fresh receipt, stages complete
-approved paths (never partial hunks), calls `workflow_prepare_commit`, runs the external Git commit,
+parent view, and dispatches the committer. Working-tree reviewers first call `workflow_begin_review`;
+Workflow MCP owns receipt capture and comparison. The committer stages complete approved paths
+(never partial hunks), calls `workflow_prepare_commit`, runs the external Git commit,
 and submits the commit result whether Git succeeds or fails. Orchestrator performs the final parent
 refresh after that terminal handoff.
 
@@ -120,11 +122,12 @@ sequenceDiagram
     Orchestrator->>code_reviewer: Exact workflow_id + capability + expected_version
     code_reviewer->>workflow_state: Initial workflow_get
     workflow_state-->>code_reviewer: Authoritative reviewer view
-    code_reviewer->>GitWorkingTree: Independent read-only review and receipt
+    code_reviewer->>workflow_state: workflow_begin_review (working tree)
+    code_reviewer->>GitWorkingTree: Independent read-only review
     code_reviewer->>workflow_state: Terminal review submission
     code_reviewer-->>Orchestrator: Final textual review report
     Orchestrator->>workflow_state: Parent workflow_get refresh
-    workflow_state-->>Orchestrator: STOPPED_APPROVED + review receipt
+    workflow_state-->>Orchestrator: STOPPED_APPROVED + sanitized approval view
     User->>Orchestrator: Explicit commit authorization
     Orchestrator->>workflow_state: Authorize commit
     Orchestrator->>workflow_state: Parent workflow_get refresh
@@ -168,7 +171,8 @@ the target repository.
 - **Orchestrator:** primary workflow control plane; bounded read-only preflight and routing only.
 - **Plan:** optional pre-workflow analysis and plan refinement; never the implementation workflow.
 - **Implementer:** detailed investigation, edits, validation, and implementation evidence.
-- **Code reviewer:** independent read-only review, findings, and review receipt.
+- **Code reviewer:** independent read-only review and semantic findings; receipt capture and
+  comparison remain inside Workflow MCP.
 - **Committer:** exact-scope staging, commit preparation, external Git commit, and commit-result
   submission after explicit authorization.
 - **Build:** optional direct coding agent, not workflow orchestration, with no project-global

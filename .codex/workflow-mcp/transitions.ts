@@ -158,6 +158,7 @@ const V2_STATE_KEYS: readonly string[] = [
   "validation_requirements",
   "review_target",
   "initial_receipt",
+  "review_start_receipt",
   "dirty_baseline_paths",
   "repair_cycle",
   "max_repair_cycles",
@@ -313,7 +314,7 @@ const ACTION_MATRIX: Partial<
     REPAIRING: ["workflow_submit_implementation"],
   },
   reviewer: {
-    REVIEWING: ["workflow_submit_review"],
+    REVIEWING: ["workflow_begin_review", "workflow_submit_review"],
   },
   parent: {
     REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
@@ -331,9 +332,25 @@ const ACTION_MATRIX: Partial<
   },
 };
 
+const INTERNAL_RECEIPT_FIELDS = new Set([
+  "initial_receipt",
+  "review_start_receipt",
+  "implementation_receipt",
+  "review_receipt",
+]);
+
 export function permittedNextActions(state: WorkflowState, actorRole: Role): WorkflowAction[] {
   role(actorRole);
   let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
+  if (actorRole === "reviewer" && state.phase === "REVIEWING") {
+    if (state.review_target.review_mode === "commit_range") {
+      actions = ["workflow_submit_review"];
+    } else if (state.review_start_receipt) {
+      actions = ["workflow_submit_review"];
+    } else {
+      actions = ["workflow_begin_review"];
+    }
+  }
   if (
     actorRole === "parent" &&
     state.phase === "STOPPED_APPROVED" &&
@@ -368,6 +385,15 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
       if (ROLE_VIEW_COMMON.includes(key)) continue;
       if (key === "legacy_evidence") continue;
       if (TEMPORARY_COMPATIBILITY_KEYS.includes(key)) continue;
+      if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
+      if (key === "commit_preparation" && raw[key] !== null) {
+        const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
+          string,
+          unknown
+        >;
+        view[key] = clone(sanitized);
+        continue;
+      }
       view[key] = clone(raw[key]);
     }
   } else {
@@ -376,6 +402,15 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
         ? ROLE_VIEW_EXTRA[actorRole].filter((key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key))
         : ROLE_VIEW_EXTRA[actorRole];
     for (const key of extra) {
+      if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
+      if (key === "commit_preparation" && raw[key] !== null) {
+        const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
+          string,
+          unknown
+        >;
+        view[key] = clone(sanitized);
+        continue;
+      }
       if (key in raw) view[key] = clone(raw[key]);
     }
   }
@@ -429,6 +464,7 @@ function baseState({
       include_untracked: true,
     },
     initial_receipt: null,
+    review_start_receipt: null,
     dirty_baseline_paths: [],
     repair_cycle: 0,
     max_repair_cycles: maxRepairCycles,
@@ -650,7 +686,6 @@ export function submitImplementation(
       "agent_touched_paths",
       "acceptance_results",
       "validation_results",
-      "implementation_receipt",
       "known_failures",
       "finding_resolution_map",
     ],
@@ -664,10 +699,6 @@ export function submitImplementation(
     args.status !== "BLOCKED"
   ) {
     fail("ERROR_INVALID_IMPLEMENTATION", "implementation status is invalid");
-  }
-  const receipt = args.implementation_receipt;
-  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
-    fail("ERROR_INVALID_IMPLEMENTATION", "implementation receipt is required");
   }
   const touchedPaths = exactPaths(args.agent_touched_paths, repositoryRoot, true);
   const approved = new Set(state.approved_paths);
@@ -701,9 +732,7 @@ export function submitImplementation(
   next.acceptance_results = acceptanceResults;
   next.validation_results = validationResults;
   // Documented producer cast: the store verified canonical equality with the fresh receipt first.
-  next.implementation_receipt = JSON.parse(
-    JSON.stringify(freshReceipt ?? receipt),
-  ) as ChangeReceipt;
+  next.implementation_receipt = JSON.parse(JSON.stringify(freshReceipt)) as ChangeReceipt;
   next.implementation_known_failures = knownFailures;
   next.finding_resolution_map = resolution;
   next.scope_changed_paths = scopeChangedPaths(state.initial_receipt, next.implementation_receipt);
@@ -777,7 +806,41 @@ export function acceptConcerns(state: WorkflowState, input: unknown): WorkflowSt
   return next;
 }
 
-export function submitReview(state: WorkflowState, input: unknown): WorkflowState {
+export function beginReview(
+  state: WorkflowState,
+  input: unknown,
+  startReceipt: ChangeReceipt,
+): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_REVIEW", "review begin input is invalid");
+  }
+  exactKeys(input, ["workflow_id", "capability", "expected_version"], "review begin");
+  ensurePhase(state, "REVIEWING");
+  if (state.review_target.review_mode !== "working_tree") {
+    fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
+  }
+  if (startReceipt.base_head !== state.base_head) {
+    fail("ERROR_STALE_RECEIPT", "review snapshot base is stale; begin review again");
+  }
+  if (
+    state.review_start_receipt &&
+    canonicalJson(state.review_start_receipt) === canonicalJson(startReceipt)
+  ) {
+    fail(
+      "ERROR_INVALID_REVIEW",
+      "review has already begun; submit the review before beginning again",
+    );
+  }
+  const next = clone(state);
+  next.review_start_receipt = clone(startReceipt);
+  return next;
+}
+
+export function submitReview(
+  state: WorkflowState,
+  input: unknown,
+  finalReceipt: ChangeReceipt | null = null,
+): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_REVIEW", "review input is invalid");
   }
@@ -791,7 +854,6 @@ export function submitReview(state: WorkflowState, input: unknown): WorkflowStat
       "review_status",
       "blocking_findings",
       "optional_findings",
-      "review_receipt",
       "review_target",
       "prior_finding_classifications",
     ],
@@ -846,17 +908,12 @@ export function submitReview(state: WorkflowState, input: unknown): WorkflowStat
   if (args.review_status === "CHANGES_REQUESTED" && blockingFindings.length === 0) {
     fail("ERROR_INVALID_REVIEW", "changes requested without blockers");
   }
-  if (args.review_status === "INCONCLUSIVE" && args.review_receipt !== null) {
-    fail("ERROR_INVALID_REVIEW", "inconclusive review cannot include receipt");
-  }
   const next = clone(state);
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;
   next.prior_finding_classifications = classifications;
-  // Documented cast: the store validates receipts canonically before calling.
-  next.review_receipt = args.review_receipt
-    ? (JSON.parse(JSON.stringify(args.review_receipt)) as ChangeReceipt)
-    : null;
+  next.review_receipt = finalReceipt ? clone(finalReceipt) : null;
+  next.review_start_receipt = null;
   if (args.review_status === "APPROVED") next.phase = "STOPPED_APPROVED";
   if (args.review_status === "INCONCLUSIVE") {
     next.phase = "STOPPED_INCONCLUSIVE";
@@ -1364,6 +1421,7 @@ export function migrateV1State(state: unknown): WorkflowState {
       include_untracked: true,
     },
     initial_receipt: null,
+    review_start_receipt: null,
     dirty_baseline_paths: [],
     repair_cycle: v1.repair_cycle,
     max_repair_cycles: v1.max_repair_cycles,
@@ -1766,6 +1824,7 @@ export function validateWorkflowStateV2(value: unknown): WorkflowState {
   contractsShape(value.validation_requirements, "VAL");
   reviewTargetShape(value.review_target);
   nullableReceipt(value.initial_receipt, legacyTolerant);
+  nullableReceipt(value.review_start_receipt, legacyTolerant);
   pathList(value.dirty_baseline_paths, true);
   if (
     !Number.isSafeInteger(value.repair_cycle) ||

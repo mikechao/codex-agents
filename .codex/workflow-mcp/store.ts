@@ -18,6 +18,7 @@ import {
   acceptConcerns,
   authorizeCommit,
   authorizeRepair,
+  beginReview,
   commitMismatch,
   createState,
   dirtyBaselinePaths,
@@ -280,8 +281,8 @@ export class WorkflowStore {
 
   #migrateLegacyRows(): void {
     const rows = this.db
-      .prepare("SELECT workflow_id, version, state_json FROM workflows")
-      .all() as Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json">>;
+      .prepare("SELECT workflow_id, version, state_json, state_digest FROM workflows")
+      .all() as Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json" | "state_digest">>;
     if (rows.length === 0) return;
     this.db
       .transaction(() => {
@@ -332,13 +333,22 @@ export class WorkflowStore {
             if (
               typeof parsed === "object" &&
               parsed !== null &&
-              !("runtime_id" in parsed) &&
-              !("runtime_revision" in parsed)
+              (!("runtime_id" in parsed) ||
+                !("runtime_revision" in parsed) ||
+                !("review_start_receipt" in parsed))
             ) {
+              if (row.state_digest === null || row.state_digest === undefined) {
+                fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
+              }
+              if (row.state_digest !== objectDigest(parsed)) {
+                fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
+              }
               const next = {
                 ...(parsed as WorkflowState),
-                runtime_id: null,
-                runtime_revision: null,
+                runtime_id: "runtime_id" in parsed ? parsed.runtime_id : null,
+                runtime_revision: "runtime_revision" in parsed ? parsed.runtime_revision : null,
+                review_start_receipt:
+                  "review_start_receipt" in parsed ? parsed.review_start_receipt : null,
               };
               validateWorkflowStateV2(next);
               const result = this.db
@@ -584,12 +594,30 @@ export class WorkflowStore {
         if (currentReceipt.base_head !== state.base_head) {
           fail("ERROR_STALE_RECEIPT", "implementation receipt base is stale");
         }
-        if (canonicalJson(currentReceipt) !== canonicalJson(args.implementation_receipt)) {
-          fail("ERROR_STALE_RECEIPT", "implementation receipt is stale");
-        }
         return submitImplementation(state, args, this.root, currentReceipt);
       },
       outcome,
+    );
+  }
+
+  beginReview(input: unknown): RoleView {
+    const args = mutationInput(input);
+    return this.#mutate(
+      args.workflow_id,
+      "reviewer",
+      args.capability,
+      args.expected_version,
+      "REVIEW_STARTED",
+      (state) => {
+        if (state.review_target.review_mode !== "working_tree") {
+          fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
+        }
+        const startReceipt = createReceipt(this.root, state.approved_paths, true);
+        if (startReceipt.base_head !== state.base_head) {
+          fail("ERROR_STALE_RECEIPT", "review snapshot base is stale; begin review again");
+        }
+        return beginReview(state, args, startReceipt);
+      },
     );
   }
 
@@ -648,25 +676,25 @@ export class WorkflowStore {
         if (canonicalJson(normalized) !== canonicalJson(state.review_target)) {
           fail("ERROR_INVALID_REVIEW", "review target is incomplete or stale");
         }
-        const next = submitReview(state, args);
-        if (args.review_status === "APPROVED") {
-          if (state.review_target.review_mode === "working_tree") {
-            if (!args.review_receipt)
-              fail("ERROR_STALE_RECEIPT", "approved review requires receipt");
-            verifyReviewReceipt(
-              this.root,
-              args.review_receipt as ChangeReceipt,
-              state.approved_paths,
-              state.base_head,
-            );
-          } else {
-            if (args.review_receipt !== null)
-              fail("ERROR_INVALID_REVIEW", "range approval cannot include receipt");
+        let finalReceipt: ChangeReceipt | null = null;
+        if (state.review_target.review_mode === "working_tree") {
+          if (!state.review_start_receipt) {
+            fail("ERROR_INVALID_REVIEW", "working-tree review must begin before submission");
           }
-        } else if (args.review_receipt !== undefined && args.review_receipt !== null) {
-          fail("ERROR_INVALID_REVIEW", "only approved review may include receipt");
+          if (args.review_status === "APPROVED") {
+            finalReceipt = createReceipt(this.root, state.approved_paths, true);
+            if (finalReceipt.base_head !== state.base_head) {
+              fail("ERROR_STALE_RECEIPT", "review base changed; begin a new review");
+            }
+            if (canonicalJson(finalReceipt) !== canonicalJson(state.review_start_receipt)) {
+              fail(
+                "ERROR_INVALID_REVIEW",
+                "working tree changed after review began; begin a new review before approving",
+              );
+            }
+          }
         }
-        return next;
+        return submitReview(state, args, finalReceipt);
       },
       args.review_status as ReviewStatus,
     );

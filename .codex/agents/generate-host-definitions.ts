@@ -48,7 +48,7 @@ const ROLES: readonly RoleSpec[] = [
     opencode: {
       description:
         "Executes an approved implementation plan, validates the changes, and reports the results.",
-      model: "opencode-go/gpt-5.6-luna",
+      model: "openai/gpt-5.6-luna",
       reasoningEffort: "high",
       permission: [
         "  edit: allow",
@@ -103,7 +103,7 @@ const ROLES: readonly RoleSpec[] = [
     codex: { model: "gpt-5.6-sol", reasoningEffort: "medium", sandboxMode: "read-only" },
     opencode: {
       description: "Performs an independent, read-only review of an approved implementation diff.",
-      model: "opencode-go/gpt-5.6-luna",
+      model: "openai/gpt-5.6-luna",
       reasoningEffort: "high",
       permission: [
         // OpenCode permissions are not equivalent to the Codex read-only
@@ -125,6 +125,7 @@ const ROLES: readonly RoleSpec[] = [
         '    "*": deny',
         "  workflow_state_*: deny",
         "  workflow_state_workflow_get: allow",
+        "  workflow_state_workflow_begin_review: allow",
         "  workflow_state_workflow_submit_review: allow",
       ],
       terminalTool: "workflow_submit_review",
@@ -139,8 +140,8 @@ const ROLES: readonly RoleSpec[] = [
     opencode: {
       description:
         "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-      model: "opencode-go/gpt-5.6-luna",
-      reasoningEffort: "low",
+      model: "openai/gpt-5.6-luna",
+      reasoningEffort: "high",
       permission: [
         // edit denial is stricter than the Codex workspace-write sandbox: the
         // committer must never modify source files. bash fails closed with an
@@ -292,7 +293,7 @@ export function generateDefinitions(): GeneratedDefinitions {
   const definitions: GeneratedDefinitions = {};
   for (const spec of ROLES) {
     const contractPath = resolve(CONTRACTS_DIR, `${spec.name}.md`);
-    const body = readFileSync(contractPath, "utf8");
+    const body = readFileSync(contractPath, "utf8").trimEnd();
     definitions[resolve(CODEX_AGENTS_DIR, `${spec.name}.toml`)] = codexToml(spec, body);
     definitions[resolve(OPENCODE_AGENTS_DIR, `${spec.name}.md`)] = opencodeMarkdown(spec, body);
   }

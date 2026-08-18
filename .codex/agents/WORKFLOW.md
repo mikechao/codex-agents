@@ -47,8 +47,8 @@ Host permission syntax differs and must not be treated as equivalent:
 For non-trivial work, the project-scoped `workflow_state` MCP server is authoritative. The parent
 creates one workflow before dispatch and passes each role only its one-time capability together with
 the `workflow_id`, the current `expected_version`, and the instruction to call `workflow_get` for its
-own view. The returned role view is authoritative and complete: it carries that role's objective,
-contracts, receipts, evidence, findings, repair state, and sorted `permitted_next_actions`, so
+  own view. The returned role view is authoritative and complete: it carries that role's objective,
+  contracts, semantic evidence, findings, repair state, and sorted `permitted_next_actions`, so
 prompts never duplicate objective, criteria, evidence, finding, receipt, or repair state. Mutations
 pass the common `workflow_id`, `capability`, and `expected_version` fields, and the returned view
 supplies the next `expected_version`.
@@ -103,28 +103,31 @@ under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED
 
 ### Role views and dispatch
 
-- Parent view: the full persisted workflow (minus capabilities, hashes, audits, and legacy-only
-  fields). The parent owns user and commit authorization, repair and resume authorization, retry, and
-  linked follow-up creation.
-- Implementer view: objective, acceptance criteria, validation requirements, initial receipt, dirty
+- Parent view: the full persisted workflow (minus capabilities, hashes, audits, legacy-only fields,
+  and all receipt structures/digests). The parent owns user and commit authorization, repair and
+  resume authorization, retry, and linked follow-up creation.
+- Implementer view: objective, acceptance criteria, validation requirements, dirty
   baseline, remediation context, linked findings, final implementation fields, result arrays, finding
   resolution map, blocking findings, and permitted actions. A `change` workflow starts `IMPLEMENTING`
   and the implementer submits with `workflow_submit_implementation`.
 - Reviewer view: criteria, validations, dirty baseline, implementation evidence and results, concern
-  acceptance, finding buckets and classifications, resolution map, review receipt, and permitted
-  actions. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
+  acceptance, finding buckets and classifications, resolution map, and permitted actions. Working-
+  tree reviewers call `workflow_begin_review` before inspection; the internal start snapshot is
+  never exposed. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
   skipping the implementer; the reviewer view omits the nonexistent implementer handoff.
 - Committer view: criteria, validations, derived paths, implementation results and failures, concern
-  acceptance, finding buckets, review receipt, commit authorization and preparation, and permitted
-  actions. The committer prepares and then submits the commit result.
+  acceptance, finding buckets, sanitized commit preparation, commit authorization, and permitted
+  actions. Receipt JSON and digests remain internal; the committer prepares and then submits the
+  commit result.
 
 ### Commit flow
 
-A commit is authorized only for an approved working-tree workflow with a fresh review receipt and an
-explicit parent/user `commit_authorization`; a `commit_range` review never authorizes a commit. After
-the parent authorizes, the committer stages complete approved paths, calls `workflow_prepare_commit`
-to verify the fully staged index against the authorized receipt, runs the external `git commit`, and
-then calls `workflow_submit_commit_result` whether the commit succeeded or failed. A verified commit
+A commit is authorized only for an approved working-tree workflow with a fresh internal review
+receipt and an explicit parent/user `commit_authorization`; a `commit_range` review never authorizes
+a commit. After the parent authorizes, the committer stages complete approved paths, calls
+`workflow_prepare_commit` to verify the fully staged index against the internal authorized receipt,
+runs the external `git commit`, and then calls `workflow_submit_commit_result` whether the commit
+succeeded or failed. A verified commit
 enters `COMMITTED`; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED` stop
 (cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
 `STOPPED_COMMIT_MISMATCH`. The server never changes Git state; the committer owns staging and the
@@ -176,8 +179,9 @@ safety limit, not permission to pursue every possible improvement.
 Use this mode only when the user explicitly authorizes it for a stopped, non-trivial workflow. The
 parent retains the same handoff fields and role ownership below, tracks the version and audit state
 manually, and records the decision. The parent passes the full handoff state in the prompt because no
-authoritative view exists. The implementer receipt is evidence only; a reviewer must produce the
-commit-gating receipt after independently inspecting the declared target.
+authoritative view exists. Receipt JSON and comparison data stay inside Workflow MCP; managed
+workers submit semantic fields only. The degraded handoff below retains explicit receipt commands
+because no server-side snapshot exists in that mode.
 
 ### Parent -> implementer
 
@@ -218,10 +222,9 @@ owned_files: [<materially changed exact paths>]
 acceptance_criteria: <satisfied and outstanding criteria>
 validation_required: [<commands or checks>]
 validation_completed: [<commands and outcomes>]
-changed_paths: [<exact receipt paths whose state is added, modified, or deleted>]
+changed_paths: [<exact paths derived by Workflow MCP from the authoritative receipt>]
 acceptance_evidence: [<bounded evidence>]
 validation_evidence: [<bounded evidence>]
-implementation_receipt: <complete metadata-only receipt>
 known_failures: [<bounded known failures>]
 finding_resolution_map: {<prior finding ID>: resolved | still_present | superseded}
 remediation_policy: <blocking_only | explicitly_authorized>
@@ -269,7 +272,6 @@ optional_findings: [<finding_id, severity, blocking, file_and_line, failure_scen
   violated_requirement, remediation, missing_or_inadequate_test>]
 workflow_recommendation: REPAIR_BLOCKERS | STOPPED_APPROVED | STOPPED_INCONCLUSIVE
 validation_completed: [<read-only commands and outcomes>]
-review_receipt: <complete metadata-only receipt for APPROVED working_tree; otherwise none>
 residual_risks: <none or concise list>
 review_passed: <true only for APPROVED>
 ```
@@ -286,18 +288,17 @@ uses `STOPPED_APPROVED`, even when optional findings exist; `INCONCLUSIVE` uses
 objective: <commit objective>
 owned_files: [<exact approved paths>]
 intended_changed_paths:
-  [<approved paths whose reviewer receipt state is added, modified, or deleted>]
+  [<approved paths recorded by Workflow MCP as added, modified, or deleted>]
 validation_completed: [<commands and outcomes>]
 review_status: APPROVED
 review_target: <working_tree target with all include flags true>
-review_receipt: <complete reviewer receipt matching owned_files>
 approved_for_commit: true
 ```
 
 The committer treats `owned_files` as an allowlist. For receipt-gated changes it stages complete
 paths only, never partial hunks, confirms no approved-path unstaged or untracked content remains,
-and confirms the staged path set exactly equals `intended_changed_paths`. It compares a fresh
-receipt to `review_receipt` immediately before staging and again after staging. Any mismatch stops
+and confirms the staged path set exactly equals `intended_changed_paths`. Workflow MCP performs the
+fresh internal receipt checks immediately before staging and again after staging. Any mismatch stops
 the commit and requests re-review. `approved_for_commit` is a separate parent/user authorization.
 
 ### Committer -> parent
@@ -338,9 +339,10 @@ improvement without first obtaining user approval. The change was technically us
 decision exceeded the intended stopping boundary. The rule above records the correction: blocking
 findings enter the bounded repair loop; non-blocking findings are reported and await user direction.
 
-## Receipt commands
+## Prompt-only degraded-mode receipt commands
 
-Run from the repository root with an explicit exact-path allowlist:
+These commands are for explicitly authorized prompt-only degraded mode only. Managed-mode workers do
+not generate, compare, or submit receipt JSON. Run from the repository root with an exact-path allowlist:
 
 ```sh
 bun .codex/agents/change-receipt.ts -- path/a path/b

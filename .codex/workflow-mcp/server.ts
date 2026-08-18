@@ -15,7 +15,7 @@ import { openStore } from "./store.js";
 type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
-  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. The parent owns user and commit authorization; reviewers do not authorize commits; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common: {
   type: "object";
@@ -254,7 +254,6 @@ export const tools: Tool[] = [
             additionalProperties: false,
           },
         },
-        implementation_receipt: { type: "object" },
         known_failures: {
           type: "array",
           items: { type: "string", minLength: 1, maxLength: 2000 },
@@ -269,7 +268,6 @@ export const tools: Tool[] = [
         "agent_touched_paths",
         "acceptance_results",
         "validation_results",
-        "implementation_receipt",
         "known_failures",
         "finding_resolution_map",
       ],
@@ -320,16 +318,28 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_begin_review",
+    description:
+      "Capture the authoritative working-tree review start snapshot; the snapshot remains internal and binds the subsequent review submission.",
+    inputSchema: schema(common.properties, common.required),
+    annotations: {
+      title: "Begin review",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_submit_review",
     description:
-      "Submit reviewer findings; approved working-tree reviews must include a current receipt.",
+      "Submit semantic reviewer findings; approved working-tree reviews are compared with the internal review-start snapshot.",
     inputSchema: schema(
       {
         ...common.properties,
         review_status: { type: "string", enum: ["APPROVED", "CHANGES_REQUESTED", "INCONCLUSIVE"] },
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
-        review_receipt: { type: ["object", "null"] },
         review_target: createReviewTargetSchema,
         prior_finding_classifications: resolutionMapSchema,
       },
@@ -338,7 +348,6 @@ export const tools: Tool[] = [
         "review_status",
         "blocking_findings",
         "optional_findings",
-        "review_receipt",
         "review_target",
         "prior_finding_classifications",
       ],
@@ -463,7 +472,7 @@ export const tools: Tool[] = [
   {
     name: "workflow_prepare_commit",
     description:
-      "Verify the fully staged index against the authorized review receipt and prepare a commit binding the exact HEAD, tree, paths, and receipt.",
+      "Verify the fully staged index against the internal authorized review receipt and prepare a commit binding the exact HEAD, tree, and paths.",
     inputSchema: schema(common.properties, common.required),
     annotations: {
       title: "Prepare commit",
@@ -573,6 +582,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
           break;
         case "workflow_accept_concerns":
           result = store.acceptConcerns(args);
+          break;
+        case "workflow_begin_review":
+          result = store.beginReview(args);
           break;
         case "workflow_submit_review":
           result = store.submitReview(args);

@@ -10,14 +10,15 @@ Rules:
   only your `workflow_id`, your implementer `capability`, the current `expected_version`, and the
   instruction to read your authoritative view. Call `workflow_get` with role `implementer`; the
   returned view is the single source of truth and carries the objective, acceptance criteria,
-  validation requirements, initial receipt, dirty baseline, remediation context, linked findings,
+  validation requirements, dirty baseline, remediation context, linked findings,
   and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
   server is unavailable, stop with `NEEDS_CONTEXT` and ask whether prompt-only degraded mode is
   authorized.
 - Submit the complete implementation schema with `workflow_submit_implementation`: `status`,
-  `summary`, exact `agent_touched_paths`, acceptance and validation evidence arrays, a current
-  complete `implementation_receipt`, `known_failures`, and a complete `finding_resolution_map`.
+  `summary`, exact `agent_touched_paths`, acceptance and validation evidence arrays,
+  `known_failures`, and a complete `finding_resolution_map`. Workflow MCP generates and persists
+  the authoritative implementation receipt from the approved scope; never submit receipt JSON.
   Pass your current `expected_version` on every mutation. `DONE` is the only status that advances
   to review; concerns, missing context, or blocked work must remain stopped with their explicit
   status.
@@ -41,9 +42,8 @@ Rules:
 - Before reporting, inspect the final diff against the approved objective, owned files, acceptance criteria, and repository instructions. Passing tests does not replace this review.
 - This self-review does not replace an independent `code_reviewer` review when repository policy
   requires one. Do not invoke or delegate to `code_reviewer`; the parent agent owns that review loop.
-- After final validation, the server recomputes the receipt used for commit gating; your submitted
-  `implementation_receipt` is implementation evidence only, never commit-gating. In prompt-only
-  degraded mode, produce a metadata-only receipt for every owned file with
+- After final validation, the server recomputes and persists the implementation receipt and derives
+  changed paths from it. In prompt-only degraded mode, produce a metadata-only receipt for every owned file with
   `bun .codex/agents/change-receipt.ts -- <owned paths>` and follow the degraded-mode handoff
   fields in WORKFLOW.md.
 - For a remediation task, the view carries the prior reviewer findings and you must return a

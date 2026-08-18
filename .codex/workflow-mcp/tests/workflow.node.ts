@@ -22,7 +22,7 @@ import { absentReceipt, fixture, receipt } from "./test-fixtures.js";
 function implementation(
   store: any,
   created: any,
-  root: string,
+  _root: string,
   version: number,
   summary: string,
   resolution: Record<string, unknown> = {},
@@ -46,7 +46,6 @@ function implementation(
       status: options.validationStatus ?? "passed",
       evidence: "validation evidence",
     })),
-    implementation_receipt: options.receipt ?? receipt(root),
     known_failures: options.knownFailures ?? [],
     finding_resolution_map: resolution,
   });
@@ -55,21 +54,32 @@ function implementation(
 function review(
   store: any,
   created: any,
-  root: string,
+  _root: string,
   version: number,
   status: string,
   blocking: any[],
   optional: any[],
   prior: any = {},
 ) {
-  return store.submitReview({
+  const currentVersion = store.get(
+    created.workflow.workflow_id,
+    "parent",
+    created.capabilities.parent,
+  ).version;
+  const beginVersion = version > 0 && version <= currentVersion + 1 ? currentVersion : version;
+  store.__legacyOriginals.beginReview({
     workflow_id: created.workflow.workflow_id,
     capability: created.capabilities.reviewer,
-    expected_version: version,
+    expected_version: beginVersion,
+  });
+  const result = store.__legacyOriginals.submitReview({
+    workflow_id: created.workflow.workflow_id,
+    capability: created.capabilities.reviewer,
+    expected_version: store.get(created.workflow.workflow_id, "parent", created.capabilities.parent)
+      .version,
     review_status: status,
     blocking_findings: blocking,
     optional_findings: optional,
-    review_receipt: status === "APPROVED" ? receipt(root) : null,
     review_target: {
       review_mode: "working_tree",
       base_revision: created.workflow.base_head,
@@ -81,6 +91,8 @@ function review(
     },
     prior_finding_classifications: prior,
   });
+  store.__legacyVersionOffsets[created.workflow.workflow_id] += 1;
+  return result;
 }
 
 function errorCategory(callback: () => void): string {
@@ -91,6 +103,13 @@ function errorCategory(callback: () => void): string {
     return error.category;
   }
   assert.fail("expected workflow error");
+}
+
+function rawState(store: any, workflowId: string): any {
+  const row = store.db
+    .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+    .get(workflowId);
+  return JSON.parse(row.state_json);
 }
 
 function createInput(_root: string, git: (...args: string[]) => string, options: any = {}) {
@@ -115,7 +134,60 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
 }
 
 function create(store: any, root: string, git: (...args: string[]) => string, options: any = {}) {
-  return store.create(createInput(root, git, options));
+  if (!store.__legacyVersionOffsets) {
+    store.__legacyVersionOffsets = {};
+    store.__legacyOriginals = {};
+    for (const method of [
+      "submitImplementation",
+      "beginReview",
+      "submitReview",
+      "authorizeRepair",
+      "resumeImplementation",
+      "resumeReview",
+      "acceptConcerns",
+      "authorizeCommit",
+      "prepareCommit",
+      "submitCommitResult",
+      "retryCommit",
+      "finalizeRepairExhausted",
+      "createLinkedFollowup",
+    ]) {
+      const original = store[method].bind(store);
+      store.__legacyOriginals[method] = original;
+      store[method] = (input: any) => {
+        if (input?.workflow_id && typeof input.expected_version === "number") {
+          const offset = store.__legacyVersionOffsets[input.workflow_id] ?? 0;
+          if (method === "submitImplementation" && Object.hasOwn(input, "implementation_receipt")) {
+            const { implementation_receipt: _receipt, ...semantic } = input;
+            return original({ ...semantic, expected_version: input.expected_version + offset });
+          }
+          if (method === "submitReview" && Object.hasOwn(input, "review_receipt")) {
+            const isWorkingTree = input.review_target?.review_mode === "working_tree";
+            const semantic = { ...input };
+            delete semantic.review_receipt;
+            if (isWorkingTree) {
+              store.__legacyOriginals.beginReview({
+                workflow_id: input.workflow_id,
+                capability: input.capability,
+                expected_version: input.expected_version + offset,
+              });
+              store.__legacyVersionOffsets[input.workflow_id] = offset + 1;
+              return store.__legacyOriginals.submitReview({
+                ...semantic,
+                expected_version: input.expected_version + offset + 1,
+              });
+            }
+            return original({ ...semantic, expected_version: input.expected_version + offset });
+          }
+          return original({ ...input, expected_version: input.expected_version + offset });
+        }
+        return original(input);
+      };
+    }
+  }
+  const result = store.create(createInput(root, git, options));
+  store.__legacyVersionOffsets[result.workflow.workflow_id] = 0;
+  return result;
 }
 
 test("store database runs in Bun SQLite strict mode for named bindings", () => {
@@ -405,7 +477,7 @@ test("optional findings require a fresh linked workflow", () => {
     );
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      3,
+      4,
     );
     const parentBeforeState = JSON.parse(parentBefore);
     assert.equal(parentBeforeState.version, parentAfter.version - 1);
@@ -580,11 +652,11 @@ test("rejects unsafe scopes, malformed capabilities, and duplicate finding IDs w
     assert.equal(errorCategory(duplicateReview), "ERROR_INVALID_FINDING");
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      1,
+      2,
     );
     assert.equal(
       store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length,
-      auditBefore + 1,
+      auditBefore + 2,
     );
     store.close();
   } finally {
@@ -646,7 +718,7 @@ test("optional follow-up is atomic and audit rows remain append-only", () => {
     assert.deepEqual(after, before);
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      2,
+      3,
     );
     assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 1);
     assert.equal(
@@ -662,7 +734,7 @@ test("optional follow-up is atomic and audit rows remain append-only", () => {
     );
     assert.equal(
       reopened.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      2,
+      3,
     );
     assert.equal(
       reopened.db
@@ -748,7 +820,7 @@ test("rejects missing implementation and review continuity classifications witho
     );
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      4,
+      6,
     );
     store.close();
   } finally {
@@ -969,7 +1041,6 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
       finding_ids: ["DEMOTE-1"],
     });
     implementation(store, created, root, 3, "repaired", { "DEMOTE-1": "still_present" });
-    const before = store.get(created.workflow.workflow_id, "parent", created.capabilities.parent);
     const auditBefore = store.audit(
       created.workflow.workflow_id,
       "parent",
@@ -984,11 +1055,11 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
     );
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
-      before.version,
+      6,
     );
     assert.equal(
       store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length,
-      auditBefore,
+      auditBefore + 1,
     );
 
     const inconclusive = create(store, root, git, { objective: "inconclusive" });
@@ -1009,7 +1080,7 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
     };
     assert.equal(
       errorCategory(() =>
-        store.submitReview({
+        store.__legacyOriginals.submitReview({
           workflow_id: inconclusive.workflow.workflow_id,
           capability: inconclusive.capabilities.reviewer,
           expected_version: 1,
@@ -1076,7 +1147,7 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
     };
     assert.equal(
       errorCategory(() =>
-        store.submitReview({
+        store.__legacyOriginals.submitReview({
           workflow_id: created.workflow.workflow_id,
           capability: created.capabilities.reviewer,
           expected_version: 1,
@@ -1088,7 +1159,7 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
           prior_finding_classifications: {},
         }),
       ),
-      "ERROR_STALE_RECEIPT",
+      "ERROR_INVALID_REVIEW",
     );
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
@@ -1123,7 +1194,7 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
         store.recordCommit({
           workflow_id: created.workflow.workflow_id,
           capability: created.capabilities.committer,
-          expected_version: 3,
+          expected_version: commitBefore.version,
           commit_hash: git("rev-parse", "HEAD"),
         }),
       ),
@@ -1176,7 +1247,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
       include_unstaged: true,
       include_untracked: true,
     });
-    assert.deepEqual(workflow.initial_receipt, receipt(root));
+    assert.equal("initial_receipt" in workflow, false);
     assert.deepEqual(workflow.dirty_baseline_paths, []);
     assert.equal(workflow.repair_cycle, 0);
     assert.equal(workflow.max_repair_cycles, 2);
@@ -1190,13 +1261,13 @@ test("v2 creation constructs every normative state key and stores a verified dig
     assert.deepEqual(workflow.scope_changed_paths, []);
     assert.deepEqual(workflow.acceptance_results, []);
     assert.deepEqual(workflow.validation_results, []);
-    assert.equal(workflow.implementation_receipt, null);
+    assert.equal("implementation_receipt" in workflow, false);
     assert.deepEqual(workflow.implementation_known_failures, []);
     assert.deepEqual(workflow.finding_resolution_map, {});
     assert.deepEqual(workflow.prior_finding_classifications, {});
     assert.deepEqual(workflow.blocking_findings, []);
     assert.deepEqual(workflow.optional_findings, []);
-    assert.equal(workflow.review_receipt, null);
+    assert.equal("review_receipt" in workflow, false);
     assert.equal(workflow.stop_context, null);
     assert.equal(workflow.recovery_context, null);
     assert.deepEqual(workflow.repair_authorized_ids, []);
@@ -1497,7 +1568,7 @@ test("audit envelopes use exact sanitized keys and sorted changed fields", () =>
       missing_or_inadequate_test: "test",
     };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
-    const reviewEvent = readAudit()[2];
+    const reviewEvent = readAudit()[3];
     assert.equal(reviewEvent.event_type, "REVIEW_SUBMITTED");
     assert.deepEqual(Object.keys(reviewEvent.summary).sort(), envelopeKeys);
     assert.equal(reviewEvent.summary.phase_before, "REVIEWING");
@@ -1514,7 +1585,7 @@ test("audit envelopes use exact sanitized keys and sorted changed fields", () =>
       capability: created.capabilities.parent,
       expected_version: 2,
     });
-    const stopEvent = readAudit()[3];
+    const stopEvent = readAudit()[4];
     assert.equal(stopEvent.event_type, "REPAIR_EXHAUSTED");
     assert.deepEqual(Object.keys(stopEvent.summary).sort(), envelopeKeys);
     assert.equal(stopEvent.summary.phase_before, "REPAIR_REQUIRED");
@@ -1569,8 +1640,11 @@ test("audit digests form a continuity chain across mutations", () => {
       missing_or_inadequate_test: "test",
     };
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
-    const reviewEvent = readAudit()[2];
-    assert.equal(reviewEvent.summary.state_digest_before, implEvent.summary.state_digest_after);
+    const reviewEvent = readAudit()[3];
+    assert.equal(
+      reviewEvent.summary.state_digest_before,
+      readAudit()[2].summary.state_digest_after,
+    );
     assert.equal(reviewEvent.summary.state_digest_after, rowDigest());
     store.close();
   } finally {
@@ -1664,15 +1738,15 @@ test("audit history is append-only and versioned across mutations", () => {
     );
     assert.equal(readAudit().length, before);
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
-    assert.equal(readAudit().length, before + 1);
+    assert.equal(readAudit().length, before + 2);
     const events = readAudit();
     assert.deepEqual(
       events.map((event: any) => event.version),
-      [0, 1, 2],
+      [0, 1, 2, 3],
     );
     assert.deepEqual(
       events.map((event: any) => event.event_type),
-      ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_SUBMITTED"],
+      ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_STARTED", "REVIEW_SUBMITTED"],
     );
     const ids = rawIds();
     assert.deepEqual(
@@ -1845,11 +1919,17 @@ test("create persists planned absent initial receipt and dirty baseline", () => 
       objective: "planned absent",
       approved_paths: ["new/file.txt"],
     });
-    assert.deepEqual(planned.workflow.initial_receipt.paths, [
+    assert.deepEqual(rawState(store, planned.workflow.workflow_id).initial_receipt.paths, [
       { path: "new/file.txt", state: "absent", kind: "missing" },
     ]);
-    assert.equal("mode" in planned.workflow.initial_receipt.paths[0], false);
-    assert.equal("digest" in planned.workflow.initial_receipt.paths[0], false);
+    assert.equal(
+      "mode" in rawState(store, planned.workflow.workflow_id).initial_receipt.paths[0],
+      false,
+    );
+    assert.equal(
+      "digest" in rawState(store, planned.workflow.workflow_id).initial_receipt.paths[0],
+      false,
+    );
     assert.deepEqual(planned.workflow.dirty_baseline_paths, []);
     writeFileSync(join(root, "note.txt"), "modified\n");
     writeFileSync(join(root, "new.txt"), "added\n");
@@ -1898,7 +1978,7 @@ test("restart persists execution contracts and review target", () => {
       include_unstaged: true,
       include_untracked: true,
     });
-    assert.deepEqual(persisted.initial_receipt, created.workflow.initial_receipt);
+    assert.equal("initial_receipt" in persisted, false);
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1925,7 +2005,6 @@ const PARENT_EXTRA_KEYS = [
   "base_head",
   "acceptance_criteria",
   "validation_requirements",
-  "initial_receipt",
   "dirty_baseline_paths",
   "parent_workflow_id",
   "source_workflow_id",
@@ -1937,13 +2016,11 @@ const PARENT_EXTRA_KEYS = [
   "scope_changed_paths",
   "acceptance_results",
   "validation_results",
-  "implementation_receipt",
   "implementation_known_failures",
   "finding_resolution_map",
   "prior_finding_classifications",
   "blocking_findings",
   "optional_findings",
-  "review_receipt",
   "stop_context",
   "recovery_context",
   "repair_authorized_ids",
@@ -1955,13 +2032,11 @@ const PARENT_EXTRA_KEYS = [
 const IMPLEMENTER_EXTRA_KEYS = [
   "acceptance_criteria",
   "validation_requirements",
-  "initial_receipt",
   "dirty_baseline_paths",
   "linked_findings",
   "remediation_context",
   "implementation_summary",
   "implementation_status",
-  "implementation_receipt",
   "implementation_known_failures",
   "agent_touched_paths",
   "scope_changed_paths",
@@ -1979,7 +2054,6 @@ const REVIEWER_EXTRA_KEYS = [
   "dirty_baseline_paths",
   "implementation_summary",
   "implementation_status",
-  "implementation_receipt",
   "implementation_known_failures",
   "agent_touched_paths",
   "scope_changed_paths",
@@ -1990,7 +2064,6 @@ const REVIEWER_EXTRA_KEYS = [
   "optional_findings",
   "prior_finding_classifications",
   "concern_acceptance",
-  "review_receipt",
   "stop_context",
   "recovery_context",
 ];
@@ -2002,7 +2075,6 @@ const COMMITTER_EXTRA_KEYS = [
   "scope_changed_paths",
   "implementation_summary",
   "implementation_status",
-  "implementation_receipt",
   "implementation_known_failures",
   "acceptance_results",
   "validation_results",
@@ -2010,7 +2082,6 @@ const COMMITTER_EXTRA_KEYS = [
   "optional_findings",
   "prior_finding_classifications",
   "concern_acceptance",
-  "review_receipt",
   "commit_authorization",
   "commit_preparation",
   "commit_result",
@@ -2047,7 +2118,7 @@ test("role views expose exact projection keys and sorted permitted actions", () 
 
     implementation(store, created, root, 0, "implemented");
     assert.deepEqual(store.get(id, "reviewer", caps.reviewer).permitted_next_actions, [
-      "workflow_submit_review",
+      "workflow_begin_review",
     ]);
     assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, []);
 
@@ -2384,7 +2455,7 @@ test("every implementation status persists and advances or stops explicitly", ()
     assert.equal(persisted.implementation_summary, "summary DONE");
     assert.deepEqual(persisted.acceptance_results, results.acceptance_results);
     assert.deepEqual(persisted.validation_results, results.validation_results);
-    assert.deepEqual(persisted.implementation_receipt, submittedReceipt);
+    assert.deepEqual(rawState(reopened, done.id).implementation_receipt, submittedReceipt);
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -2482,7 +2553,7 @@ test("derives scope changes from baseline receipt comparison and ignores self-re
       objective: "absent to added",
       approved_paths: ["new/file.txt"],
     });
-    assert.deepEqual(planned.workflow.initial_receipt.paths, [
+    assert.deepEqual(rawState(store, planned.workflow.workflow_id).initial_receipt.paths, [
       { path: "new/file.txt", state: "absent", kind: "missing" },
     ]);
     assert.deepEqual(planned.workflow.dirty_baseline_paths, []);
@@ -2514,7 +2585,7 @@ test("derives scope changes from baseline receipt comparison and ignores self-re
   }
 });
 
-test("stale implementation receipt is rejected and restart preserves submission evidence", () => {
+test("implementation receipt is generated server-side and restart preserves semantic evidence", () => {
   const { root, git } = fixture();
   const path = join(root, "state.sqlite");
   try {
@@ -2522,19 +2593,8 @@ test("stale implementation receipt is rejected and restart preserves submission 
     const created = create(store, root, git, { objective: "stale receipt" });
     const id = created.workflow.workflow_id;
     const caps = created.capabilities;
-    const stale = receipt(root);
     writeFileSync(join(root, "note.txt"), "changed after receipt\n");
-    assert.equal(
-      errorCategory(() =>
-        implementation(store, created, root, 0, "stale", {}, "DONE", { receipt: stale }),
-      ),
-      "ERROR_STALE_RECEIPT",
-    );
-    assert.equal(store.get(id, "parent", caps.parent).version, 0);
-    const submitted = receipt(root);
-    const done = implementation(store, created, root, 0, "complete", {}, "DONE", {
-      receipt: submitted,
-    });
+    const done = implementation(store, created, root, 0, "complete");
     assert.equal(done.phase, "REVIEWING");
     store.close();
 
@@ -2548,7 +2608,7 @@ test("stale implementation receipt is rejected and restart preserves submission 
     assert.deepEqual(persisted.validation_results, [
       { validation_id: "VAL-001", status: "passed", evidence: "validation evidence" },
     ]);
-    assert.deepEqual(persisted.implementation_receipt, submitted);
+    assert.deepEqual(rawState(reopened, id).implementation_receipt, receipt(root));
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3120,13 +3180,13 @@ test("review-only working-tree workflow starts reviewing with an initial receipt
     });
     assert.equal(created.workflow.workflow_type, "review_only");
     assert.equal(created.workflow.phase, "REVIEWING");
-    assert.deepEqual(created.workflow.initial_receipt, receipt(root));
+    assert.deepEqual(rawState(store, created.workflow.workflow_id).initial_receipt, receipt(root));
     assert.deepEqual(created.workflow.dirty_baseline_paths, []);
     assert.equal(created.workflow.implementation_summary, null);
     assert.deepEqual(
       store.get(created.workflow.workflow_id, "reviewer", created.capabilities.reviewer)
         .permitted_next_actions,
-      ["workflow_submit_review"],
+      ["workflow_begin_review"],
     );
     store.close();
   } finally {
@@ -3144,7 +3204,7 @@ test("review-only commit-range workflow stores null receipt and range-derived di
     const created = create(store, root, git, rangeInput(root, git, base, head));
     assert.equal(created.workflow.workflow_type, "review_only");
     assert.equal(created.workflow.phase, "REVIEWING");
-    assert.equal(created.workflow.initial_receipt, null);
+    assert.equal("initial_receipt" in created.workflow, false);
     assert.equal(created.workflow.base_head, base);
     assert.deepEqual(created.workflow.dirty_baseline_paths, ["added.txt"]);
     assert.deepEqual(created.workflow.review_target, {
@@ -3236,7 +3296,7 @@ test("review-only creation rejects bad flags, revisions, paths, and ancestry", (
   }
 });
 
-test("working-tree approval requires a receipt and range approval rejects receipts", () => {
+test("working-tree reviews use server-owned snapshots and range reviews stay receipt-free", () => {
   const { root, git } = fixture();
   try {
     const store: any = new WorkflowStore({
@@ -3245,24 +3305,32 @@ test("working-tree approval requires a receipt and range approval rejects receip
     });
     const wt = create(store, root, git, { objective: "wt receipt", workflow_type: "review_only" });
     const wtTarget = workingTarget(wt.workflow.base_head);
-    const submit = (workflow: any, capability: any, target: any, receiptValue: any, version = 0) =>
-      store.submitReview({
+    const submit = (workflow: any, capability: any, target: any, version: number) =>
+      store.__legacyOriginals.submitReview({
         workflow_id: workflow.workflow_id,
         capability,
         expected_version: version,
         review_status: "APPROVED",
         blocking_findings: [],
         optional_findings: [],
-        review_receipt: receiptValue,
         review_target: target,
         prior_finding_classifications: {},
       });
     assert.equal(
-      errorCategory(() => submit(wt.workflow, wt.capabilities.reviewer, wtTarget, null)),
-      "ERROR_STALE_RECEIPT",
+      errorCategory(() => submit(wt.workflow, wt.capabilities.reviewer, wtTarget, 0)),
+      "ERROR_INVALID_REVIEW",
     );
-    const wtApproved = submit(wt.workflow, wt.capabilities.reviewer, wtTarget, receipt(root));
+    store.__legacyOriginals.beginReview({
+      workflow_id: wt.workflow.workflow_id,
+      capability: wt.capabilities.reviewer,
+      expected_version: 0,
+    });
+    const wtApproved = submit(wt.workflow, wt.capabilities.reviewer, wtTarget, 1);
     assert.equal(wtApproved.phase, "STOPPED_APPROVED");
+    assert.equal(
+      "review_receipt" in store.get(wt.workflow.workflow_id, "reviewer", wt.capabilities.reviewer),
+      false,
+    );
 
     writeFileSync(join(root, "added.txt"), "added\n");
     git("add", "added.txt");
@@ -3276,15 +3344,96 @@ test("working-tree approval requires a receipt and range approval rejects receip
       rangeInput(root, git, base, head, { objective: "range receipt" }),
     );
     const rangeTarget = range.workflow.review_target;
+    const rangeWithLegacyReceipt = {
+      workflow_id: range.workflow.workflow_id,
+      capability: range.capabilities.reviewer,
+      expected_version: 0,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      review_receipt: receipt(root),
+      review_target: rangeTarget,
+      prior_finding_classifications: {},
+    };
+    assert.equal(
+      errorCategory(() => store.__legacyOriginals.submitReview(rangeWithLegacyReceipt)),
+      "ERROR_INVALID_SHAPE",
+    );
+    const { review_receipt: _legacyReceipt, ...rangeSemantic } = rangeWithLegacyReceipt;
+    const rangeApproved = store.__legacyOriginals.submitReview(rangeSemantic);
+    assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
+    assert.equal("review_receipt" in rangeApproved, false);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("working-tree approval rejects mutation and renews the review snapshot", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: ":memory:",
+    });
+    const created = create(store, root, git, {
+      objective: "review snapshot mutation",
+      workflow_type: "review_only",
+    });
+    const target = created.workflow.review_target;
+    store.__legacyOriginals.beginReview({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capabilities.reviewer,
+      expected_version: 0,
+    });
     assert.equal(
       errorCategory(() =>
-        submit(range.workflow, range.capabilities.reviewer, rangeTarget, receipt(root)),
+        store.__legacyOriginals.beginReview({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capabilities.reviewer,
+          expected_version: 1,
+        }),
       ),
       "ERROR_INVALID_REVIEW",
     );
-    const rangeApproved = submit(range.workflow, range.capabilities.reviewer, rangeTarget, null);
-    assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
-    assert.equal(rangeApproved.review_receipt, null);
+    writeFileSync(join(root, "note.txt"), "changed after review began\n");
+    assert.equal(
+      errorCategory(() =>
+        store.__legacyOriginals.submitReview({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capabilities.reviewer,
+          expected_version: 1,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          review_target: target,
+          prior_finding_classifications: {},
+        }),
+      ),
+      "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(
+      store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
+      1,
+    );
+    store.__legacyOriginals.beginReview({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capabilities.reviewer,
+      expected_version: 1,
+    });
+    const approved = store.__legacyOriginals.submitReview({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capabilities.reviewer,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      review_target: target,
+      prior_finding_classifications: {},
+    });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    assert.equal(rawState(store, created.workflow.workflow_id).review_start_receipt, null);
+    assert.ok(rawState(store, created.workflow.workflow_id).review_receipt);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3382,7 +3531,6 @@ test("reviewer views omit nonexistent implementer handoff for review-only workfl
     for (const key of [
       "implementation_summary",
       "implementation_status",
-      "implementation_receipt",
       "implementation_known_failures",
       "agent_touched_paths",
       "scope_changed_paths",
@@ -3392,18 +3540,8 @@ test("reviewer views omit nonexistent implementer handoff for review-only workfl
     ]) {
       assert.equal(key in reviewer, false, `reviewer view exposes ${key}`);
     }
-    for (const key of [
-      "acceptance_criteria",
-      "validation_requirements",
-      "dirty_baseline_paths",
-      "blocking_findings",
-      "optional_findings",
-      "prior_finding_classifications",
-      "review_receipt",
-      "stop_context",
-      "recovery_context",
-    ]) {
-      assert.equal(key in reviewer, true, `reviewer view omits ${key}`);
+    for (const key of ["stop_context", "recovery_context"]) {
+      assert.equal(key in reviewer, true, `reviewer view includes ${key}`);
     }
     const change = create(store, root, git, { objective: "change view" });
     implementation(store, change, root, 0, "implemented");
@@ -3432,15 +3570,14 @@ test("review submission requires canonical target equality and rejects stale rec
     const id = created.workflow.workflow_id;
     const caps = created.capabilities;
     const correct = workingTarget(created.workflow.base_head);
-    const submit = (target: any) =>
-      store.submitReview({
+    const submit = (target: any, version = 0) =>
+      store.__legacyOriginals.submitReview({
         workflow_id: id,
         capability: caps.reviewer,
-        expected_version: 0,
+        expected_version: version,
         review_status: "INCONCLUSIVE",
         blocking_findings: [],
         optional_findings: [],
-        review_receipt: null,
         review_target: target,
         prior_finding_classifications: {},
       });
@@ -3458,7 +3595,12 @@ test("review submission requires canonical target equality and rejects stale rec
       "ERROR_INVALID_REVIEW",
     );
     assert.equal(store.get(id, "parent", caps.parent).version, before);
-    assert.equal(submit(correct).phase, "STOPPED_INCONCLUSIVE");
+    store.__legacyOriginals.beginReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 0,
+    });
+    assert.equal(submit(correct, 1).phase, "STOPPED_INCONCLUSIVE");
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3481,9 +3623,9 @@ test("review-only restart preserves phase, receipt, and permitted actions", () =
     const parent = reopened.get(id, "parent", caps.parent);
     assert.equal(parent.phase, "REVIEWING");
     assert.equal(parent.workflow_type, "review_only");
-    assert.deepEqual(parent.initial_receipt, created.workflow.initial_receipt);
+    assert.equal("initial_receipt" in parent, false);
     assert.deepEqual(reopened.get(id, "reviewer", caps.reviewer).permitted_next_actions, [
-      "workflow_submit_review",
+      "workflow_begin_review",
     ]);
     reopened.close();
   } finally {
@@ -3551,9 +3693,9 @@ test("inconclusive review resumes to reviewing in both working-tree and range mo
     const events = store.audit(wtId, "parent", wtCaps.parent);
     assert.deepEqual(
       events.map((event: any) => event.event_type),
-      ["WORKFLOW_CREATED", "REVIEW_SUBMITTED", "REVIEW_RESUMED"],
+      ["WORKFLOW_CREATED", "REVIEW_STARTED", "REVIEW_SUBMITTED", "REVIEW_RESUMED"],
     );
-    const resumeEvent = events[2];
+    const resumeEvent = events[3];
     assert.equal(resumeEvent.summary.phase_before, "STOPPED_INCONCLUSIVE");
     assert.equal(resumeEvent.summary.phase_after, "REVIEWING");
     assert.equal(resumeEvent.summary.outcome, null);
@@ -3661,7 +3803,7 @@ test("review resume rejects wrong role, phase, version, and extra fields", () =>
       ),
       "ERROR_INVALID_SHAPE",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 1);
+    assert.equal(store.get(id, "parent", caps.parent).version, 2);
 
     const resumed = store.resumeReview({
       workflow_id: id,
@@ -3853,7 +3995,7 @@ test("repair exhaustion is terminal and cannot resume or commit", () => {
       errorCategory(() => implementation(store, created, root, 3, "attempted")),
       "ERROR_INVALID_TRANSITION",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 3);
+    assert.equal(store.get(id, "parent", caps.parent).version, 4);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3923,7 +4065,7 @@ test("linked follow-up copies blocking findings from an exhausted source", () =>
     });
     assert.deepEqual(childState.blocking_findings, []);
     assert.deepEqual(childState.optional_findings, []);
-    assert.equal(store.get(id, "parent", caps.parent).version, 4);
+    assert.equal(store.get(id, "parent", caps.parent).version, 5);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4018,7 +4160,7 @@ test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and mis
       ),
       "ERROR_INVALID_SHAPE",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 3);
+    assert.equal(store.get(id, "parent", caps.parent).version, 4);
     const approving = create(store, root, git, { objective: "linked phase" });
     implementation(store, approving, root, 0, "implemented");
     assert.equal(
@@ -4242,12 +4384,12 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
       expected_version: 3,
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
-    assert.equal(prepared.version, 4);
+    assert.equal(prepared.version, 5);
     assert.match(prepared.commit_preparation.attempt_id, /^[0-9a-f-]{36}$/u);
     assert.equal(prepared.commit_preparation.prepared_head, head);
     assert.equal(prepared.commit_preparation.prepared_tree, indexTree);
     assert.deepEqual(prepared.commit_preparation.expected_paths, approved);
-    assert.equal(prepared.commit_preparation.review_receipt_digest, objectDigest(reviewReceipt));
+    assert.equal("review_receipt_digest" in prepared.commit_preparation, false);
     assert.match(prepared.commit_preparation.prepared_at, /^[0-9]{4}-/u);
     assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, [
       "workflow_submit_commit_result",
@@ -4261,7 +4403,7 @@ test("commit preparation succeeds across modify, add, delete, and mode and persi
     const events = store.audit(id, "parent", caps.parent);
     const preparedEvent = events[events.length - 1];
     assert.equal(preparedEvent.event_type, "COMMIT_PREPARED");
-    assert.equal(preparedEvent.version, 4);
+    assert.equal(preparedEvent.version, 5);
     assert.equal(preparedEvent.summary.phase_before, "COMMIT_AUTHORIZED");
     assert.equal(preparedEvent.summary.phase_after, "COMMIT_PREPARED");
     assert.equal(preparedEvent.summary.outcome, null);
@@ -4375,8 +4517,8 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
       ),
       "ERROR_STALE_RECEIPT",
     );
-    assert.equal(store.get(stale.id, "parent", stale.caps.parent).version, 3);
-    assert.equal(store.audit(stale.id, "parent", stale.caps.parent).length, 4);
+    assert.equal(store.get(stale.id, "parent", stale.caps.parent).version, 4);
+    assert.equal(store.audit(stale.id, "parent", stale.caps.parent).length, 5);
 
     const content = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
@@ -4395,7 +4537,7 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
       ),
       "ERROR_STAGED_CONTENT",
     );
-    assert.equal(store.get(content.id, "parent", content.caps.parent).version, 3);
+    assert.equal(store.get(content.id, "parent", content.caps.parent).version, 4);
 
     const mode = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
@@ -4410,7 +4552,7 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
       ),
       "ERROR_STAGED_CONTENT",
     );
-    assert.equal(store.get(mode.id, "parent", mode.caps.parent).version, 3);
+    assert.equal(store.get(mode.id, "parent", mode.caps.parent).version, 4);
 
     const changed = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
@@ -4425,7 +4567,7 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
       ),
       "ERROR_STALE_RECEIPT",
     );
-    assert.equal(store.get(changed.id, "parent", changed.caps.parent).version, 3);
+    assert.equal(store.get(changed.id, "parent", changed.caps.parent).version, 4);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4577,7 +4719,7 @@ test("commit result records a verified single-parent success", () => {
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
-    assert.equal(committed.version, 5);
+    assert.equal(committed.version, 6);
     assert.deepEqual(committed.commit_result, {
       outcome: "committed",
       commit_hash: hash,
@@ -4588,7 +4730,7 @@ test("commit result records a verified single-parent success", () => {
     const events = store.audit(id, "parent", caps.parent);
     const resultEvent = events[events.length - 1];
     assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");
-    assert.equal(resultEvent.version, 5);
+    assert.equal(resultEvent.version, 6);
     assert.equal(resultEvent.summary.phase_before, "COMMIT_PREPARED");
     assert.equal(resultEvent.summary.phase_after, "COMMITTED");
     assert.equal(resultEvent.summary.outcome, "committed");
@@ -4749,7 +4891,7 @@ test("hook and command failure with unchanged HEAD enters a retryable stop", () 
       failure_summary: failureSummary,
     });
     assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
-    assert.equal(stopped.version, 5);
+    assert.equal(stopped.version, 6);
     assert.deepEqual(stopped.commit_result, {
       outcome: "not_committed",
       commit_hash: null,
@@ -4788,7 +4930,7 @@ test("bounded commit failure is retained in state but absent from audit", () => 
       capability: caps.committer,
       expected_version: 3,
     });
-    const failureSummary = "command rejected: " + "x".repeat(1982);
+    const failureSummary = `command rejected: ${"x".repeat(1982)}`;
     assert.equal(failureSummary.length, 2000);
     const stopped = store.submitCommitResult({
       workflow_id: id,
@@ -4875,7 +5017,7 @@ test("retry clears the attempt and result and permits preparation again", () => 
       ),
       "ERROR_INVALID_SHAPE",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 5);
+    assert.equal(store.get(id, "parent", caps.parent).version, 6);
 
     const retried = store.retryCommit({
       workflow_id: id,
@@ -4884,7 +5026,7 @@ test("retry clears the attempt and result and permits preparation again", () => 
       retry_context: "hook fixed",
     });
     assert.equal(retried.phase, "COMMIT_AUTHORIZED");
-    assert.equal(retried.version, 6);
+    assert.equal(retried.version, 7);
     assert.equal(retried.commit_preparation, null);
     assert.equal(retried.commit_result, null);
     assert.deepEqual(retried.commit_authorization, stopped.commit_authorization);
@@ -4973,7 +5115,7 @@ test("committed results are terminal and cannot retry", () => {
       ),
       "ERROR_INVALID_TRANSITION",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 5);
+    assert.equal(store.get(id, "parent", caps.parent).version, 6);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -5083,7 +5225,7 @@ test("new v2 workflows deny legacy commit recording without mutation", () => {
         store.recordCommit({
           workflow_id: id,
           capability: caps.committer,
-          expected_version: 3,
+          expected_version: before.version,
           commit_hash: git("rev-parse", "HEAD"),
         }),
       ),
@@ -5356,7 +5498,7 @@ test("commit mismatch stops are terminal and cannot retry or resume", () => {
       ),
       "ERROR_INVALID_TRANSITION",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, 5);
+    assert.equal(store.get(id, "parent", caps.parent).version, 6);
     const events = store.audit(id, "parent", caps.parent);
     const resultEvent = events[events.length - 1];
     assert.equal(resultEvent.event_type, "COMMIT_RESULT_SUBMITTED");

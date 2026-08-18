@@ -8,6 +8,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_accept_concerns",
     "workflow_authorize_commit",
     "workflow_authorize_repair",
+    "workflow_begin_review",
     "workflow_create",
     "workflow_create_linked_followup",
     "workflow_finalize_repair_exhausted",
@@ -29,4 +30,18 @@ test("protocol tool contract exposes the workflow actions with stable annotation
       tool.name === "workflow_get" || tool.name === "workflow_get_audit",
     );
   }
+  const implementation = tools.find((tool) => tool.name === "workflow_submit_implementation");
+  const review = tools.find((tool) => tool.name === "workflow_submit_review");
+  const begin = tools.find((tool) => tool.name === "workflow_begin_review");
+  assert.ok(implementation && review && begin);
+  const implementationSchema = implementation.inputSchema as any;
+  const reviewSchema = review.inputSchema as any;
+  const beginSchema = begin.inputSchema as any;
+  assert.equal("implementation_receipt" in implementationSchema.properties, false);
+  assert.equal("review_receipt" in reviewSchema.properties, false);
+  assert.deepEqual(Object.keys(beginSchema.properties).sort(), [
+    "capability",
+    "expected_version",
+    "workflow_id",
+  ]);
 });
