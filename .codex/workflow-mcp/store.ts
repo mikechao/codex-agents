@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fail } from "./errors.js";
 import {
   createReceipt,
@@ -92,6 +92,11 @@ export interface WorkflowStoreOptions {
   /** Immutable runtime identity supplied by bootstrap for newly created workflows. */
   runtimeId?: string;
   runtimeRevision?: string;
+  /** Ephemeral supervisor launch attestation for the current immutable child. */
+  runtimeAttestation?: string;
+  runtimeAttestationNonce?: string;
+  /** Test-only key override for stores instantiated directly from source. */
+  runtimeAttestationKey?: string;
 }
 
 export interface RuntimeAffinity {
@@ -107,6 +112,59 @@ function runtimeAffinityPair(
     fail("ERROR_RUNTIME_RECOVERY", "workflow runtime affinity is incomplete");
   }
   return { runtime_id: runtimeId, runtime_revision: runtimeRevision };
+}
+
+export function createRuntimeAttestation(
+  runtimeId: string,
+  runtimeRevision: string,
+  nonce: string,
+  key: string | Buffer,
+): string {
+  return createHmac("sha256", key)
+    .update(`${runtimeId}\u0000${runtimeRevision}\u0000${nonce}`, "utf8")
+    .digest("hex");
+}
+
+function immutableRuntimeKey(
+  repositoryRoot: string,
+  runtimeId: string,
+  runtimeRevision: string,
+  keyPathOverride?: string,
+): Buffer | null {
+  const repository = realpathSync(repositoryRoot);
+  try {
+    const sourceDirectory = realpathSync(import.meta.dir);
+    const keyPath = realpathSync(
+      keyPathOverride ?? join(sourceDirectory, "..", ".runtime-attestation-key"),
+    );
+    const artifactRoot = realpathSync(join(keyPath, ".."));
+    if (artifactRoot === repository || artifactRoot.startsWith(`${repository}${sep}`)) return null;
+    const markerPath = join(artifactRoot, ".runtime-complete");
+    const manifestPath = join(artifactRoot, ".runtime-manifest.json");
+    const marker = lstatSync(markerPath);
+    const manifest = lstatSync(manifestPath);
+    const key = lstatSync(keyPath);
+    if (
+      marker.isSymbolicLink() ||
+      !marker.isFile() ||
+      manifest.isSymbolicLink() ||
+      !manifest.isFile() ||
+      key.isSymbolicLink() ||
+      !key.isFile()
+    )
+      return null;
+    if (
+      keyPath !== join(artifactRoot, ".runtime-attestation-key") ||
+      readFileSync(markerPath, "utf8").trim() !== runtimeId
+    )
+      return null;
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { revision?: unknown };
+    if (parsed.revision !== runtimeRevision) return null;
+    const contents = readFileSync(keyPath);
+    return contents.byteLength === 32 ? contents : null;
+  } catch {
+    return null;
+  }
 }
 
 function mutationInput(value: unknown): Record<string, unknown> {
@@ -182,6 +240,9 @@ export class WorkflowStore {
   readonly faultAfterMigrationUpdate: boolean;
   readonly runtimeId: string | null;
   readonly runtimeRevision: GitCommitSha | null;
+  readonly runtimeAttestation: string | null;
+  readonly runtimeAttestationNonce: string | null;
+  private readonly runtimeAttestationKey: Buffer | null;
   private db: Database;
   private closed = false;
 
@@ -194,14 +255,32 @@ export class WorkflowStore {
     const runtimeId = options.runtimeId ?? process.env.WORKFLOW_MCP_RUNTIME_ID ?? null;
     const runtimeRevision =
       options.runtimeRevision ?? process.env.WORKFLOW_MCP_RUNTIME_REVISION ?? null;
+    const runtimeAttestation =
+      options.runtimeAttestation ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION ?? null;
+    const runtimeAttestationNonce =
+      options.runtimeAttestationNonce ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE ?? null;
+    const runtimeAttestationKeyPath =
+      process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH ?? undefined;
     if (runtimeId !== null && !/^[0-9a-f]{64}$/u.test(runtimeId))
       fail("ERROR_RUNTIME_ISOLATION", "runtime identity is invalid");
     if (runtimeRevision !== null && !/^[0-9a-f]{40}$/u.test(runtimeRevision))
       fail("ERROR_RUNTIME_ISOLATION", "runtime revision is invalid");
+    if (runtimeAttestation !== null && !/^[0-9a-f]{64}$/u.test(runtimeAttestation))
+      fail("ERROR_RUNTIME_ISOLATION", "runtime launch attestation is invalid");
+    if (runtimeAttestationNonce !== null && !/^[0-9a-f]{64}$/u.test(runtimeAttestationNonce))
+      fail("ERROR_RUNTIME_ISOLATION", "runtime launch attestation nonce is invalid");
     if ((runtimeId === null) !== (runtimeRevision === null))
       fail("ERROR_RUNTIME_ISOLATION", "runtime identity is incomplete");
     this.runtimeId = runtimeId;
     this.runtimeRevision = runtimeRevision as GitCommitSha | null;
+    this.runtimeAttestation = runtimeAttestation;
+    this.runtimeAttestationNonce = runtimeAttestationNonce;
+    this.runtimeAttestationKey =
+      options.runtimeAttestationKey !== undefined
+        ? Buffer.from(options.runtimeAttestationKey, "utf8")
+        : runtimeId !== null && runtimeRevision !== null
+          ? immutableRuntimeKey(this.root, runtimeId, runtimeRevision, runtimeAttestationKeyPath)
+          : null;
     if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
     // counts are not checked in this version); every query here binds positionally.
@@ -294,6 +373,24 @@ export class WorkflowStore {
     ) {
       fail("ERROR_RUNTIME_ISOLATION", "workflow is owned by a different runtime");
     }
+    if (
+      this.runtimeAttestation === null ||
+      this.runtimeAttestationNonce === null ||
+      this.runtimeAttestationKey === null
+    )
+      fail("ERROR_RUNTIME_ISOLATION", "supervisor launch attestation is unavailable");
+    const expected = Buffer.from(
+      createRuntimeAttestation(
+        this.runtimeId,
+        this.runtimeRevision,
+        this.runtimeAttestationNonce,
+        this.runtimeAttestationKey,
+      ),
+      "hex",
+    );
+    const actual = Buffer.from(this.runtimeAttestation, "hex");
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
+      fail("ERROR_RUNTIME_ISOLATION", "supervisor launch attestation is invalid");
   }
 
   #row(workflowId: WorkflowId): WorkflowRow {

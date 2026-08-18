@@ -20,11 +20,21 @@ import { WorkflowError } from "../errors.js";
 import { currentHead } from "../git.js";
 import { materializeRuntimeArtifact } from "../runtime-artifact.js";
 import { RuntimeSupervisor, resolveOwningRuntime } from "../runtime-supervisor.js";
-import { WorkflowStore } from "../store.js";
+import { createRuntimeAttestation, WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
 
 describe("Workflow MCP runtime supervision", () => {
+  const testAttestation = (runtimeId: string, runtimeRevision: string) => {
+    const nonce = "1".repeat(64);
+    const key = "2".repeat(64);
+    return {
+      runtimeAttestation: createRuntimeAttestation(runtimeId, runtimeRevision, nonce, key),
+      runtimeAttestationNonce: nonce,
+      runtimeAttestationKey: key,
+    };
+  };
+
   test("persists immutable runtime affinity and keeps it across reopen", () => {
     const { root } = fixture();
     const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-state-"));
@@ -185,6 +195,7 @@ describe("Workflow MCP runtime supervision", () => {
     let supervisor: Client | undefined;
     let missing: Client | undefined;
     let mismatched: Client | undefined;
+    let spoofed: Client | undefined;
     const supervisorScript = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeSupervisor)}; new RuntimeSupervisor(${JSON.stringify({ repositoryRoot: target.root, providerRoot: target.root, databasePath, cacheRoot, installDependencies: false })}).run();`;
     try {
       writeProvider();
@@ -224,6 +235,10 @@ describe("Workflow MCP runtime supervision", () => {
       const workflowId = createdCall.body.workflow.workflow_id as string;
       const capabilities = createdCall.body.capabilities as Record<string, string>;
       assert.equal(artifact.runtime_id.length, 64);
+      const owningIdentity = {
+        WORKFLOW_MCP_RUNTIME_ID: artifact.runtime_id,
+        WORKFLOW_MCP_RUNTIME_REVISION: artifact.revision,
+      };
 
       const directBaseEnv: Record<string, string | undefined> = {
         ...process.env,
@@ -231,6 +246,9 @@ describe("Workflow MCP runtime supervision", () => {
       };
       delete directBaseEnv.WORKFLOW_MCP_RUNTIME_ID;
       delete directBaseEnv.WORKFLOW_MCP_RUNTIME_REVISION;
+      delete directBaseEnv.WORKFLOW_MCP_RUNTIME_ATTESTATION;
+      delete directBaseEnv.WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE;
+      delete directBaseEnv.WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH;
       missing = await connect(process.execPath, ["--no-warnings", runtimeServer], directBaseEnv);
       for (const [name, args] of [
         [
@@ -270,6 +288,52 @@ describe("Workflow MCP runtime supervision", () => {
       }
       await mismatched.close();
       mismatched = undefined;
+
+      const beforeSpoofedGet = await readTool(supervisor, "workflow_get", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      const beforeSpoofedAudit = await readTool(supervisor, "workflow_get_audit", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      spoofed = await connect(process.execPath, ["--no-warnings", runtimeServer], {
+        ...directBaseEnv,
+        ...owningIdentity,
+        WORKFLOW_MCP_RUNTIME_ATTESTATION: "f".repeat(64),
+        WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE: "e".repeat(64),
+      });
+      for (const [name, args] of [
+        [
+          "workflow_get",
+          { workflow_id: workflowId, role: "parent", capability: capabilities.parent },
+        ],
+        [
+          "workflow_submit_implementation",
+          implementationArgs(workflowId, capabilities.implementer),
+        ],
+      ] as Array<[string, Record<string, unknown>]>) {
+        const rejected = await readTool(spoofed, name, args);
+        assert.equal(rejected.result.isError, true);
+        assert.equal(rejected.body.category, "ERROR_RUNTIME_ISOLATION");
+      }
+      await spoofed.close();
+      spoofed = undefined;
+      const afterSpoofedGet = await readTool(supervisor, "workflow_get", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      const afterSpoofedAudit = await readTool(supervisor, "workflow_get_audit", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      assert.deepEqual(afterSpoofedGet.body, beforeSpoofedGet.body);
+      assert.deepEqual(afterSpoofedAudit.body, beforeSpoofedAudit.body);
+
       await supervisor.close();
       supervisor = undefined;
 
@@ -288,6 +352,7 @@ describe("Workflow MCP runtime supervision", () => {
     } finally {
       await missing?.close().catch(() => {});
       await mismatched?.close().catch(() => {});
+      await spoofed?.close().catch(() => {});
       await supervisor?.close().catch(() => {});
       rmSync(target.root, { recursive: true, force: true });
       rmSync(cacheRoot, { recursive: true, force: true });
@@ -402,6 +467,7 @@ describe("Workflow MCP runtime supervision", () => {
         databasePath,
         runtimeId: artifactA.runtime_id,
         runtimeRevision: revisionA,
+        ...testAttestation(artifactA.runtime_id, revisionA),
       });
       const workflowA = firstStore.create({
         workflow_type: "change",
@@ -495,6 +561,7 @@ describe("Workflow MCP runtime supervision", () => {
         databasePath,
         runtimeId: artifactB.runtime_id,
         runtimeRevision: revisionB,
+        ...testAttestation(artifactB.runtime_id, revisionB),
       });
       const workflowB = secondStore.create({
         workflow_type: "change",

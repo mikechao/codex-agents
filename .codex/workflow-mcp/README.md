@@ -65,12 +65,16 @@ with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability 
 
 The store is the runtime-ownership enforcement boundary. After role capability authentication, an
 affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
-and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner. Missing or mismatched identity
-returns `ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked
-follow-up insertion; an incomplete persisted pair remains `ERROR_RUNTIME_RECOVERY`. This also
-protects state from direct mutable `server.ts` launches, while leaving un-affined installed-mode
-and temporary/in-memory test stores compatible. Supervisor routing may inspect affinity and adopt an
-un-affined legacy row before dispatching it; those are supervisor-only paths.
+and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner and which has a valid ephemeral
+`WORKFLOW_MCP_RUNTIME_ATTESTATION`/nonce pair signed with the private key stored in that immutable
+artifact. Missing, mismatched, or unverifiable identity or launch attestation returns
+`ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked follow-up
+insertion; an incomplete persisted pair remains `ERROR_RUNTIME_RECOVERY`. The per-artifact key and
+per-child attestation are kept outside the checkout, are never persisted in workflow state, and are
+not exposed through MCP. This also protects state from direct mutable `server.ts` launches, while
+leaving un-affined installed-mode and temporary/in-memory test stores compatible. Supervisor routing
+may inspect affinity and adopt an un-affined legacy row before dispatching it; those are
+supervisor-only paths.
 
 On restart, the supervisor reopens the same durable database, resolves the persisted owning
 revision, and launches that immutable runtime, so unfinished workflows remain safely routable

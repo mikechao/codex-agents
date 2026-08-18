@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
@@ -21,6 +21,8 @@ const ENTRYPOINT = ".codex/workflow-mcp/server.ts";
 const RECEIPT_MODULES = [".codex/agents/change-receipt.ts", ".codex/agents/receipt.ts"];
 const PACKAGE_METADATA = ["package.json", "bun.lock"];
 const SCHEMA_VERSION = 1;
+export const RUNTIME_ATTESTATION_KEY_FILE = ".runtime-attestation-key";
+const RUNTIME_ATTESTATION_KEY_BYTES = 32;
 
 export interface RuntimeManifestEntry {
   path: string;
@@ -42,6 +44,7 @@ export interface RuntimeArtifact {
   runtimePath: string;
   runtime_path: string;
   cachePath: string;
+  attestationKeyPath: string;
   revision: string;
   manifest: RuntimeManifest;
   reused: boolean;
@@ -466,6 +469,34 @@ function writeCommittedFile(artifactRoot: string, path: string, file: CommittedF
   if (file.mode === "100755") chmodSync(destination, 0o755);
 }
 
+function ensureAttestationKey(artifactRoot: string): string {
+  const keyPath = join(artifactRoot, RUNTIME_ATTESTATION_KEY_FILE);
+  try {
+    const stat = lstatSync(keyPath);
+    if (stat.isSymbolicLink() || !stat.isFile())
+      throw new Error("runtime attestation key is not a regular file");
+    if (readFileSync(keyPath).byteLength !== RUNTIME_ATTESTATION_KEY_BYTES)
+      throw new Error("runtime attestation key has an invalid length");
+    return keyPath;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  try {
+    writeFileSync(keyPath, randomBytes(RUNTIME_ATTESTATION_KEY_BYTES), {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const stat = lstatSync(keyPath);
+  if (stat.isSymbolicLink() || !stat.isFile())
+    throw new Error("runtime attestation key is not a regular file");
+  if (readFileSync(keyPath).byteLength !== RUNTIME_ATTESTATION_KEY_BYTES)
+    throw new Error("runtime attestation key has an invalid length");
+  return keyPath;
+}
+
 export function trustedRuntimeManifest(root: string, revision: string): RuntimeManifest {
   const repository = realpathSync(root);
   const committedRevision = verifyRevision(repository, revision);
@@ -505,12 +536,15 @@ export function materializeRuntimeArtifact(
     runtimePath: join(cachePath, manifest.entrypoint),
     runtime_path: join(cachePath, manifest.entrypoint),
     cachePath,
+    attestationKeyPath: join(cachePath, RUNTIME_ATTESTATION_KEY_FILE),
     revision: committedRevision,
     manifest,
     reused: true,
   };
-  if (validArtifact(cachePath, id, manifest, packageContent, cacheRoot, repository))
+  if (validArtifact(cachePath, id, manifest, packageContent, cacheRoot, repository)) {
+    ensureAttestationKey(cachePath);
     return existing;
+  }
   rmSync(cachePath, { recursive: true, force: true });
 
   const staging = mkdtempSync(join(cacheRoot, `.runtime-${id.slice(0, 12)}-${randomUUID()}-`));
@@ -529,6 +563,7 @@ export function materializeRuntimeArtifact(
         mode: 0o644,
       },
     );
+    ensureAttestationKey(staging);
     writeFileSync(join(staging, ".runtime-complete"), `${id}\n`, { mode: 0o644 });
     if (!validArtifact(staging, id, manifest, packageContent, cacheRoot, repository)) {
       throw new Error("materialized runtime artifact failed validation");
@@ -539,6 +574,7 @@ export function materializeRuntimeArtifact(
       assertSafeCacheEntry(cacheRoot, repository, cachePath);
       if (validArtifact(cachePath, id, manifest, packageContent, cacheRoot, repository)) {
         rmSync(staging, { recursive: true, force: true });
+        ensureAttestationKey(cachePath);
         return { ...existing, reused: true };
       }
       rmSync(cachePath, { recursive: true, force: true });

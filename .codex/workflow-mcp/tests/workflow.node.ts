@@ -14,10 +14,20 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
-import { resolveStatePath, WorkflowStore } from "../store.js";
+import { createRuntimeAttestation, resolveStatePath, WorkflowStore } from "../store.js";
 import { permittedNextActions, roleView } from "../transitions.js";
 import { hashCapability, issueCapability, objectDigest } from "../validation.js";
 import { absentReceipt, fixture, receipt } from "./test-fixtures.js";
+
+function testAttestation(runtimeId: string, runtimeRevision: string) {
+  const nonce = "1".repeat(64);
+  const key = "2".repeat(64);
+  return {
+    runtimeAttestation: createRuntimeAttestation(runtimeId, runtimeRevision, nonce, key),
+    runtimeAttestationNonce: nonce,
+    runtimeAttestationKey: key,
+  };
+}
 
 function implementation(
   store: any,
@@ -268,6 +278,7 @@ test("enforces runtime ownership without changing rejected workflow or audit row
       databasePath: path,
       runtimeId: runtimeA,
       runtimeRevision: revision,
+      ...testAttestation(runtimeA, revision),
     });
     const created = create(owner, root, git, { objective: "runtime ownership" });
     const linkedSource = create(owner, root, git, { objective: "linked ownership" });
@@ -321,6 +332,7 @@ test("enforces runtime ownership without changing rejected workflow or audit row
       databasePath: path,
       runtimeId: runtimeA,
       runtimeRevision: revision,
+      ...testAttestation(runtimeA, revision),
     });
     assert.equal(snapshot(verification), before);
     assert.equal(
@@ -505,6 +517,7 @@ test("optional findings require a fresh linked workflow", () => {
       databasePath: ":memory:",
       runtimeId: "a".repeat(64),
       runtimeRevision: git("rev-parse", "HEAD"),
+      ...testAttestation("a".repeat(64), git("rev-parse", "HEAD")),
     });
     const created = create(store, root, git, { objective: "optional" });
     implementation(store, created, root, 0, "implemented");

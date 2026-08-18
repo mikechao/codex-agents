@@ -61,11 +61,13 @@ not silently downgrade. In degraded mode the parent tracks the version and audit
 records the decision.
 
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
-`runtime_revision` to match the persisted owner after capability authentication. Missing or
-mismatched identity is rejected with `ERROR_RUNTIME_ISOLATION` before role views, audit reads,
-transition callbacks, or linked child insertion can run. An incomplete persisted pair remains a
-runtime-recovery failure. `runtimeAffinity()` and `adoptRuntime()` are supervisor-only routing
-paths; un-affined legacy, installed-mode, and temporary/in-memory test workflows remain supported.
+`runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
+supervisor launch attestation signed with the private key belonging to the immutable child artifact.
+Missing, mismatched, or unverifiable identity or attestation is rejected with
+`ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked child
+insertion can run. An incomplete persisted pair remains a runtime-recovery failure.
+`runtimeAffinity()` and `adoptRuntime()` are supervisor-only routing paths; un-affined legacy,
+installed-mode, and temporary/in-memory test workflows remain supported.
 Restarting the host is safe: the supervisor reads persisted affinity and routes the workflow back to
 the owning committed runtime. Direct mutable `server.ts` launches can serve un-affined workflows,
 but cannot read or mutate affined workflows without the matching identity. Corrupt or otherwise

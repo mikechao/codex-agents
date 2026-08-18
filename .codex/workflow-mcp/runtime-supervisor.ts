@@ -1,4 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { WorkflowError } from "./errors.js";
 import { currentHead, repositoryRoot } from "./git.js";
@@ -7,7 +9,12 @@ import {
   type RuntimeArtifact,
   type RuntimeArtifactOptions,
 } from "./runtime-artifact.js";
-import { openStore, type RuntimeAffinity, resolveStatePath } from "./store.js";
+import {
+  createRuntimeAttestation,
+  openStore,
+  type RuntimeAffinity,
+  resolveStatePath,
+} from "./store.js";
 
 export interface RuntimeSupervisorOptions extends RuntimeArtifactOptions {
   repositoryRoot?: string;
@@ -195,10 +202,30 @@ export class RuntimeSupervisor {
   }
 
   private launch(artifact: ResolvedRuntime): ChildRuntime {
+    let runtimeAttestationNonce: string;
+    let runtimeAttestation: string;
+    try {
+      const key = readFileSync(artifact.attestationKeyPath);
+      runtimeAttestationNonce = randomBytes(32).toString("hex");
+      runtimeAttestation = createRuntimeAttestation(
+        artifact.runtime_id,
+        artifact.revision,
+        runtimeAttestationNonce,
+        key,
+      );
+    } catch (error) {
+      throw runtimeFailure(
+        "ERROR_RUNTIME_RECOVERY",
+        error instanceof Error ? error.message : "runtime attestation could not be created",
+      );
+    }
     const environment = {
       ...process.env,
       WORKFLOW_MCP_RUNTIME_ID: artifact.runtime_id,
       WORKFLOW_MCP_RUNTIME_REVISION: artifact.revision,
+      WORKFLOW_MCP_RUNTIME_ATTESTATION: runtimeAttestation,
+      WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE: runtimeAttestationNonce,
+      WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH: artifact.attestationKeyPath,
       ...(this.options.databasePath ? { WORKFLOW_MCP_DB_PATH: this.options.databasePath } : {}),
     };
     let child: ChildProcess;
