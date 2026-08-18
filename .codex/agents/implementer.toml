@@ -22,6 +22,11 @@ Rules:
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
   server is unavailable, stop with `NEEDS_CONTEXT` and ask whether prompt-only degraded mode is
   authorized.
+- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+  the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
+  through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
+  tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
+  behavior; never use an alternate transport.
 - Submit the complete implementation schema with `workflow_submit_implementation`: `status`,
   `summary`, exact `agent_touched_paths`, acceptance and validation evidence arrays,
   `known_failures`, and a complete `finding_resolution_map`. Workflow MCP generates and persists

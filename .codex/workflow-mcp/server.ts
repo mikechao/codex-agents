@@ -668,5 +668,9 @@ export async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  main().catch(() => (process.exitCode = 1));
+  main().catch((error) => {
+    const safe = safeError(error);
+    process.stderr.write(`${safe.category}: ${safe.detail}\n`);
+    process.exitCode = 1;
+  });
 }

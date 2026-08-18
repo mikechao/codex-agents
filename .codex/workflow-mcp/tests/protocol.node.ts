@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -229,6 +229,56 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.equal(committed.phase, "COMMITTED");
     await client.close();
     await transport.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("startup corruption fails closed with an actionable stderr diagnostic", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "corrupt-state.sqlite");
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    const created = store.create({
+      workflow_type: "change",
+      objective: "corrupt startup",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["criterion"],
+      validation_requirements: ["validation"],
+      review_target: {
+        review_mode: "working_tree",
+        base_revision: git("rev-parse", "HEAD"),
+        head_revision: null,
+        approved_paths: ["note.txt"],
+        include_staged: true,
+        include_unstaged: true,
+        include_untracked: true,
+      },
+    });
+    store.db
+      .prepare("UPDATE workflows SET state_json = ? WHERE workflow_id = ?")
+      .run('{"schema_version":2}', created.workflow.workflow_id);
+    store.close();
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          ["--no-warnings", join(process.cwd(), ".codex/workflow-mcp/server.ts")],
+          {
+            cwd: root,
+            env: { ...process.env, WORKFLOW_MCP_DB_PATH: databasePath },
+            input: "",
+            encoding: "utf8",
+            stdio: ["pipe", "pipe", "pipe"],
+          },
+        ),
+      (error: unknown) => {
+        const result = error as { stdout?: string; stderr?: string };
+        assert.equal(result.stdout ?? "", "");
+        assert.match(result.stderr ?? "", /ERROR_STATE_CORRUPT/);
+        return true;
+      },
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

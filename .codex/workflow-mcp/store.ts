@@ -157,6 +157,17 @@ function parseState(row: WorkflowRow): WorkflowState {
   if (row.state_digest !== objectDigest(parsed)) {
     fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
   }
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    "runtime_id" in parsed &&
+    "runtime_revision" in parsed
+  ) {
+    runtimeAffinityPair(
+      (parsed as { runtime_id: string | null }).runtime_id,
+      (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
+    );
+  }
   return validateWorkflowStateV2(parsed);
 }
 
@@ -267,6 +278,24 @@ export class WorkflowStore {
     return selectedRole;
   }
 
+  #assertRuntimeOwnership(row: WorkflowRow): void {
+    const state = parseState(row);
+    const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    if (affinity.runtime_id === null && affinity.runtime_revision === null) return;
+    if (this.runtimeId === null || this.runtimeRevision === null) {
+      fail(
+        "ERROR_RUNTIME_ISOLATION",
+        "current runtime identity is unavailable for this affined workflow",
+      );
+    }
+    if (
+      affinity.runtime_id !== this.runtimeId ||
+      affinity.runtime_revision !== this.runtimeRevision
+    ) {
+      fail("ERROR_RUNTIME_ISOLATION", "workflow is owned by a different runtime");
+    }
+  }
+
   #row(workflowId: WorkflowId): WorkflowRow {
     if (typeof workflowId !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowId)) {
       fail("ERROR_NOT_FOUND", "workflow is not found");
@@ -350,6 +379,10 @@ export class WorkflowStore {
                 review_start_receipt:
                   "review_start_receipt" in parsed ? parsed.review_start_receipt : null,
               };
+              runtimeAffinityPair(
+                next.runtime_id as string | null,
+                next.runtime_revision as GitCommitSha | null,
+              );
               validateWorkflowStateV2(next);
               const result = this.db
                 .prepare(
@@ -365,6 +398,10 @@ export class WorkflowStore {
               if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
               parsed = next;
             }
+            runtimeAffinityPair(
+              (parsed as WorkflowState).runtime_id,
+              (parsed as WorkflowState).runtime_revision,
+            );
             validateWorkflowStateV2(parsed);
           } else {
             fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
@@ -443,6 +480,7 @@ export class WorkflowStore {
     const id = workflowId(workflowIdValue);
     const row = this.#row(id);
     const selectedRole = this.#assertAuth(row, actorRole, token);
+    this.#assertRuntimeOwnership(row);
     return roleViewForRole(parseState(row), selectedRole);
   }
 
@@ -499,6 +537,7 @@ export class WorkflowStore {
     const id = workflowId(workflowIdValue);
     const row = this.#row(id);
     this.#assertAuth(row, actorRole, token);
+    this.#assertRuntimeOwnership(row);
     return (
       this.db
         .prepare(
@@ -536,6 +575,7 @@ export class WorkflowStore {
       .transaction(() => {
         const row = this.#row(id);
         const selectedRole = this.#assertAuth(row, actorRole, token);
+        this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         }
@@ -859,6 +899,7 @@ export class WorkflowStore {
       .transaction(() => {
         const row = this.#row(id);
         this.#assertAuth(row, "parent", args.capability);
+        this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);

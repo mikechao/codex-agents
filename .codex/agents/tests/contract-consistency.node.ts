@@ -328,3 +328,30 @@ test("contract fragments are host-neutral and each host injects its own identity
     );
   }
 });
+
+test("role contracts require native workflow transport and forbid alternate access", () => {
+  const contractsDir = resolve(import.meta.dir, "../contracts");
+  const required = [
+    "Host-provided `workflow_state_*` tools are the only authorized workflow transport.",
+    "Do not import the MCP client SDK",
+    "launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`",
+    "invoke MCP through shell/Bun/Node scripts",
+    "access Workflow MCP SQLite files directly",
+    "never use an alternate transport",
+  ];
+  for (const role of ["implementer", "code_reviewer", "committer"]) {
+    const contract = readFileSync(resolve(contractsDir, `${role}.md`), "utf8");
+    const normalizedContract = contract.replace(/\s+/gu, " ");
+    const generated = Object.entries(generateDefinitions()).find(([path]) =>
+      path.endsWith(`/${role}.toml`),
+    )?.[1];
+    assert.ok(generated, `${role} Codex definition must be generated`);
+    for (const phrase of required) {
+      assert.ok(normalizedContract.includes(phrase), `${role} contract must include: ${phrase}`);
+      assert.ok(
+        generated.replace(/\s+/gu, " ").includes(phrase),
+        `${role} definition must include: ${phrase}`,
+      );
+    }
+  }
+});

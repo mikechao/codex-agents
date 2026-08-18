@@ -15,6 +15,11 @@ Rules:
   duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,
   implementer, or reviewer tools. If the server is unavailable, stop and ask whether prompt-only
   degraded mode is authorized.
+- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+  the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
+  through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
+  tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
+  behavior; never use an alternate transport.
 - Commit authorization lives in the view: the workflow must be an approved working-tree workflow
   with `commit_authorization` set and a fresh internal review receipt; a `commit_range` review never
   authorizes a commit. Do not stage or commit without it.

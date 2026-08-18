@@ -41,6 +41,11 @@ Rules:
   duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,
   implementer, or committer tools. If the server is unavailable, stop with `INCONCLUSIVE` and ask
   whether prompt-only degraded mode is authorized.
+- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+  the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
+  through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
+  tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
+  behavior; never use an alternate transport.
 - Submit `prior_finding_classifications` for every prior blocking and optional finding on re-review;
   classify each as `resolved`, `still_present`, or `superseded`. Preserve every still-present ID in
   the corresponding finding bucket.

@@ -63,6 +63,21 @@ host restart the new default artifact is promoted for new workflows while affini
 workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
 with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability or receipt errors.
 
+The store is the runtime-ownership enforcement boundary. After role capability authentication, an
+affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
+and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner. Missing or mismatched identity
+returns `ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked
+follow-up insertion; an incomplete persisted pair remains `ERROR_RUNTIME_RECOVERY`. This also
+protects state from direct mutable `server.ts` launches, while leaving un-affined installed-mode
+and temporary/in-memory test stores compatible. Supervisor routing may inspect affinity and adopt an
+un-affined legacy row before dispatching it; those are supervisor-only paths.
+
+On restart, the supervisor reopens the same durable database, resolves the persisted owning
+revision, and launches that immutable runtime, so unfinished workflows remain safely routable
+across runtime promotions. Invalid persisted state fails closed at startup with an actionable
+`ERROR_STATE_CORRUPT`, `ERROR_MIGRATION_REQUIRED`, or runtime-recovery diagnostic on stderr; the
+STDIO server never writes diagnostics to stdout.
+
 ## Self-host A-to-B dogfooding lifecycle
 
 The self-hosted regression is deliberately chronological: start the self-hosted host on committed runtime A,

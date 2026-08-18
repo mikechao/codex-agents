@@ -243,6 +243,109 @@ test("persists workflow, rejects stale versions and enforces role capabilities",
   }
 });
 
+test("enforces runtime ownership without changing rejected workflow or audit rows", () => {
+  const { root, git } = fixture();
+  const path = join(root, "runtime-ownership.sqlite");
+  const revision = git("rev-parse", "HEAD");
+  const runtimeA = "a".repeat(64);
+  const runtimeB = "b".repeat(64);
+  const snapshot = (store: any) =>
+    JSON.stringify({
+      workflows: store.db
+        .prepare(
+          "SELECT workflow_id, version, state_json, state_digest, updated_at FROM workflows ORDER BY workflow_id",
+        )
+        .all(),
+      audits: store.db
+        .prepare(
+          "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json, created_at FROM audit_events ORDER BY event_id",
+        )
+        .all(),
+    });
+  try {
+    const owner: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: path,
+      runtimeId: runtimeA,
+      runtimeRevision: revision,
+    });
+    const created = create(owner, root, git, { objective: "runtime ownership" });
+    const linkedSource = create(owner, root, git, { objective: "linked ownership" });
+    implementation(owner, linkedSource, root, 0, "implemented");
+    review(owner, linkedSource, root, 1, "APPROVED", [], []);
+    const before = snapshot(owner);
+    owner.close();
+
+    const runtimeLess: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    for (const rejected of [
+      () => runtimeLess.get(created.workflow.workflow_id, "parent", created.capabilities.parent),
+      () => runtimeLess.audit(created.workflow.workflow_id, "parent", created.capabilities.parent),
+      () => implementation(runtimeLess, created, root, 0, "must not run"),
+      () =>
+        runtimeLess.createLinkedFollowup({
+          workflow_id: linkedSource.workflow.workflow_id,
+          capability: linkedSource.capabilities.parent,
+          expected_version: 3,
+          objective: "must not insert",
+          approved_paths: ["note.txt"],
+          acceptance_criteria: ["child criterion"],
+          validation_requirements: ["child validation"],
+          finding_ids: [],
+          user_authorization: "test",
+        }),
+    ]) {
+      assert.equal(errorCategory(rejected), "ERROR_RUNTIME_ISOLATION");
+    }
+    runtimeLess.close();
+
+    const mismatched: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: path,
+      runtimeId: runtimeB,
+      runtimeRevision: revision,
+    });
+    assert.equal(
+      errorCategory(() =>
+        mismatched.get(created.workflow.workflow_id, "parent", created.capabilities.parent),
+      ),
+      "ERROR_RUNTIME_ISOLATION",
+    );
+    assert.equal(
+      errorCategory(() => implementation(mismatched, created, root, 0, "must not run")),
+      "ERROR_RUNTIME_ISOLATION",
+    );
+    mismatched.close();
+
+    const verification: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: path,
+      runtimeId: runtimeA,
+      runtimeRevision: revision,
+    });
+    assert.equal(snapshot(verification), before);
+    assert.equal(
+      verification.get(created.workflow.workflow_id, "parent", created.capabilities.parent).phase,
+      "IMPLEMENTING",
+    );
+    implementation(verification, created, root, 0, "owner continues");
+    assert.equal(
+      verification.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
+      1,
+    );
+    assert.equal(
+      verification.get(
+        linkedSource.workflow.workflow_id,
+        "parent",
+        linkedSource.capabilities.parent,
+      ).phase,
+      "STOPPED_APPROVED",
+    );
+    verification.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("production state path is stable and outside the repository", () => {
   const { root } = fixture();
   try {

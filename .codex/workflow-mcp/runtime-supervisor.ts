@@ -106,6 +106,10 @@ interface ChildRuntime {
   dead: boolean;
 }
 
+function runtimeKey(artifact: Pick<ResolvedRuntime, "runtime_id" | "revision">): string {
+  return `${artifact.runtime_id}\u0000${artifact.revision}`;
+}
+
 /**
  * MCP STDIO supervisor. The provider checkout is only used to resolve artifacts and read affinity;
  * every authority request is handled by a child launched from an immutable artifact.
@@ -176,8 +180,8 @@ export class RuntimeSupervisor {
   private failChild(child: ChildRuntime, detail: string): void {
     if (child.dead) return;
     child.dead = true;
-    if (this.children.get(child.artifact.runtime_id) === child)
-      this.children.delete(child.artifact.runtime_id);
+    const key = runtimeKey(child.artifact);
+    if (this.children.get(key) === child) this.children.delete(key);
     const error = this.childError(child, detail);
     for (const pending of child.pending.values()) this.emitRequestError(pending.id, error);
     child.pending.clear();
@@ -283,10 +287,11 @@ export class RuntimeSupervisor {
   }
 
   private childFor(artifact: ResolvedRuntime): ChildRuntime {
-    const existing = this.children.get(artifact.runtime_id);
+    const key = runtimeKey(artifact);
+    const existing = this.children.get(key);
     if (existing && !existing.dead && !existing.process.killed) return existing;
     const child = this.launch(artifact);
-    this.children.set(artifact.runtime_id, child);
+    this.children.set(key, child);
     return child;
   }
 
@@ -340,19 +345,29 @@ export class RuntimeSupervisor {
     }
   }
 
-  private affinityFor(message: JsonRpcMessage): ResolvedRuntime {
+  private affinityFor(message: JsonRpcMessage): { artifact: ResolvedRuntime; adopted: boolean } {
     const workflowId = message.params?.arguments?.workflow_id;
-    if (typeof workflowId !== "string") return this.defaultRuntime;
+    if (typeof workflowId !== "string") return { artifact: this.defaultRuntime, adopted: false };
     let affinity = this.store.runtimeAffinity(workflowId);
+    let adopted = false;
     if (affinity.runtime_id === null && affinity.runtime_revision === null) {
       affinity = this.store.adoptRuntime(workflowId);
+      adopted = true;
     }
     if (
       affinity.runtime_id === this.defaultRuntime.runtime_id &&
       affinity.runtime_revision === this.defaultRuntime.revision
     )
-      return this.defaultRuntime;
-    return resolveOwningRuntime(this.providerRoot, affinity, this.options);
+      return { artifact: this.defaultRuntime, adopted };
+    return { artifact: resolveOwningRuntime(this.providerRoot, affinity, this.options), adopted };
+  }
+
+  private adoptedRequest(message: JsonRpcMessage, adopted: boolean): string {
+    if (!adopted) return JSON.stringify(message);
+    const args = message.params?.arguments;
+    if (!args || typeof args.expected_version !== "number") return JSON.stringify(message);
+    args.expected_version += 1;
+    return JSON.stringify(message);
   }
 
   private async forward(line: string): Promise<void> {
@@ -364,7 +379,8 @@ export class RuntimeSupervisor {
       return;
     }
     try {
-      const artifact = this.affinityFor(message);
+      const affinity = this.affinityFor(message);
+      const artifact = affinity.artifact;
       const child = this.childFor(artifact);
       const isInitialize = message.method === "initialize";
       if (
@@ -388,7 +404,7 @@ export class RuntimeSupervisor {
       } else if (message.method === "notifications/initialized") {
         this.initializationLines.push(line);
       }
-      childInput(child.process).write(`${line}\n`);
+      childInput(child.process).write(`${this.adoptedRequest(message, affinity.adopted)}\n`);
     } catch (error) {
       if (message.id === undefined) return;
       const detail = error instanceof WorkflowError ? error.detail : "runtime request failed";

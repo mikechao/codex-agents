@@ -156,6 +156,14 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
   with a deterministic category and no failure text retained.
 - Restart durability: closing and reopening the store retains workflow state and append-only audit
   events without retaining plaintext capabilities.
+- Runtime ownership: an affined workflow rejects runtime-less and mismatched stores for role views,
+  audit reads, transition mutations, and linked follow-up creation with `ERROR_RUNTIME_ISOLATION`,
+  without changing workflow or audit rows; the owning runtime continues normally afterward.
+- Direct-launch rejection and recovery: mutable `server.ts` launches with missing or mismatched
+  identity cannot read or submit against an affined workflow, while supervisor restart routes the
+  workflow back to its owner and preserves persisted state.
+- Startup corruption: invalid persisted state fails closed with an actionable state, migration, or
+  runtime-recovery diagnostic on stderr and never emits non-protocol stdout.
 - Protocol cleanliness: the STDIO child emits only valid MCP traffic on stdout; diagnostics remain
   closed and on stderr.
 - Unavailable server: non-trivial workflows stop and ask whether prompt-only degraded mode is
