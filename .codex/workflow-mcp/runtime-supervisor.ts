@@ -219,15 +219,15 @@ export class RuntimeSupervisor {
         error instanceof Error ? error.message : "runtime attestation could not be created",
       );
     }
-    const environment = {
+    const environment: NodeJS.ProcessEnv = {
       ...process.env,
       WORKFLOW_MCP_RUNTIME_ID: artifact.runtime_id,
       WORKFLOW_MCP_RUNTIME_REVISION: artifact.revision,
       WORKFLOW_MCP_RUNTIME_ATTESTATION: runtimeAttestation,
       WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE: runtimeAttestationNonce,
-      WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH: artifact.attestationKeyPath,
       ...(this.options.databasePath ? { WORKFLOW_MCP_DB_PATH: this.options.databasePath } : {}),
     };
+    delete environment.WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH;
     let child: ChildProcess;
     try {
       child = spawn(

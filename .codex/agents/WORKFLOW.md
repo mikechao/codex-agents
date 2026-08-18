@@ -62,7 +62,11 @@ records the decision.
 
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
 `runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
-supervisor launch attestation signed with the private key belonging to the immutable child artifact.
+supervisor launch attestation signed with the private key belonging to the immutable child artifact
+that contains the executing `store.ts`/`server.ts`. Verification derives that artifact from the
+executing module location and validates its external completion marker, manifest, closure digests,
+and dependency tree; environment configuration cannot redirect verification to a borrowed key or
+mutable checkout code.
 Missing, mismatched, or unverifiable identity or attestation is rejected with
 `ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked child
 insertion can run. An incomplete persisted pair remains a runtime-recovery failure.

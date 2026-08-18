@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   cpSync,
   mkdirSync,
@@ -170,25 +171,14 @@ describe("Workflow MCP runtime supervision", () => {
       finding_resolution_map: {},
     });
     const writeProvider = () => {
-      mkdirSync(join(target.root, ".codex", "workflow-mcp"), { recursive: true });
-      mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
-      writeFileSync(
-        join(target.root, ".codex/workflow-mcp/server.ts"),
-        `import { main } from ${JSON.stringify(pathToFileURL(runtimeServer).href)}; main(); export { main };\n`,
-      );
-      cpSync(
-        join(process.cwd(), ".codex/agents/change-receipt.ts"),
-        join(target.root, ".codex/agents/change-receipt.ts"),
-      );
-      cpSync(
-        join(process.cwd(), ".codex/agents/receipt.ts"),
-        join(target.root, ".codex/agents/receipt.ts"),
-      );
-      writeFileSync(
-        join(target.root, "package.json"),
-        '{"name":"runtime-direct-fixture","type":"module","dependencies":{}}\n',
-      );
-      writeFileSync(join(target.root, "bun.lock"), "{}\n");
+      cpSync(join(process.cwd(), ".codex/workflow-mcp"), join(target.root, ".codex/workflow-mcp"), {
+        recursive: true,
+      });
+      cpSync(join(process.cwd(), ".codex/agents"), join(target.root, ".codex/agents"), {
+        recursive: true,
+      });
+      cpSync(join(process.cwd(), "package.json"), join(target.root, "package.json"));
+      cpSync(join(process.cwd(), "bun.lock"), join(target.root, "bun.lock"));
       git("add", ".");
       git("commit", "-qm", "runtime owner fixture");
     };
@@ -196,14 +186,22 @@ describe("Workflow MCP runtime supervision", () => {
     let missing: Client | undefined;
     let mismatched: Client | undefined;
     let spoofed: Client | undefined;
-    const supervisorScript = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeSupervisor)}; new RuntimeSupervisor(${JSON.stringify({ repositoryRoot: target.root, providerRoot: target.root, databasePath, cacheRoot, installDependencies: false })}).run();`;
+    let borrowed: Client | undefined;
+    let tampered: Client | undefined;
+    let tamperedParent: string | undefined;
+    const supervisorScript = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeSupervisor)}; new RuntimeSupervisor(${JSON.stringify({ repositoryRoot: target.root, providerRoot: target.root, databasePath, cacheRoot, installDependencies: true })}).run();`;
     try {
       writeProvider();
       const revision = currentHead(target.root);
       const artifact = materializeRuntimeArtifact(target.root, revision, {
         cacheRoot,
-        installDependencies: false,
+        installDependencies: true,
       });
+      tamperedParent = mkdtempSync(join(tmpdir(), "workflow-runtime-tampered-"));
+      const tamperedArtifactRoot = join(tamperedParent, "artifact");
+      cpSync(artifact.cachePath, tamperedArtifactRoot, { recursive: true });
+      const tamperedStore = join(tamperedArtifactRoot, ".codex/workflow-mcp/store.ts");
+      writeFileSync(tamperedStore, `${readFileSync(tamperedStore, "utf8")}\n// tampered\n`);
       const supervisorEnv = {
         ...process.env,
         WORKFLOW_MCP_DB_PATH: databasePath,
@@ -334,6 +332,120 @@ describe("Workflow MCP runtime supervision", () => {
       assert.deepEqual(afterSpoofedGet.body, beforeSpoofedGet.body);
       assert.deepEqual(afterSpoofedAudit.body, beforeSpoofedAudit.body);
 
+      const borrowedNonce = randomBytes(32).toString("hex");
+      const borrowedAttestation = createRuntimeAttestation(
+        artifact.runtime_id,
+        artifact.revision,
+        borrowedNonce,
+        readFileSync(artifact.attestationKeyPath),
+      );
+      const beforeBorrowedGet = await readTool(supervisor, "workflow_get", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      const beforeBorrowedAudit = await readTool(supervisor, "workflow_get_audit", {
+        workflow_id: workflowId,
+        role: "parent",
+        capability: capabilities.parent,
+      });
+      borrowed = await connect(process.execPath, ["--no-warnings", runtimeServer], {
+        ...directBaseEnv,
+        ...owningIdentity,
+        WORKFLOW_MCP_RUNTIME_ATTESTATION: borrowedAttestation,
+        WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE: borrowedNonce,
+        WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH: artifact.attestationKeyPath,
+      });
+      for (const [name, args] of [
+        [
+          "workflow_get",
+          { workflow_id: workflowId, role: "parent", capability: capabilities.parent },
+        ],
+        [
+          "workflow_submit_implementation",
+          implementationArgs(workflowId, capabilities.implementer),
+        ],
+      ] as Array<[string, Record<string, unknown>]>) {
+        const rejected = await readTool(borrowed, name, args);
+        assert.equal(rejected.result.isError, true);
+        assert.equal(rejected.body.category, "ERROR_RUNTIME_ISOLATION");
+      }
+      await borrowed.close();
+      borrowed = undefined;
+      assert.deepEqual(
+        (
+          await readTool(supervisor, "workflow_get", {
+            workflow_id: workflowId,
+            role: "parent",
+            capability: capabilities.parent,
+          })
+        ).body,
+        beforeBorrowedGet.body,
+      );
+      assert.deepEqual(
+        (
+          await readTool(supervisor, "workflow_get_audit", {
+            workflow_id: workflowId,
+            role: "parent",
+            capability: capabilities.parent,
+          })
+        ).body,
+        beforeBorrowedAudit.body,
+      );
+
+      const tamperedNonce = randomBytes(32).toString("hex");
+      tampered = await connect(
+        process.execPath,
+        ["--no-warnings", join(tamperedArtifactRoot, ".codex/workflow-mcp/server.ts")],
+        {
+          ...directBaseEnv,
+          ...owningIdentity,
+          WORKFLOW_MCP_RUNTIME_ATTESTATION: createRuntimeAttestation(
+            artifact.runtime_id,
+            artifact.revision,
+            tamperedNonce,
+            readFileSync(join(tamperedArtifactRoot, ".runtime-attestation-key")),
+          ),
+          WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE: tamperedNonce,
+        },
+      );
+      for (const [name, args] of [
+        [
+          "workflow_get",
+          { workflow_id: workflowId, role: "parent", capability: capabilities.parent },
+        ],
+        [
+          "workflow_submit_implementation",
+          implementationArgs(workflowId, capabilities.implementer),
+        ],
+      ] as Array<[string, Record<string, unknown>]>) {
+        const rejected = await readTool(tampered, name, args);
+        assert.equal(rejected.result.isError, true);
+        assert.equal(rejected.body.category, "ERROR_RUNTIME_ISOLATION");
+      }
+      await tampered.close();
+      tampered = undefined;
+      assert.deepEqual(
+        (
+          await readTool(supervisor, "workflow_get", {
+            workflow_id: workflowId,
+            role: "parent",
+            capability: capabilities.parent,
+          })
+        ).body,
+        beforeBorrowedGet.body,
+      );
+      assert.deepEqual(
+        (
+          await readTool(supervisor, "workflow_get_audit", {
+            workflow_id: workflowId,
+            role: "parent",
+            capability: capabilities.parent,
+          })
+        ).body,
+        beforeBorrowedAudit.body,
+      );
+
       await supervisor.close();
       supervisor = undefined;
 
@@ -349,13 +461,18 @@ describe("Workflow MCP runtime supervision", () => {
       });
       assert.equal(recovered.result.isError, undefined);
       assert.equal(recovered.body.workflow_id, workflowId);
+      assert.equal(recovered.body.version, beforeBorrowedGet.body.version);
+      assert.equal(recovered.body.phase, beforeBorrowedGet.body.phase);
     } finally {
       await missing?.close().catch(() => {});
       await mismatched?.close().catch(() => {});
       await spoofed?.close().catch(() => {});
+      await borrowed?.close().catch(() => {});
+      await tampered?.close().catch(() => {});
       await supervisor?.close().catch(() => {});
       rmSync(target.root, { recursive: true, force: true });
       rmSync(cacheRoot, { recursive: true, force: true });
+      if (tamperedParent) rmSync(tamperedParent, { recursive: true, force: true });
       rmSync(databaseRoot, { recursive: true, force: true });
     }
   });

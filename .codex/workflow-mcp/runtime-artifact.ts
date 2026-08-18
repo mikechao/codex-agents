@@ -504,8 +504,9 @@ export function trustedRuntimeManifest(root: string, revision: string): RuntimeM
 }
 
 export function isValidRuntimeArtifact(artifact: RuntimeArtifact): boolean {
-  if (!artifact.manifest.files.some((entry) => entry.path === "package.json")) return false;
   try {
+    if (runtimeId(artifact.manifest) !== artifact.runtime_id) return false;
+    if (!artifact.manifest.files.some((entry) => entry.path === "package.json")) return false;
     return validArtifact(
       artifact.cachePath,
       artifact.runtime_id,

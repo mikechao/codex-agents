@@ -15,6 +15,11 @@ import {
   verifyReviewReceipt,
 } from "./git.js";
 import {
+  isValidRuntimeArtifact,
+  type RuntimeArtifact,
+  type RuntimeManifest,
+} from "./runtime-artifact.js";
+import {
   acceptConcerns,
   authorizeCommit,
   authorizeRepair,
@@ -129,37 +134,41 @@ function immutableRuntimeKey(
   repositoryRoot: string,
   runtimeId: string,
   runtimeRevision: string,
-  keyPathOverride?: string,
 ): Buffer | null {
   const repository = realpathSync(repositoryRoot);
   try {
     const sourceDirectory = realpathSync(import.meta.dir);
-    const keyPath = realpathSync(
-      keyPathOverride ?? join(sourceDirectory, "..", ".runtime-attestation-key"),
-    );
-    const artifactRoot = realpathSync(join(keyPath, ".."));
+    const artifactRoot = realpathSync(join(sourceDirectory, "..", ".."));
     if (artifactRoot === repository || artifactRoot.startsWith(`${repository}${sep}`)) return null;
     const markerPath = join(artifactRoot, ".runtime-complete");
     const manifestPath = join(artifactRoot, ".runtime-manifest.json");
+    const keyPath = join(artifactRoot, ".runtime-attestation-key");
     const marker = lstatSync(markerPath);
-    const manifest = lstatSync(manifestPath);
+    const manifestStat = lstatSync(manifestPath);
     const key = lstatSync(keyPath);
     if (
       marker.isSymbolicLink() ||
       !marker.isFile() ||
-      manifest.isSymbolicLink() ||
-      !manifest.isFile() ||
+      manifestStat.isSymbolicLink() ||
+      !manifestStat.isFile() ||
       key.isSymbolicLink() ||
       !key.isFile()
     )
       return null;
-    if (
-      keyPath !== join(artifactRoot, ".runtime-attestation-key") ||
-      readFileSync(markerPath, "utf8").trim() !== runtimeId
-    )
-      return null;
-    const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { revision?: unknown };
-    if (parsed.revision !== runtimeRevision) return null;
+    if (readFileSync(markerPath, "utf8").trim() !== runtimeId) return null;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as RuntimeManifest;
+    if (manifest.revision !== runtimeRevision) return null;
+    const artifact: RuntimeArtifact = {
+      runtime_id: runtimeId,
+      runtimePath: join(artifactRoot, manifest.entrypoint),
+      runtime_path: join(artifactRoot, manifest.entrypoint),
+      cachePath: artifactRoot,
+      attestationKeyPath: keyPath,
+      revision: runtimeRevision,
+      manifest,
+      reused: true,
+    };
+    if (!isValidRuntimeArtifact(artifact)) return null;
     const contents = readFileSync(keyPath);
     return contents.byteLength === 32 ? contents : null;
   } catch {
@@ -259,8 +268,6 @@ export class WorkflowStore {
       options.runtimeAttestation ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION ?? null;
     const runtimeAttestationNonce =
       options.runtimeAttestationNonce ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE ?? null;
-    const runtimeAttestationKeyPath =
-      process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION_KEY_PATH ?? undefined;
     if (runtimeId !== null && !/^[0-9a-f]{64}$/u.test(runtimeId))
       fail("ERROR_RUNTIME_ISOLATION", "runtime identity is invalid");
     if (runtimeRevision !== null && !/^[0-9a-f]{40}$/u.test(runtimeRevision))
@@ -279,7 +286,7 @@ export class WorkflowStore {
       options.runtimeAttestationKey !== undefined
         ? Buffer.from(options.runtimeAttestationKey, "utf8")
         : runtimeId !== null && runtimeRevision !== null
-          ? immutableRuntimeKey(this.root, runtimeId, runtimeRevision, runtimeAttestationKeyPath)
+          ? immutableRuntimeKey(this.root, runtimeId, runtimeRevision)
           : null;
     if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`

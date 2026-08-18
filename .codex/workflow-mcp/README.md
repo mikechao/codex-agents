@@ -66,8 +66,13 @@ with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability 
 The store is the runtime-ownership enforcement boundary. After role capability authentication, an
 affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
 and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner and which has a valid ephemeral
-`WORKFLOW_MCP_RUNTIME_ATTESTATION`/nonce pair signed with the private key stored in that immutable
-artifact. Missing, mismatched, or unverifiable identity or launch attestation returns
+`WORKFLOW_MCP_RUNTIME_ATTESTATION`/nonce pair signed with the private key stored in the immutable
+artifact containing the executing `store.ts`/`server.ts`. The store derives that artifact from its
+own module location and requires the external artifact markers, manifest, closure digests, and
+dependency tree to validate against the supplied identity; the key path is not configurable.
+Environment configuration cannot redirect attestation verification to a key borrowed from another
+artifact or from mutable checkout code. Missing, mismatched, or unverifiable identity or launch
+attestation returns
 `ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked follow-up
 insertion; an incomplete persisted pair remains `ERROR_RUNTIME_RECOVERY`. The per-artifact key and
 per-child attestation are kept outside the checkout, are never persisted in workflow state, and are
