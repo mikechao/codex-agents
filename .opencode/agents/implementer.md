@@ -1,7 +1,7 @@
 ---
 description: Executes an approved implementation plan, validates the changes, and reports the results.
 mode: subagent
-model: opencode-go/gpt-5.6-luna
+model: openai/gpt-5.6-luna
 reasoningEffort: high
 permission:
   edit: allow

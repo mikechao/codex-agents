@@ -1,7 +1,7 @@
 ---
 description: Performs an independent, read-only review of an approved implementation diff.
 mode: subagent
-model: opencode-go/gpt-5.6-luna
+model: openai/gpt-5.6-luna
 reasoningEffort: high
 permission:
   edit: deny

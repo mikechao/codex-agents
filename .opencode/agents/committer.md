@@ -1,8 +1,8 @@
 ---
 description: Stages relevant project changes, generates an accurate commit message, and creates a Git commit.
 mode: subagent
-model: opencode-go/gpt-5.6-luna
-reasoningEffort: low
+model: openai/gpt-5.6-luna
+reasoningEffort: high
 permission:
   edit: deny
   bash:
