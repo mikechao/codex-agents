@@ -8,7 +8,6 @@ import type {
   CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitRangeReviewTarget,
-  CommitVerification,
   ContentDigest,
   ErrorCategory,
   ExactRepoPath,
@@ -159,23 +158,6 @@ function digest(value: Buffer): ContentDigest {
   return createHash("sha256").update(value).digest("hex") as ContentDigest;
 }
 
-function treeEntries(root: string, revision: GitCommitSha): Map<ExactRepoPath, GitTreeEntry> {
-  const output = git(root, ["ls-tree", "-r", "-z", revision]);
-  const result = new Map<ExactRepoPath, GitTreeEntry>();
-  for (const record of output.split("\0")) {
-    if (!record) continue;
-    const separator = record.indexOf("\t");
-    if (separator < 0) continue;
-    const fields = record.slice(0, separator).split(" ");
-    if (fields.length !== 3 || fields[1] !== "blob") continue;
-    result.set(record.slice(separator + 1) as ExactRepoPath, {
-      mode: normalizeMode(fields[0]),
-      object: fields[2] as GitBlobSha,
-    });
-  }
-  return result;
-}
-
 function normalizeMode(mode: string): GitFileMode {
   if (!["100644", "100755", "120000"].includes(mode))
     fail("ERROR_UNSUPPORTED_MODE", "file mode is unsupported");
@@ -224,48 +206,6 @@ export function createReceipt(
     if (/^ERROR_[A-Z_]+$/u.test(category)) fail(category as ErrorCategory, "receipt rejected");
     fail("ERROR_RECEIPT_UNAVAILABLE", "receipt could not be recomputed");
   }
-}
-
-export function verifyCommit(
-  root: string,
-  state: WorkflowState,
-  commitHash: unknown,
-): CommitVerification {
-  if (typeof commitHash !== "string" || !/^[0-9a-f]{40}$/u.test(commitHash)) {
-    return { ok: false, mismatch: "HEAD_CHANGED" };
-  }
-  const head = currentHead(root);
-  if (head !== commitHash) return { ok: false, mismatch: "HEAD_CHANGED" };
-  const parent = git(root, ["rev-list", "--parents", "-n", "1", commitHash]).trim().split(" ");
-  if (parent.length !== 2) return { ok: false, mismatch: "PARENT_MISMATCH" };
-  if (parent[1] !== state.base_head) return { ok: false, mismatch: "PARENT_MISMATCH" };
-  const entries = treeEntries(root, commitHash as GitCommitSha);
-  for (const entry of state.review_receipt?.paths ?? []) {
-    const tree = entries.get(entry.path);
-    if (entry.state === "deleted") {
-      if (tree) return { ok: false, mismatch: "TREE_MISMATCH" };
-      continue;
-    }
-    // Absent entries have no mode/digest; JS read them as undefined (always TREE_MISMATCH if a
-    // tree entry exists). Map to undefined explicitly to preserve that exact semantics.
-    const mode = entry.state === "absent" ? undefined : entry.mode;
-    const entryDigest = entry.state === "absent" ? undefined : entry.digest;
-    if (!tree || tree.mode !== mode || blobDigest(root, tree.object) !== entryDigest) {
-      return { ok: false, mismatch: "TREE_MISMATCH" };
-    }
-  }
-  const expectedChanged = (state.review_receipt?.paths ?? [])
-    .filter((entry) => entry.state !== "unchanged")
-    .map((entry) => entry.path)
-    .sort();
-  const actualChanged = commitChangedPaths(root, state.base_head, commitHash as GitCommitSha);
-  if (
-    actualChanged.length !== expectedChanged.length ||
-    actualChanged.some((path, index) => path !== expectedChanged[index])
-  ) {
-    return { ok: false, mismatch: "PATH_MISMATCH" };
-  }
-  return { ok: true, commit_hash: commitHash as GitCommitSha, changed_paths: actualChanged };
 }
 
 export function stagedPaths(root: string): ExactRepoPath[] {

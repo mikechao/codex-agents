@@ -82,7 +82,7 @@ insertion; an incomplete persisted pair remains `ERROR_RUNTIME_RECOVERY`. The pe
 per-child attestation are kept outside the checkout, are never persisted in workflow state, and are
 not exposed through MCP. This also protects state from direct mutable `server.ts` launches, while
 leaving un-affined installed-mode and temporary/in-memory test stores compatible. Supervisor routing
-may inspect affinity and adopt an un-affined legacy row before dispatching it; those are
+may inspect affinity and adopt an un-affined current row before dispatching it; those are
 supervisor-only paths.
 
 On restart, the supervisor reopens the same durable database, resolves the persisted owning
@@ -143,22 +143,23 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 
 Commit authorization is separate from review approval and is valid only for approved working-tree
 workflows with a fresh review receipt; commit-range workflows reject it. After authorization, the
-committer stages complete approved paths and calls `workflow_prepare_commit`, which verifies the
-fully staged index (HEAD, staged scope, modes, digests, and absence of residue) against the
-authorized receipt and binds the exact prepared tree without changing Git state. The committer then
-runs the external `git commit` and submits the result with `workflow_submit_commit_result` whether
-the attempt succeeded or failed. A verified commit enters the terminal `COMMITTED` phase; an
-unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED` stop cleared by
-`workflow_retry_commit`; any verification mismatch enters the terminal `STOPPED_COMMIT_MISMATCH`.
-Recording verifies current HEAD, parent, changed paths, modes, and content digests against the
-prepared attempt.
+committer stages complete approved paths and calls `workflow_prepare_commit`, which checks the
+current HEAD and the staged scope, file modes, and blob digests against the authorized receipt,
+rejects approved-path residue, and binds the exact prepared tree and path set without changing Git
+state. The committer then runs the external `git commit` and submits the result with
+`workflow_submit_commit_result` whether the attempt succeeded or failed. Result submission verifies
+the current HEAD, commit parent, prepared tree, and changed paths against the prepared attempt (or
+confirms that HEAD stayed unchanged for a not-committed result). A verified commit enters the
+terminal `COMMITTED` phase; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
+stop cleared by `workflow_retry_commit`; any verification mismatch enters the terminal
+`STOPPED_COMMIT_MISMATCH`.
 
-## Migrated v1 compatibility
+## Persistence schema
 
-`workflow_record_commit` exists only for migrated v1 workflows that were already in `COMMIT_AUTHORIZED`
-at migration; new v2 workflows reject it with `ERROR_LEGACY_WORKFLOW`. For such a migrated row only,
-it records an already-created Git commit after verifying current HEAD and reviewed content. New v2
-workflows always use `workflow_prepare_commit` plus `workflow_submit_commit_result`.
+Workflow MCP supports one current persisted schema. Incompatible SQLite tables and persisted state
+schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
+startup never performs implicit schema upgrades or row rewrites. Current workflows always use
+`workflow_prepare_commit` plus `workflow_submit_commit_result` after commit authorization.
 
 ## Bootstrap and reload
 

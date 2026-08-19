@@ -1,8 +1,6 @@
-import { Database } from "bun:sqlite";
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -16,7 +14,7 @@ import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { createRuntimeAttestation, resolveStatePath, WorkflowStore } from "../store.js";
 import { permittedNextActions, roleView } from "../transitions.js";
-import { hashCapability, issueCapability, objectDigest } from "../validation.js";
+import { objectDigest } from "../validation.js";
 import { absentReceipt, fixture, receipt } from "./test-fixtures.js";
 
 function testAttestation(runtimeId: string, runtimeRevision: string) {
@@ -1182,15 +1180,14 @@ test("rejects extra mutation fields without changing workflow state", () => {
     ).length;
     assert.equal(
       errorCategory(() =>
-        store.recordCommit({
+        store.prepareCommit({
           workflow_id: approved.workflow.workflow_id,
           capability: approved.capabilities.committer,
           expected_version: 3,
-          commit_hash: "0".repeat(40),
           extra: true,
         }),
       ),
-      "ERROR_INVALID_SHAPE",
+      "ERROR_STAGED_SCOPE",
     );
     assert.equal(
       store.get(approved.workflow.workflow_id, "committer", approved.capabilities.committer)
@@ -1370,14 +1367,13 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
     ).length;
     assert.equal(
       errorCategory(() =>
-        store.recordCommit({
+        store.prepareCommit({
           workflow_id: created.workflow.workflow_id,
           capability: created.capabilities.committer,
           expected_version: commitBefore.version,
-          commit_hash: git("rev-parse", "HEAD"),
         }),
       ),
-      "ERROR_LEGACY_WORKFLOW",
+      "ERROR_VERSION_CONFLICT",
     );
     assert.equal(
       store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
@@ -1406,7 +1402,6 @@ test("v2 creation constructs every normative state key and stores a verified dig
     assert.equal(workflow.schema_version, 2);
     assert.equal(workflow.version, 0);
     assert.equal(workflow.workflow_type, "change");
-    assert.equal(workflow.legacy_v1, false);
     assert.equal(workflow.phase, "IMPLEMENTING");
     assert.equal(workflow.objective, "v2 state");
     assert.equal(workflow.base_head, created.workflow.base_head);
@@ -1570,7 +1565,7 @@ test("rejects digest and JSON tampering and preserves state on failed mutation",
     store.db.prepare("UPDATE workflows SET state_digest = NULL WHERE workflow_id = ?").run(id);
     assert.equal(
       errorCategory(() => store.get(id, "parent", created.capabilities.parent)),
-      "ERROR_MIGRATION_REQUIRED",
+      "ERROR_STATE_CORRUPT",
     );
     store.db
       .prepare("UPDATE workflows SET state_digest = ? WHERE workflow_id = ?")
@@ -2204,7 +2199,6 @@ const COMMON_KEYS = [
   "permitted_next_actions",
 ];
 const PARENT_EXTRA_KEYS = [
-  "legacy_v1",
   "runtime_id",
   "runtime_revision",
   "base_head",
@@ -2815,39 +2809,6 @@ test("implementation receipt is generated server-side and restart preserves sema
     ]);
     assert.deepEqual(rawState(reopened, id).implementation_receipt, receipt(root));
     reopened.close();
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("migrated workflows with empty contracts cannot submit implementation", () => {
-  const { root, git } = fixture();
-  try {
-    const store: any = new WorkflowStore({
-      repositoryRoot: root,
-      databasePath: ":memory:",
-    });
-    const created = create(store, root, git, { objective: "legacy gate" });
-    const id = created.workflow.workflow_id;
-    const caps = created.capabilities;
-    const raw = JSON.parse(
-      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
-    );
-    raw.legacy_v1 = true;
-    raw.acceptance_criteria = [];
-    raw.validation_requirements = [];
-    raw.implementation_changed_paths = [];
-    raw.implementation_acceptance_evidence = [];
-    raw.implementation_validation_evidence = [];
-    store.db
-      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
-      .run(JSON.stringify(raw), objectDigest(raw), id);
-    assert.equal(
-      errorCategory(() => implementation(store, created, root, 0, "legacy")),
-      "ERROR_LEGACY_WORKFLOW",
-    );
-    assert.equal(store.get(id, "parent", caps.parent).version, 0);
-    store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -5334,123 +5295,6 @@ test("committed results are terminal and cannot retry", () => {
   }
 });
 
-function insertV1Workflow(path: string, state: any) {
-  const db = new Database(path);
-  db.exec(`
-    CREATE TABLE workflows (
-      workflow_id TEXT PRIMARY KEY,
-      version INTEGER NOT NULL,
-      state_json TEXT NOT NULL,
-      parent_capability_hash TEXT NOT NULL,
-      implementer_capability_hash TEXT NOT NULL,
-      reviewer_capability_hash TEXT NOT NULL,
-      committer_capability_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE audit_events (
-      event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      workflow_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      event_type TEXT NOT NULL,
-      actor_role TEXT NOT NULL,
-      summary_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
-    );
-    CREATE INDEX audit_events_workflow ON audit_events(workflow_id, event_id);
-  `);
-  const caps = {
-    parent: issueCapability(),
-    implementer: issueCapability(),
-    reviewer: issueCapability(),
-    committer: issueCapability(),
-  };
-  db.prepare(
-    "INSERT INTO workflows (workflow_id, version, state_json, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    state.workflow_id,
-    state.version,
-    JSON.stringify(state),
-    hashCapability(caps.parent),
-    hashCapability(caps.implementer),
-    hashCapability(caps.reviewer),
-    hashCapability(caps.committer),
-    "2024-01-01T00:00:00.000Z",
-    "2024-01-01T00:00:00.000Z",
-  );
-  db.close();
-  return caps;
-}
-
-function v1AuthorizedState(root: string, git: (...args: string[]) => string, overrides: any = {}) {
-  const base = git("rev-parse", "HEAD");
-  writeFileSync(join(root, "note.txt"), "after\n");
-  const reviewReceipt = receipt(root);
-  return {
-    schema_version: 1,
-    version: 0,
-    workflow_id: randomUUID(),
-    phase: "COMMIT_AUTHORIZED",
-    objective: "legacy objective",
-    base_head: base,
-    approved_paths: ["note.txt"],
-    repair_cycle: 0,
-    max_repair_cycles: 2,
-    parent_workflow_id: null,
-    implementation_summary: null,
-    implementation_status: null,
-    implementation_changed_paths: ["note.txt"],
-    implementation_acceptance_evidence: [],
-    implementation_validation_evidence: [],
-    implementation_receipt: null,
-    implementation_known_failures: [],
-    finding_resolution_map: {},
-    prior_finding_classifications: {},
-    blocking_findings: [],
-    optional_findings: [],
-    review_receipt: reviewReceipt,
-    commit_authorization: { user_authorization: "legacy auth" },
-    commit_result: null,
-    repair_authorized_ids: [],
-    authorized_optional_ids: [],
-    user_authorization_summary: null,
-    ...overrides,
-  };
-}
-
-test("new v2 workflows deny legacy commit recording without mutation", () => {
-  const { root, git } = fixture();
-  try {
-    const store: any = new WorkflowStore({
-      repositoryRoot: root,
-      databasePath: ":memory:",
-    });
-    const { id, caps } = authorizedWorkflow(store, root, git);
-    const before = store.get(id, "parent", caps.parent);
-    const auditBefore = store.audit(id, "parent", caps.parent).length;
-    assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, [
-      "workflow_prepare_commit",
-    ]);
-    assert.equal(
-      errorCategory(() =>
-        store.recordCommit({
-          workflow_id: id,
-          capability: caps.committer,
-          expected_version: before.version,
-          commit_hash: git("rev-parse", "HEAD"),
-        }),
-      ),
-      "ERROR_LEGACY_WORKFLOW",
-    );
-    assert.equal(store.get(id, "parent", caps.parent).version, before.version);
-    assert.equal(store.audit(id, "parent", caps.parent).length, auditBefore);
-    store.close();
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("commit result verification mismatches stop terminally with deterministic categories", () => {
   const { root, git } = fixture();
   try {
@@ -5719,95 +5563,6 @@ test("commit mismatch stops are terminal and cannot retry or resume", () => {
     assert.equal(resultEvent.summary.outcome, "mismatch");
     assert.equal(resultEvent.summary.linked_workflow_id, null);
     assert.equal(JSON.stringify(events).includes("tampered"), false);
-    store.close();
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("migrated legacy commit recording succeeds into COMMITTED", () => {
-  const { root, git } = fixture();
-  const path = join(root, "state.sqlite");
-  try {
-    const state = v1AuthorizedState(root, git);
-    const caps = insertV1Workflow(path, state);
-    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-    assert.deepEqual(
-      store.get(state.workflow_id, "committer", caps.committer).permitted_next_actions,
-      ["workflow_prepare_commit", "workflow_record_commit"],
-    );
-    git("add", "note.txt");
-    git("commit", "-qm", "legacy change");
-    const hash = git("rev-parse", "HEAD");
-    const committed = store.recordCommit({
-      workflow_id: state.workflow_id,
-      capability: caps.committer,
-      expected_version: 1,
-      commit_hash: hash,
-    });
-    assert.equal(committed.phase, "COMMITTED");
-    assert.equal(committed.version, 2);
-    assert.deepEqual(committed.commit_result, {
-      outcome: "committed",
-      commit_hash: hash,
-      failure_summary: null,
-    });
-    assert.deepEqual(committed.commit_authorization, { user_authorization: "legacy auth" });
-    assert.deepEqual(
-      store.get(state.workflow_id, "committer", caps.committer).permitted_next_actions,
-      [],
-    );
-    const events = store.audit(state.workflow_id, "parent", caps.parent);
-    const resultEvent = events[events.length - 1];
-    assert.equal(resultEvent.event_type, "COMMIT_RECORDED");
-    assert.equal(resultEvent.summary.phase_before, "COMMIT_AUTHORIZED");
-    assert.equal(resultEvent.summary.phase_after, "COMMITTED");
-    assert.equal(resultEvent.summary.outcome, "committed");
-    assert.equal(resultEvent.summary.linked_workflow_id, null);
-    assert.equal(JSON.stringify(events).includes(hash), false);
-    store.close();
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("migrated legacy commit recording failure stops terminally as a mismatch", () => {
-  const { root, git } = fixture();
-  const path = join(root, "state.sqlite");
-  try {
-    const state = v1AuthorizedState(root, git);
-    const caps = insertV1Workflow(path, state);
-    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-    writeFileSync(join(root, "note.txt"), "tampered\n");
-    git("add", "note.txt");
-    git("commit", "-qm", "tampered legacy commit");
-    const mismatched = store.recordCommit({
-      workflow_id: state.workflow_id,
-      capability: caps.committer,
-      expected_version: 1,
-      commit_hash: git("rev-parse", "HEAD"),
-    });
-    assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
-    assert.deepEqual(mismatched.commit_result, {
-      outcome: "mismatch",
-      mismatch_category: "TREE_MISMATCH",
-    });
-    assert.equal("failure_summary" in mismatched.commit_result, false);
-    for (const role of ["parent", "implementer", "reviewer", "committer"]) {
-      assert.deepEqual(
-        store.get(state.workflow_id, role, (caps as any)[role]).permitted_next_actions,
-        [],
-      );
-    }
-    const events = store.audit(state.workflow_id, "parent", caps.parent);
-    const resultEvent = events[events.length - 1];
-    assert.equal(resultEvent.event_type, "COMMIT_RECORDED");
-    assert.equal(resultEvent.summary.phase_before, "COMMIT_AUTHORIZED");
-    assert.equal(resultEvent.summary.phase_after, "STOPPED_COMMIT_MISMATCH");
-    assert.equal(resultEvent.summary.outcome, "mismatch");
-    assert.equal(resultEvent.summary.linked_workflow_id, null);
-    assert.equal(JSON.stringify(events).includes("tampered"), false);
-    assert.equal(JSON.stringify(events).includes("TREE_MISMATCH"), false);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

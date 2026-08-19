@@ -15,7 +15,7 @@ import { openStore } from "./store.js";
 type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
-  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common: {
   type: "object";
@@ -550,22 +550,6 @@ export const tools: Tool[] = [
       openWorldHint: false,
     },
   },
-  {
-    name: "workflow_record_commit",
-    description:
-      "Migrated-v1 compatibility: record a legacy committer Git result after verifying current HEAD and reviewed content; rejected for new v2 workflows.",
-    inputSchema: schema(
-      { ...common.properties, commit_hash: { type: "string", pattern: "^[0-9a-f]{40}$" } },
-      [...common.required, "commit_hash"],
-    ),
-    annotations: {
-      title: "Record commit",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-  },
 ];
 
 function json(value: unknown): CallToolResult {
@@ -635,9 +619,6 @@ export function createServer(store: WorkflowStore = openStore()): Server {
           break;
         case "workflow_retry_commit":
           result = store.retryCommit(args);
-          break;
-        case "workflow_record_commit":
-          result = store.recordCommit(args);
           break;
         default:
           fail("ERROR_UNKNOWN_TOOL", "tool is not available");

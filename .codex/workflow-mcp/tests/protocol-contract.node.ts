@@ -15,7 +15,6 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_get",
     "workflow_get_audit",
     "workflow_prepare_commit",
-    "workflow_record_commit",
     "workflow_resume_implementation",
     "workflow_resume_review",
     "workflow_retry_commit",

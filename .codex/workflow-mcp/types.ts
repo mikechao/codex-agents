@@ -66,7 +66,7 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All 17 tool names (from `server.ts` `tools`).
+// All 16 tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
   | "workflow_get"
@@ -83,8 +83,7 @@ export type WorkflowAction =
   | "workflow_authorize_commit"
   | "workflow_prepare_commit"
   | "workflow_submit_commit_result"
-  | "workflow_retry_commit"
-  | "workflow_record_commit";
+  | "workflow_retry_commit";
 
 // Every `ERROR_*` literal used by `fail(...)` in the server plus the child change-receipt CLI
 // categories that `git.createReceipt` can re-throw (`/^ERROR_[A-Z_]+$/` from child stderr). The
@@ -109,7 +108,6 @@ export type ErrorCategory =
   | "ERROR_STALE_RECEIPT"
   | "ERROR_INVALID_REVIEW"
   | "ERROR_COMMIT_NOT_ALLOWED"
-  | "ERROR_LEGACY_WORKFLOW"
   | "ERROR_INVALID_TRANSITION"
   | "ERROR_UNSUPPORTED_WORKFLOW_TYPE"
   | "ERROR_INVALID_REPAIR"
@@ -142,7 +140,7 @@ export type ErrorCategory =
 
 export type AuditEventType =
   | "WORKFLOW_CREATED"
-  | "WORKFLOW_MIGRATED"
+  | "WORKFLOW_RUNTIME_ADOPTED"
   | "IMPLEMENTATION_SUBMITTED"
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"
@@ -156,7 +154,6 @@ export type AuditEventType =
   | "COMMIT_PREPARED"
   | "COMMIT_RESULT_SUBMITTED"
   | "COMMIT_RETRY_AUTHORIZED"
-  | "COMMIT_RECORDED"
   | "LINKED_FOLLOWUP_CREATED";
 
 export type ActorRole = Role;
@@ -299,8 +296,7 @@ export interface WorkflowState {
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
-  legacy_v1: boolean;
-  /** Immutable runtime that owns this workflow. Null is retained for pre-affinity legacy rows. */
+  /** Immutable runtime that owns this workflow. */
   runtime_id: string | null;
   runtime_revision: GitCommitSha | null;
   phase: WorkflowPhase;
@@ -339,13 +335,6 @@ export interface WorkflowState {
   commit_authorization: CommitAuthorization | null;
   commit_preparation: CommitPreparation | null;
   commit_result: CommitResult | null;
-  // Migration-only keys (present on legacy rows; absent on new v2 workflows):
-  legacy_evidence?: { acceptance_evidence: string[]; validation_evidence: string[] };
-  implementation_changed_paths?: ExactRepoPath[];
-  implementation_acceptance_evidence?: string[];
-  implementation_validation_evidence?: string[];
-  authorized_optional_ids?: FindingId[];
-  user_authorization_summary?: string | null;
 }
 
 export type StopContext =
@@ -385,12 +374,6 @@ export type CommitPreparationView = Omit<CommitPreparation, "review_receipt_dige
 export type ParentView = RoleViewCommon &
   Omit<
     WorkflowState,
-    | "legacy_evidence"
-    | "implementation_changed_paths"
-    | "implementation_acceptance_evidence"
-    | "implementation_validation_evidence"
-    | "authorized_optional_ids"
-    | "user_authorization_summary"
     | "initial_receipt"
     | "review_start_receipt"
     | "implementation_receipt"
@@ -516,15 +499,10 @@ export interface AuditEnvelope {
 
 export interface AuditEvent {
   version: number;
-  event_type: AuditEventType; // legacy rows may fall outside the union; cast at read
+  event_type: AuditEventType;
   actor_role: ActorRole;
-  summary: AuditEnvelope | LegacyAuditSummary;
+  summary: AuditEnvelope;
   created_at: IsoTimestamp;
-}
-
-// Old rows returned unsynthesized.
-export interface LegacyAuditSummary {
-  [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +531,3 @@ export type CommitResult =
   | { outcome: "committed"; commit_hash: GitCommitSha; failure_summary: null }
   | { outcome: "not_committed"; commit_hash: null; failure_summary: string }
   | { outcome: "mismatch"; mismatch_category: CommitMismatchCategory };
-
-export type CommitVerification =
-  | { ok: true; commit_hash: GitCommitSha; changed_paths: ExactRepoPath[] }
-  | { ok: false; mismatch: CommitMismatchCategory };

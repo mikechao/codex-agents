@@ -10,7 +10,6 @@ import {
   prepareCommitReceipt,
   repositoryRoot,
   reviewRange,
-  verifyCommit,
   verifyCommitResult,
   verifyReviewReceipt,
 } from "./git.js";
@@ -31,10 +30,8 @@ import {
   IMPLEMENTATION_STOP_PHASES,
   linkedFollowupChildState,
   linkedFollowupInput,
-  migrateV1State,
   prepareCommit,
   rangeDirtyBaselinePaths,
-  recordCommit,
   resumeImplementation,
   resumeReview,
   retryCommit,
@@ -54,10 +51,8 @@ import type {
   ChangeReceipt,
   CommitMismatchCategory,
   CommitPreparationEvidence,
-  CommitVerification,
   GitCommitSha,
   IsoTimestamp,
-  LegacyAuditSummary,
   ParentView,
   ReviewStatus,
   Role,
@@ -93,7 +88,6 @@ export interface WorkflowStoreOptions {
   repositoryRoot?: string;
   databasePath?: string;
   faultAfterLinkedChildInsert?: boolean;
-  faultAfterMigrationUpdate?: boolean;
   /** Immutable runtime identity supplied by bootstrap for newly created workflows. */
   runtimeId?: string;
   runtimeRevision?: string;
@@ -213,9 +207,90 @@ function auditEnvelope(
   };
 }
 
+function createCurrentSchema(db: Database): void {
+  db.exec(`
+    CREATE TABLE workflows (
+      workflow_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      state_digest TEXT,
+      parent_capability_hash TEXT NOT NULL,
+      implementer_capability_hash TEXT NOT NULL,
+      reviewer_capability_hash TEXT NOT NULL,
+      committer_capability_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE audit_events (
+      event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      summary_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
+    );
+    CREATE INDEX audit_events_workflow ON audit_events(workflow_id, event_id);
+  `);
+}
+
+function quotedIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function schemaSignature(db: Database): string {
+  const master = db
+    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+    .all();
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all()
+    .map((row) => (row as { name: string }).name)
+    .map((table) => ({
+      name: table,
+      info: db.prepare(`PRAGMA table_xinfo(${quotedIdentifier(table)})`).all(),
+      indexes: db.prepare(`PRAGMA index_list(${quotedIdentifier(table)})`).all(),
+      foreignKeys: db.prepare(`PRAGMA foreign_key_list(${quotedIdentifier(table)})`).all(),
+    }));
+  return JSON.stringify({ master, tables });
+}
+
+function unsupportedSchema(): never {
+  fail(
+    "ERROR_MIGRATION_REQUIRED",
+    "persisted Workflow MCP database schema is unsupported; reset the database and restart",
+  );
+}
+
+function currentSchemaSignature(): string {
+  const db = new Database(":memory:");
+  try {
+    createCurrentSchema(db);
+    return schemaSignature(db);
+  } finally {
+    db.close();
+  }
+}
+
+function requireCurrentSchema(db: Database): void {
+  const objects = db.prepare("SELECT 1 FROM sqlite_master LIMIT 1").get();
+  if (!objects) {
+    createCurrentSchema(db);
+    return;
+  }
+  let signature: string;
+  try {
+    signature = schemaSignature(db);
+  } catch {
+    unsupportedSchema();
+  }
+  if (signature !== currentSchemaSignature()) unsupportedSchema();
+}
+
 function parseState(row: WorkflowRow): WorkflowState {
   if (row.state_digest === null || row.state_digest === undefined) {
-    fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
+    fail("ERROR_STATE_CORRUPT", "workflow state digest is missing");
   }
   let parsed: unknown;
   try {
@@ -223,8 +298,25 @@ function parseState(row: WorkflowRow): WorkflowState {
   } catch {
     fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
   }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { schema_version?: unknown }).schema_version !== 2
+  ) {
+    fail(
+      "ERROR_MIGRATION_REQUIRED",
+      "persisted workflow state schema is unsupported; reset the database and restart",
+    );
+  }
   if (row.state_digest !== objectDigest(parsed)) {
     fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { version?: unknown }).version !== row.version
+  ) {
+    fail("ERROR_STATE_CORRUPT", "workflow state version is corrupted");
   }
   if (
     typeof parsed === "object" &&
@@ -240,6 +332,11 @@ function parseState(row: WorkflowRow): WorkflowState {
   return validateWorkflowStateV2(parsed);
 }
 
+function validatePersistedRows(db: Database): void {
+  const rows = db.prepare("SELECT * FROM workflows").all() as WorkflowRow[];
+  for (const row of rows) parseState(row);
+}
+
 // roleView's public overloads only accept literal roles; the store reaches the
 // implementation signature (which validates via `role`) with the Role from #assertAuth.
 const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
@@ -248,7 +345,6 @@ export class WorkflowStore {
   readonly root: string;
   readonly path: string;
   readonly faultAfterLinkedChildInsert: boolean;
-  readonly faultAfterMigrationUpdate: boolean;
   readonly runtimeId: string | null;
   readonly runtimeRevision: GitCommitSha | null;
   readonly runtimeAttestation: string | null;
@@ -262,7 +358,6 @@ export class WorkflowStore {
     this.path =
       options.databasePath ?? (process.env.WORKFLOW_MCP_DB_PATH || resolveStatePath(this.root));
     this.faultAfterLinkedChildInsert = options.faultAfterLinkedChildInsert === true;
-    this.faultAfterMigrationUpdate = options.faultAfterMigrationUpdate === true;
     const runtimeId = options.runtimeId ?? process.env.WORKFLOW_MCP_RUNTIME_ID ?? null;
     const runtimeRevision =
       options.runtimeRevision ?? process.env.WORKFLOW_MCP_RUNTIME_REVISION ?? null;
@@ -294,44 +389,13 @@ export class WorkflowStore {
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
     // counts are not checked in this version); every query here binds positionally.
     this.db = new Database(this.path, { strict: true });
-    if (this.path !== ":memory:")
-      this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
-    else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
-    this.db.exec("PRAGMA foreign_keys = ON;");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS workflows (
-        workflow_id TEXT PRIMARY KEY,
-        version INTEGER NOT NULL,
-        state_json TEXT NOT NULL,
-        state_digest TEXT,
-        parent_capability_hash TEXT NOT NULL,
-        implementer_capability_hash TEXT NOT NULL,
-        reviewer_capability_hash TEXT NOT NULL,
-        committer_capability_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS audit_events (
-        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workflow_id TEXT NOT NULL,
-        version INTEGER NOT NULL,
-        event_type TEXT NOT NULL,
-        actor_role TEXT NOT NULL,
-        summary_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
-      );
-      CREATE INDEX IF NOT EXISTS audit_events_workflow ON audit_events(workflow_id, event_id);
-    `);
-    const workflowColumns = this.db
-      .prepare("PRAGMA table_info(workflows)")
-      .all()
-      .map((column) => (column as { name: string }).name);
-    if (!workflowColumns.includes("state_digest")) {
-      this.db.exec("ALTER TABLE workflows ADD COLUMN state_digest TEXT");
-    }
     try {
-      this.#migrateLegacyRows();
+      requireCurrentSchema(this.db);
+      validatePersistedRows(this.db);
+      if (this.path !== ":memory:")
+        this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+      else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
+      this.db.exec("PRAGMA foreign_keys = ON;");
     } catch (error) {
       this.db.close();
       throw error;
@@ -412,135 +476,6 @@ export class WorkflowStore {
     if (!row) fail("ERROR_NOT_FOUND", "workflow is not found");
     parseState(row);
     return row;
-  }
-
-  #migrateLegacyRows(): void {
-    const rows = this.db
-      .prepare("SELECT workflow_id, version, state_json, state_digest FROM workflows")
-      .all() as Array<Pick<WorkflowRow, "workflow_id" | "version" | "state_json" | "state_digest">>;
-    if (rows.length === 0) return;
-    this.db
-      .transaction(() => {
-        for (const row of rows) {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(row.state_json);
-          } catch {
-            fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-          }
-          const schema = (parsed as { schema_version?: unknown }).schema_version;
-          const state = parsed as WorkflowState; // envelope/before view; migrateV1State revalidates
-          if (schema === 1) {
-            if (row.version !== (parsed as { version: number }).version) {
-              fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-            }
-            const next = migrateV1State(parsed);
-            next.runtime_id = this.runtimeId;
-            next.runtime_revision = this.runtimeRevision;
-            validateWorkflowStateV2(next);
-            next.version = ((parsed as { version: number }).version + 1) as WorkflowVersion;
-            const now = isoNow();
-            const result = this.db
-              .prepare(
-                "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-              )
-              .run(
-                next.version,
-                JSON.stringify(next),
-                objectDigest(next),
-                now,
-                row.workflow_id,
-                row.version,
-              );
-            if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-            if (this.faultAfterMigrationUpdate)
-              fail("ERROR_INJECTED_FAILURE", "injected migration failure");
-            this.#audit(
-              row.workflow_id as WorkflowId,
-              next.version,
-              "WORKFLOW_MIGRATED",
-              "parent",
-              auditEnvelope(state, next, null, { outcome: next.phase }),
-            );
-          } else if (schema === 2) {
-            // v2 rows created before runtime affinity existed are safely upgraded in place. They
-            // remain unowned until the first host using a current immutable runtime opens them.
-            if (
-              typeof parsed === "object" &&
-              parsed !== null &&
-              (!("runtime_id" in parsed) ||
-                !("runtime_revision" in parsed) ||
-                !("review_start_receipt" in parsed) ||
-                (Array.isArray(
-                  (parsed as { validation_requirements?: unknown }).validation_requirements,
-                ) &&
-                  (
-                    parsed as unknown as { validation_requirements: unknown[] }
-                  ).validation_requirements.some(
-                    (requirement) =>
-                      requirement &&
-                      typeof requirement === "object" &&
-                      !Array.isArray(requirement) &&
-                      !("argv" in requirement),
-                  )))
-            ) {
-              if (row.state_digest === null || row.state_digest === undefined) {
-                fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
-              }
-              if (row.state_digest !== objectDigest(parsed)) {
-                fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
-              }
-              const next = {
-                ...(parsed as WorkflowState),
-                runtime_id: "runtime_id" in parsed ? parsed.runtime_id : null,
-                runtime_revision: "runtime_revision" in parsed ? parsed.runtime_revision : null,
-                review_start_receipt:
-                  "review_start_receipt" in parsed ? parsed.review_start_receipt : null,
-                validation_requirements: Array.isArray(
-                  (parsed as { validation_requirements?: unknown }).validation_requirements,
-                )
-                  ? (
-                      parsed as { validation_requirements: Array<Record<string, unknown>> }
-                    ).validation_requirements.map((requirement) =>
-                      requirement &&
-                      typeof requirement === "object" &&
-                      !Array.isArray(requirement) &&
-                      !("argv" in requirement)
-                        ? { ...requirement, argv: null }
-                        : requirement,
-                    )
-                  : (parsed as WorkflowState).validation_requirements,
-              };
-              runtimeAffinityPair(
-                next.runtime_id as string | null,
-                next.runtime_revision as GitCommitSha | null,
-              );
-              validateWorkflowStateV2(next);
-              const result = this.db
-                .prepare(
-                  "UPDATE workflows SET state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-                )
-                .run(
-                  JSON.stringify(next),
-                  objectDigest(next),
-                  isoNow(),
-                  row.workflow_id,
-                  row.version,
-                );
-              if (result.changes !== 1) fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-              parsed = next;
-            }
-            runtimeAffinityPair(
-              (parsed as WorkflowState).runtime_id,
-              (parsed as WorkflowState).runtime_revision,
-            );
-            validateWorkflowStateV2(parsed);
-          } else {
-            fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
-          }
-        }
-      })
-      .immediate();
   }
 
   #audit(
@@ -653,7 +588,7 @@ export class WorkflowStore {
         this.#audit(
           id,
           next.version,
-          "WORKFLOW_MIGRATED",
+          "WORKFLOW_RUNTIME_ADOPTED",
           "parent",
           auditEnvelope(state, next, row.state_digest as StateDigest | null, {
             outcome: next.phase,
@@ -686,7 +621,7 @@ export class WorkflowStore {
       version: event.version,
       event_type: event.event_type as AuditEventType,
       actor_role: event.actor_role as ActorRole,
-      summary: JSON.parse(event.summary_json) as AuditEnvelope | LegacyAuditSummary,
+      summary: JSON.parse(event.summary_json) as AuditEnvelope,
       created_at: event.created_at as IsoTimestamp,
     }));
   }
@@ -917,33 +852,6 @@ export class WorkflowStore {
         verifyReviewReceipt(this.root, state.review_receipt, state.approved_paths, state.base_head);
         return authorizeCommit(state, args);
       },
-    );
-  }
-
-  recordCommit(input: unknown): RoleView {
-    const args = mutationInput(input);
-    exactKeys(
-      args,
-      ["workflow_id", "capability", "expected_version", "commit_hash"],
-      "commit record",
-    );
-    return this.#mutate(
-      args.workflow_id,
-      "committer",
-      args.capability,
-      args.expected_version,
-      "COMMIT_RECORDED",
-      (state) => {
-        if (state.legacy_v1 !== true) {
-          fail("ERROR_LEGACY_WORKFLOW", "workflow_record_commit is only for migrated workflows");
-        }
-        if (state.phase !== "COMMIT_AUTHORIZED") {
-          fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
-        }
-        const evidence: CommitVerification = verifyCommit(this.root, state, args.commit_hash);
-        return recordCommit(state, evidence, args);
-      },
-      (next) => next.commit_result!.outcome,
     );
   }
 

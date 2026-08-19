@@ -71,7 +71,7 @@ mutable checkout code.
 Missing, mismatched, or unverifiable identity or attestation is rejected with
 `ERROR_RUNTIME_ISOLATION` before role views, audit reads, transition callbacks, or linked child
 insertion can run. An incomplete persisted pair remains a runtime-recovery failure.
-`runtimeAffinity()` and `adoptRuntime()` are supervisor-only routing paths; un-affined legacy,
+`runtimeAffinity()` and `adoptRuntime()` are supervisor-only routing paths; un-affined current,
 installed-mode, and temporary/in-memory test workflows remain supported.
 Restarting the host is safe: the supervisor reads persisted affinity and routes the workflow back to
 the owning committed runtime. Direct mutable `server.ts` launches can serve un-affined workflows,
@@ -123,7 +123,7 @@ under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED
 
 ### Role views and dispatch
 
-- Parent view: the full persisted workflow (minus capabilities, hashes, audits, legacy-only fields,
+- Parent view: the full persisted workflow (minus capabilities, hashes, audits, internal fields,
   and all receipt structures/digests). The parent owns user and commit authorization, repair and
   resume authorization, retry, and linked follow-up creation.
 - Implementer view: objective, acceptance criteria, validation requirements, dirty
@@ -151,12 +151,15 @@ manual requirements are never executed.
 
 A commit is authorized only for an approved working-tree workflow with a fresh internal review
 receipt and an explicit parent/user `commit_authorization`; a `commit_range` review never authorizes
-a commit. After the parent authorizes, the committer stages complete approved paths, calls
-`workflow_prepare_commit` to verify the fully staged index against the internal authorized receipt,
-runs the external `git commit`, and then calls `workflow_submit_commit_result` whether the commit
-succeeded or failed. A verified commit
-enters `COMMITTED`; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED` stop
-(cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
+a commit. After the parent authorizes, the committer stages complete approved paths and calls
+`workflow_prepare_commit`, which checks the current HEAD and the staged scope, file modes, and blob
+digests against the internal authorized receipt, rejects approved-path residue, and binds the
+prepared tree and path set without changing Git state. The committer then runs the external
+`git commit` and calls `workflow_submit_commit_result` whether the commit succeeded or failed.
+Result submission verifies the current HEAD, commit parent, prepared tree, and changed paths against
+the prepared attempt (or confirms that HEAD stayed unchanged for a not-committed result). A verified
+commit enters `COMMITTED`; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
+stop (cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
 `STOPPED_COMMIT_MISMATCH`. The server never changes Git state; the committer owns staging and the
 commit.
 
@@ -341,13 +344,12 @@ hook_changes: <none or exact summary>
 known_failures: <none or concise list>
 ```
 
-## Migrated v1 compatibility
+## Persistence schema
 
-`workflow_record_commit` exists only for migrated v1 workflows that were already in `COMMIT_AUTHORIZED`
-at migration; new v2 workflows reject it with `ERROR_LEGACY_WORKFLOW`. For such a migrated row only,
-the committer may record an already-created Git commit with `workflow_record_commit`, which verifies
-the current HEAD and reviewed content and either commits or stops terminally. Do not use it for new
-v2 workflows, which use `workflow_prepare_commit` plus `workflow_submit_commit_result`.
+Persisted Workflow MCP state has one current schema. Incompatible databases are rejected at startup
+with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
+or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
+`workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.
 
 ## Observed end-to-end run
 

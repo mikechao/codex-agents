@@ -1862,100 +1862,6 @@ test("commit mismatch over STDIO stops terminally and leaves no retry", async ()
   }
 });
 
-test("v2 workflows deny legacy commit recording over STDIO", async () => {
-  const { root, git } = fixture();
-  try {
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ["--no-warnings", join(process.cwd(), ".codex", "workflow-mcp", "server.ts")],
-      cwd: root,
-      env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") },
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
-    await client.connect(transport);
-    const call = makeLegacyCompatibleCall(client);
-    const receipt = (): any => makeReceipt(root);
-
-    const createdResult = await call("workflow_create", {
-      workflow_type: "change",
-      objective: "record deny protocol",
-      approved_paths: ["note.txt"],
-      acceptance_criteria: ["criterion"],
-      validation_requirements: ["validation"],
-      review_target: {
-        review_mode: "working_tree",
-        base_revision: git("rev-parse", "HEAD"),
-        head_revision: null,
-        approved_paths: ["note.txt"],
-        include_staged: true,
-        include_unstaged: true,
-        include_untracked: true,
-      },
-    });
-    const created = createdResult.workflow;
-    const caps = createdResult.capabilities;
-    await call("workflow_submit_implementation", {
-      workflow_id: created.workflow_id,
-      capability: caps.implementer,
-      expected_version: 0,
-      status: "DONE",
-      summary: "done",
-      agent_touched_paths: [],
-      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }],
-      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }],
-      implementation_receipt: receipt(),
-      known_failures: [],
-      finding_resolution_map: {},
-    });
-    writeFileSync(join(root, "note.txt"), "after\n");
-    const target = {
-      review_mode: "working_tree",
-      base_revision: created.base_head,
-      head_revision: null,
-      approved_paths: ["note.txt"],
-      include_staged: true,
-      include_unstaged: true,
-      include_untracked: true,
-    };
-    await call("workflow_submit_review", {
-      workflow_id: created.workflow_id,
-      capability: caps.reviewer,
-      expected_version: 1,
-      review_status: "APPROVED",
-      blocking_findings: [],
-      optional_findings: [],
-      review_receipt: receipt(),
-      review_target: target,
-      prior_finding_classifications: {},
-    });
-    await call("workflow_authorize_commit", {
-      workflow_id: created.workflow_id,
-      capability: caps.parent,
-      expected_version: 2,
-      user_authorization: "record deny authorized",
-    });
-    const denied = await client.callTool({
-      name: "workflow_record_commit",
-      arguments: {
-        workflow_id: created.workflow_id,
-        capability: caps.committer,
-        expected_version: 4,
-        commit_hash: git("rev-parse", "HEAD"),
-      },
-    });
-    assert.equal(denied.isError, true);
-    assert.equal(
-      JSON.parse((denied.content[0] as { text: string }).text).category,
-      "ERROR_LEGACY_WORKFLOW",
-    );
-    await client.close();
-    await transport.close();
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 interface AgentContract {
   name: string;
   description: string;
@@ -2042,7 +1948,7 @@ test("project config.toml registers an immutable committed workflow_state bootst
   assert.throws(() => TOML.parse('command = "unterminated'), /unterminated/i);
 });
 
-test("obsolete names are absent and workflow_record_commit appears only in migrated-v1 compatibility text", () => {
+test("obsolete persistence and commit compatibility names are absent", () => {
   const ownedTexts = [
     ".codex/agents/WORKFLOW.md",
     ".codex/agents/implementer.toml",
@@ -2062,29 +1968,22 @@ test("obsolete names are absent and workflow_record_commit appears only in migra
       assert.equal(text.includes(obsolete), false, `${file} must not contain ${obsolete}`);
     }
   }
-  for (const file of [".codex/agents/WORKFLOW.md", ".codex/workflow-mcp/README.md"]) {
+  for (const file of [
+    ".codex/agents/WORKFLOW.md",
+    ".codex/workflow-mcp/README.md",
+    ".codex/workflow-mcp/server.ts",
+    ".codex/workflow-mcp/store.ts",
+    ".codex/workflow-mcp/transitions.ts",
+    ".codex/workflow-mcp/types.ts",
+  ]) {
     const text = readFileSync(join(process.cwd(), file), "utf8");
-    let from = 0;
-    let occurrences = 0;
-    while (true) {
-      const idx = text.indexOf("workflow_record_commit", from);
-      if (idx < 0) break;
-      occurrences++;
-      const windowText = text.slice(Math.max(0, idx - 200), idx + 200);
-      assert.ok(
-        /migrat/i.test(windowText),
-        `${file} must mention workflow_record_commit only inside a labeled migrated-v1 compatibility paragraph`,
-      );
-      from = idx + 1;
-    }
-    assert.ok(
-      occurrences > 0,
-      `${file} must document the migrated-v1 workflow_record_commit compatibility`,
-    );
+    assert.equal(text.includes("workflow_record_commit"), false, `${file} has removed action`);
+    assert.equal(text.includes("WORKFLOW_MIGRATED"), false, `${file} has removed event`);
   }
-  const recordTool = tools.find((tool) => tool.name === "workflow_record_commit");
-  assert.ok(recordTool);
-  assert.match(recordTool.description as string, /migrat/i);
+  assert.equal(
+    tools.some((tool) => tool.name === "workflow_record_commit"),
+    false,
+  );
 });
 
 test("normal documentation covers review-only dispatch, recovery, and the prepare/submit commit flow", () => {
@@ -2101,6 +2000,15 @@ test("normal documentation covers review-only dispatch, recovery, and the prepar
     assert.ok(
       text.includes("workflow_submit_commit_result"),
       `${name} must document workflow_submit_commit_result`,
+    );
+    assert.equal(/\b[Rr]ecording\b/.test(text), false, `${name} has stale recording terminology`);
+    assert.ok(
+      /staged scope,\s+file modes,\s+and blob\s+digests/.test(text),
+      `${name} must document preparation's staged-content checks`,
+    );
+    assert.ok(
+      text.includes("current HEAD, commit parent, prepared tree, and changed paths"),
+      `${name} must document result-submission verification checks`,
     );
     assert.ok(/review.only|review_only/i.test(text), `${name} must document review-only workflows`);
     assert.ok(
