@@ -38,8 +38,20 @@ Rules:
   authorize a later commit must use `working_tree`.
 - A `review_only` workflow has no implementer handoff; review the declared target directly from the
   working tree or the declared commit range without expecting implementation evidence.
-- Inspect every part of the declared target. Return `INCONCLUSIVE` if any declared path, include
-  class, revision, diff, or required context cannot be inspected or is contradictory.
+- Treat `approved_paths` as an exact path allowlist and scope-accounting obligation, not as an
+  assertion that every working-tree path must exist. Inspect every declared path and record its
+  observed state, including a provably absent path. A working-tree path is provably absent when the
+  authoritative receipt/direct inspection establishes that it is missing rather than inaccessible;
+  that state is inspected evidence and is not, by itself, `INCONCLUSIVE`.
+- For a working-tree review, if an authoritative objective, acceptance criterion, validation
+  requirement, or other contract requires an approved file or artifact to exist, a provably absent
+  path is an actionable blocking finding describing the required artifact and its absence. Do not
+  turn a required-but-absent artifact into `INCONCLUSIVE`.
+- Return `INCONCLUSIVE` when a path state is unknown, contradictory, or uninspectable, or when any
+  declared include class, revision, diff, or required context cannot be inspected. Do not silently
+  omit an absent path from reviewed-scope accounting.
+- Commit-range semantics remain stricter: a path absent at both endpoints is rejected as an invalid
+  range target and is not an inspected absent working-tree state.
 - For a `working_tree` review, call `workflow_begin_review` before inspecting the target. Workflow
   MCP captures the internal start snapshot and binds it to your next submission through
   `expected_version`; receipt contents and handles are never exposed. Submit semantic findings

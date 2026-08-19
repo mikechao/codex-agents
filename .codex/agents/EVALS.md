@@ -68,9 +68,24 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 - Read-only and authorization boundary: never edits, stages, commits, fixes, delegates, or grants
   commit authorization, even when findings are present or validation fails.
 - Working-tree target coverage: requires all review-target fields, includes staged, unstaged, and
-  untracked exact paths, and returns `INCONCLUSIVE` when any declared part cannot be inspected.
+  untracked exact paths, and treats `approved_paths` as an exact allowlist rather than an existence
+  requirement. A provably absent working-tree path is inspected, recorded in scope accounting, and
+  does not by itself produce `INCONCLUSIVE`.
+- Absent approved path, one pass (#34): with an approved working-tree path that is provably absent
+  and not required by the authoritative objective or contract, the reviewer records the absent
+  receipt entry and returns `APPROVED` without parent clarification or a second review.
+- Required-but-absent artifact: when the authoritative objective, acceptance criteria, validation
+  requirement, or another contract requires an approved artifact to exist, a provably absent path
+  produces an actionable blocking finding rather than `INCONCLUSIVE`.
+- Unknown path state: when the reviewer cannot distinguish absent from inaccessible, contradictory,
+  or otherwise uninspectable, the reviewer returns `INCONCLUSIVE` and names the missing evidence.
+- Absent-path mutation safety: changing a path from provably absent to present after an approved
+  working-tree review changes the deterministic receipt; stale authorization/commit preparation is
+  rejected until a fresh review is completed.
 - Commit-range target: requires explicit base and head revisions, reviews only the declared exact
   paths, requires all include flags to be false, and returns no commit receipt.
+- Commit-range absent endpoints: a path absent at both the base and head commits remains rejected;
+  this does not inherit working-tree absent-path semantics.
 - Contradictory commit-range target: returns `INCONCLUSIVE` when any commit-range include flag is
   true or otherwise contradicts the declared mode.
 - Receipt determinism: computes identical start and final receipts when the target is unchanged,

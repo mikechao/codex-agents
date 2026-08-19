@@ -634,6 +634,45 @@ scenario("clean change lifecycle ends committed", [
   },
 ]);
 
+scenario("#34 absent working-tree path is reviewed and approved in one pass", [
+  {
+    name: "create workflow with an intentionally absent approved path",
+    run: (ctx: any) =>
+      doCreate(ctx, {
+        approved_paths: ["note.txt", "planned.txt"],
+      }),
+    snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
+  },
+  {
+    name: "implement without creating the planned path",
+    run: (ctx: any) => doImplementation(ctx, 0),
+    snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
+  },
+  {
+    name: "approve without parent clarification or a second review",
+    run: (ctx: any) => {
+      doReview(ctx, 1);
+      const state = JSON.parse(
+        ctx.store.db
+          .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+          .get(ctx.created.workflow.workflow_id).state_json,
+      );
+      assert.deepEqual(
+        state.review_receipt.paths.map(({ path, state: pathState, kind }: any) => ({
+          path,
+          state: pathState,
+          kind,
+        })),
+        [
+          { path: "note.txt", state: "unchanged", kind: "file" },
+          { path: "planned.txt", state: "absent", kind: "missing" },
+        ],
+      );
+    },
+    snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
+  },
+]);
+
 scenario("repair cycle and approval lifecycle", [
   {
     name: "create change workflow",

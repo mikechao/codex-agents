@@ -284,9 +284,13 @@ prior_finding_classifications: {<finding_id>: resolved | still_present | superse
 ```
 
 Working-tree reviews require all three include flags to be true and are the only review mode that
-can authorize a later commit. Commit-range reviews require explicit base and head revisions, all
-three include flags set to false, and never produce a commit receipt. Contradictory include flags
-make the review `INCONCLUSIVE`.
+can authorize a later commit. Their `approved_paths` are an exact allowlist for inspection and
+scope accounting, not an existence requirement: a path may be provably absent and still be reviewed
+and recorded as absent. A required-but-absent artifact is a blocking finding when an authoritative
+contract requires it; an unknown, contradictory, or uninspectable path state is `INCONCLUSIVE`.
+Commit-range reviews require explicit base and head revisions, all three include flags set to false,
+and never produce a commit receipt. A path absent at both commit-range endpoints remains rejected
+under the existing range rules. Contradictory include flags make the review `INCONCLUSIVE`.
 
 ### Reviewer -> parent
 

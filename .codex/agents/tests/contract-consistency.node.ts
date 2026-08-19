@@ -126,6 +126,24 @@ test("reviewer validation is the only executable validation path", () => {
   assert.ok(!content.includes('"npx *": allow'));
 });
 
+test("reviewer contract distinguishes absent, required, and unknown path states", () => {
+  const contract = readFileSync(
+    resolve(import.meta.dir, "../contracts/code_reviewer.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  for (const phrase of [
+    "exact path allowlist and scope-accounting obligation",
+    "not as an assertion that every working-tree path must exist",
+    "provably absent path",
+    "required-but-absent artifact",
+    "actionable blocking finding describing the required artifact",
+    "unknown, contradictory, or uninspectable",
+    "path absent at both endpoints is rejected",
+  ]) {
+    assert.ok(contract.includes(phrase), `reviewer contract must include: ${phrase}`);
+  }
+});
+
 test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {
   const content = opencode("committer.md");
   assert.match(content, /^  edit: deny$/m, "committer must not modify source files");

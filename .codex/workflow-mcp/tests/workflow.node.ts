@@ -682,7 +682,7 @@ test("approved receipt gates commit and commit evidence", () => {
   }
 });
 
-test("absent approved paths remain authorized through commit preparation", () => {
+test("#34: one-pass working-tree review records an absent approved path", () => {
   const { root, git } = fixture();
   try {
     const store: any = new WorkflowStore({
@@ -717,6 +717,7 @@ test("absent approved paths remain authorized through commit preparation", () =>
     });
     assert.equal(approved.phase, "STOPPED_APPROVED");
     const approvedReceipt = rawState(store, id).review_receipt;
+    assert.deepEqual(approvedReceipt.approved_paths, approvedPaths);
     assert.deepEqual(
       approvedReceipt.paths.map(({ path, state, kind }: any) => ({ path, state, kind })),
       [
@@ -724,6 +725,7 @@ test("absent approved paths remain authorized through commit preparation", () =>
         { path: "planned.txt", state: "absent", kind: "missing" },
       ],
     );
+    assert.equal(rawState(store, id).review_start_receipt, null);
 
     writeFileSync(join(root, "planned.txt"), "created after approval\n");
     assert.equal(
