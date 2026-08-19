@@ -800,27 +800,19 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_SUBMITTED",
       (state) => {
-        const target = args.review_target;
-        exactKeys(
-          target,
-          [
-            "review_mode",
-            "base_revision",
-            "head_revision",
-            "approved_paths",
-            "include_staged",
-            "include_unstaged",
-            "include_untracked",
-          ],
-          "review_target",
-        );
-        const targetRecord = target as Record<string, unknown>;
-        const normalized = {
-          ...targetRecord,
-          approved_paths: exactPaths(targetRecord.approved_paths, this.root),
-        };
-        if (canonicalJson(normalized) !== canonicalJson(state.review_target)) {
-          fail("ERROR_INVALID_REVIEW", "review target is incomplete or stale");
+        if (
+          state.review_target.base_revision !== state.base_head ||
+          canonicalJson(state.review_target.approved_paths) !== canonicalJson(state.approved_paths)
+        ) {
+          fail("ERROR_INVALID_REVIEW", "authoritative review target is stale or corrupt");
+        }
+        if (state.review_target.review_mode === "commit_range") {
+          if (state.workflow_type !== "review_only") {
+            fail("ERROR_INVALID_REVIEW", "authoritative commit-range target is invalid");
+          }
+          // Re-resolve the persisted range so a deleted or rewritten authoritative target fails
+          // closed instead of allowing semantic review of an unavailable revision.
+          reviewRange(this.root, state.review_target);
         }
         let finalReceipt: ChangeReceipt | null = null;
         if (state.review_target.review_mode === "working_tree") {

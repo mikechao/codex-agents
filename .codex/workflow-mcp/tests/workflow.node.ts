@@ -90,15 +90,6 @@ function review(
     review_status: status,
     blocking_findings: blocking,
     optional_findings: optional,
-    review_target: {
-      review_mode: "working_tree",
-      base_revision: created.workflow.base_head,
-      head_revision: null,
-      approved_paths: ["note.txt"],
-      include_staged: true,
-      include_unstaged: true,
-      include_untracked: true,
-    },
     prior_finding_classifications: prior,
   });
   store.__legacyVersionOffsets[created.workflow.workflow_id] += 1;
@@ -175,6 +166,7 @@ function create(store: any, root: string, git: (...args: string[]) => string, op
             const isWorkingTree = input.review_target?.review_mode === "working_tree";
             const semantic = { ...input };
             delete semantic.review_receipt;
+            delete semantic.review_target;
             if (isWorkingTree) {
               store.__legacyOriginals.beginReview({
                 workflow_id: input.workflow_id,
@@ -187,6 +179,11 @@ function create(store: any, root: string, git: (...args: string[]) => string, op
                 expected_version: input.expected_version + offset + 1,
               });
             }
+            return original({ ...semantic, expected_version: input.expected_version + offset });
+          }
+          if (method === "submitReview") {
+            const semantic = { ...input };
+            delete semantic.review_target;
             return original({ ...semantic, expected_version: input.expected_version + offset });
           }
           return original({ ...input, expected_version: input.expected_version + offset });
@@ -697,12 +694,10 @@ test("absent approved paths remain authorized through commit preparation", () =>
     });
     const id = created.workflow.workflow_id;
     const caps = created.capabilities;
-
     const implemented = implementation(store, created, root, 0, "implemented");
     assert.equal(implemented.phase, "REVIEWING");
     writeFileSync(join(root, "note.txt"), "modified\n");
 
-    const target = workingTarget(created.workflow.base_head, approvedPaths);
     const started = store.beginReview({
       workflow_id: id,
       capability: caps.reviewer,
@@ -716,7 +711,6 @@ test("absent approved paths remain authorized through commit preparation", () =>
       review_status: "APPROVED",
       blocking_findings: [],
       optional_findings: [],
-      review_target: target,
       prior_finding_classifications: {},
     });
     assert.equal(approved.phase, "STOPPED_APPROVED");
@@ -1266,15 +1260,6 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
       "parent",
       inconclusive.capabilities.parent,
     );
-    const target = {
-      review_mode: "working_tree",
-      base_revision: inconclusive.workflow.base_head,
-      head_revision: null,
-      approved_paths: ["note.txt"],
-      include_staged: true,
-      include_unstaged: true,
-      include_untracked: true,
-    };
     assert.equal(
       errorCategory(() =>
         store.__legacyOriginals.submitReview({
@@ -1285,7 +1270,6 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
           blocking_findings: [],
           optional_findings: [],
           review_receipt: receipt(root),
-          review_target: target,
           prior_finding_classifications: {},
         }),
       ),
@@ -1296,16 +1280,20 @@ test("preserves blocking continuity and handles inconclusive receipt semantics",
         .version,
       inconclusiveBefore.version,
     );
+    store.beginReview({
+      workflow_id: inconclusive.workflow.workflow_id,
+      capability: inconclusive.capabilities.reviewer,
+      expected_version: 1,
+    });
     assert.equal(
       store.submitReview({
         workflow_id: inconclusive.workflow.workflow_id,
         capability: inconclusive.capabilities.reviewer,
-        expected_version: 1,
+        expected_version: 2,
         review_status: "INCONCLUSIVE",
         blocking_findings: [],
         optional_findings: [],
         review_receipt: null,
-        review_target: target,
         prior_finding_classifications: {},
       }).phase,
       "STOPPED_INCONCLUSIVE",
@@ -1333,15 +1321,6 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
       "parent",
       created.capabilities.parent,
     ).length;
-    const target = {
-      review_mode: "working_tree",
-      base_revision: created.workflow.base_head,
-      head_revision: null,
-      approved_paths: ["note.txt"],
-      include_staged: true,
-      include_unstaged: true,
-      include_untracked: true,
-    };
     assert.equal(
       errorCategory(() =>
         store.__legacyOriginals.submitReview({
@@ -1352,7 +1331,6 @@ test("rejects stale review and denies v2 legacy commit recording without mutatio
           blocking_findings: [],
           optional_findings: [],
           review_receipt: stale,
-          review_target: target,
           prior_finding_classifications: {},
         }),
       ),
@@ -3502,7 +3480,7 @@ test("working-tree reviews use server-owned snapshots and range reviews stay rec
     });
     const wt = create(store, root, git, { objective: "wt receipt", workflow_type: "review_only" });
     const wtTarget = workingTarget(wt.workflow.base_head);
-    const submit = (workflow: any, capability: any, target: any, version: number) =>
+    const submit = (workflow: any, capability: any, _target: any, version: number) =>
       store.__legacyOriginals.submitReview({
         workflow_id: workflow.workflow_id,
         capability,
@@ -3510,7 +3488,6 @@ test("working-tree reviews use server-owned snapshots and range reviews stay rec
         review_status: "APPROVED",
         blocking_findings: [],
         optional_findings: [],
-        review_target: target,
         prior_finding_classifications: {},
       });
     assert.equal(
@@ -3556,7 +3533,11 @@ test("working-tree reviews use server-owned snapshots and range reviews stay rec
       errorCategory(() => store.__legacyOriginals.submitReview(rangeWithLegacyReceipt)),
       "ERROR_INVALID_SHAPE",
     );
-    const { review_receipt: _legacyReceipt, ...rangeSemantic } = rangeWithLegacyReceipt;
+    const {
+      review_receipt: _legacyReceipt,
+      review_target: _target,
+      ...rangeSemantic
+    } = rangeWithLegacyReceipt;
     const rangeApproved = store.__legacyOriginals.submitReview(rangeSemantic);
     assert.equal(rangeApproved.phase, "STOPPED_APPROVED");
     assert.equal("review_receipt" in rangeApproved, false);
@@ -3577,7 +3558,6 @@ test("working-tree approval rejects mutation and renews the review snapshot", ()
       objective: "review snapshot mutation",
       workflow_type: "review_only",
     });
-    const target = created.workflow.review_target;
     store.__legacyOriginals.beginReview({
       workflow_id: created.workflow.workflow_id,
       capability: created.capabilities.reviewer,
@@ -3603,7 +3583,6 @@ test("working-tree approval rejects mutation and renews the review snapshot", ()
           review_status: "APPROVED",
           blocking_findings: [],
           optional_findings: [],
-          review_target: target,
           prior_finding_classifications: {},
         }),
       ),
@@ -3625,7 +3604,6 @@ test("working-tree approval rejects mutation and renews the review snapshot", ()
       review_status: "APPROVED",
       blocking_findings: [],
       optional_findings: [],
-      review_target: target,
       prior_finding_classifications: {},
     });
     assert.equal(approved.phase, "STOPPED_APPROVED");
@@ -3753,7 +3731,7 @@ test("reviewer views omit nonexistent implementer handoff for review-only workfl
   }
 });
 
-test("review submission requires canonical target equality and rejects stale receipts", () => {
+test("review submission rejects model targets and stale authoritative targets", () => {
   const { root, git } = fixture();
   try {
     const store: any = new WorkflowStore({
@@ -3766,8 +3744,12 @@ test("review submission requires canonical target equality and rejects stale rec
     });
     const id = created.workflow.workflow_id;
     const caps = created.capabilities;
-    const correct = workingTarget(created.workflow.base_head);
-    const submit = (target: any, version = 0) =>
+    store.__legacyOriginals.beginReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 0,
+    });
+    const submit = (input: any = {}, version = 0) =>
       store.__legacyOriginals.submitReview({
         workflow_id: id,
         capability: caps.reviewer,
@@ -3775,29 +3757,30 @@ test("review submission requires canonical target equality and rejects stale rec
         review_status: "INCONCLUSIVE",
         blocking_findings: [],
         optional_findings: [],
-        review_target: target,
+        ...input,
         prior_finding_classifications: {},
       });
     const before = store.get(id, "parent", caps.parent).version;
     assert.equal(
-      errorCategory(() => submit({ ...correct, head_revision: created.workflow.base_head })),
-      "ERROR_INVALID_REVIEW",
+      errorCategory(() => submit({ review_target: workingTarget(created.workflow.base_head) }, 1)),
+      "ERROR_INVALID_SHAPE",
     );
+    assert.equal(store.get(id, "parent", caps.parent).version, before);
+    const state = rawState(store, id);
+    state.review_target.approved_paths = ["other.txt"];
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(state), objectDigest(state), id);
     assert.equal(
-      errorCategory(() => submit({ ...correct, include_untracked: false })),
-      "ERROR_INVALID_REVIEW",
-    );
-    assert.equal(
-      errorCategory(() => submit({ ...correct, approved_paths: ["other.txt"] })),
+      errorCategory(() => submit({}, 1)),
       "ERROR_INVALID_REVIEW",
     );
     assert.equal(store.get(id, "parent", caps.parent).version, before);
-    store.__legacyOriginals.beginReview({
-      workflow_id: id,
-      capability: caps.reviewer,
-      expected_version: 0,
-    });
-    assert.equal(submit(correct, 1).phase, "STOPPED_INCONCLUSIVE");
+    state.review_target.approved_paths = ["note.txt"];
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(state), objectDigest(state), id);
+    assert.equal(submit({}, 1).phase, "STOPPED_INCONCLUSIVE");
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

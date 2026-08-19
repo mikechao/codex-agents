@@ -854,7 +854,6 @@ export function submitReview(
       "review_status",
       "blocking_findings",
       "optional_findings",
-      "review_target",
       "prior_finding_classifications",
     ],
     "review submission",

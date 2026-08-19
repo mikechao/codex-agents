@@ -284,7 +284,6 @@ make the review `INCONCLUSIVE`.
 review_status: APPROVED | CHANGES_REQUESTED | INCONCLUSIVE
 reviewed_scope: <exact target paths and mode>
 reviewed_objective: <objective reviewed>
-review_target: <complete target schema>
 prior_finding_classifications: {<finding_id>: resolved | still_present | superseded}
 blocking_findings: [<finding_id, severity, blocking, file_and_line, failure_scenario, impact,
   violated_requirement, remediation, missing_or_inadequate_test>]

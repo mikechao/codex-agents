@@ -340,7 +340,6 @@ export const tools: Tool[] = [
         review_status: { type: "string", enum: ["APPROVED", "CHANGES_REQUESTED", "INCONCLUSIVE"] },
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
-        review_target: createReviewTargetSchema,
         prior_finding_classifications: resolutionMapSchema,
       },
       [
@@ -348,7 +347,6 @@ export const tools: Tool[] = [
         "review_status",
         "blocking_findings",
         "optional_findings",
-        "review_target",
         "prior_finding_classifications",
       ],
     ),

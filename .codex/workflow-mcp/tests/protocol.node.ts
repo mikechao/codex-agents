@@ -22,8 +22,10 @@ function makeLegacyCompatibleCall(client: Client) {
     if (name === "workflow_submit_implementation") delete args.implementation_receipt;
     if (name === "workflow_submit_review") {
       const legacyReceipt = Object.hasOwn(args, "review_receipt");
+      const isWorkingTree = args.review_target?.review_mode === "working_tree";
       delete args.review_receipt;
-      if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+      delete args.review_target;
+      if (legacyReceipt && isWorkingTree) {
         await client.callTool({
           name: "workflow_begin_review",
           arguments: {
@@ -102,8 +104,10 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
       if (name === "workflow_submit_implementation") delete args.implementation_receipt;
       if (name === "workflow_submit_review") {
         const legacyReceipt = Object.hasOwn(args, "review_receipt");
+        const isWorkingTree = args.review_target?.review_mode === "working_tree";
         delete args.review_receipt;
-        if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+        delete args.review_target;
+        if (legacyReceipt && isWorkingTree) {
           await client.callTool({
             name: "workflow_begin_review",
             arguments: {
@@ -512,6 +516,32 @@ test("exact implementation tool schema matches the normative contract", () => {
   assert.equal("changed_paths" in inputSchema.properties, false);
   assert.equal("acceptance_evidence" in inputSchema.properties, false);
   assert.equal("validation_evidence" in inputSchema.properties, false);
+});
+
+test("review submission schema accepts semantic data only", () => {
+  const submitTool = tools.find((tool) => tool.name === "workflow_submit_review");
+  assert.ok(submitTool);
+  const inputSchema = submitTool.inputSchema as any;
+  assert.equal(inputSchema.additionalProperties, false);
+  assert.deepEqual(Object.keys(inputSchema.properties).sort(), [
+    "blocking_findings",
+    "capability",
+    "expected_version",
+    "optional_findings",
+    "prior_finding_classifications",
+    "review_status",
+    "workflow_id",
+  ]);
+  assert.deepEqual(inputSchema.required, [
+    "workflow_id",
+    "capability",
+    "expected_version",
+    "review_status",
+    "blocking_findings",
+    "optional_findings",
+    "prior_finding_classifications",
+  ]);
+  assert.equal("review_target" in inputSchema.properties, false);
 });
 
 test("exact recovery tool schemas match the normative contract", () => {

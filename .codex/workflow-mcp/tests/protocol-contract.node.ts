@@ -39,6 +39,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const beginSchema = begin.inputSchema as any;
   assert.equal("implementation_receipt" in implementationSchema.properties, false);
   assert.equal("review_receipt" in reviewSchema.properties, false);
+  assert.equal("review_target" in reviewSchema.properties, false);
   assert.deepEqual(Object.keys(beginSchema.properties).sort(), [
     "capability",
     "expected_version",

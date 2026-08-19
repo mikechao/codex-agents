@@ -41,8 +41,10 @@ async function start(root: string) {
     if (name === "workflow_submit_implementation") delete args.implementation_receipt;
     if (name === "workflow_submit_review") {
       const legacyReceipt = Object.hasOwn(args, "review_receipt");
+      const isWorkingTree = args.review_target?.review_mode === "working_tree";
       delete args.review_receipt;
-      if (legacyReceipt && args.review_target?.review_mode === "working_tree") {
+      delete args.review_target;
+      if (legacyReceipt && isWorkingTree) {
         await client.callTool({
           name: "workflow_begin_review",
           arguments: {
@@ -117,6 +119,7 @@ function implementInput(workflowId: string, caps: any, version: number, override
 }
 
 function reviewInput(workflowId: string, caps: any, version: number, overrides: any = {}) {
+  const { review_target: _reviewTarget, ...semanticOverrides } = overrides;
   return {
     workflow_id: workflowId,
     capability: caps.reviewer,
@@ -124,9 +127,9 @@ function reviewInput(workflowId: string, caps: any, version: number, overrides: 
     review_status: "APPROVED",
     blocking_findings: [],
     optional_findings: [],
-    review_target: null,
+    review_target: _reviewTarget,
     prior_finding_classifications: {},
-    ...overrides,
+    ...semanticOverrides,
   };
 }
 

@@ -18,18 +18,6 @@ function rangeFixture() {
   return { root, git, base: git("rev-parse", "HEAD~1"), head: git("rev-parse", "HEAD") };
 }
 
-function workingTarget(baseHead: string, paths: string[] = ["note.txt"]) {
-  return {
-    review_mode: "working_tree",
-    base_revision: baseHead,
-    head_revision: null,
-    approved_paths: paths,
-    include_staged: true,
-    include_unstaged: true,
-    include_untracked: true,
-  };
-}
-
 function createInput(_root: string, git: (...args: string[]) => string, options: any = {}) {
   const approvedPaths = options.approved_paths ?? ["note.txt"];
   return {
@@ -363,7 +351,6 @@ function doReview(ctx: any, version: number, options: any = {}) {
     review_status: status,
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
-    review_target: options.target ?? workingTarget(workflow.base_head),
     prior_finding_classifications: options.prior ?? {},
   });
 }

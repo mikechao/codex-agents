@@ -110,6 +110,11 @@ SHA-256 hashes and are defense-in-depth orchestration controls, not a security b
 another process with equivalent filesystem access. If the server is unavailable for non-trivial work,
 the parent must ask the user before using the documented prompt-only degraded mode.
 
+The reviewer view includes the authoritative sanitized `review_target` for inspection. Managed
+reviewers submit only semantic findings and prior classifications to `workflow_submit_review`; the
+target is not accepted from the model at that boundary. Workflow MCP uses the persisted target for
+working-tree snapshot and receipt gating, and rejects corrupt or stale authoritative target state.
+
 ## Phases, recovery, and stops
 
 ```text

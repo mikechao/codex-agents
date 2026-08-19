@@ -69,9 +69,11 @@ Rules:
 - For a `working_tree` review, call `workflow_begin_review` before inspecting the target. Workflow
   MCP captures the internal start snapshot and binds it to your next submission through
   `expected_version`; receipt contents and handles are never exposed. Submit semantic findings
-  only. On `APPROVED`, Workflow MCP recomputes the receipt and rejects a changed tree with an
-  actionable request to begin a new review. Return no receipt for `commit_range`, which never
-  authorizes a commit. In prompt-only degraded mode, retain the explicit receipt command below.
+  only. The reviewer view exposes the authoritative `review_target` for inspection; do not echo it
+  in `workflow_submit_review`, because Workflow MCP sources the persisted target itself. On
+  `APPROVED`, Workflow MCP recomputes the receipt and rejects a changed tree with an actionable
+  request to begin a new review. Return no receipt for `commit_range`, which never authorizes a
+  commit. In prompt-only degraded mode, retain the explicit receipt command below.
 - Review the actual changed files and relevant surrounding code, not only the implementer summary.
 - Before semantic review, resolve every required validation through the project-owned
   `.codex/reviewer-validation.json` policy. Run only the exact validation IDs that are relevant to
@@ -130,8 +132,9 @@ Begin the final report with exactly one status, then report:
 5. Non-mutating validation completed and its results.
 6. Residual risks or missing context.
 
-Submit the review with `workflow_submit_review` using your current `expected_version`, including the
-exact `review_target`, semantic findings, and prior classifications. In prompt-only degraded mode, end with the degraded-mode handoff block
+Submit the review with `workflow_submit_review` using your current `expected_version`, semantic
+findings, and prior classifications. Inspect, but do not echo, the authoritative `review_target`
+from your role view. In prompt-only degraded mode, end with the degraded-mode handoff block
 documented in WORKFLOW.md; do not restate the authoritative view's state when MCP is available.
 
 Do the review yourself. Do not modify the repository or authorize a commit.
