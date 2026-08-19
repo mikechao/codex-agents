@@ -71,6 +71,24 @@ working-tree target and is read-only; it does not fix findings or authorize a co
 prepares and executes only the exact approved scope after the required gates, and it reports the
 external Git result back to the workflow server.
 
+### Validation-policy preflight
+
+Before creating a managed workflow, Orchestrator reads the target repository's
+`.codex/reviewer-validation.json` policy and checks every proposed executable validation. Authorization
+is exact structured `argv` equality: length, argument ordering, and every individual argument must
+match a policy command. Workflow-local validation IDs, descriptions, prefixes, and approximate matches
+do not authorize execution. A requirement with `argv: null` is an explicit manual check and is never
+executed.
+
+This preflight addresses the #34 regression in which a workflow could be created with a required
+executable validation that the reviewer policy did not authorize, leaving review to fail later with
+an unavailable check. When a proposed command is not authorized, Orchestrator does not edit the
+policy, run the reviewer validation, silently drop the requirement, or claim that it passed manually.
+It may use an already-authorized exact argv only when that command is genuinely sufficient for the
+same check, or represent a genuinely manual check with `argv: null`; otherwise it reports the policy
+mismatch and stops before `workflow_create`. Policy reading and comparison stay bounded and
+read-only, with no helper execution or reviewer enforcement changes.
+
 The illustrative happy path is:
 
 ```text

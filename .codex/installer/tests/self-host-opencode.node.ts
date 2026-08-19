@@ -87,6 +87,32 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.ok(!existsSync(resolve(repoRoot, ".opencode/ORCHESTRATION.md")));
 });
 
+test("the orchestrator preflights the exact reviewer validation policy", () => {
+  const orchestratorFile = resolve(repoRoot, orchestratorPath);
+  const orchestrator = readFileSync(orchestratorFile, "utf8");
+  const normalized = orchestrator.replace(/\s+/gu, " ");
+  for (const phrase of [
+    "Before calling `workflow_create`, read the repository's `.codex/reviewer-validation.json` policy",
+    "exact array equality",
+    "argument ordering, and every individual argument",
+    "Validation IDs, descriptions, prefixes, and approximate or partial matches never authorize execution",
+    "Treat `argv: null` as an explicit manual requirement",
+    "Only reformulate it as `argv: null` when the check is genuinely manual",
+    "substitute an already-authorized exact argv when that command is genuinely sufficient",
+    "do not edit the policy, execute the reviewer validation runner, silently drop the requirement, or create the workflow",
+    "stop before workflow creation rather than guessing",
+  ]) {
+    assert.ok(normalized.includes(phrase), `missing validation preflight contract: ${phrase}`);
+  }
+  const preflightStart = normalized.indexOf("Before calling `workflow_create`");
+  const policyRead = normalized.indexOf(
+    "read the repository's `.codex/reviewer-validation.json` policy",
+  );
+  const creationGate = normalized.indexOf("Create the workflow only after");
+  assert.ok(preflightStart >= 0 && preflightStart < policyRead, "policy read must be in preflight");
+  assert.ok(policyRead < creationGate, "policy preflight must precede workflow creation");
+});
+
 test("the repository's own OpenCode registration keeps the installer server semantics", () => {
   const { mcp } = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     mcp: { workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number } };

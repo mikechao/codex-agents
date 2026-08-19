@@ -147,6 +147,16 @@ an exact structured executable `argv` array or `argv: null` for a manual check. 
 authorizes exact argv entries independently, so descriptions are never parsed as commands and
 manual requirements are never executed.
 
+The OpenCode orchestrator performs a bounded, read-only policy preflight before
+`workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed non-null
+`argv` by exact array equality, including length, ordering, and every individual argument. Validation
+IDs, descriptions, prefixes, and approximate matches never authorize execution. An unauthorized
+requirement may be reformulated only as a genuinely manual `argv: null` check or as an already-
+authorized exact argv that is genuinely sufficient for the same check; otherwise the orchestrator
+stops and reports the mismatch without creating the workflow. It never edits the policy, executes
+reviewer validations, silently drops required checks, or claims an unavailable executable check
+passed manually. A missing or malformed policy is a stop condition rather than a reason to guess.
+
 ### Commit flow
 
 A commit is authorized only for an approved working-tree workflow with a fresh internal review

@@ -246,6 +246,16 @@ registration) after changing the orchestrator, installer, generator, or a canoni
 - Default-agent installation policy: a new target or target config without `default_agent` starts in
   Orchestrator; an explicit existing `default_agent` is preserved while the Orchestrator definition
   is installed.
+- Validation-policy preflight (#34 regression): before `workflow_create`, Orchestrator reads the
+  target `.codex/reviewer-validation.json` policy and checks every proposed executable validation by
+  exact argv-array equality, including length, ordering, and each argument. Validation IDs,
+  descriptions, prefixes, and approximate matches do not authorize execution; `argv: null` remains
+  an explicit manual check. If an executable requirement is unauthorized, Orchestrator does not
+  create the workflow, edit policy, run the reviewer validation, silently drop the check, or claim
+  it passed manually. A valid reformulation either uses an already-authorized exact argv that is
+  genuinely sufficient for the same check or represents a genuinely manual check with `argv: null`;
+  otherwise it reports the mismatch and stops. The read-only preflight remains bounded and does not
+  broaden reviewer enforcement.
 
 ## Acceptance
 

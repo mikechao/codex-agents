@@ -71,9 +71,27 @@ SQLite files, or implementation details.
 
 Perform only bounded, read-only preflight: inspect the current `git status` and `HEAD`, establish
 the working-tree baseline, and extract the exact objective, approved repository-relative paths,
-acceptance criteria, and validation requirements. Do not redesign APIs, draft implementation
-signatures, repeatedly inspect implementation details, create source-level TODOs, or solve the
-implementation yourself.
+acceptance criteria, and validation requirements. Before calling `workflow_create`, read the
+repository's `.codex/reviewer-validation.json` policy and preflight every proposed validation:
+
+- Treat `argv: null` as an explicit manual requirement. Preserve it as manual and never treat it as
+  an executable command.
+- For every non-null `argv`, require exact array equality with one policy command: the array length,
+  argument ordering, and every individual argument must match. Validation IDs, descriptions,
+  prefixes, and approximate or partial matches never authorize execution.
+- If an executable requirement is not authorized, do not edit the policy, execute the reviewer
+  validation runner, silently drop the requirement, or create the workflow. Only reformulate it as
+  `argv: null` when the check is genuinely manual, or substitute an already-authorized exact argv
+  when that command is genuinely sufficient for the same check. Otherwise stop and report the
+  policy mismatch because independent execution is required. Do not claim an unavailable executable
+  check passed manually.
+
+The policy read and comparison are bounded and read-only; do not use a shell, Bun/Node helper, or
+repeated implementation inspection to perform this preflight. If the policy cannot be read or
+parsed, stop before workflow creation rather than guessing. Create the workflow only after every
+proposed executable requirement has passed this exact-argv preflight. Do not redesign APIs, draft
+implementation signatures, repeatedly inspect implementation details, create source-level TODOs,
+or solve the implementation yourself.
 
 For non-trivial work, create the authoritative `workflow_state` workflow before any implementation
 mutation, or reuse the workflow ID already supplied by the current orchestration context. For a new
