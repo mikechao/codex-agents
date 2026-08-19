@@ -11,6 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WorkflowError } from "../errors.js";
 import { WorkflowStore } from "../store.js";
 import { hashCapability, issueCapability, objectDigest } from "../validation.js";
+import { fixture } from "./test-fixtures.js";
 
 function v1State(overrides: any = {}): any {
   return {
@@ -246,6 +247,69 @@ test("migrates a single v1 row to complete v2 state in one transaction", () => {
       4,
     );
     store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("upgrades pre-Issue-33 validation contracts without changing version or digest integrity", () => {
+  const { root, git } = fixture();
+  try {
+    const path = join(root, "state.sqlite");
+    const first = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const created = first.create({
+      workflow_type: "change",
+      objective: "validation migration",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["criterion"],
+      validation_requirements: [{ description: "executable", argv: ["bun", "run", "check"] }],
+      review_target: {
+        review_mode: "working_tree",
+        base_revision: git("rev-parse", "HEAD"),
+        head_revision: null,
+        approved_paths: ["note.txt"],
+        include_staged: true,
+        include_unstaged: true,
+        include_untracked: true,
+      },
+    });
+    const workflowId = created.workflow.workflow_id;
+    const capability = created.capabilities.parent;
+    first.close();
+
+    const db = new Database(path);
+    const row = db
+      .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+      .get(workflowId) as {
+      state_json: string;
+    };
+    const oldState = JSON.parse(row.state_json) as any;
+    oldState.validation_requirements = oldState.validation_requirements.map((requirement: any) => {
+      const { argv: _argv, ...legacyRequirement } = requirement;
+      return legacyRequirement;
+    });
+    db.prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?").run(
+      JSON.stringify(oldState),
+      objectDigest(oldState),
+      workflowId,
+    );
+    db.close();
+
+    const migrated: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    const view = migrated.get(workflowId, "parent", capability);
+    assert.equal(view.version, 0);
+    assert.deepEqual(view.validation_requirements, [
+      { validation_id: "VAL-001", description: "executable", argv: null },
+    ]);
+    const migratedRow = migrated.db
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(workflowId) as { state_json: string; state_digest: string };
+    assert.equal(migratedRow.state_digest, objectDigest(JSON.parse(migratedRow.state_json)));
+    migrated.close();
+
+    const restarted = new WorkflowStore({ repositoryRoot: root, databasePath: path });
+    assert.equal(restarted.get(workflowId, "parent", capability).version, 0);
+    restarted.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

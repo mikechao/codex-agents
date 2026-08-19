@@ -15,7 +15,7 @@ import { openStore } from "./store.js";
 type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
-  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Migrated v1 workflows keep only limited legacy compatibility. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common: {
   type: "object";
@@ -129,6 +129,31 @@ const createReviewTargetSchema: JsonSchema = {
   oneOf: [workingTreeReviewTargetSchema, commitRangeReviewTargetSchema],
 };
 
+const validationRequirementSchema: JsonSchema = {
+  oneOf: [
+    { type: "string", minLength: 1, maxLength: 4000 },
+    {
+      type: "object",
+      properties: {
+        description: { type: "string", minLength: 1, maxLength: 4000 },
+        argv: {
+          oneOf: [
+            { type: "null" },
+            {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 4000 },
+              minItems: 1,
+              maxItems: 50,
+            },
+          ],
+        },
+      },
+      required: ["description", "argv"],
+      additionalProperties: false,
+    },
+  ],
+};
+
 export const tools: Tool[] = [
   {
     name: "workflow_create",
@@ -147,7 +172,7 @@ export const tools: Tool[] = [
         },
         validation_requirements: {
           type: "array",
-          items: { type: "string", minLength: 1, maxLength: 4000 },
+          items: validationRequirementSchema,
           minItems: 0,
           maxItems: 999,
         },
@@ -423,7 +448,7 @@ export const tools: Tool[] = [
         },
         validation_requirements: {
           type: "array",
-          items: { type: "string", minLength: 1, maxLength: 4000 },
+          items: validationRequirementSchema,
           minItems: 1,
           maxItems: 999,
         },

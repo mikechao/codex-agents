@@ -311,10 +311,47 @@ export function contractList(
   ) {
     fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
   }
-  return value.map((description, index) => ({
-    [idField]: `${idPrefix}-${String(index + 1).padStart(3, "0")}`,
-    description: boundedString(description, `${name} description`),
-  })) as unknown as AcceptanceCriterion[] | ValidationRequirement[];
+  return value.map((item, index) => {
+    const id = `${idPrefix}-${String(index + 1).padStart(3, "0")}`;
+    if (idField === "criterion_id") {
+      return {
+        criterion_id: id,
+        description: boundedString(item, `${name} description`),
+      };
+    }
+    // String requirements remain accepted as manual requirements for compatibility with
+    // pre-Issue #33 callers. Executable requirements must use the structured object form;
+    // descriptions are never interpreted as commands.
+    if (typeof item === "string") {
+      return {
+        validation_id: id,
+        description: boundedString(item, `${name} description`),
+        argv: null,
+      };
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      fail("ERROR_INVALID_SHAPE", `${name} requirement is invalid`);
+    }
+    const record = item as Record<string, unknown>;
+    exactKeys(item, ["description", "argv"], `${name} requirement`);
+    if (record.argv !== null && !Array.isArray(record.argv)) {
+      fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
+    }
+    const argv =
+      record.argv === null
+        ? null
+        : record.argv.map((argument, argumentIndex) =>
+            boundedString(argument, `${name} argv[${argumentIndex}]`, MAX_TEXT),
+          );
+    if (argv !== null && (argv.length === 0 || argv.length > 50)) {
+      fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
+    }
+    return {
+      validation_id: id,
+      description: boundedString(record.description, `${name} description`),
+      argv,
+    };
+  }) as unknown as AcceptanceCriterion[] | ValidationRequirement[];
 }
 
 export function evidenceResults(

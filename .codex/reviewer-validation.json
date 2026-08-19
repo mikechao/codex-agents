@@ -2,25 +2,26 @@
   "version": 1,
   "commands": [
     {
-      "validation_id": "VAL-001",
       "argv": ["bun", "run", "generate:agents"],
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
-      "validation_id": "VAL-002",
       "argv": ["bun", "run", "test:agents"],
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
-      "validation_id": "VAL-003",
       "argv": ["bun", "run", "test:installer"],
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
-      "validation_id": "VAL-004",
+      "argv": ["bun", "run", "test:workflow-mcp"],
+      "timeout_ms": 120000,
+      "max_output_bytes": 65536
+    },
+    {
       "argv": ["bun", "run", "validate"],
       "timeout_ms": 120000,
       "max_output_bytes": 65536

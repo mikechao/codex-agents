@@ -446,6 +446,10 @@ test("exact create tool schema matches the normative contract", () => {
   assert.equal(inputSchema.properties.acceptance_criteria.maxItems, 999);
   assert.equal(inputSchema.properties.validation_requirements.minItems, 0);
   assert.equal(inputSchema.properties.validation_requirements.maxItems, 999);
+  const validationItem = inputSchema.properties.validation_requirements.items;
+  const structuredValidation = validationItem.oneOf.find((entry: any) => entry.type === "object");
+  assert.deepEqual(structuredValidation.required, ["description", "argv"]);
+  assert.equal(structuredValidation.properties.argv.oneOf[0].type, "null");
   assert.equal(inputSchema.properties.max_repair_cycles.minimum, 0);
   assert.equal(inputSchema.properties.max_repair_cycles.maximum, 2);
   const target = inputSchema.properties.review_target;
@@ -1229,7 +1233,7 @@ test("linked follow-up over STDIO creates a self-contained child without source 
       { criterion_id: "AC-001", description: "child criterion" },
     ]);
     assert.deepEqual(childImplementer.validation_requirements, [
-      { validation_id: "VAL-001", description: "child validation" },
+      { validation_id: "VAL-001", description: "child validation", argv: null },
     ]);
     assert.deepEqual(childImplementer.permitted_next_actions, ["workflow_submit_implementation"]);
     const parentView = await call("workflow_get", {

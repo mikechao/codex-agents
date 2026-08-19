@@ -228,8 +228,11 @@ export interface AcceptanceCriterion {
 }
 
 export interface ValidationRequirement {
+  /** Workflow-local result correlation ID; never a repository command selector. */
   validation_id: string; // "VAL-001"..
   description: string;
+  /** Exact executable argv, or null for a manual validation requirement. */
+  argv: string[] | null;
 }
 
 export interface AcceptanceResult {

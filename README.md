@@ -99,10 +99,12 @@ one all-or-nothing step:
   unrelated settings).
 - The reviewer validation runner is installed at `.codex/agents/reviewer-validation.ts`, and a
   project-owned `.codex/reviewer-validation.json` policy is scaffolded only when absent. The policy
-  contains exact argv arrays, timeout limits, and output limits; customize it in the target project
-  without regenerating agent definitions. Reviewer validation is executed directly without a shell,
-  and unknown IDs, malformed policy, shell syntax, timeouts, unavailable commands, and working-tree
-  mutations fail closed.
+  contains exact argv arrays, timeout limits, and output limits (not workflow validation IDs);
+  customize it in the target project without regenerating agent definitions. Workflow-local
+  `VAL-*` IDs correlate evidence only. Reviewer validation is executed directly without a shell, and
+  unauthorized argv, malformed policy, shell syntax, timeouts, unavailable commands, and working-tree
+  mutations fail closed. Manual validation requirements are represented with `argv: null` and are
+  never executed.
 
 Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
 sources. Their direct provider-server registration has no runtime-artifact affinity lifecycle; the

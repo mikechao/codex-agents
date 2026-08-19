@@ -350,7 +350,7 @@ test("range review to linked change and approval over STDIO", async () => {
       { criterion_id: "AC-001", description: "child criterion" },
     ]);
     assert.deepEqual(childImplementer.validation_requirements, [
-      { validation_id: "VAL-001", description: "child validation" },
+      { validation_id: "VAL-001", description: "child validation", argv: null },
     ]);
 
     const implemented = await call(

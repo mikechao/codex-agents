@@ -70,6 +70,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
     assert.ok(existsSync(join(root, ".codex/reviewer-validation.json")));
+    const reviewerPolicy = JSON.parse(
+      readFileSync(join(root, ".codex/reviewer-validation.json"), "utf8"),
+    ) as { commands: Array<Record<string, unknown>> };
+    assert.ok(reviewerPolicy.commands.length > 0);
+    assert.ok(reviewerPolicy.commands.every((command) => !Object.hasOwn(command, "validation_id")));
     for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),

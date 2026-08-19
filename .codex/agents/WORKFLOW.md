@@ -140,6 +140,13 @@ under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED
   actions. Receipt JSON and digests remain internal; the committer prepares and then submits the
   commit result.
 
+Validation requirements are workflow-local contracts. The server assigns `VAL-001`, `VAL-002`, and
+so on in caller order; those IDs correlate a requirement with its result within that workflow and
+are never repository-global command selectors. Each requirement exposes `description` plus either
+an exact structured executable `argv` array or `argv: null` for a manual check. The reviewer policy
+authorizes exact argv entries independently, so descriptions are never parsed as commands and
+manual requirements are never executed.
+
 ### Commit flow
 
 A commit is authorized only for an approved working-tree workflow with a fresh internal review

@@ -470,7 +470,19 @@ export class WorkflowStore {
               parsed !== null &&
               (!("runtime_id" in parsed) ||
                 !("runtime_revision" in parsed) ||
-                !("review_start_receipt" in parsed))
+                !("review_start_receipt" in parsed) ||
+                (Array.isArray(
+                  (parsed as { validation_requirements?: unknown }).validation_requirements,
+                ) &&
+                  (
+                    parsed as unknown as { validation_requirements: unknown[] }
+                  ).validation_requirements.some(
+                    (requirement) =>
+                      requirement &&
+                      typeof requirement === "object" &&
+                      !Array.isArray(requirement) &&
+                      !("argv" in requirement),
+                  )))
             ) {
               if (row.state_digest === null || row.state_digest === undefined) {
                 fail("ERROR_MIGRATION_REQUIRED", "workflow requires state migration");
@@ -484,6 +496,20 @@ export class WorkflowStore {
                 runtime_revision: "runtime_revision" in parsed ? parsed.runtime_revision : null,
                 review_start_receipt:
                   "review_start_receipt" in parsed ? parsed.review_start_receipt : null,
+                validation_requirements: Array.isArray(
+                  (parsed as { validation_requirements?: unknown }).validation_requirements,
+                )
+                  ? (
+                      parsed as { validation_requirements: Array<Record<string, unknown>> }
+                    ).validation_requirements.map((requirement) =>
+                      requirement &&
+                      typeof requirement === "object" &&
+                      !Array.isArray(requirement) &&
+                      !("argv" in requirement)
+                        ? { ...requirement, argv: null }
+                        : requirement,
+                    )
+                  : (parsed as WorkflowState).validation_requirements,
               };
               runtimeAffinityPair(
                 next.runtime_id as string | null,

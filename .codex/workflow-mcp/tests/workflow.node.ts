@@ -542,7 +542,7 @@ test("optional findings require a fresh linked workflow", () => {
       objective: "authorized optional",
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
-      validation_requirements: ["child validation"],
+      validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
       finding_ids: ["F-3"],
       user_authorization: "user approved optional follow-up",
     });
@@ -565,7 +565,11 @@ test("optional findings require a fresh linked workflow", () => {
       { criterion_id: "AC-001", description: "child criterion" },
     ]);
     assert.deepEqual(linked.workflow.validation_requirements, [
-      { validation_id: "VAL-001", description: "child validation" },
+      {
+        validation_id: "VAL-001",
+        description: "child validation",
+        argv: ["bun", "run", "check"],
+      },
     ]);
     const childState = JSON.parse(
       store.db
@@ -1411,7 +1415,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
       { criterion_id: "AC-001", description: "criterion A" },
     ]);
     assert.deepEqual(workflow.validation_requirements, [
-      { validation_id: "VAL-001", description: "validation A" },
+      { validation_id: "VAL-001", description: "validation A", argv: null },
     ]);
     assert.deepEqual(workflow.review_target, {
       review_mode: "working_tree",
@@ -1952,9 +1956,35 @@ test("create assigns ordered contract IDs and preserves duplicate descriptions",
       { criterion_id: "AC-003", description: "alpha" },
     ]);
     assert.deepEqual(created.workflow.validation_requirements, [
-      { validation_id: "VAL-001", description: "lint" },
-      { validation_id: "VAL-002", description: "unit" },
+      { validation_id: "VAL-001", description: "lint", argv: null },
+      { validation_id: "VAL-002", description: "unit", argv: null },
     ]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validation contracts persist exact executable argv independently of local IDs", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = create(store, root, git, {
+      validation_requirements: [
+        { description: "run checks", argv: ["bun", "run", "check"] },
+        { description: "inspect manually", argv: null },
+      ],
+    });
+    assert.deepEqual(created.workflow.validation_requirements, [
+      {
+        validation_id: "VAL-001",
+        description: "run checks",
+        argv: ["bun", "run", "check"],
+      },
+      { validation_id: "VAL-002", description: "inspect manually", argv: null },
+    ]);
+    const persisted = rawState(store, created.workflow.workflow_id);
+    assert.deepEqual(persisted.validation_requirements, created.workflow.validation_requirements);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -2142,7 +2172,7 @@ test("restart persists execution contracts and review target", () => {
       { criterion_id: "AC-001", description: "restart criterion" },
     ]);
     assert.deepEqual(persisted.validation_requirements, [
-      { validation_id: "VAL-001", description: "restart validation" },
+      { validation_id: "VAL-001", description: "restart validation", argv: null },
     ]);
     assert.deepEqual(persisted.review_target, {
       review_mode: "working_tree",

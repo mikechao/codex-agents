@@ -33,7 +33,6 @@ const SHELL_EXECUTABLES = new Set([
 ]);
 
 export interface ReviewerValidationCommand {
-  validation_id: string;
   argv: string[];
   timeout_ms: number;
   max_output_bytes: number;
@@ -46,7 +45,8 @@ export interface ReviewerValidationPolicy {
 
 export interface ValidationEvidence {
   validation_id: string;
-  argv: string[];
+  requested_argv: string[];
+  executed_argv: string[];
   status: "passed" | "failed" | "unavailable" | "mutated";
   exit_code: number | null;
   timed_out: boolean;
@@ -75,27 +75,30 @@ function boundedInteger(value: unknown, context: string, maximum: number): numbe
   return value as number;
 }
 
+function argvValue(value: unknown, context: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    throw new Error(`${context} must be a non-empty array`);
+  }
+  return value.map((argument, index) => stringValue(argument, `${context}[${index}]`));
+}
+
+function sameArgv(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((argument, index) => argument === right[index]);
+}
+
 export function parseReviewerValidationPolicy(value: unknown): ReviewerValidationPolicy {
   const policy = objectRecord(value, "policy");
   if (policy.version !== 1) throw new Error("policy.version must be 1");
   if (!Array.isArray(policy.commands) || policy.commands.length === 0) {
     throw new Error("policy.commands must be a non-empty array");
   }
+  const parsedCommands: ReviewerValidationCommand[] = [];
   const commands = policy.commands.map((entry, index) => {
     const command = objectRecord(entry, `policy.commands[${index}]`);
-    const validationId = stringValue(
-      command.validation_id,
-      `policy.commands[${index}].validation_id`,
-    );
-    if (!/^[A-Z][A-Z0-9_-]*$/u.test(validationId)) {
-      throw new Error(`policy.commands[${index}].validation_id is invalid`);
+    if (Object.keys(command).sort().join(",") !== "argv,max_output_bytes,timeout_ms") {
+      throw new Error(`policy.commands[${index}] has invalid fields`);
     }
-    if (!Array.isArray(command.argv) || command.argv.length === 0) {
-      throw new Error(`policy.commands[${index}].argv must be a non-empty array`);
-    }
-    const argv = command.argv.map((argument, argumentIndex) =>
-      stringValue(argument, `policy.commands[${index}].argv[${argumentIndex}]`),
-    );
+    const argv = argvValue(command.argv, `policy.commands[${index}].argv`);
     const executable = argv[0].split(/[\\/]/u).pop() ?? argv[0];
     if (
       SHELL_EXECUTABLES.has(executable) ||
@@ -113,24 +116,18 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
       `policy.commands[${index}].max_output_bytes`,
       MAX_OUTPUT_BYTES,
     );
-    if (commandsHaveDuplicateId(policy.commands as unknown[], validationId, index)) {
-      throw new Error(`duplicate validation_id: ${validationId}`);
+    if (parsedCommands.some((candidate) => sameArgv(candidate.argv, argv))) {
+      throw new Error(`duplicate argv: ${JSON.stringify(argv)}`);
     }
-    return {
-      validation_id: validationId,
+    const parsed = {
       argv,
       timeout_ms: timeout,
       max_output_bytes: maxOutput,
     };
+    parsedCommands.push(parsed);
+    return parsed;
   });
   return { version: 1, commands };
-}
-
-function commandsHaveDuplicateId(commands: unknown[], id: string, currentIndex: number): boolean {
-  return commands.slice(0, currentIndex).some((entry) => {
-    const record = entry as Record<string, unknown>;
-    return record.validation_id === id;
-  });
 }
 
 export function loadReviewerValidationPolicy(
@@ -203,11 +200,14 @@ export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
 export function runReviewerValidation(
   policy: ReviewerValidationPolicy,
   validationId: string,
+  requestedArgv: readonly string[],
   projectRoot = PROJECT_ROOT,
 ): ValidationEvidence {
-  const command = policy.commands.find((candidate) => candidate.validation_id === validationId);
-  if (command === undefined)
-    throw new Error(`validation command is not allowlisted: ${validationId}`);
+  const requested = argvValue(requestedArgv, "requested argv");
+  const command = policy.commands.find((candidate) => sameArgv(candidate.argv, requested));
+  if (command === undefined) {
+    throw new Error(`requested validation argv is not allowlisted: ${JSON.stringify(requested)}`);
+  }
   const before = reviewTargetFingerprint(projectRoot);
   const outputDirectory = mkdtempSync(join(tmpdir(), "reviewer-validation-output-"));
   const stdoutPath = join(outputDirectory, "stdout");
@@ -247,7 +247,8 @@ export function runReviewerValidation(
     if (changed) status = "mutated";
     return {
       validation_id: validationId,
-      argv: command.argv,
+      requested_argv: requested,
+      executed_argv: command.argv,
       status,
       exit_code: exitCode,
       timed_out: timedOut,
@@ -260,12 +261,24 @@ export function runReviewerValidation(
 }
 
 function main(args: readonly string[]): number {
-  if (args.length !== 2 || args[0] !== "--validation-id") {
-    process.stderr.write("Usage: bun .codex/agents/reviewer-validation.ts --validation-id ID\n");
+  if (args.length !== 4 || args[0] !== "--validation-id" || args[2] !== "--argv-json") {
+    process.stderr.write(
+      "Usage: bun .codex/agents/reviewer-validation.ts --validation-id ID --argv-json JSON\n",
+    );
     return 2;
   }
   try {
-    const evidence = runReviewerValidation(loadReviewerValidationPolicy(), args[1]);
+    let requestedArgv: unknown;
+    try {
+      requestedArgv = JSON.parse(args[3]);
+    } catch {
+      throw new Error("requested argv JSON is invalid");
+    }
+    const evidence = runReviewerValidation(
+      loadReviewerValidationPolicy(),
+      args[1],
+      argvValue(requestedArgv, "requested argv"),
+    );
     process.stdout.write(`${JSON.stringify(evidence)}\n`);
     return evidence.status === "passed" ? 0 : 1;
   } catch (cause) {

@@ -1543,10 +1543,16 @@ function contractsShape(value: unknown, prefix: "AC" | "VAL"): void {
   const idField = prefix === "AC" ? "criterion_id" : "validation_id";
   for (const item of value) {
     if (!isObject(item)) corrupt();
-    checkKeys(item, [idField, "description"]);
+    checkKeys(item, prefix === "VAL" ? [idField, "description", "argv"] : [idField, "description"]);
     const id = item[idField];
     if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
     bounded(item.description, MAX_TEXT);
+    if (prefix === "VAL") {
+      if (item.argv !== null) {
+        if (!Array.isArray(item.argv) || item.argv.length === 0 || item.argv.length > 50) corrupt();
+        for (const argument of item.argv) bounded(argument, MAX_TEXT);
+      }
+    }
   }
 }
 

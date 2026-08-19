@@ -16,7 +16,6 @@ function policy(argv: string[]): ReviewerValidationPolicy {
     version: 1,
     commands: [
       {
-        validation_id: "VAL-TEST",
         argv,
         timeout_ms: 10_000,
         max_output_bytes: 4096,
@@ -41,7 +40,19 @@ function gitFixture() {
   return { root, git };
 }
 
-test("policy accepts exact argv and rejects duplicates, shell syntax, and malformed limits", () => {
+function workflowValidationFixture() {
+  const fixture = gitFixture();
+  writeFileSync(
+    join(fixture.root, "package.json"),
+    JSON.stringify({
+      private: true,
+      scripts: { "test:workflow-mcp": "bun -e \"process.stdout.write('workflow fixture')\"" },
+    }),
+  );
+  return fixture;
+}
+
+test("policy accepts exact argv and rejects duplicates, policy IDs, shell syntax, and malformed limits", () => {
   const parsed = policy(["bun", "-e", "process.stdout.write('ok')"]);
   assert.deepEqual(parsed.commands[0]?.argv, ["bun", "-e", "process.stdout.write('ok')"]);
   assert.throws(
@@ -50,20 +61,18 @@ test("policy accepts exact argv and rejects duplicates, shell syntax, and malfor
         version: 1,
         commands: [
           {
-            validation_id: "VAL-A",
             argv: ["bun", "run", "check"],
             timeout_ms: 1,
             max_output_bytes: 1,
           },
           {
-            validation_id: "VAL-A",
-            argv: ["bun", "run", "test"],
+            argv: ["bun", "run", "check"],
             timeout_ms: 1,
             max_output_bytes: 1,
           },
         ],
       }),
-    /duplicate validation_id/,
+    /duplicate argv/,
   );
   assert.throws(() => policy(["bun", "run", "check;touch p"]), /shell syntax/);
   assert.throws(() => policy(["sh", "-c", "true"]), /invokes a shell/);
@@ -75,28 +84,55 @@ test("policy accepts exact argv and rejects duplicates, shell syntax, and malfor
     () =>
       parseReviewerValidationPolicy({
         version: 1,
-        commands: [{ validation_id: "VAL", argv: ["bun"] }],
+        commands: [{ argv: ["bun"], max_output_bytes: 1 }],
       }),
-    /timeout_ms/,
+    /invalid fields/,
   );
 });
 
 test("project policy maps every required validation to its authoritative command", () => {
-  const commands = new Map(
-    loadReviewerValidationPolicy().commands.map((command) => [command.validation_id, command.argv]),
-  );
-  assert.deepEqual(commands.get("VAL-001"), ["bun", "run", "generate:agents"]);
-  assert.deepEqual(commands.get("VAL-002"), ["bun", "run", "test:agents"]);
-  assert.deepEqual(commands.get("VAL-003"), ["bun", "run", "test:installer"]);
-  assert.deepEqual(commands.get("VAL-004"), ["bun", "run", "validate"]);
-  assert.equal(commands.size, 4);
+  const commands = loadReviewerValidationPolicy().commands.map((command) => command.argv);
+  assert.deepEqual(commands, [
+    ["bun", "run", "generate:agents"],
+    ["bun", "run", "test:agents"],
+    ["bun", "run", "test:installer"],
+    ["bun", "run", "test:workflow-mcp"],
+    ["bun", "run", "validate"],
+  ]);
 });
 
-test("unknown validation IDs fail before execution", () => {
+test("project workflow validation is authorized and runs through the reviewer runner", () => {
+  const workflowArgv = ["bun", "run", "test:workflow-mcp"];
+  const { root } = workflowValidationFixture();
+  try {
+    const result = runReviewerValidation(
+      loadReviewerValidationPolicy(),
+      "VAL-LOCAL-WORKFLOW",
+      workflowArgv,
+      root,
+    );
+    assert.equal(result.status, "passed");
+    assert.equal(result.exit_code, 0);
+    assert.equal(result.working_tree_changed, false);
+    assert.deepEqual(result.requested_argv, workflowArgv);
+    assert.deepEqual(result.executed_argv, workflowArgv);
+    assert.match(result.output, /workflow fixture/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("unauthorized argv fails before execution while IDs remain local correlation", () => {
   const { root } = gitFixture();
   try {
     assert.throws(
-      () => runReviewerValidation(policy(["bun", "-e", "process.exit(1)"]), "VAL-NOPE", root),
+      () =>
+        runReviewerValidation(
+          policy(["bun", "-e", "process.exit(1)"]),
+          "VAL-NOPE",
+          ["bun", "-e", "process.exit(2)"],
+          root,
+        ),
       /not allowlisted/,
     );
   } finally {
@@ -110,16 +146,28 @@ test("runner uses repository root, records output, and returns failures", () => 
     const result = runReviewerValidation(
       policy(["bun", "-e", "process.stdout.write(process.cwd())"]),
       "VAL-TEST",
+      ["bun", "-e", "process.stdout.write(process.cwd())"],
       root,
     );
     assert.equal(result.status, "passed");
     assert.equal(result.exit_code, 0);
     assert.equal(result.working_tree_changed, false);
+    assert.deepEqual(result.requested_argv, ["bun", "-e", "process.stdout.write(process.cwd())"]);
+    assert.deepEqual(result.executed_argv, result.requested_argv);
     assert.equal(result.output, realpathSync(root));
+    const reusedId = runReviewerValidation(
+      policy(["bun", "-e", "process.stdout.write(process.cwd())"]),
+      "VAL-001",
+      ["bun", "-e", "process.stdout.write(process.cwd())"],
+      root,
+    );
+    assert.equal(reusedId.validation_id, "VAL-001");
+    assert.equal(reusedId.status, "passed");
 
     const failed = runReviewerValidation(
       policy(["bun", "-e", "process.stderr.write('bad'),process.exit(3)"]),
       "VAL-TEST",
+      ["bun", "-e", "process.stderr.write('bad'),process.exit(3)"],
       root,
     );
     assert.equal(failed.status, "failed");
@@ -134,7 +182,12 @@ test("runner rejects approval evidence when validation mutates the review target
   const { root } = gitFixture();
   try {
     const script = `Bun.write(${JSON.stringify(join(root, "tracked.txt"))}, "after")`;
-    const result = runReviewerValidation(policy(["bun", "-e", script]), "VAL-TEST", root);
+    const result = runReviewerValidation(
+      policy(["bun", "-e", script]),
+      "VAL-TEST",
+      ["bun", "-e", script],
+      root,
+    );
     assert.equal(result.status, "mutated");
     assert.equal(result.working_tree_changed, true);
     assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "after");
@@ -150,42 +203,47 @@ test("runner bounds validation output and timeout", () => {
       version: 1,
       commands: [
         {
-          validation_id: "VAL-OUTPUT",
           argv: ["bun", "-e", 'process.stdout.write("x".repeat(100))'],
           timeout_ms: 10_000,
           max_output_bytes: 32,
         },
         {
-          validation_id: "VAL-TIMEOUT",
           argv: ["bun", "-e", "setTimeout(process.exit,1000)"],
           timeout_ms: 10,
           max_output_bytes: 1024,
         },
         {
-          validation_id: "VAL-STDERR",
           argv: ["bun", "-e", 'process.stderr.write("warning")'],
           timeout_ms: 10_000,
           max_output_bytes: 1024,
         },
         {
-          validation_id: "VAL-BACKPRESSURE",
           argv: ["bun", "-e", 'process.stderr.write("x".repeat(1_000_000))'],
           timeout_ms: 10_000,
           max_output_bytes: 1024,
         },
       ],
     });
-    const output = runReviewerValidation(outputPolicy, "VAL-OUTPUT", root);
+    const outputArgv = ["bun", "-e", 'process.stdout.write("x".repeat(100))'];
+    const output = runReviewerValidation(outputPolicy, "VAL-OUTPUT", outputArgv, root);
     assert.equal(output.status, "failed");
     assert.ok(Buffer.byteLength(output.output) <= 32);
     assert.match(output.output, /output truncated/);
-    const timeout = runReviewerValidation(outputPolicy, "VAL-TIMEOUT", root);
+    const timeoutArgv = ["bun", "-e", "setTimeout(process.exit,1000)"];
+    const timeout = runReviewerValidation(outputPolicy, "VAL-TIMEOUT", timeoutArgv, root);
     assert.equal(timeout.status, "failed");
     assert.equal(timeout.timed_out, true);
-    const stderr = runReviewerValidation(outputPolicy, "VAL-STDERR", root);
+    const stderrArgv = ["bun", "-e", 'process.stderr.write("warning")'];
+    const stderr = runReviewerValidation(outputPolicy, "VAL-STDERR", stderrArgv, root);
     assert.equal(stderr.status, "passed");
     assert.equal(stderr.output, "warning");
-    const backpressure = runReviewerValidation(outputPolicy, "VAL-BACKPRESSURE", root);
+    const backpressureArgv = ["bun", "-e", 'process.stderr.write("x".repeat(1_000_000))'];
+    const backpressure = runReviewerValidation(
+      outputPolicy,
+      "VAL-BACKPRESSURE",
+      backpressureArgv,
+      root,
+    );
     assert.equal(backpressure.status, "failed");
     assert.ok(Buffer.byteLength(backpressure.output) <= 1024);
   } finally {
@@ -202,14 +260,18 @@ test("truncation evidence never exceeds small policy limits", () => {
         version: 1,
         commands: [
           {
-            validation_id: "VAL-BOUNDARY",
             argv: ["bun", "-e", 'process.stdout.write("€".repeat(100))'],
             timeout_ms: 10_000,
             max_output_bytes: limit,
           },
         ],
       });
-      const result = runReviewerValidation(outputPolicy, "VAL-BOUNDARY", root);
+      const result = runReviewerValidation(
+        outputPolicy,
+        "VAL-BOUNDARY",
+        ["bun", "-e", 'process.stdout.write("€".repeat(100))'],
+        root,
+      );
       assert.equal(result.status, "failed");
       assert.ok(Buffer.byteLength(result.output, "utf8") <= limit);
     }
