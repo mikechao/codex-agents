@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "include": [
     ".codex/agents/change-receipt.ts",
+    ".codex/agents/reviewer-validation.ts",
     ".codex/agents/generate-host-definitions.ts",
     ".codex/agents/tests/**/*.ts"
   ]

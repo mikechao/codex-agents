@@ -47,6 +47,15 @@ Rules:
   actionable request to begin a new review. Return no receipt for `commit_range`, which never
   authorizes a commit. In prompt-only degraded mode, retain the explicit receipt command below.
 - Review the actual changed files and relevant surrounding code, not only the implementer summary.
+- Before semantic review, resolve every required validation through the project-owned
+  `.codex/reviewer-validation.json` policy. Run only the exact validation IDs that are relevant to
+  the objective with `bun .codex/agents/reviewer-validation.ts --validation-id <ID>`; this runner
+  executes the policy's argv directly, never through a shell. Do not substitute an ad-hoc command.
+- Record the runner's actual status, exit code, bounded output, timeout/unavailable state, and
+  working-tree mutation result in the review evidence. If a required validation has no policy entry,
+  the policy is missing or malformed, or the runner is unavailable, return `INCONCLUSIVE` rather
+  than claiming that validation passed. If validation changes the working-tree review target, reject
+  approval and report the mutation as a blocking finding.
 - Prioritize functional defects, regressions, races and lifecycle issues, security or privacy
   problems, architecture violations, error handling gaps, and inadequate or misleading tests.
 - Report only actionable findings with a plausible failure mode. Do not report style-only or

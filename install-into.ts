@@ -19,6 +19,8 @@ const REGISTRATION_SECTION = ["mcp_servers", "workflow_state"];
 const REQUIRED_SOURCE_FILES = [
   ".codex/workflow-mcp/server.ts",
   ".codex/agents/change-receipt.ts",
+  ".codex/agents/reviewer-validation.ts",
+  ".codex/reviewer-validation.json",
   ".codex/agents/code_reviewer.toml",
   ".codex/agents/committer.toml",
   ".codex/agents/implementer.toml",
@@ -30,6 +32,7 @@ const REQUIRED_SOURCE_FILES = [
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
+  ".codex/agents/reviewer-validation.ts",
   ".codex/agents/code_reviewer.toml",
   ".codex/agents/committer.toml",
   ".codex/agents/implementer.toml",
@@ -146,6 +149,12 @@ export interface CommitRecoveryState {
   openCodeAgentsBackup: OpenCodeAgentsBackupState;
 }
 
+export interface OptionalProjectFile {
+  staging: string;
+  target: string;
+  original: string | null;
+}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -231,6 +240,7 @@ export function commitBothHosts(
   rename: (from: string, to: string) => void = renameSync,
   writeFile: (path: string, content: string) => void = writeFileSync,
   recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" },
+  projectFile?: OptionalProjectFile,
 ): void {
   const steps: readonly CommitStep[] = [
     { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
@@ -252,6 +262,16 @@ export function commitBothHosts(
       original: originalOpenCodeConfig,
       originalDir: null,
     },
+    ...(projectFile === undefined
+      ? []
+      : [
+          {
+            staging: projectFile.staging,
+            target: projectFile.target,
+            original: projectFile.original,
+            originalDir: null,
+          },
+        ]),
   ];
   const committed: CommitStep[] = [];
   try {
@@ -593,6 +613,10 @@ export function main(args: readonly string[]): number {
   const opencodeConfigTarget = opencodeConfig ?? resolve(target, "opencode.json");
   const opencodeConfigOriginal =
     opencodeConfig === null ? null : readFileSync(opencodeConfig, "utf8");
+  const reviewerPolicyTarget = resolve(target, ".codex/reviewer-validation.json");
+  const reviewerPolicyOriginal = existsSync(reviewerPolicyTarget)
+    ? readFileSync(reviewerPolicyTarget, "utf8")
+    : null;
   const stagedOpenCode = stageOpenCodeConfig(
     opencodeConfigTarget,
     opencodeConfigOriginal,
@@ -605,6 +629,9 @@ export function main(args: readonly string[]): number {
   const configStaging = mkdtempSync(resolve(target, ".codex/.config.install."));
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
+  const reviewerPolicyStaging = mkdtempSync(
+    resolve(target, ".codex/.reviewer-validation.install."),
+  );
   let opencodeAgentsBackup: string | null = null;
   const recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" };
   try {
@@ -615,6 +642,12 @@ export function main(args: readonly string[]): number {
           resolve(agentsStaging, file.slice(".codex/agents/".length)),
         );
       }
+    }
+    if (reviewerPolicyOriginal === null) {
+      cpSync(
+        resolve(projectRoot, ".codex/reviewer-validation.json"),
+        resolve(reviewerPolicyStaging, "reviewer-validation.json"),
+      );
     }
     if (opencodeAgentsExisting) {
       cpSync(opencodeAgentsTarget, opencodeAgentsStaging, { recursive: true });
@@ -648,17 +681,26 @@ export function main(args: readonly string[]): number {
       renameSync,
       writeFileSync,
       recoveryState,
+      reviewerPolicyOriginal === null
+        ? {
+            staging: resolve(reviewerPolicyStaging, "reviewer-validation.json"),
+            target: reviewerPolicyTarget,
+            original: null,
+          }
+        : undefined,
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
+    rmSync(reviewerPolicyStaging, { recursive: true, force: true });
     cleanupOpenCodeAgentsBackup(opencodeAgentsBackup, recoveryState);
     throw cause;
   }
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
+  rmSync(reviewerPolicyStaging, { recursive: true, force: true });
   if (opencodeAgentsBackup !== null) {
     rmSync(opencodeAgentsBackup, { recursive: true, force: true });
   }

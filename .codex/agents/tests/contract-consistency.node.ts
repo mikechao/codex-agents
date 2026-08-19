@@ -93,6 +93,7 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     '"git show *": allow',
     '"git rev-parse *": allow',
     '"bun .codex/agents/change-receipt.ts *": allow',
+    '"bun .codex/agents/reviewer-validation.ts *": allow',
   ]) {
     assert.ok(content.includes(allowed), `reviewer bash allowlist must include ${allowed}`);
   }
@@ -115,6 +116,14 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   assert.match(content, /^  workflow_state_workflow_begin_review: allow$/m);
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
+});
+
+test("reviewer validation is the only executable validation path", () => {
+  const content = opencode("code_reviewer.md");
+  assert.ok(content.includes('"bun .codex/agents/reviewer-validation.ts *": allow'));
+  assert.ok(!content.includes('"bun run *": allow'));
+  assert.ok(!content.includes('"npm *": allow'));
+  assert.ok(!content.includes('"npx *": allow'));
 });
 
 test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {

@@ -61,6 +61,7 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     assert.match(result.stdout, /Installed Codex agents/);
     for (const file of [
       "change-receipt.ts",
+      "reviewer-validation.ts",
       "code_reviewer.toml",
       "committer.toml",
       "implementer.toml",
@@ -68,6 +69,7 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
+    assert.ok(existsSync(join(root, ".codex/reviewer-validation.json")));
     for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
@@ -97,6 +99,20 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]);
     assert.ok(!existsSync(join(root, ".codex/.agents.install.")));
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts scaffolds reviewer policy once and preserves target customization", () => {
+  const { root, write } = fixture();
+  try {
+    const customized = '{"version":1,"commands":[] }\n';
+    write(".codex/reviewer-validation.json", customized);
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(join(root, ".codex/reviewer-validation.json"), "utf8"), customized);
+    assert.ok(existsSync(join(root, ".codex/agents/reviewer-validation.ts")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

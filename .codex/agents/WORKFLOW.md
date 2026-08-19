@@ -20,7 +20,8 @@ Host permission syntax differs and must not be treated as equivalent:
 - Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
   implementer and committer).
 - OpenCode has no filesystem sandbox. The reviewer gets `edit: deny` plus a narrow bash allowlist
-  (status/diff/log/show/rev-parse and the receipt command); the committer gets `edit: deny` and a
+  (status/diff/log/show/rev-parse, the receipt command, and the project-owned
+  `.codex/agents/reviewer-validation.ts` runner); the committer gets `edit: deny` and a
   fail-closed bash allowlist covering the documented commit flow (status/diff/log/show/rev-parse/
   ls-files inspection, approved `git add`/`git commit`, and the receipt command) while denying
   push/amend/rebase/reset/checkout/switch/history rewriting and filesystem mutation; the
