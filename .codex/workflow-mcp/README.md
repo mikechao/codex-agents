@@ -121,7 +121,7 @@ working-tree snapshot and receipt gating, and rejects corrupt or stale authorita
 IMPLEMENTING, REVIEWING, REPAIR_REQUIRED, REPAIRING,
 STOPPED_CONCERNS, STOPPED_NEEDS_CONTEXT, STOPPED_IMPLEMENTATION_BLOCKED,
 STOPPED_INCONCLUSIVE, STOPPED_APPROVED, STOPPED_REPAIR_EXHAUSTED,
-COMMIT_AUTHORIZED, COMMIT_PREPARED, STOPPED_NOT_COMMITTED,
+COMMIT_AUTHORIZED, COMMIT_PREPARED, STOPPED_COMMIT_PREPARATION, STOPPED_NOT_COMMITTED,
 STOPPED_COMMIT_MISMATCH, COMMITTED
 ```
 
@@ -146,7 +146,9 @@ workflows with a fresh review receipt; commit-range workflows reject it. After a
 committer stages complete approved paths and calls `workflow_prepare_commit`, which checks the
 current HEAD and the staged scope, file modes, and blob digests against the authorized receipt,
 rejects approved-path residue, and binds the exact prepared tree and path set without changing Git
-state. The committer then runs the external `git commit` and submits only the semantic result with
+state. Rename paths are always represented as exact delete+add paths; staged and post-commit path
+derivation disables Git rename detection. The committer then runs the external `git commit` and
+submits only the semantic result with
 `workflow_submit_commit_result` whether the attempt succeeded or failed; it does not supply a commit
 SHA. Workflow MCP observes and verifies the authoritative Git state. Result submission verifies the
 current HEAD, commit parent, prepared tree, and changed paths against the prepared attempt (or
@@ -154,7 +156,11 @@ confirms that HEAD stayed unchanged for a
 not-committed result), then persists the verified SHA. A verified commit enters the
 terminal `COMMITTED` phase; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
 stop cleared by `workflow_retry_commit`; any verification mismatch enters the terminal
-`STOPPED_COMMIT_MISMATCH`.
+`STOPPED_COMMIT_MISMATCH`. Supported failures before a commit exists enter
+`STOPPED_COMMIT_PREPARATION` with a bounded category/diagnostic, timestamp, failed version, and
+recovery class. Scope/content failures expose `workflow_retry_commit_preparation`; stale receipt
+failures expose `workflow_return_commit_to_review`, which clears authorization and requires fresh
+review and fresh commit authorization. No committer action is permitted while stopped.
 
 ## Persistence schema
 

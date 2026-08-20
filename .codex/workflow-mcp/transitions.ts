@@ -5,6 +5,7 @@ import type {
   CommitAttemptId,
   CommitMismatchCategory,
   CommitPreparationEvidence,
+  CommitPreparationFailureCategory,
   CommitterView,
   ExactRepoPath,
   FindingId,
@@ -81,6 +82,7 @@ export const PHASES: readonly WorkflowPhase[] = [
   "STOPPED_REPAIR_EXHAUSTED",
   "COMMIT_AUTHORIZED",
   "COMMIT_PREPARED",
+  "STOPPED_COMMIT_PREPARATION",
   "STOPPED_NOT_COMMITTED",
   "STOPPED_COMMIT_MISMATCH",
   "COMMITTED",
@@ -260,6 +262,10 @@ const ACTION_MATRIX: Partial<
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
     STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
+    STOPPED_COMMIT_PREPARATION: [
+      "workflow_retry_commit_preparation",
+      "workflow_return_commit_to_review",
+    ],
   },
   committer: {
     COMMIT_AUTHORIZED: ["workflow_prepare_commit"],
@@ -292,6 +298,19 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     state.review_target?.review_mode !== "working_tree"
   ) {
     actions = actions.filter((action) => action !== "workflow_authorize_commit");
+  }
+  if (actorRole === "parent" && state.phase === "STOPPED_COMMIT_PREPARATION") {
+    const recovery =
+      state.stop_context?.status === "COMMIT_PREPARATION_FAILED"
+        ? state.stop_context.recovery
+        : null;
+    actions = actions.filter((action) =>
+      recovery === "retry"
+        ? action === "workflow_retry_commit_preparation"
+        : recovery === "review"
+          ? action === "workflow_return_commit_to_review"
+          : false,
+    );
   }
   return actions.sort();
 }
@@ -945,6 +964,28 @@ export function commitMismatch(
   return next;
 }
 
+export function commitPreparationFailed(
+  state: WorkflowState,
+  category: CommitPreparationFailureCategory,
+  summary: string,
+): WorkflowState {
+  ensurePhase(state, "COMMIT_AUTHORIZED");
+  const next = clone(state);
+  next.phase = "STOPPED_COMMIT_PREPARATION";
+  next.stop_context = {
+    status: "COMMIT_PREPARATION_FAILED",
+    category,
+    summary: boundedString(summary, "preparation failure summary", 2000),
+    recovery: category === "ERROR_STALE_RECEIPT" ? "review" : "retry",
+    failed_at: isoNow(),
+    failed_version: (state.version + 1) as WorkflowVersion,
+    stopped_from: "COMMIT_AUTHORIZED",
+  };
+  next.commit_preparation = null;
+  next.commit_result = null;
+  return next;
+}
+
 export function prepareCommit(
   state: WorkflowState,
   input: unknown,
@@ -962,6 +1003,65 @@ export function prepareCommit(
     prepared_at: isoNow(),
   };
   next.phase = "COMMIT_PREPARED";
+  return next;
+}
+
+export function retryCommitPreparation(state: WorkflowState, input: unknown): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "commit preparation retry input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "retry_context"],
+    "commit preparation retry",
+  );
+  ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
+  if (
+    state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
+    state.stop_context.recovery !== "retry"
+  ) {
+    fail("ERROR_INVALID_TRANSITION", "preparation failure requires review recovery");
+  }
+  const next = clone(state);
+  next.phase = "COMMIT_AUTHORIZED";
+  next.stop_context = null;
+  next.recovery_context = {
+    kind: "commit",
+    context: boundedString(args.retry_context, "retry_context", 2000),
+    recovered_at: isoNow(),
+  };
+  return next;
+}
+
+export function returnCommitToReview(state: WorkflowState, input: unknown): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "commit review recovery input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "review_context"],
+    "commit review recovery",
+  );
+  ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
+  if (
+    state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
+    state.stop_context.recovery !== "review"
+  ) {
+    fail("ERROR_INVALID_TRANSITION", "preparation failure is retryable");
+  }
+  const next = clone(state);
+  next.phase = "REVIEWING";
+  next.stop_context = null;
+  next.recovery_context = {
+    kind: "review",
+    context: boundedString(args.review_context, "review_context", 2000),
+    recovered_at: isoNow(),
+  };
+  next.review_receipt = null;
+  next.review_start_receipt = null;
+  next.commit_authorization = null;
+  next.commit_preparation = null;
+  next.commit_result = null;
   return next;
 }
 
@@ -1449,6 +1549,38 @@ function remediationContextShape(value: unknown): void {
 function stopContextShape(value: unknown): void {
   if (value === null || value === undefined) return;
   if (!isObject(value)) corrupt();
+  if (value.status === "COMMIT_PREPARATION_FAILED") {
+    checkKeys(value, [
+      "status",
+      "category",
+      "summary",
+      "recovery",
+      "failed_at",
+      "failed_version",
+      "stopped_from",
+    ]);
+    if (
+      value.category !== "ERROR_STAGED_SCOPE" &&
+      value.category !== "ERROR_STAGED_CONTENT" &&
+      value.category !== "ERROR_STALE_RECEIPT"
+    ) {
+      corrupt();
+    }
+    if (value.recovery !== "retry" && value.recovery !== "review") corrupt();
+    if (value.stopped_from !== "COMMIT_AUTHORIZED") corrupt();
+    if (!Number.isSafeInteger(value.failed_version) || (value.failed_version as number) < 0) {
+      corrupt();
+    }
+    if (
+      (value.category === "ERROR_STALE_RECEIPT" && value.recovery !== "review") ||
+      (value.category !== "ERROR_STALE_RECEIPT" && value.recovery !== "retry")
+    ) {
+      corrupt();
+    }
+    bounded(value.summary, 2000);
+    bounded(value.failed_at, 64);
+    return;
+  }
   checkKeys(value, ["status", "summary", "stopped_from"]);
   if (value.status === "INCONCLUSIVE") {
     if (value.stopped_from !== "REVIEWING") corrupt();

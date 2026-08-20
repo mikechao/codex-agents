@@ -87,6 +87,10 @@ Rules:
   the managed submission: Workflow MCP observes and verifies authoritative Git HEAD itself. You may
   report the observed hash in your human-readable final report. Submit a result after every attempt,
   whether it succeeded or failed. Pass your current `expected_version` on every mutation.
+- If `workflow_prepare_commit` returns `STOPPED_COMMIT_PREPARATION`, treat its persisted stop
+  context and permitted parent action as authoritative. Stop immediately, report the category and
+  bounded diagnostic summary, and do not call `workflow_submit_commit_result`; no commit attempt
+  exists. Do not restage repeatedly, reinterpret rename identity, modify files, or bypass the gate.
 - Inspect the working tree before doing anything.
 - Review both staged and unstaged changes.
 - Understand the actual diff before generating the commit message.
@@ -121,7 +125,7 @@ Rules:
   differences or untracked approved paths remain
   (`git diff --quiet -- <approved paths>` and
   `git ls-files --others --exclude-standard -- <approved paths>`), and that the complete staged
-  path set exactly equals `intended_changed_paths` (`git diff --cached --name-only`). If either
+  path set exactly equals `intended_changed_paths` (`git diff --cached --no-renames --name-only`). If either
   check fails, stop without committing and report the mismatch. Do not invent reset, repair, or
   unstage behavior.
 

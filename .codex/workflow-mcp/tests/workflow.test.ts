@@ -211,6 +211,8 @@ function create(store: any, root: string, git: (...args: string[]) => string, op
       "acceptConcerns",
       "authorizeCommit",
       "prepareCommit",
+      "retryCommitPreparation",
+      "returnCommitToReview",
       "submitCommitResult",
       "retryCommit",
       "finalizeRepairExhausted",
@@ -1255,7 +1257,7 @@ test("rejects extra mutation fields without changing workflow state", () => {
           extra: true,
         }),
       ),
-      "ERROR_STAGED_SCOPE",
+      "ERROR_INVALID_SHAPE",
     );
     assert.equal(
       store.get(approved.workflow.workflow_id, "committer", approved.capabilities.committer)
@@ -4718,25 +4720,42 @@ test("commit preparation rejects empty, partial, extra, and untracked staging wi
       expected_version: 2,
       user_authorization: "guards",
     });
-    const prepare = () =>
-      store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 3 });
-    const versionBefore = store.get(id, "parent", caps.parent).version;
-    const auditBefore = store.audit(id, "parent", caps.parent).length;
-    assert.equal(errorCategory(prepare), "ERROR_STAGED_SCOPE");
+    const prepare = (expected_version: number) =>
+      store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version });
+    let stopped = prepare(3);
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.stop_context.recovery, "retry");
     git("add", "note.txt");
-    assert.equal(errorCategory(prepare), "ERROR_STAGED_SCOPE");
+    const retried = store.retryCommitPreparation({
+      workflow_id: id,
+      capability: caps.parent,
+      expected_version: 4,
+      retry_context: "stage the remaining reviewed paths",
+    });
+    assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    stopped = prepare(5);
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
     git("reset", "-q");
     git("add", "note.txt");
     git("add", "other.txt");
     writeFileSync(join(root, "unrelated.txt"), "extra\n");
     git("add", "unrelated.txt");
-    assert.equal(errorCategory(prepare), "ERROR_STAGED_SCOPE");
+    store.retryCommitPreparation({
+      workflow_id: id,
+      capability: caps.parent,
+      expected_version: 6,
+      retry_context: "remove the unreviewed staged path",
+    });
     git("reset", "-q");
     git("add", "note.txt");
     git("add", "other.txt");
-    assert.equal(errorCategory(prepare), "ERROR_STAGED_SCOPE");
-    assert.equal(store.get(id, "parent", caps.parent).version, versionBefore);
-    assert.equal(store.audit(id, "parent", caps.parent).length, auditBefore);
+    stopped = prepare(7);
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.version, 9);
+    assert.equal(stopped.stop_context.failed_version, 9);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4753,18 +4772,16 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
 
     const stale = authorizedWorkflow(store, root, git);
     writeFileSync(join(root, "note.txt"), "v3\n");
-    assert.equal(
-      errorCategory(() =>
-        store.prepareCommit({
-          workflow_id: stale.id,
-          capability: stale.caps.committer,
-          expected_version: 3,
-        }),
-      ),
-      "ERROR_STALE_RECEIPT",
-    );
-    assert.equal(store.get(stale.id, "parent", stale.caps.parent).version, 4);
-    assert.equal(store.audit(stale.id, "parent", stale.caps.parent).length, 5);
+    const staleStopped = store.prepareCommit({
+      workflow_id: stale.id,
+      capability: stale.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(staleStopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(staleStopped.stop_context.category, "ERROR_STALE_RECEIPT");
+    assert.equal(staleStopped.stop_context.recovery, "review");
+    assert.equal(store.get(stale.id, "parent", stale.caps.parent).version, 5);
+    assert.equal(store.audit(stale.id, "parent", stale.caps.parent).length, 6);
 
     const content = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
@@ -4773,47 +4790,144 @@ test("commit preparation rejects stale receipts, content and mode mismatches, an
       encoding: "utf8",
     }).trim();
     git("update-index", "--cacheinfo", "100644", tamperedBlob, "note.txt");
-    assert.equal(
-      errorCategory(() =>
-        store.prepareCommit({
-          workflow_id: content.id,
-          capability: content.caps.committer,
-          expected_version: 3,
-        }),
-      ),
-      "ERROR_STAGED_CONTENT",
+    const contentStopped = store.prepareCommit({
+      workflow_id: content.id,
+      capability: content.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(contentStopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(contentStopped.stop_context.category, "ERROR_STAGED_CONTENT");
+    assert.equal(store.get(content.id, "parent", content.caps.parent).version, 5);
+    assert.deepEqual(store.get(content.id, "parent", content.caps.parent).permitted_next_actions, [
+      "workflow_retry_commit_preparation",
+    ]);
+    assert.deepEqual(
+      store.get(content.id, "committer", content.caps.committer).permitted_next_actions,
+      [],
     );
-    assert.equal(store.get(content.id, "parent", content.caps.parent).version, 4);
+    store.retryCommitPreparation({
+      workflow_id: content.id,
+      capability: content.caps.parent,
+      expected_version: 4,
+      retry_context: "restage the reviewed worktree contents",
+    });
+    git("add", "note.txt");
+    const reprepared = store.prepareCommit({
+      workflow_id: content.id,
+      capability: content.caps.committer,
+      expected_version: 5,
+    });
+    assert.equal(reprepared.phase, "COMMIT_PREPARED");
 
     const mode = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
     git("update-index", "--chmod=+x", "note.txt");
-    assert.equal(
-      errorCategory(() =>
-        store.prepareCommit({
-          workflow_id: mode.id,
-          capability: mode.caps.committer,
-          expected_version: 3,
-        }),
-      ),
-      "ERROR_STAGED_CONTENT",
-    );
-    assert.equal(store.get(mode.id, "parent", mode.caps.parent).version, 4);
+    const modeStopped = store.prepareCommit({
+      workflow_id: mode.id,
+      capability: mode.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(modeStopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(modeStopped.stop_context.category, "ERROR_STAGED_CONTENT");
+    assert.equal(store.get(mode.id, "parent", mode.caps.parent).version, 5);
 
     const changed = authorizedWorkflow(store, root, git);
     git("add", "note.txt");
     git("commit", "-qm", "unexpected commit");
-    assert.equal(
-      errorCategory(() =>
-        store.prepareCommit({
-          workflow_id: changed.id,
-          capability: changed.caps.committer,
-          expected_version: 3,
-        }),
-      ),
-      "ERROR_STALE_RECEIPT",
+    const changedStopped = store.prepareCommit({
+      workflow_id: changed.id,
+      capability: changed.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(changedStopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(changedStopped.stop_context.category, "ERROR_STALE_RECEIPT");
+    assert.equal(changedStopped.stop_context.recovery, "review");
+    assert.equal(store.get(changed.id, "parent", changed.caps.parent).version, 5);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("review-invalidating preparation failures require fresh review and authorization", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: ":memory:",
+    });
+    const workflow = authorizedWorkflow(store, root, git);
+    writeFileSync(join(root, "note.txt"), "changed after approval\n");
+    const stopped = store.prepareCommit({
+      workflow_id: workflow.id,
+      capability: workflow.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.recovery, "review");
+    assert.deepEqual(
+      store.get(workflow.id, "parent", workflow.caps.parent).permitted_next_actions,
+      ["workflow_return_commit_to_review"],
     );
-    assert.equal(store.get(changed.id, "parent", changed.caps.parent).version, 4);
+    assert.deepEqual(
+      store.get(workflow.id, "committer", workflow.caps.committer).permitted_next_actions,
+      [],
+    );
+
+    const reviewing = store.returnCommitToReview({
+      workflow_id: workflow.id,
+      capability: workflow.caps.parent,
+      expected_version: 4,
+      review_context: "review the changed worktree again",
+    });
+    assert.equal(reviewing.phase, "REVIEWING");
+    assert.equal(reviewing.commit_authorization, null);
+    assert.equal(reviewing.review_receipt, undefined);
+    assert.deepEqual(
+      store.get(workflow.id, "reviewer", workflow.caps.reviewer).permitted_next_actions,
+      ["workflow_begin_review"],
+    );
+
+    const begun = store.__legacyOriginals.beginReview({
+      workflow_id: workflow.id,
+      capability: workflow.caps.reviewer,
+      expected_version: reviewing.version,
+    });
+    const approved = store.__legacyOriginals.submitReview({
+      workflow_id: workflow.id,
+      capability: workflow.caps.reviewer,
+      expected_version: begun.version,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    const reauthorized = store.__legacyOriginals.authorizeCommit({
+      workflow_id: workflow.id,
+      capability: workflow.caps.parent,
+      expected_version: approved.version,
+      user_authorization: "fresh authorization",
+    });
+    assert.equal(reauthorized.phase, "COMMIT_AUTHORIZED");
+
+    const headWorkflow = authorizedWorkflow(store, root, git);
+    git("add", "note.txt");
+    git("commit", "-qm", "external head change");
+    const headStopped = store.prepareCommit({
+      workflow_id: headWorkflow.id,
+      capability: headWorkflow.caps.committer,
+      expected_version: 3,
+    });
+    assert.equal(headStopped.stop_context.category, "ERROR_STALE_RECEIPT");
+    const headReturned = store.returnCommitToReview({
+      workflow_id: headWorkflow.id,
+      capability: headWorkflow.caps.parent,
+      expected_version: 4,
+      review_context: "rebase the review baseline after the external head change",
+    });
+    assert.equal(headReturned.phase, "REVIEWING");
+    assert.equal(headReturned.review_target.base_revision, git("rev-parse", "HEAD"));
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -5589,7 +5703,7 @@ test("commit mismatch stops are terminal and cannot retry or resume", () => {
       errorCategory(() =>
         store.prepareCommit({ workflow_id: id, capability: caps.committer, expected_version: 5 }),
       ),
-      "ERROR_STALE_RECEIPT",
+      "ERROR_INVALID_TRANSITION",
     );
     assert.equal(
       errorCategory(() =>

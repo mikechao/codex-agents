@@ -46,6 +46,7 @@ export type WorkflowPhase =
   | "STOPPED_REPAIR_EXHAUSTED"
   | "COMMIT_AUTHORIZED"
   | "COMMIT_PREPARED"
+  | "STOPPED_COMMIT_PREPARATION"
   | "STOPPED_NOT_COMMITTED"
   | "STOPPED_COMMIT_MISMATCH"
   | "COMMITTED";
@@ -66,7 +67,7 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All 16 tool names (from `server.ts` `tools`).
+// All 18 tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
   | "workflow_get"
@@ -83,6 +84,8 @@ export type WorkflowAction =
   | "workflow_authorize_commit"
   | "workflow_prepare_commit"
   | "workflow_submit_commit_result"
+  | "workflow_retry_commit_preparation"
+  | "workflow_return_commit_to_review"
   | "workflow_retry_commit";
 
 // Every `ERROR_*` literal used by `fail(...)` in the server plus the child change-receipt CLI
@@ -138,6 +141,11 @@ export type ErrorCategory =
   | "ERROR_RUNTIME_RECOVERY"
   | "ERROR_RUNTIME_ARTIFACT";
 
+export type CommitPreparationFailureCategory =
+  | "ERROR_STAGED_SCOPE"
+  | "ERROR_STAGED_CONTENT"
+  | "ERROR_STALE_RECEIPT";
+
 export type AuditEventType =
   | "WORKFLOW_CREATED"
   | "WORKFLOW_RUNTIME_ADOPTED"
@@ -152,6 +160,9 @@ export type AuditEventType =
   | "REPAIR_EXHAUSTED"
   | "COMMIT_AUTHORIZED"
   | "COMMIT_PREPARED"
+  | "COMMIT_PREPARATION_FAILED"
+  | "COMMIT_PREPARATION_RETRY_AUTHORIZED"
+  | "COMMIT_PREPARATION_REVIEW_AUTHORIZED"
   | "COMMIT_RESULT_SUBMITTED"
   | "COMMIT_RETRY_AUTHORIZED"
   | "LINKED_FOLLOWUP_CREATED";
@@ -340,7 +351,16 @@ export interface WorkflowState {
 
 export type StopContext =
   | { status: ImplementationStatus; summary: string; stopped_from: "IMPLEMENTING" | "REPAIRING" }
-  | { status: "INCONCLUSIVE"; summary: string; stopped_from: "REVIEWING" };
+  | { status: "INCONCLUSIVE"; summary: string; stopped_from: "REVIEWING" }
+  | {
+      status: "COMMIT_PREPARATION_FAILED";
+      category: CommitPreparationFailureCategory;
+      summary: string;
+      recovery: "retry" | "review";
+      failed_at: IsoTimestamp;
+      failed_version: WorkflowVersion;
+      stopped_from: "COMMIT_AUTHORIZED";
+    };
 
 export type RecoveryContext =
   | { kind: "implementation"; context: string; recovered_at: IsoTimestamp }

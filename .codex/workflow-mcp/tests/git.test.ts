@@ -20,6 +20,7 @@ import {
   reviewRange,
   stagedEntries,
   stagedPaths,
+  verifyPreparedCommit,
   verifyRange,
   verifyRevision,
   writeTree,
@@ -319,6 +320,77 @@ test("stagedPaths and stagedEntries reflect the full index and staged content", 
     git("commit", "-qm", "second");
     assert.deepEqual(stagedPaths(root), []);
     assert.deepEqual([...stagedEntries(root).keys()].sort(), ["add.txt", "mod.txt", "mode.txt"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stagedPaths preserves both sides of byte-identical renames", () => {
+  const { root, git, write } = fixture();
+  try {
+    write("old.ts", "same\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    git("mv", "old.ts", "new.ts");
+
+    assert.deepEqual(stagedPaths(root), ["new.ts", "old.ts"]);
+
+    git("config", "diff.renames", "false");
+    assert.deepEqual(stagedPaths(root), ["new.ts", "old.ts"]);
+    git("config", "diff.renames", "true");
+    git("config", "diff.renamelimit", "1");
+    assert.deepEqual(stagedPaths(root), ["new.ts", "old.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepare and post-commit verification preserve exact paths for the #42 rename shape", () => {
+  const { root, git, write } = fixture();
+  try {
+    mkdirSync(join(root, ".codex", "agents"), { recursive: true });
+    cpSync(
+      join(process.cwd(), ".codex", "agents", "change-receipt.ts"),
+      join(root, ".codex", "agents", "change-receipt.ts"),
+    );
+    const oldPaths = Array.from({ length: 15 }, (_, index) => `file-${index}.node.ts`);
+    const newPaths = oldPaths.map((path) => path.replace(".node.ts", ".test.ts"));
+    for (const path of oldPaths) write(path, "byte-identical\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    for (let index = 0; index < oldPaths.length; index += 1) {
+      git("mv", oldPaths[index], newPaths[index]);
+    }
+    const approvedPaths = [...oldPaths, ...newPaths].sort();
+    const receipt = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [realpathSync(join(root, ".codex", "agents", "change-receipt.ts")), "--", ...approvedPaths],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    const state = {
+      review_target: { review_mode: "working_tree" },
+      commit_authorization: { user_authorization: "authorized" },
+      base_head: base,
+      approved_paths: approvedPaths,
+      review_receipt: receipt,
+    } as unknown as WorkflowState;
+    const prepared = prepareCommitReceipt(root, state);
+    assert.deepEqual(prepared.expected_paths, approvedPaths);
+
+    git("commit", "-qm", "rename commit");
+    const verification = verifyPreparedCommit(root, {
+      ...state,
+      commit_preparation: {
+        ...prepared,
+        attempt_id: "00000000-0000-0000-0000-000000000000",
+        review_receipt_digest: "0".repeat(64),
+        prepared_at: "2026-01-01T00:00:00.000Z",
+      },
+    } as unknown as WorkflowState);
+    assert.equal(verification.category, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

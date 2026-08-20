@@ -1444,6 +1444,31 @@ test("exact commit result and retry tool schemas match the normative contract", 
   assert.equal(retrySchema.properties.retry_context.minLength, 1);
   assert.equal(retrySchema.properties.retry_context.maxLength, 2000);
   assert.equal(retryTool.annotations?.destructiveHint, true);
+
+  for (const [name, field] of [
+    ["workflow_retry_commit_preparation", "retry_context"],
+    ["workflow_return_commit_to_review", "review_context"],
+  ] as const) {
+    const tool = tools.find((candidate) => candidate.name === name);
+    assert.ok(tool);
+    const recoverySchema = tool.inputSchema as any;
+    assert.equal(recoverySchema.additionalProperties, false);
+    assert.deepEqual(Object.keys(recoverySchema.properties).sort(), [
+      "capability",
+      "expected_version",
+      field,
+      "workflow_id",
+    ]);
+    assert.deepEqual(recoverySchema.required, [
+      "workflow_id",
+      "capability",
+      "expected_version",
+      field,
+    ]);
+    assert.equal(recoverySchema.properties[field].minLength, 1);
+    assert.equal(recoverySchema.properties[field].maxLength, 2000);
+    assert.equal(tool.annotations?.destructiveHint, false);
+  }
 });
 
 test("commit result success over STDIO records a verified external commit", async () => {
@@ -2040,6 +2065,8 @@ test("normal documentation covers review-only dispatch, recovery, and the prepar
     "workflow_resume_review",
     "workflow_finalize_repair_exhausted",
     "workflow_retry_commit",
+    "workflow_retry_commit_preparation",
+    "workflow_return_commit_to_review",
   ]) {
     assert.ok(workflowMd.includes(tool), `WORKFLOW.md must document ${tool}`);
   }

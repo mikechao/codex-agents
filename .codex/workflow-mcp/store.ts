@@ -3,7 +3,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import { fail } from "./errors.js";
+import { fail, WorkflowError } from "./errors.js";
 import {
   createReceipt,
   currentHead,
@@ -24,6 +24,7 @@ import {
   authorizeRepair,
   beginReview,
   commitMismatch,
+  commitPreparationFailed,
   createState,
   dirtyBaselinePaths,
   finalizeRepairExhausted,
@@ -35,6 +36,8 @@ import {
   resumeImplementation,
   resumeReview,
   retryCommit,
+  retryCommitPreparation,
+  returnCommitToReview,
   roleView,
   submitCommitResult,
   submitImplementation,
@@ -51,6 +54,7 @@ import type {
   CapabilityHash,
   ChangeReceipt,
   CommitPreparationEvidence,
+  CommitPreparationFailureCategory,
   GitCommitSha,
   IsoTimestamp,
   ParentView,
@@ -347,6 +351,20 @@ function validatePersistedRows(db: Database): void {
 // implementation signature (which validates via `role`) with the Role from #assertAuth.
 const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
 
+function supportedPreparationFailure(
+  error: unknown,
+): { category: CommitPreparationFailureCategory; detail: string } | null {
+  if (!(error instanceof WorkflowError)) return null;
+  if (
+    error.category !== "ERROR_STAGED_SCOPE" &&
+    error.category !== "ERROR_STAGED_CONTENT" &&
+    error.category !== "ERROR_STALE_RECEIPT"
+  ) {
+    return null;
+  }
+  return { category: error.category, detail: error.detail || error.category };
+}
+
 export class WorkflowStore {
   readonly root: string;
   readonly path: string;
@@ -638,7 +656,7 @@ export class WorkflowStore {
     actorRole: Role,
     token: unknown,
     expected: unknown,
-    eventType: AuditEventType,
+    eventType: AuditEventType | ((next: WorkflowState) => AuditEventType),
     action: (state: WorkflowState) => WorkflowState,
     outcome: AuditOutcome | null | ((next: WorkflowState) => AuditOutcome | null) = null,
   ): RoleView {
@@ -673,10 +691,11 @@ export class WorkflowStore {
           );
         if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
+        const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
         this.#audit(
           id,
           nextVersion,
-          eventType,
+          resolvedEventType,
           selectedRole,
           auditEnvelope(current, next, row.state_digest as StateDigest | null, {
             outcome: resolvedOutcome,
@@ -865,15 +884,64 @@ export class WorkflowStore {
 
   prepareCommit(input: unknown): RoleView {
     const args = mutationInput(input);
+    exactKeys(args, ["workflow_id", "capability", "expected_version"], "commit preparation");
     return this.#mutate(
       args.workflow_id,
       "committer",
       args.capability,
       args.expected_version,
-      "COMMIT_PREPARED",
+      (next) =>
+        next.phase === "STOPPED_COMMIT_PREPARATION"
+          ? "COMMIT_PREPARATION_FAILED"
+          : "COMMIT_PREPARED",
       (state) => {
-        const evidence: CommitPreparationEvidence = prepareCommitReceipt(this.root, state);
-        return prepareCommit(state, args, evidence);
+        try {
+          const evidence: CommitPreparationEvidence = prepareCommitReceipt(this.root, state);
+          return prepareCommit(state, args, evidence);
+        } catch (error) {
+          const failure = supportedPreparationFailure(error);
+          if (!failure) throw error;
+          return commitPreparationFailed(state, failure.category, failure.detail);
+        }
+      },
+    );
+  }
+
+  retryCommitPreparation(input: unknown): RoleView {
+    const args = mutationInput(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "COMMIT_PREPARATION_RETRY_AUTHORIZED",
+      (state) => retryCommitPreparation(state, args),
+      "retry",
+    );
+  }
+
+  returnCommitToReview(input: unknown): RoleView {
+    const args = mutationInput(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "COMMIT_PREPARATION_REVIEW_AUTHORIZED",
+      (state) => {
+        const next = returnCommitToReview(state, args);
+        const head = currentHead(this.root);
+        if (next.review_target.review_mode === "working_tree" && next.base_head !== head) {
+          const initialReceipt = createReceipt(this.root, next.approved_paths, true);
+          if (initialReceipt.base_head !== head) {
+            fail("ERROR_STALE_BASE", "review recovery base is stale");
+          }
+          next.base_head = head;
+          next.review_target = { ...next.review_target, base_revision: head };
+          next.initial_receipt = initialReceipt;
+          next.dirty_baseline_paths = dirtyBaselinePaths(initialReceipt);
+        }
+        return next;
       },
     );
   }

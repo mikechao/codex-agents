@@ -168,8 +168,11 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 - Linked follow-up workflow: `workflow_create_linked_followup` creates a cycle-0 child with a new
   ID, exact scope, copied findings, remediation context, and parent/source links from an approved or
   exhausted source workflow.
-- Commit preparation: prepare binds the exact HEAD, index tree, paths, and review receipt, rejects
-  empty/partial/extra/untracked staging, and never changes Git state or runs hooks.
+- Commit preparation: prepare binds the exact HEAD, index tree, paths, and review receipt, uses
+  rename-independent exact delete+add paths, rejects empty/partial/extra/untracked staging, and
+  never changes Git state or runs hooks. Supported pre-commit failures persist a
+  `STOPPED_COMMIT_PREPARATION` recovery state with only the matching parent action exposed; the
+  committer is not redispatched against unchanged state.
 - Commit result: a verified commit enters `COMMITTED`; an unchanged-HEAD failure enters the retryable
   `STOPPED_NOT_COMMITTED` stop; any verification mismatch enters the terminal `STOPPED_COMMIT_MISMATCH`
   with a deterministic category and no failure text retained.

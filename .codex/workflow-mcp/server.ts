@@ -514,6 +514,44 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_retry_commit_preparation",
+    description:
+      "Authorize an explicit retry after a retryable commit-preparation failure; clears the failure stop and returns to commit authorization without staging or preparing automatically.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        retry_context: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "retry_context"],
+    ),
+    annotations: {
+      title: "Retry commit preparation",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_return_commit_to_review",
+    description:
+      "Return a review-invalidating commit-preparation failure to review; clears the old receipt and commit authorization and requires fresh review before authorization.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        review_context: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "review_context"],
+    ),
+    annotations: {
+      title: "Return commit to review",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_submit_commit_result",
     description:
       "Submit the outcome of an external commit attempt; a verified commit enters COMMITTED, an unchanged-HEAD failure enters a retryable stop, and any verification mismatch enters a terminal stop.",
@@ -618,6 +656,12 @@ export function createServer(store: WorkflowStore = openStore()): Server {
           break;
         case "workflow_prepare_commit":
           result = store.prepareCommit(args);
+          break;
+        case "workflow_retry_commit_preparation":
+          result = store.retryCommitPreparation(args);
+          break;
+        case "workflow_return_commit_to_review":
+          result = store.returnCommitToReview(args);
           break;
         case "workflow_submit_commit_result":
           result = store.submitCommitResult(args);

@@ -44,6 +44,8 @@ permission:
   workflow_state_workflow_finalize_repair_exhausted: allow
   workflow_state_workflow_create_linked_followup: allow
   workflow_state_workflow_authorize_commit: allow
+  workflow_state_workflow_retry_commit_preparation: allow
+  workflow_state_workflow_return_commit_to_review: allow
   workflow_state_workflow_retry_commit: allow
 ---
 You are the OpenCode workflow orchestrator.
@@ -138,8 +140,11 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
 
 The same exact workflow ID must flow through implementer, reviewer, blocking remediation, and
 committer handoffs. Review-only workflows may skip implementer when the authoritative view says so.
-Handle recoverable context, concern, inconclusive-review, and commit-failure stops only through the
-corresponding parent transition and explicit user authorization required by the workflow contract.
+Handle recoverable context, concern, inconclusive-review, commit-preparation, and commit-failure
+stops only through the corresponding parent transition and explicit user authorization required by
+the workflow contract. A `STOPPED_COMMIT_PREPARATION` view exposes either
+`workflow_retry_commit_preparation` or `workflow_return_commit_to_review`; do not dispatch another
+committer while stopped and do not retry preparation without an explicit parent recovery mutation.
 
 Build remains an ordinary OpenCode Build agent. Do not invoke it as the workflow control plane and
 do not attempt to perform any role's repository work in the primary session. Manual direct

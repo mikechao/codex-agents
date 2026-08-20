@@ -86,7 +86,7 @@ clean.
 IMPLEMENTING, REVIEWING, REPAIR_REQUIRED, REPAIRING,
 STOPPED_CONCERNS, STOPPED_NEEDS_CONTEXT, STOPPED_IMPLEMENTATION_BLOCKED,
 STOPPED_INCONCLUSIVE, STOPPED_APPROVED, STOPPED_REPAIR_EXHAUSTED,
-COMMIT_AUTHORIZED, COMMIT_PREPARED, STOPPED_NOT_COMMITTED,
+COMMIT_AUTHORIZED, COMMIT_PREPARED, STOPPED_COMMIT_PREPARATION, STOPPED_NOT_COMMITTED,
 STOPPED_COMMIT_MISMATCH, COMMITTED
 ```
 
@@ -107,6 +107,8 @@ IMPLEMENTING -> REVIEWING -> REPAIR_REQUIRED -> REPAIRING -> REVIEWING
 
 STOPPED_APPROVED -> COMMIT_AUTHORIZED -> COMMIT_PREPARED -> COMMITTED   (terminal)
                         |  |                 |   `-> STOPPED_COMMIT_MISMATCH (terminal)
+                        |  `-> STOPPED_COMMIT_PREPARATION -> (retry) COMMIT_AUTHORIZED
+                        |                              `-> (review) REVIEWING
                         |  `-> (unchanged-HEAD failure) STOPPED_NOT_COMMITTED -> COMMIT_AUTHORIZED
                         |
                         `-> STOPPED_REPAIR_EXHAUSTED (terminal, when cycles exhausted)
@@ -166,7 +168,9 @@ receipt and an explicit parent/user `commit_authorization`; a `commit_range` rev
 a commit. After the parent authorizes, the committer stages complete approved paths and calls
 `workflow_prepare_commit`, which checks the current HEAD and the staged scope, file modes, and blob
 digests against the internal authorized receipt, rejects approved-path residue, and binds the
-prepared tree and path set without changing Git state. The committer then runs the external
+prepared tree and path set without changing Git state. Receipt paths use exact delete+add semantics
+for renames. Staged and post-commit path derivation disables Git rename detection, so user Git
+configuration cannot collapse or change the reviewed path set. The committer then runs the external
 `git commit` and calls `workflow_submit_commit_result` with only the semantic outcome and bounded
 failure summary when applicable, whether the commit succeeded or failed. Workflow MCP observes and
 verifies authoritative Git HEAD itself and persists the verified SHA. Result submission verifies the
@@ -174,8 +178,13 @@ current HEAD, commit parent, prepared tree, and changed paths against the prepar
 confirms that HEAD stayed unchanged for a not-committed result). A verified commit enters `COMMITTED`;
 an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
 stop (cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
-`STOPPED_COMMIT_MISMATCH`. The server never changes Git state; the committer owns staging and the
-commit.
+`STOPPED_COMMIT_MISMATCH`. A supported preparation failure before a commit exists is persisted as
+`STOPPED_COMMIT_PREPARATION` with its category, bounded diagnostic, failure version/timestamp, and
+recovery class. Retryable scope/content failures expose only
+`workflow_retry_commit_preparation`; stale receipt failures expose only
+`workflow_return_commit_to_review`, which clears authorization and requires a fresh review and
+fresh authorization. The committer has no permitted action while stopped. The server never changes
+Git state; the committer owns staging and the commit.
 
 ## Bootstrap and reload checklist
 

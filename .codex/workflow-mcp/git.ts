@@ -209,7 +209,11 @@ export function createReceipt(
 }
 
 export function stagedPaths(root: string): ExactRepoPath[] {
-  const output = git(root, ["diff", "--cached", "--name-only", "-z"]);
+  return exactChangedPaths(root, ["diff", "--cached"]);
+}
+
+function exactChangedPaths(root: string, prefix: readonly string[]): ExactRepoPath[] {
+  const output = git(root, [...prefix, "--no-renames", "--name-only", "-z"]);
   return output
     .split("\0")
     .filter((path) => path.length > 0)
@@ -316,24 +320,7 @@ function commitChangedPaths(
   fromRevision: GitCommitSha,
   toRevision: GitCommitSha,
 ): ExactRepoPath[] {
-  const changed = new Set<ExactRepoPath>();
-  const diff = git(root, ["diff", "--name-status", "-z", fromRevision, toRevision]);
-  const parts = diff.split("\0");
-  for (let index = 0; index < parts.length; index += 1) {
-    const status = parts[index];
-    if (!status) continue;
-    const path = parts[index + 1];
-    if (!path) fail("ERROR_COMMIT_MISMATCH", "commit path is invalid");
-    changed.add(path as ExactRepoPath);
-    if (status.startsWith("R") || status.startsWith("C")) {
-      const destination = parts[index + 2];
-      if (!destination) fail("ERROR_COMMIT_MISMATCH", "rename path is invalid");
-      changed.add(destination as ExactRepoPath);
-      index += 1;
-    }
-    index += 1;
-  }
-  return [...changed].sort();
+  return exactChangedPaths(root, ["diff", fromRevision, toRevision]);
 }
 
 export function verifyPreparedCommit(
