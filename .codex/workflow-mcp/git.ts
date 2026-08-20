@@ -212,6 +212,27 @@ export function stagedPaths(root: string): ExactRepoPath[] {
   return exactChangedPaths(root, ["diff", "--cached"]);
 }
 
+/** Return approved paths whose index entry differs from HEAD, including staged-only changes. */
+export function stagedScopeChanges(
+  root: string,
+  expectedPaths: ReadonlyArray<ExactRepoPath>,
+): ExactRepoPath[] {
+  const expected = new Set(expectedPaths);
+  const output = git(root, [
+    "--literal-pathspecs",
+    "diff",
+    "--cached",
+    "--no-renames",
+    "--name-only",
+    "-z",
+    "--",
+    ...expectedPaths,
+  ]);
+  return [
+    ...new Set(output.split("\0").filter((path) => expected.has(path as ExactRepoPath))),
+  ].sort() as ExactRepoPath[];
+}
+
 function exactChangedPaths(root: string, prefix: readonly string[]): ExactRepoPath[] {
   const output = git(root, [...prefix, "--no-renames", "--name-only", "-z"]);
   return output

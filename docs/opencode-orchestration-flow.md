@@ -64,6 +64,13 @@ values. The returned role view supplies that worker's objective, scope, criteria
 repair context, and next actions; receipt data and digests remain internal to Workflow MCP, and the
 prompt does not duplicate them.
 
+The approved plan is immutable, but the effective approved path scope may be expanded append-only by
+the parent with `workflow_expand_scope` in the explicitly permitted implementation and repair stops.
+The parent must have fresh user authorization naming exact paths; Workflow MCP captures clean or
+absent baselines and records the amendment parent-only. After expansion, refresh the parent and
+implementer views before dispatch: stale implementation/review evidence is cleared and fresh
+implementation and review are required without consuming a repair cycle.
+
 Workers perform their role and submit a terminal MCP result through their role-specific submission
 tool. After a successful terminal submission, the OpenCode adapter also requires a non-empty normal
 text report to the parent. Orchestrator refreshes the parent view immediately after each terminal

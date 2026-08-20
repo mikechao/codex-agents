@@ -117,6 +117,16 @@ working-tree snapshot and receipt gating, and rejects corrupt or stale authorita
 
 ## Phases, recovery, and stops
 
+### Append-only scope expansion
+
+The approved plan remains immutable, while the parent may append exact repository-relative paths to
+an active working-tree `change` workflow with `workflow_expand_scope`. The action requires fresh
+user authorization naming the paths and records a bounded reason, authorization-time version, and
+clean tracked or absent baseline. Dirty paths, directories, globs, duplicates, already-approved
+paths, and scope overflow are rejected. Expansion is unavailable during review, approval, commit,
+exhausted, and terminal phases, does not consume a repair cycle, and clears stale implementation and
+review evidence so a fresh implementation and review are required.
+
 ```text
 IMPLEMENTING, REVIEWING, REPAIR_REQUIRED, REPAIRING,
 STOPPED_CONCERNS, STOPPED_NEEDS_CONTEXT, STOPPED_IMPLEMENTATION_BLOCKED,
@@ -173,8 +183,10 @@ The current state stores `approved_plan` exactly in the JSON state: Plan-mode ex
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
 execution intent exposed only to parent and implementer views. Structured objective, paths, criteria,
 validations, and remediation/findings remain enforceable contracts. Linked follow-ups receive their
-own explicit plan input and never reconstruct or silently inherit the source plan. State schema changes
-are clean breaks and require resetting incompatible databases.
+own explicit plan input and never reconstruct or silently inherit the source plan. The current v4
+state also stores append-only parent-only scope amendments and authorization-time baselines; v3
+state is incompatible and requires resetting the database. State schema changes are clean breaks
+and require resetting incompatible databases.
 
 ## Bootstrap and reload
 

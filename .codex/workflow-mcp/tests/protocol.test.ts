@@ -91,7 +91,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
     assert.equal(created.workflow.phase, "IMPLEMENTING");
     assert.equal(created.workflow.capabilities, undefined);
     assert.equal(Object.keys(created.capabilities).length, 4);
-    assert.deepEqual(created.workflow.permitted_next_actions, []);
+    assert.deepEqual(created.workflow.permitted_next_actions, ["workflow_expand_scope"]);
     const denied = await client.callTool({
       name: "workflow_get",
       arguments: { workflow_id: created.workflow.workflow_id, role: "parent", capability: "bad" },

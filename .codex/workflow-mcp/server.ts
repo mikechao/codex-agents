@@ -15,7 +15,7 @@ import { openStore } from "./store.js";
 type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
-  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent: Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent, while approved_paths is an append-only effective scope: only the parent may expand it with fresh user authorization naming exact paths in permitted active states. Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common: {
   type: "object";
@@ -155,6 +155,27 @@ const validationRequirementSchema: JsonSchema = {
 };
 
 export const tools: Tool[] = [
+  {
+    name: "workflow_expand_scope",
+    description:
+      "Append exact clean or absent repository paths to an active working-tree change workflow under fresh parent/user authorization.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        added_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        reason: { type: "string", minLength: 1, maxLength: 2000 },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "added_paths", "reason", "user_authorization"],
+    ),
+    annotations: {
+      title: "Expand workflow scope",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
   {
     name: "workflow_create",
     description:
@@ -615,6 +636,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
       const args = request.params.arguments ?? {};
       let result: unknown;
       switch (request.params.name) {
+        case "workflow_expand_scope":
+          result = store.expandScope(args);
+          break;
         case "workflow_create":
           result = store.create(args);
           break;

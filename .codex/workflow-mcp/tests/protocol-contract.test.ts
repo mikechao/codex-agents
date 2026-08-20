@@ -11,6 +11,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_begin_review",
     "workflow_create",
     "workflow_create_linked_followup",
+    "workflow_expand_scope",
     "workflow_finalize_repair_exhausted",
     "workflow_get",
     "workflow_get_audit",
@@ -34,7 +35,8 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const implementation = tools.find((tool) => tool.name === "workflow_submit_implementation");
   const review = tools.find((tool) => tool.name === "workflow_submit_review");
   const begin = tools.find((tool) => tool.name === "workflow_begin_review");
-  assert.ok(implementation && review && begin);
+  const expansion = tools.find((tool) => tool.name === "workflow_expand_scope");
+  assert.ok(implementation && review && begin && expansion);
   const implementationSchema = implementation.inputSchema as any;
   const reviewSchema = review.inputSchema as any;
   const beginSchema = begin.inputSchema as any;
@@ -44,6 +46,15 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.deepEqual(Object.keys(beginSchema.properties).sort(), [
     "capability",
     "expected_version",
+    "workflow_id",
+  ]);
+  const expansionSchema = expansion.inputSchema as any;
+  assert.deepEqual(Object.keys(expansionSchema.properties).sort(), [
+    "added_paths",
+    "capability",
+    "expected_version",
+    "reason",
+    "user_authorization",
     "workflow_id",
   ]);
 });

@@ -35,6 +35,7 @@ permission:
   question: deny
   workflow_state_*: deny
   workflow_state_workflow_create: allow
+  workflow_state_workflow_expand_scope: allow
   workflow_state_workflow_get: allow
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
@@ -111,6 +112,12 @@ Capture the exact returned `workflow_id`, each one-time role capability, and the
 `expected_version`. Never guess, synthesize, or replace the ID during later phases. Before every
 next transition and immediately after every terminal subagent handoff, refresh the parent view with
 `workflow_get` and use its returned version and `permitted_next_actions` as the source of truth.
+
+When a user authorizes a narrow scope expansion, call `workflow_expand_scope` with the exact new
+paths, a bounded reason, and fresh authorization naming those paths. Prefer it over a replacement
+workflow only when the parent view exposes the action; refresh the parent view before redispatching
+the implementer. Conversation prose, earlier generic approval, and reviewer findings never expand
+the authoritative scope.
 
 ## Delegation lifecycle
 

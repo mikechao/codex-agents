@@ -67,9 +67,10 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All 18 tool names (from `server.ts` `tools`).
+// All 19 tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
+  | "workflow_expand_scope"
   | "workflow_get"
   | "workflow_get_audit"
   | "workflow_submit_implementation"
@@ -139,7 +140,8 @@ export type ErrorCategory =
   | "ERROR_INVALID_ARGUMENTS"
   | "ERROR_RUNTIME_ISOLATION"
   | "ERROR_RUNTIME_RECOVERY"
-  | "ERROR_RUNTIME_ARTIFACT";
+  | "ERROR_RUNTIME_ARTIFACT"
+  | "ERROR_SCOPE_EXPANSION_DIRTY";
 
 export type CommitPreparationFailureCategory =
   | "ERROR_STAGED_SCOPE"
@@ -148,6 +150,7 @@ export type CommitPreparationFailureCategory =
 
 export type AuditEventType =
   | "WORKFLOW_CREATED"
+  | "SCOPE_EXPANDED"
   | "WORKFLOW_RUNTIME_ADOPTED"
   | "IMPLEMENTATION_SUBMITTED"
   | "IMPLEMENTATION_STOPPED"
@@ -303,7 +306,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 3;
+  schema_version: 4;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -315,6 +318,8 @@ export interface WorkflowState {
   approved_plan: string | null;
   base_head: GitCommitSha;
   approved_paths: ExactRepoPath[];
+  scope_expansions: ScopeExpansion[];
+  approved_path_baselines: ApprovedPathBaseline[];
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   review_target: ReviewTarget;
@@ -378,7 +383,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 3;
+  schema_version: 4;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -390,6 +395,44 @@ export interface RoleViewCommon {
   permitted_next_actions: WorkflowAction[];
 }
 
+export interface ScopeExpansion {
+  expansion_id: string;
+  added_paths: ExactRepoPath[];
+  reason: string;
+  user_authorization: string;
+  prior_version: WorkflowVersion;
+  resulting_version: WorkflowVersion;
+  authorized_at: IsoTimestamp;
+}
+
+export interface ApprovedPathBaseline {
+  path: ExactRepoPath;
+  approved_at_version: WorkflowVersion;
+  baseline: ReceiptPath;
+}
+
+export type ApprovedPathBaselineView = Omit<ApprovedPathBaseline, "baseline"> & {
+  baseline:
+    | { path: ExactRepoPath; state: "absent"; kind: "missing" }
+    | {
+        path: ExactRepoPath;
+        state: "deleted";
+        kind: "missing";
+        mode: GitFileMode;
+      }
+    | {
+        path: ExactRepoPath;
+        state: "added" | "modified" | "unchanged";
+        kind: "file" | "symlink";
+        mode: GitFileMode;
+      };
+};
+
+export interface ScopeExpansionAudit {
+  expansion: ScopeExpansion;
+  baselines: ApprovedPathBaselineView[];
+}
+
 export type CommitPreparationView = Omit<CommitPreparation, "review_receipt_digest">;
 
 export type ParentView = RoleViewCommon &
@@ -399,8 +442,10 @@ export type ParentView = RoleViewCommon &
     | "review_start_receipt"
     | "implementation_receipt"
     | "review_receipt"
+    | "approved_path_baselines"
     | "commit_preparation"
   > & {
+    approved_path_baselines: ApprovedPathBaselineView[];
     commit_preparation: CommitPreparationView | null;
   };
 
@@ -524,6 +569,7 @@ export interface AuditEvent {
   event_type: AuditEventType;
   actor_role: ActorRole;
   summary: AuditEnvelope;
+  scope_expansion?: ScopeExpansionAudit;
   created_at: IsoTimestamp;
 }
 

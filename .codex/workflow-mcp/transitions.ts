@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
+import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
 import type {
+  ApprovedPathBaseline,
+  ApprovedPathBaselineView,
   ChangeReceipt,
   CommitAttemptId,
   CommitMismatchCategory,
@@ -58,7 +61,7 @@ import {
   VALIDATION_STATUSES,
 } from "./validation.js";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = CURRENT_STATE_SCHEMA_VERSION;
 
 export const IMPLEMENTATION_STOP_PHASES: Record<
   "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED",
@@ -68,6 +71,39 @@ export const IMPLEMENTATION_STOP_PHASES: Record<
   NEEDS_CONTEXT: "STOPPED_NEEDS_CONTEXT",
   BLOCKED: "STOPPED_IMPLEMENTATION_BLOCKED",
 };
+
+export function approvedPathBaselineView(value: ApprovedPathBaseline): ApprovedPathBaselineView {
+  const { baseline } = value;
+  if (baseline.state === "absent") {
+    return {
+      path: value.path,
+      approved_at_version: value.approved_at_version,
+      baseline: { path: baseline.path, state: baseline.state, kind: baseline.kind },
+    };
+  }
+  if (baseline.state === "deleted") {
+    return {
+      path: value.path,
+      approved_at_version: value.approved_at_version,
+      baseline: {
+        path: baseline.path,
+        state: baseline.state,
+        kind: baseline.kind,
+        mode: baseline.mode,
+      },
+    };
+  }
+  return {
+    path: value.path,
+    approved_at_version: value.approved_at_version,
+    baseline: {
+      path: baseline.path,
+      state: baseline.state,
+      kind: baseline.kind,
+      mode: baseline.mode,
+    },
+  };
+}
 
 export const PHASES: readonly WorkflowPhase[] = [
   "IMPLEMENTING",
@@ -95,7 +131,7 @@ export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set(
   "PATH_MISMATCH",
 ]);
 
-const V3_STATE_KEYS: readonly string[] = [
+const V4_STATE_KEYS: readonly string[] = [
   "schema_version",
   "version",
   "workflow_id",
@@ -107,6 +143,8 @@ const V3_STATE_KEYS: readonly string[] = [
   "approved_plan",
   "base_head",
   "approved_paths",
+  "scope_expansions",
+  "approved_path_baselines",
   "acceptance_criteria",
   "validation_requirements",
   "review_target",
@@ -254,12 +292,18 @@ const ACTION_MATRIX: Partial<
     REVIEWING: ["workflow_begin_review", "workflow_submit_review"],
   },
   parent: {
-    REPAIR_REQUIRED: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
+    IMPLEMENTING: ["workflow_expand_scope"],
+    REPAIR_REQUIRED: [
+      "workflow_authorize_repair",
+      "workflow_expand_scope",
+      "workflow_finalize_repair_exhausted",
+    ],
+    REPAIRING: ["workflow_expand_scope"],
     STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_linked_followup"],
     STOPPED_REPAIR_EXHAUSTED: ["workflow_create_linked_followup"],
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
-    STOPPED_NEEDS_CONTEXT: ["workflow_resume_implementation"],
-    STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_resume_implementation"],
+    STOPPED_NEEDS_CONTEXT: ["workflow_expand_scope", "workflow_resume_implementation"],
+    STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_expand_scope", "workflow_resume_implementation"],
     STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
     STOPPED_COMMIT_PREPARATION: [
@@ -278,6 +322,7 @@ const INTERNAL_RECEIPT_FIELDS = new Set([
   "review_start_receipt",
   "implementation_receipt",
   "review_receipt",
+  "approved_path_baselines",
 ]);
 
 export function permittedNextActions(state: WorkflowState, actorRole: Role): WorkflowAction[] {
@@ -330,6 +375,10 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
   if (actorRole === "parent") {
     for (const key of Object.keys(state)) {
       if (ROLE_VIEW_COMMON.includes(key)) continue;
+      if (key === "approved_path_baselines") {
+        view[key] = (raw[key] as ApprovedPathBaseline[]).map(approvedPathBaselineView);
+        continue;
+      }
       if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
@@ -399,6 +448,8 @@ function baseState({
     approved_plan: approvedPlan,
     base_head: baseHead,
     approved_paths: approvedPaths,
+    scope_expansions: [],
+    approved_path_baselines: [],
     acceptance_criteria: [],
     validation_requirements: [],
     review_target: {
@@ -683,7 +734,11 @@ export function submitImplementation(
   next.implementation_receipt = JSON.parse(JSON.stringify(freshReceipt)) as ChangeReceipt;
   next.implementation_known_failures = knownFailures;
   next.finding_resolution_map = resolution;
-  next.scope_changed_paths = scopeChangedPaths(state.initial_receipt, next.implementation_receipt);
+  next.scope_changed_paths = scopeChangedPaths(
+    state.initial_receipt,
+    state.approved_path_baselines,
+    next.implementation_receipt,
+  );
   if (args.status === "DONE") {
     if (acceptanceResults.some((item) => item.status !== "satisfied")) {
       fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires satisfied criteria");
@@ -706,6 +761,96 @@ export function submitImplementation(
     next.repair_authorized_ids = [];
   }
   if (args.status !== "DONE") next.phase = IMPLEMENTATION_STOP_PHASES[args.status];
+  return next;
+}
+
+export function expandScope(
+  state: WorkflowState,
+  input: unknown,
+  addedReceipt: ChangeReceipt,
+  repositoryRoot: string,
+): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "scope expansion input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    [
+      "workflow_id",
+      "capability",
+      "expected_version",
+      "added_paths",
+      "reason",
+      "user_authorization",
+    ],
+    "scope expansion",
+  );
+  ensurePhase(
+    state,
+    "IMPLEMENTING",
+    "REPAIR_REQUIRED",
+    "REPAIRING",
+    "STOPPED_NEEDS_CONTEXT",
+    "STOPPED_IMPLEMENTATION_BLOCKED",
+  );
+  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
+    fail(
+      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+      "scope expansion requires a working-tree change workflow",
+    );
+  }
+  const addedPaths = exactPaths(args.added_paths, repositoryRoot);
+  if (addedPaths.some((path) => state.approved_paths.includes(path))) {
+    fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
+  }
+  if (state.approved_paths.length + addedPaths.length > MAX_PATHS) {
+    fail("ERROR_INVALID_PATHS", "scope expansion exceeds the path limit");
+  }
+  if (addedReceipt.base_head !== state.base_head) {
+    fail("ERROR_STALE_RECEIPT", "scope expansion baseline is stale");
+  }
+  if (
+    addedReceipt.approved_paths.length !== addedPaths.length ||
+    addedReceipt.approved_paths.some((path, index) => path !== addedPaths[index])
+  ) {
+    fail("ERROR_INVALID_PATHS", "scope expansion baseline scope is invalid");
+  }
+  if (addedReceipt.paths.some((entry) => entry.state !== "unchanged" && entry.state !== "absent")) {
+    fail(
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+      "scope expansion paths must have clean or absent baselines",
+    );
+  }
+  const priorVersion = state.version;
+  const next = clone(state);
+  const resultingPaths = [...state.approved_paths, ...addedPaths].sort();
+  next.approved_paths = resultingPaths;
+  next.review_target = { ...next.review_target, approved_paths: resultingPaths };
+  next.scope_expansions.push({
+    expansion_id: randomUUID(),
+    added_paths: addedPaths,
+    reason: boundedString(args.reason, "reason", MAX_DETAIL),
+    user_authorization: userAuthorization(args.user_authorization),
+    prior_version: priorVersion,
+    resulting_version: (priorVersion + 1) as WorkflowVersion,
+    authorized_at: isoNow(),
+  });
+  next.approved_path_baselines.push(
+    ...addedReceipt.paths.map((entry) => ({
+      path: entry.path,
+      approved_at_version: (priorVersion + 1) as WorkflowVersion,
+      baseline: clone(entry),
+    })),
+  );
+  // Any implementation evidence was captured against the old scope and cannot authorize the
+  // expanded result. Findings and repair context remain intact for bounded repair recovery.
+  next.implementation_receipt = null;
+  next.scope_changed_paths = [];
+  next.review_start_receipt = null;
+  next.review_receipt = null;
+  next.commit_authorization = null;
+  next.commit_preparation = null;
+  next.commit_result = null;
   return next;
 }
 
@@ -1273,6 +1418,7 @@ export function rangeDirtyBaselinePaths(range: ReviewRange | null | undefined): 
 
 export function scopeChangedPaths(
   initialReceipt: ChangeReceipt | null,
+  approvedPathBaselines: ApprovedPathBaseline[],
   finalReceipt: ChangeReceipt | null,
 ): ExactRepoPath[] {
   if (
@@ -1283,10 +1429,14 @@ export function scopeChangedPaths(
   ) {
     fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
   }
-  const initialByPath = new Map(initialReceipt.paths.map((entry) => [entry.path, entry]));
+  const baselines = [
+    ...initialReceipt.paths,
+    ...approvedPathBaselines.map((entry) => entry.baseline),
+  ];
+  const initialByPath = new Map(baselines.map((entry) => [entry.path, entry]));
   const finalByPath = new Map(finalReceipt.paths.map((entry) => [entry.path, entry]));
   const changed: ExactRepoPath[] = [];
-  for (const entry of initialReceipt.paths) {
+  for (const entry of baselines) {
     const initialEntry = initialByPath.get(entry.path);
     const finalEntry = finalByPath.get(entry.path);
     if (!initialEntry || !finalEntry) fail("ERROR_STATE_CORRUPT", "receipt scope is invalid");
@@ -1374,10 +1524,13 @@ function pathList(value: unknown, allowEmpty: boolean): void {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > MAX_PATHS) {
     corrupt();
   }
+  let previous: string | null = null;
   for (const path of value) {
     if (typeof path !== "string" || path.length === 0 || path.length > 300 || path.includes("\0")) {
       corrupt();
     }
+    if (previous !== null && previous >= path) corrupt();
+    previous = path;
   }
 }
 
@@ -1491,8 +1644,90 @@ function receiptShape(value: unknown): void {
   sha40(value.base_head);
   pathList(value.approved_paths, false);
   if (!Array.isArray(value.paths) || value.paths.length > MAX_PATHS) corrupt();
-  for (const entry of value.paths) receiptPathShape(entry);
+  let previousPath: string | null = null;
+  for (const entry of value.paths) {
+    receiptPathShape(entry);
+    const path = (entry as { path: string }).path;
+    if (previousPath !== null && previousPath >= path) corrupt();
+    previousPath = path;
+  }
+  if (
+    (value.paths as Array<{ path: string }>).length !== (value.approved_paths as string[]).length ||
+    (value.paths as Array<{ path: string }>).some(
+      (entry, index) => entry.path !== (value.approved_paths as string[])[index],
+    )
+  )
+    corrupt();
   sha64(value.overall_scope_hash);
+}
+
+function scopeExpansionShape(value: unknown): void {
+  if (!Array.isArray(value) || value.length > MAX_PATHS) corrupt();
+  const ids = new Set<string>();
+  let previousVersion = -1;
+  for (const item of value) {
+    if (!isObject(item)) corrupt();
+    checkKeys(item, [
+      "expansion_id",
+      "added_paths",
+      "reason",
+      "user_authorization",
+      "prior_version",
+      "resulting_version",
+      "authorized_at",
+    ]);
+    if (
+      typeof item.expansion_id !== "string" ||
+      !/^[0-9a-f-]{36}$/u.test(item.expansion_id) ||
+      ids.has(item.expansion_id)
+    )
+      corrupt();
+    ids.add(item.expansion_id);
+    pathList(item.added_paths, false);
+    if (new Set(item.added_paths as string[]).size !== (item.added_paths as string[]).length)
+      corrupt();
+    bounded(item.reason, MAX_DETAIL);
+    bounded(item.user_authorization, MAX_DETAIL);
+    if (
+      !Number.isSafeInteger(item.prior_version) ||
+      !Number.isSafeInteger(item.resulting_version) ||
+      (item.prior_version as number) < 0 ||
+      (item.resulting_version as number) !== (item.prior_version as number) + 1 ||
+      (item.prior_version as number) <= previousVersion
+    )
+      corrupt();
+    previousVersion = item.prior_version as number;
+    bounded(item.authorized_at, 64);
+  }
+}
+
+function approvedPathBaselinesShape(value: unknown): void {
+  if (!Array.isArray(value) || value.length > MAX_PATHS) corrupt();
+  const paths = new Set<string>();
+  let previousVersion = -1;
+  let previousPath: string | null = null;
+  for (const item of value) {
+    if (!isObject(item)) corrupt();
+    checkKeys(item, ["path", "approved_at_version", "baseline"]);
+    pathList([item.path], false);
+    if (paths.has(item.path as string)) corrupt();
+    paths.add(item.path as string);
+    if (
+      !Number.isSafeInteger(item.approved_at_version) ||
+      (item.approved_at_version as number) < 1 ||
+      (item.approved_at_version as number) < previousVersion ||
+      ((item.approved_at_version as number) === previousVersion &&
+        previousPath !== null &&
+        previousPath >= (item.path as string))
+    )
+      corrupt();
+    previousVersion = item.approved_at_version as number;
+    previousPath = item.path as string;
+    receiptPathShape(item.baseline);
+    if ((item.baseline as { path?: unknown }).path !== item.path) corrupt();
+    const baseline = item.baseline as { state?: unknown };
+    if (baseline.state !== "unchanged" && baseline.state !== "absent") corrupt();
+  }
 }
 
 function nullableReceipt(value: unknown): void {
@@ -1658,12 +1893,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v3 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v4 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV3(value: unknown): WorkflowState {
+export function validateWorkflowStateV4(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V3_STATE_KEYS].sort();
+  const required = [...V4_STATE_KEYS].sort();
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -1680,6 +1915,95 @@ export function validateWorkflowStateV3(value: unknown): WorkflowState {
   if (value.approved_plan !== null) bounded(value.approved_plan, MAX_APPROVED_PLAN);
   sha40(value.base_head);
   pathList(value.approved_paths, false);
+  scopeExpansionShape(value.scope_expansions);
+  approvedPathBaselinesShape(value.approved_path_baselines);
+  reviewTargetShape(value.review_target);
+  if (
+    value.workflow_type === "review_only" &&
+    ((value.scope_expansions as unknown[]).length > 0 ||
+      (value.approved_path_baselines as unknown[]).length > 0)
+  )
+    corrupt();
+  if (
+    canonicalJson((value.review_target as { approved_paths: unknown }).approved_paths) !==
+    canonicalJson(value.approved_paths)
+  )
+    corrupt();
+  const initialPaths = new Set(
+    value.initial_receipt && isObject(value.initial_receipt)
+      ? Array.isArray(value.initial_receipt.paths)
+        ? (value.initial_receipt.paths as Array<{ path: string }>).map((entry) => entry.path)
+        : corrupt()
+      : [],
+  );
+  if ((value.review_target as { review_mode: string }).review_mode === "working_tree") {
+    if (value.initial_receipt === null || value.initial_receipt === undefined) corrupt();
+    if (
+      canonicalJson([...initialPaths].sort()) !==
+      canonicalJson((value.initial_receipt as { approved_paths: unknown }).approved_paths)
+    )
+      corrupt();
+  }
+  const expanded = new Set<string>();
+  const evolvingScope = new Set<string>(initialPaths);
+  let evolvingVersion = -1;
+  for (const expansion of value.scope_expansions as Array<{
+    added_paths: string[];
+    prior_version: number;
+    resulting_version: number;
+  }>) {
+    if (
+      expansion.resulting_version > (value.version as number) ||
+      expansion.prior_version <= evolvingVersion
+    )
+      corrupt();
+    for (const path of expansion.added_paths) {
+      if (expanded.has(path)) corrupt();
+      expanded.add(path);
+      if (evolvingScope.has(path)) corrupt();
+      evolvingScope.add(path);
+    }
+    evolvingVersion = expansion.resulting_version;
+  }
+  const baselinePaths = new Set(
+    (value.approved_path_baselines as Array<{ path: string }>).map((entry) => entry.path),
+  );
+  if ([...expanded].some((path) => !baselinePaths.has(path))) corrupt();
+  if ([...baselinePaths].some((path) => !expanded.has(path))) corrupt();
+  const baselineEntries = value.approved_path_baselines as Array<{
+    path: string;
+    approved_at_version: number;
+  }>;
+  const expectedBaselines = (
+    value.scope_expansions as Array<{ added_paths: string[]; resulting_version: number }>
+  ).flatMap((expansion) =>
+    expansion.added_paths.map((path) => ({
+      path,
+      approved_at_version: expansion.resulting_version,
+    })),
+  );
+  if (
+    baselineEntries.length !== expectedBaselines.length ||
+    baselineEntries.some(
+      (entry, index) =>
+        entry.path !== expectedBaselines[index]?.path ||
+        entry.approved_at_version !== expectedBaselines[index]?.approved_at_version,
+    )
+  )
+    corrupt();
+  const covered = new Set([...initialPaths, ...baselinePaths]);
+  if (
+    value.review_target &&
+    (value.review_target as { review_mode?: string }).review_mode === "working_tree" &&
+    (value.approved_paths as string[]).some((path) => !covered.has(path))
+  )
+    corrupt();
+  if (
+    value.review_target &&
+    (value.review_target as { review_mode?: string }).review_mode === "working_tree" &&
+    canonicalJson([...evolvingScope].sort()) !== canonicalJson(value.approved_paths)
+  )
+    corrupt();
   contractsShape(value.acceptance_criteria, "AC");
   contractsShape(value.validation_requirements, "VAL");
   reviewTargetShape(value.review_target);
@@ -1741,3 +2065,6 @@ export function validateWorkflowStateV3(value: unknown): WorkflowState {
   commitResultShape(value.commit_result);
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
+
+/** @deprecated retained for source compatibility; persisted state is schema v4 only. */
+export const validateWorkflowStateV3 = validateWorkflowStateV4;

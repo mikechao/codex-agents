@@ -10,9 +10,11 @@ import {
   prepareCommitReceipt,
   repositoryRoot,
   reviewRange,
+  stagedScopeChanges,
   verifyCommitResult,
   verifyReviewReceipt,
 } from "./git.js";
+import { assertSupportedStateSchema } from "./migration.js";
 import {
   isValidRuntimeArtifact,
   type RuntimeArtifact,
@@ -20,6 +22,7 @@ import {
 } from "./runtime-artifact.js";
 import {
   acceptConcerns,
+  approvedPathBaselineView,
   authorizeCommit,
   authorizeRepair,
   beginReview,
@@ -27,6 +30,7 @@ import {
   commitPreparationFailed,
   createState,
   dirtyBaselinePaths,
+  expandScope,
   finalizeRepairExhausted,
   IMPLEMENTATION_STOP_PHASES,
   linkedFollowupChildState,
@@ -43,7 +47,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV3,
+  validateWorkflowStateV4,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -62,6 +66,7 @@ import type {
   Role,
   RoleCapabilities,
   RoleView,
+  ScopeExpansionAudit,
   StateDigest,
   WorkflowId,
   WorkflowRow,
@@ -199,6 +204,18 @@ function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState
   }
 }
 
+function assertScopeUnchanged(before: WorkflowState, after: WorkflowState): void {
+  if (
+    canonicalJson(before.approved_paths) !== canonicalJson(after.approved_paths) ||
+    canonicalJson(before.review_target.approved_paths) !==
+      canonicalJson(after.review_target.approved_paths) ||
+    canonicalJson(before.scope_expansions) !== canonicalJson(after.scope_expansions) ||
+    canonicalJson(before.approved_path_baselines) !== canonicalJson(after.approved_path_baselines)
+  ) {
+    fail("ERROR_INVALID_TRANSITION", "approved scope is immutable outside workflow_expand_scope");
+  }
+}
+
 function auditEnvelope(
   before: WorkflowState | null,
   after: WorkflowState,
@@ -308,16 +325,7 @@ function parseState(row: WorkflowRow): WorkflowState {
   } catch {
     fail("ERROR_STATE_CORRUPT", "workflow state is invalid");
   }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    (parsed as { schema_version?: unknown }).schema_version !== 3
-  ) {
-    fail(
-      "ERROR_MIGRATION_REQUIRED",
-      "persisted workflow state schema is unsupported; reset the database and restart",
-    );
-  }
+  assertSupportedStateSchema(parsed);
   if (row.state_digest !== objectDigest(parsed)) {
     fail("ERROR_STATE_CORRUPT", "workflow state digest is corrupted");
   }
@@ -339,7 +347,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV3(parsed);
+  return validateWorkflowStateV4(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -575,6 +583,40 @@ export class WorkflowStore {
     return roleViewForRole(parseState(row), selectedRole);
   }
 
+  expandScope(input: unknown): RoleView {
+    const args = mutationInput(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "SCOPE_EXPANDED",
+      (state) => {
+        if (
+          state.workflow_type !== "change" ||
+          state.review_target.review_mode !== "working_tree"
+        ) {
+          fail(
+            "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+            "scope expansion requires a working-tree change workflow",
+          );
+        }
+        const addedPaths = exactPaths(args.added_paths, this.root);
+        if (addedPaths.some((path) => state.approved_paths.includes(path))) {
+          fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
+        }
+        const head = currentHead(this.root);
+        if (head !== state.base_head) fail("ERROR_STALE_BASE", "scope base is stale");
+        const stagedChanges = stagedScopeChanges(this.root, addedPaths);
+        if (stagedChanges.length > 0) {
+          fail("ERROR_SCOPE_EXPANSION_DIRTY", "scope expansion paths have staged changes");
+        }
+        const baseline = createReceipt(this.root, addedPaths, true);
+        return expandScope(state, args, baseline, this.root);
+      },
+    );
+  }
+
   /** Read only the persisted owning runtime; used by the bootstrap supervisor before auth. */
   runtimeAffinity(workflowIdValue: unknown): RuntimeAffinity {
     this.#ensureOpen();
@@ -603,7 +645,8 @@ export class WorkflowStore {
           version: (row.version + 1) as WorkflowVersion,
         };
         assertApprovedPlanUnchanged(state, next);
-        validateWorkflowStateV3(next);
+        assertScopeUnchanged(state, next);
+        validateWorkflowStateV4(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -628,8 +671,9 @@ export class WorkflowStore {
     this.#ensureOpen();
     const id = workflowId(workflowIdValue);
     const row = this.#row(id);
-    this.#assertAuth(row, actorRole, token);
+    const selectedRole = this.#assertAuth(row, actorRole, token);
     this.#assertRuntimeOwnership(row);
+    const state = parseState(row);
     return (
       this.db
         .prepare(
@@ -642,13 +686,30 @@ export class WorkflowStore {
         summary_json: string;
         created_at: string;
       }>
-    ).map((event) => ({
-      version: event.version,
-      event_type: event.event_type as AuditEventType,
-      actor_role: event.actor_role as ActorRole,
-      summary: JSON.parse(event.summary_json) as AuditEnvelope,
-      created_at: event.created_at as IsoTimestamp,
-    }));
+    ).map((event) => {
+      const result: AuditEvent = {
+        version: event.version,
+        event_type: event.event_type as AuditEventType,
+        actor_role: event.actor_role as ActorRole,
+        summary: JSON.parse(event.summary_json) as AuditEnvelope,
+        created_at: event.created_at as IsoTimestamp,
+      };
+      if (selectedRole === "parent" && result.event_type === "SCOPE_EXPANDED") {
+        const expansion = state.scope_expansions.find(
+          (candidate) => candidate.resulting_version === result.version,
+        );
+        if (expansion) {
+          const auditProjection: ScopeExpansionAudit = {
+            expansion,
+            baselines: state.approved_path_baselines
+              .filter((entry) => entry.approved_at_version === result.version)
+              .map(approvedPathBaselineView),
+          };
+          result.scope_expansion = auditProjection;
+        }
+      }
+      return result;
+    });
   }
 
   #mutate(
@@ -674,8 +735,29 @@ export class WorkflowStore {
         const current = parseState(row);
         const next = action(current);
         assertApprovedPlanUnchanged(current, next);
+        const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
+        if (resolvedEventType === "SCOPE_EXPANDED") {
+          if (
+            next.scope_expansions.length !== current.scope_expansions.length + 1 ||
+            canonicalJson(next.scope_expansions.slice(0, -1)) !==
+              canonicalJson(current.scope_expansions) ||
+            next.approved_paths.length <= current.approved_paths.length ||
+            !current.approved_paths.every((path) => next.approved_paths.includes(path)) ||
+            !next.approved_paths.every(
+              (path) =>
+                current.approved_paths.includes(path) ||
+                next.scope_expansions.at(-1)?.added_paths.includes(path),
+            ) ||
+            canonicalJson(next.review_target.approved_paths) !== canonicalJson(next.approved_paths)
+          ) {
+            fail("ERROR_INVALID_TRANSITION", "scope expansion history is not append-only");
+          }
+        } else {
+          assertScopeUnchanged(current, next);
+        }
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
+        validateWorkflowStateV4(next);
         const now = isoNow();
         const result = this.db
           .prepare(
@@ -691,7 +773,6 @@ export class WorkflowStore {
           );
         if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
-        const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
         this.#audit(
           id,
           nextVersion,
@@ -932,7 +1013,11 @@ export class WorkflowStore {
         const next = returnCommitToReview(state, args);
         const head = currentHead(this.root);
         if (next.review_target.review_mode === "working_tree" && next.base_head !== head) {
-          const initialReceipt = createReceipt(this.root, next.approved_paths, true);
+          // Keep the original receipt boundary separate from authorization-time baselines for
+          // paths appended by scope expansion. Re-baselining the full effective scope would
+          // duplicate those paths and lose their provenance in scopeChangedPaths().
+          const originalPaths = next.initial_receipt?.approved_paths ?? next.approved_paths;
+          const initialReceipt = createReceipt(this.root, originalPaths, true);
           if (initialReceipt.base_head !== head) {
             fail("ERROR_STALE_BASE", "review recovery base is stale");
           }
@@ -1010,12 +1095,12 @@ export class WorkflowStore {
         childState.runtime_id = parentAffinity.runtime_id;
         childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
         childState.workflow_id = childId;
-        validateWorkflowStateV3(childState);
         const childReceipt = createReceipt(this.root, childState.approved_paths, true);
         if (childReceipt.base_head !== followup.base_head)
           fail("ERROR_STALE_BASE", "scope base is stale");
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
+        validateWorkflowStateV4(childState);
         const childCapabilities: RoleCapabilities = {
           parent: issueCapability(),
           implementer: issueCapability(),

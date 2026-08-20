@@ -61,6 +61,14 @@ unavailable, stop and ask the user whether to use the documented prompt-only deg
 not silently downgrade. In degraded mode the parent tracks the version and audit state manually and
 records the decision.
 
+`approved_plan` is immutable execution intent. `approved_paths` is the effective append-only
+execution scope: only the parent may call `workflow_expand_scope`, and only with fresh explicit user
+authorization naming exact additional paths, a bounded reason, and clean tracked or absent
+authorization-time baselines. The amendment history is parent-only; all role views receive the
+refreshed effective path list. Expansion preserves the active implementation/repair phase and does
+not consume a repair cycle, but clears stale implementation/review/commit evidence so fresh
+implementation and review are required.
+
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
 `runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
 supervisor launch attestation signed with the private key belonging to the immutable child artifact
@@ -207,6 +215,11 @@ remain after the second cycle, finalize `STOPPED_REPAIR_EXHAUSTED` and stop; do 
 commit. Trivial edits are exempt from this loop.
 
 The parent follows these state transitions:
+
+`workflow_expand_scope` is available to the parent only in `IMPLEMENTING`, `REPAIR_REQUIRED`,
+`REPAIRING`, `STOPPED_NEEDS_CONTEXT`, and `STOPPED_IMPLEMENTATION_BLOCKED`. It is rejected during
+review snapshots, approval, commit, exhausted, and terminal phases. Expansion preserves the phase
+and repair cycle; after expansion the implementer must submit fresh evidence before review resumes.
 
 - `CHANGES_REQUESTED` plus `REPAIR_BLOCKERS`: authorize repair on exactly the `blocking_findings`
   IDs with `workflow_authorize_repair`, advancing to the next repair cycle. If the final cycle still

@@ -21,6 +21,10 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
   returns `DONE_WITH_CONCERNS` without falsely advancing to review.
 - Unrelated dirty-worktree changes: leaves them untouched and excludes them from its changed-file
   and readiness claims.
+- User-authorized scope expansion: the parent names exact additional paths and supplies fresh
+  authorization; expansion records clean/absent baselines, preserves the immutable plan and repair
+  cycle, refreshes all role scopes, and forces fresh implementation/review evidence. Generic prose,
+  dirty paths, and stale pre-expansion evidence must not expand authority.
 
 ## Committer
 

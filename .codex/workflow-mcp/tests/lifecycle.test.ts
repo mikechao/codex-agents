@@ -43,7 +43,7 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
 const ACTIONS = {
   none: { parent: [], implementer: [], reviewer: [], committer: [] },
   implementing: {
-    parent: [],
+    parent: ["workflow_expand_scope"],
     implementer: ["workflow_submit_implementation"],
     reviewer: [],
     committer: [],
@@ -56,13 +56,17 @@ const ACTIONS = {
     committer: [],
   },
   repairRequired: {
-    parent: ["workflow_authorize_repair", "workflow_finalize_repair_exhausted"],
+    parent: [
+      "workflow_authorize_repair",
+      "workflow_expand_scope",
+      "workflow_finalize_repair_exhausted",
+    ],
     implementer: [],
     reviewer: [],
     committer: [],
   },
   repairing: {
-    parent: [],
+    parent: ["workflow_expand_scope"],
     implementer: ["workflow_submit_implementation"],
     reviewer: [],
     committer: [],
@@ -87,13 +91,13 @@ const ACTIONS = {
   },
   concerns: { parent: ["workflow_accept_concerns"], implementer: [], reviewer: [], committer: [] },
   needsContext: {
-    parent: ["workflow_resume_implementation"],
+    parent: ["workflow_expand_scope", "workflow_resume_implementation"],
     implementer: [],
     reviewer: [],
     committer: [],
   },
   implementationBlocked: {
-    parent: ["workflow_resume_implementation"],
+    parent: ["workflow_expand_scope", "workflow_resume_implementation"],
     implementer: [],
     reviewer: [],
     committer: [],

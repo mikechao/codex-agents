@@ -5,6 +5,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -163,6 +164,126 @@ test("approved plan preserves exact text, visibility, persistence, and creation 
       plan,
     );
     reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("parent expands active scope with clean baselines and requires fresh implementation evidence", () => {
+  const { root, git } = fixture();
+  try {
+    const databasePath = join(root, "scope-expansion.sqlite");
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    const created = create(store, root, git, {
+      approved_paths: ["note.txt"],
+      objective: "scope expansion",
+      approved_plan: "immutable plan",
+    });
+    const id = created.workflow.workflow_id;
+    const expanded = store.expandScope({
+      workflow_id: id,
+      capability: created.capabilities.parent,
+      expected_version: 0,
+      added_paths: ["extra.txt"],
+      reason: "implementation needs the companion file",
+      user_authorization: "I authorize adding extra.txt to this workflow",
+    });
+    assert.equal(expanded.phase, "IMPLEMENTING");
+    assert.equal(expanded.version, 1);
+    assert.deepEqual(expanded.approved_paths, ["extra.txt", "note.txt"]);
+    assert.deepEqual(expanded.review_target.approved_paths, expanded.approved_paths);
+    assert.equal(expanded.approved_plan, "immutable plan");
+    assert.equal(expanded.scope_expansions.length, 1);
+    assert.deepEqual(expanded.scope_expansions[0].added_paths, ["extra.txt"]);
+    assert.deepEqual(expanded.approved_path_baselines, [
+      {
+        path: "extra.txt",
+        approved_at_version: 1,
+        baseline: { path: "extra.txt", state: "absent", kind: "missing" },
+      },
+    ]);
+    assert.equal("digest" in expanded.approved_path_baselines[0].baseline, false);
+    assert.deepEqual(
+      store.get(id, "implementer", created.capabilities.implementer).approved_paths,
+      ["extra.txt", "note.txt"],
+    );
+    for (const actorRole of ["implementer", "reviewer", "committer"] as const) {
+      assert.equal(
+        "approved_path_baselines" in store.get(id, actorRole, created.capabilities[actorRole]),
+        false,
+      );
+    }
+    const expansionAudit = store.audit(id, "parent", created.capabilities.parent).at(-1);
+    assert.deepEqual(expansionAudit.scope_expansion.baselines, expanded.approved_path_baselines);
+    assert.equal(
+      "scope_expansion" in store.audit(id, "implementer", created.capabilities.implementer).at(-1),
+      false,
+    );
+    writeFileSync(join(root, "extra.txt"), "new\n");
+    const implemented = implementation(
+      store,
+      created,
+      root,
+      1,
+      "implemented expanded scope",
+      {},
+      "DONE",
+      {
+        touched: ["extra.txt"],
+      },
+    );
+    assert.deepEqual(implemented.scope_changed_paths, ["extra.txt"]);
+    assert.equal(implemented.phase, "REVIEWING");
+    store.close();
+    const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    const reopenedParent = reopened.get(id, "parent", created.capabilities.parent);
+    assert.deepEqual(reopenedParent.approved_path_baselines, expanded.approved_path_baselines);
+    assert.deepEqual(
+      reopened.audit(id, "parent", created.capabilities.parent)[1].scope_expansion.baselines,
+      expanded.approved_path_baselines,
+    );
+    reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("scope expansion rejects staged-only changes in the index", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = create(store, root, git, {
+      approved_paths: ["new.txt"],
+      objective: "staged baseline",
+    });
+    writeFileSync(join(root, "note.txt"), "staged change\n");
+    git("add", "note.txt");
+    git("restore", "--source=HEAD", "--worktree", "--", "note.txt");
+    assert.equal(readFileSync(join(root, "note.txt"), "utf8"), "before\n");
+    assert.equal(git("show", "HEAD:note.txt"), "before");
+    assert.equal(git("diff", "--cached", "--name-only", "--", "note.txt"), "note.txt");
+    assert.equal(
+      errorCategory(() =>
+        store.expandScope({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capabilities.parent,
+          expected_version: 0,
+          added_paths: ["note.txt"],
+          reason: "need the tracked companion file",
+          user_authorization: "I authorize adding note.txt to this workflow",
+        }),
+      ),
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+    );
+    assert.equal(
+      store.get(created.workflow.workflow_id, "parent", created.capabilities.parent).version,
+      0,
+    );
+    assert.equal(
+      store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent).length,
+      1,
+    );
+    store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1469,7 +1590,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
     });
     const created = create(store, root, git, { objective: "v2 state" });
     const workflow = created.workflow;
-    assert.equal(workflow.schema_version, 3);
+    assert.equal(workflow.schema_version, 4);
     assert.equal(workflow.version, 0);
     assert.equal(workflow.workflow_type, "change");
     assert.equal(workflow.phase, "IMPLEMENTING");
@@ -2229,7 +2350,7 @@ test("restart persists execution contracts and review target", () => {
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const persisted = reopened.get(id, "parent", capabilities.parent);
-    assert.equal(persisted.schema_version, 3);
+    assert.equal(persisted.schema_version, 4);
     assert.equal(persisted.version, 0);
     assert.equal(persisted.phase, "IMPLEMENTING");
     assert.equal(persisted.objective, "restart contract");
@@ -2273,6 +2394,8 @@ const PARENT_EXTRA_KEYS = [
   "runtime_revision",
   "approved_plan",
   "base_head",
+  "scope_expansions",
+  "approved_path_baselines",
   "acceptance_criteria",
   "validation_requirements",
   "dirty_baseline_paths",
@@ -2373,7 +2496,7 @@ test("role views expose exact projection keys and sorted permitted actions", () 
 
     const parentView = store.get(id, "parent", caps.parent);
     assert.deepEqual(Object.keys(parentView), [...COMMON_KEYS, ...PARENT_EXTRA_KEYS]);
-    assert.deepEqual(parentView.permitted_next_actions, []);
+    assert.deepEqual(parentView.permitted_next_actions, ["workflow_expand_scope"]);
 
     const implementerView = store.get(id, "implementer", caps.implementer);
     assert.deepEqual(Object.keys(implementerView), [...COMMON_KEYS, ...IMPLEMENTER_EXTRA_KEYS]);
@@ -2407,6 +2530,7 @@ test("role views expose exact projection keys and sorted permitted actions", () 
     review(store, created, root, 1, "CHANGES_REQUESTED", [blocker], []);
     assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, [
       "workflow_authorize_repair",
+      "workflow_expand_scope",
       "workflow_finalize_repair_exhausted",
     ]);
 
@@ -2547,7 +2671,7 @@ test("permittedNextActions and roleView are pure and follow the role and phase m
     );
     const before = JSON.stringify(raw);
     assert.deepEqual(permittedNextActions(raw, "implementer"), ["workflow_submit_implementation"]);
-    assert.deepEqual(permittedNextActions(raw, "parent"), []);
+    assert.deepEqual(permittedNextActions(raw, "parent"), ["workflow_expand_scope"]);
     assert.deepEqual(permittedNextActions(raw, "reviewer"), []);
     const view = roleView(raw, "implementer");
     assert.equal(JSON.stringify(raw), before);
@@ -3368,6 +3492,7 @@ test("parent gets resume and concern acceptance actions at implementation stops"
     const caps = created.capabilities;
     implementation(store, created, root, 0, "context", {}, "NEEDS_CONTEXT");
     assert.deepEqual(store.get(id, "parent", caps.parent).permitted_next_actions, [
+      "workflow_expand_scope",
       "workflow_resume_implementation",
     ]);
     assert.deepEqual(store.get(id, "implementer", caps.implementer).permitted_next_actions, []);
@@ -3377,7 +3502,7 @@ test("parent gets resume and concern acceptance actions at implementation stops"
     assert.deepEqual(
       store.get(blocked.workflow.workflow_id, "parent", blocked.capabilities.parent)
         .permitted_next_actions,
-      ["workflow_resume_implementation"],
+      ["workflow_expand_scope", "workflow_resume_implementation"],
     );
 
     const concerns = create(store, root, git, { objective: "concerns actions" });
@@ -3873,9 +3998,12 @@ test("review submission rejects model targets and stale authoritative targets", 
       .run(JSON.stringify(state), objectDigest(state), id);
     assert.equal(
       errorCategory(() => submit({}, 1)),
-      "ERROR_INVALID_REVIEW",
+      "ERROR_STATE_CORRUPT",
     );
-    assert.equal(store.get(id, "parent", caps.parent).version, before);
+    assert.equal(
+      errorCategory(() => store.get(id, "parent", caps.parent)),
+      "ERROR_STATE_CORRUPT",
+    );
     state.review_target.approved_paths = ["note.txt"];
     store.db
       .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")

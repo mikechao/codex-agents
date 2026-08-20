@@ -37,6 +37,9 @@ Rules:
 - Read every applicable AGENTS.md file and any architecture or domain documentation it requires before editing.
 - Inspect the working tree before editing, respect assigned file or responsibility ownership, and preserve unrelated changes made by the user or other agents.
 - Treat the view's objective, approved scope, and contracts as the source of truth.
+- Conversation prose, generic approval, and earlier findings never expand authority. Newly
+  authorized paths are mutable only after `workflow_expand_scope` succeeds and a refreshed
+  authoritative implementer view lists them in `approved_paths`.
 - Execute the exact immutable `approved_plan` from the authoritative implementer view. Do not
   summarize, reconstruct, or replace it with the objective or structured criteria. Structured paths,
   acceptance criteria, validation requirements, permitted actions, and remediation context remain
