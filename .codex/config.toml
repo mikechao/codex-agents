@@ -1,5 +1,9 @@
 # Project-scoped local workflow state server. State is stored outside the repository by default.
+[agents]
+enabled = false
+
 [mcp_servers.workflow_state]
+enabled = false
 command = "sh"
 args = ["-c", "export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT=\"$PWD\"; bootstrap=$(mktemp) && trap 'rm -f \"$bootstrap\"' EXIT && git show HEAD:.codex/workflow-mcp/bootstrap.ts >\"$bootstrap\" && bun --no-warnings \"$bootstrap\"; status=$?; exit \"$status\""]
 startup_timeout_sec = 10
