@@ -33,6 +33,7 @@ export const MAX_FINDINGS = 200;
 export const MAX_CONTRACTS = 999;
 export const MAX_TEXT = 4000;
 export const MAX_DETAIL = 2000;
+export const MAX_APPROVED_PLAN = 1024 * 1024;
 
 const FINDING_SEVERITIES: ReadonlySet<FindingSeverity> = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_KEYS = [
@@ -78,6 +79,11 @@ export function optionalString(value: unknown, name: string, max = MAX_DETAIL): 
 
 export function optionalText(value: unknown, name: string, max = MAX_DETAIL): string | null {
   return optionalString(value, name, max);
+}
+
+export function approvedPlan(value: unknown, name = "approved_plan"): string | null {
+  if (value === null) return null;
+  return boundedString(value, name, MAX_APPROVED_PLAN);
 }
 
 export function userAuthorization(value: unknown): string {

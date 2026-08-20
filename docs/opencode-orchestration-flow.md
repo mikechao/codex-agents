@@ -29,6 +29,12 @@ OpenCode's built-in Build agent remains available for deliberate ordinary direct
 no project-global orchestration instructions. Select it explicitly when workflow-backed delegation
 is not wanted.
 
+For Plan -> Orchestrator execution, `workflow_create` receives the exact approved Plan-mode text in
+immutable `approved_plan`; Orchestrator must not summarize or reconstruct it. Direct requests pass
+`approved_plan: null`. The parent view and implementer view expose this execution intent, while
+reviewer and committer views retain least-context projections. Objective, paths, acceptance criteria,
+validation requirements, and authorized remediation/findings remain structured enforcement fields.
+
 ## Identity and handoffs
 
 The authoritative server is the source of truth. Every worker handoff carries exactly these values:

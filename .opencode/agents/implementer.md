@@ -52,8 +52,8 @@ Rules:
 - For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
   only your `workflow_id`, your implementer `capability`, the current `expected_version`, and the
   instruction to read your authoritative view. Call `workflow_get` with role `implementer`; the
-  returned view is the single source of truth and carries the objective, acceptance criteria,
-  validation requirements, dirty baseline, remediation context, linked findings,
+  returned view is the single source of truth and carries the objective, immutable approved_plan,
+  acceptance criteria, validation requirements, dirty baseline, remediation context, linked findings,
   and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
   server is unavailable, stop with `NEEDS_CONTEXT` and ask whether prompt-only degraded mode is
@@ -73,6 +73,11 @@ Rules:
 - Read every applicable AGENTS.md file and any architecture or domain documentation it requires before editing.
 - Inspect the working tree before editing, respect assigned file or responsibility ownership, and preserve unrelated changes made by the user or other agents.
 - Treat the view's objective, approved scope, and contracts as the source of truth.
+- Execute the exact immutable `approved_plan` from the authoritative implementer view. Do not
+  summarize, reconstruct, or replace it with the objective or structured criteria. Structured paths,
+  acceptance criteria, validation requirements, permitted actions, and remediation context remain
+  enforcement boundaries. During repair, use the original approved plan together with only the
+  bounded authorized remediation context and findings.
 - Implement the requested changes completely.
 - Do not redesign or substantially alter the plan unless implementation is impossible.
 - Inspect the existing codebase before making changes so your implementation fits existing patterns and conventions.

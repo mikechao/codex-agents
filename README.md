@@ -28,6 +28,11 @@ directly in either host loads the local agent definitions and auto-starts the
 `workflow_state` MCP server from the project config itself — no manual server launch is required.
 Runtime SQLite state is stored outside the repository under the user's Codex state directory.
 
+Workflow creation records the exact approved Plan-mode text as immutable `approved_plan` state. Direct
+or non-plan workflows explicitly pass `null`; structured objective, paths, acceptance criteria, and
+validation requirements remain the enforceable workflow contract. The plan is visible to the parent
+and implementer only, and linked follow-ups provide an explicit plan rather than inheriting one.
+
 The Workflow MCP runtime can be materialized independently from a committed revision with
 `resolveRuntimeArtifact` from `.codex/workflow-mcp/index.ts`. It returns a deterministic `runtime_id`
 and absolute Bun `runtimePath` from an external, content-addressed cache. The `runtime_id` hashes the

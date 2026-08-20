@@ -292,7 +292,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 2;
+  schema_version: 3;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -301,6 +301,7 @@ export interface WorkflowState {
   runtime_revision: GitCommitSha | null;
   phase: WorkflowPhase;
   objective: string;
+  approved_plan: string | null;
   base_head: GitCommitSha;
   approved_paths: ExactRepoPath[];
   acceptance_criteria: AcceptanceCriterion[];
@@ -357,7 +358,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 2;
+  schema_version: 3;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -384,6 +385,7 @@ export type ParentView = RoleViewCommon &
   };
 
 export interface ImplementerView extends RoleViewCommon {
+  approved_plan: string | null;
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   dirty_baseline_paths: ExactRepoPath[];

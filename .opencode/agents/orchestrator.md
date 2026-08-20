@@ -71,8 +71,15 @@ SQLite files, or implementation details.
 
 Perform only bounded, read-only preflight: inspect the current `git status` and `HEAD`, establish
 the working-tree baseline, and extract the exact objective, approved repository-relative paths,
-acceptance criteria, and validation requirements. Before calling `workflow_create`, read the
-repository's `.codex/reviewer-validation.json` policy and preflight every proposed validation:
+acceptance criteria, and validation requirements. When the request is `implement the plan` (or an
+equivalent execution request), pass the exact approved Plan-mode text as `approved_plan` to
+`workflow_create`; do not summarize, normalize, reconstruct, or substitute the objective and
+structured fields for it. If the exact approved plan is unavailable, stop and report that the
+workflow cannot be created. For a direct non-plan request, pass `approved_plan: null` explicitly.
+The same explicit plan input is required for review-only and linked-follow-up creation; linked
+follow-ups must receive the plan selected for that child and must not silently copy or reconstruct
+the source workflow's plan. Before calling `workflow_create`, read the repository's
+`.codex/reviewer-validation.json` policy and preflight every proposed validation:
 
 - Treat `argv: null` as an explicit manual requirement. Preserve it as manual and never treat it as
   an executable command.

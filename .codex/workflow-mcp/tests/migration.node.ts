@@ -133,6 +133,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
     const created = store.create({
       workflow_type: "change",
       objective: "schema rejection",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["state is rejected"],
       validation_requirements: ["startup"],
@@ -171,7 +172,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
     const after = afterDb.prepare("SELECT version, state_json, state_digest FROM workflows").all();
     afterDb.close();
     assert.deepEqual(after, before);
-    assert.equal(created.workflow.schema_version, 2);
+    assert.equal(created.workflow.schema_version, 3);
   } finally {
     rmSync(root.root, { recursive: true, force: true });
   }
@@ -185,6 +186,7 @@ test("rejects current-schema digest corruption distinctly", () => {
     store.create({
       workflow_type: "change",
       objective: "digest rejection",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["state is corrupt"],
       validation_requirements: ["startup"],
@@ -219,6 +221,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
     const created = store.create({
       workflow_type: "change",
       objective: "fresh state",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["created"],
       validation_requirements: ["startup"],
@@ -232,7 +235,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
         include_untracked: true,
       },
     });
-    assert.equal(created.workflow.schema_version, 2);
+    assert.equal(created.workflow.schema_version, 3);
     const events = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent);
     assert.deepEqual(
       events.map((event) => event.event_type),

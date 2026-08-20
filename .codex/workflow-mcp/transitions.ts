@@ -29,6 +29,7 @@ import type {
 } from "./types.js";
 import {
   ACCEPTANCE_STATUSES,
+  approvedPlan,
   boundedString,
   canonicalJson,
   contractList,
@@ -38,6 +39,7 @@ import {
   findingIdList,
   findings,
   isoNow,
+  MAX_APPROVED_PLAN,
   MAX_CONTRACTS,
   MAX_DETAIL,
   MAX_FINDINGS,
@@ -55,7 +57,7 @@ import {
   VALIDATION_STATUSES,
 } from "./validation.js";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const IMPLEMENTATION_STOP_PHASES: Record<
   "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED",
@@ -91,7 +93,7 @@ export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set(
   "PATH_MISMATCH",
 ]);
 
-const V2_STATE_KEYS: readonly string[] = [
+const V3_STATE_KEYS: readonly string[] = [
   "schema_version",
   "version",
   "workflow_id",
@@ -100,6 +102,7 @@ const V2_STATE_KEYS: readonly string[] = [
   "runtime_revision",
   "phase",
   "objective",
+  "approved_plan",
   "base_head",
   "approved_paths",
   "acceptance_criteria",
@@ -171,6 +174,7 @@ const REVIEWER_IMPLEMENTER_HANDOFF: readonly string[] = [
 
 const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly string[]> = {
   implementer: [
+    "approved_plan",
     "acceptance_criteria",
     "validation_requirements",
     "initial_receipt",
@@ -341,6 +345,7 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
 
 interface BaseStateOptions {
   objective: string;
+  approvedPlan: string | null;
   approvedPaths: ExactRepoPath[];
   baseHead: GitCommitSha;
   maxRepairCycles: number;
@@ -353,6 +358,7 @@ interface BaseStateOptions {
 
 function baseState({
   objective,
+  approvedPlan,
   approvedPaths,
   baseHead,
   maxRepairCycles,
@@ -371,6 +377,7 @@ function baseState({
     runtime_revision: null,
     phase: workflowType === "review_only" ? "REVIEWING" : "IMPLEMENTING",
     objective,
+    approved_plan: approvedPlan,
     base_head: baseHead,
     approved_paths: approvedPaths,
     acceptance_criteria: [],
@@ -515,6 +522,7 @@ export function createState(
     const maxRepairCycles = repairCycle(args.max_repair_cycles ?? 2);
     return baseState({
       objective,
+      approvedPlan: null,
       approvedPaths,
       baseHead,
       maxRepairCycles,
@@ -530,6 +538,7 @@ export function createState(
     [
       "workflow_type",
       "objective",
+      "approved_plan",
       "approved_paths",
       "acceptance_criteria",
       "validation_requirements",
@@ -543,6 +552,7 @@ export function createState(
     fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "workflow type is not supported");
   }
   const objective = boundedString(args.objective, "objective");
+  const plan = approvedPlan(args.approved_plan);
   const approvedPaths = exactPaths(args.approved_paths, repositoryRoot);
   const target = reviewTarget(
     args.review_target,
@@ -554,6 +564,7 @@ export function createState(
   const maxRepairCycles = repairCycle(args.max_repair_cycles ?? 2);
   const state = baseState({
     objective,
+    approvedPlan: plan,
     approvedPaths,
     baseHead: target.base_revision,
     maxRepairCycles,
@@ -1038,6 +1049,7 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
 
 export interface LinkedFollowupPlan {
   objective: string;
+  approved_plan: string | null;
   approved_paths: ExactRepoPath[];
   acceptance_criteria: string[]; // raw caller order; contractList runs in child
   validation_requirements: string[];
@@ -1066,6 +1078,7 @@ export function linkedFollowupInput(
       "capability",
       "expected_version",
       "objective",
+      "approved_plan",
       "approved_paths",
       "acceptance_criteria",
       "validation_requirements",
@@ -1088,6 +1101,7 @@ export function linkedFollowupInput(
   );
   return {
     objective: boundedString(args.objective, "objective"),
+    approved_plan: approvedPlan(args.approved_plan),
     approved_paths: exactPaths(args.approved_paths, repositoryRoot),
     acceptance_criteria: args.acceptance_criteria as string[], // raw passthrough to the child
     validation_requirements: args.validation_requirements as string[],
@@ -1104,6 +1118,7 @@ export function linkedFollowupInput(
 export function linkedFollowupChildState(followup: LinkedFollowupPlan): WorkflowState {
   const state = baseState({
     objective: followup.objective,
+    approvedPlan: followup.approved_plan,
     approvedPaths: followup.approved_paths,
     baseHead: followup.base_head,
     maxRepairCycles: followup.max_repair_cycles,
@@ -1511,12 +1526,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v2 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v3 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV2(value: unknown): WorkflowState {
+export function validateWorkflowStateV3(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V2_STATE_KEYS].sort();
+  const required = [...V3_STATE_KEYS].sort();
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -1530,6 +1545,7 @@ export function validateWorkflowStateV2(value: unknown): WorkflowState {
   if ((value.runtime_id === null) !== (value.runtime_revision === null)) corrupt();
   if (typeof value.phase !== "string" || !PHASES.includes(value.phase as WorkflowPhase)) corrupt();
   bounded(value.objective, MAX_TEXT);
+  if (value.approved_plan !== null) bounded(value.approved_plan, MAX_APPROVED_PLAN);
   sha40(value.base_head);
   pathList(value.approved_paths, false);
   contractsShape(value.acceptance_criteria, "AC");

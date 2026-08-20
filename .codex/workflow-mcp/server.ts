@@ -15,7 +15,7 @@ import { openStore } from "./store.js";
 type JsonSchema = Record<string, JSONValue>;
 
 const instructions =
-  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, criteria, evidence, finding, receipt, or repair state. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+  "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent: Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; APPROVED stops optional remediation; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 
 const common: {
   type: "object";
@@ -163,6 +163,9 @@ export const tools: Tool[] = [
       {
         workflow_type: { type: "string", enum: ["change", "review_only"] },
         objective: { type: "string", minLength: 1, maxLength: 4000 },
+        approved_plan: {
+          oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 1048576 }],
+        },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
         acceptance_criteria: {
           type: "array",
@@ -182,6 +185,7 @@ export const tools: Tool[] = [
       [
         "workflow_type",
         "objective",
+        "approved_plan",
         "approved_paths",
         "acceptance_criteria",
         "validation_requirements",
@@ -439,6 +443,9 @@ export const tools: Tool[] = [
       {
         ...common.properties,
         objective: { type: "string", minLength: 1, maxLength: 4000 },
+        approved_plan: {
+          oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 1048576 }],
+        },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
         acceptance_criteria: {
           type: "array",
@@ -458,6 +465,7 @@ export const tools: Tool[] = [
       [
         ...common.required,
         "objective",
+        "approved_plan",
         "approved_paths",
         "acceptance_criteria",
         "validation_requirements",

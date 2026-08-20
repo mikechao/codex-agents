@@ -52,6 +52,7 @@ describe("Workflow MCP runtime supervision", () => {
       const created = first.create({
         workflow_type: "change",
         objective: "runtime affinity",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -91,6 +92,7 @@ describe("Workflow MCP runtime supervision", () => {
       const created = store.create({
         workflow_type: "change",
         objective: "incomplete runtime",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -216,6 +218,7 @@ describe("Workflow MCP runtime supervision", () => {
       const createdCall = await readTool(supervisor, "workflow_create", {
         workflow_type: "change",
         objective: "supervised runtime ownership",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -589,6 +592,7 @@ describe("Workflow MCP runtime supervision", () => {
       const workflowA = firstStore.create({
         workflow_type: "change",
         objective: "runtime A",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -607,6 +611,7 @@ describe("Workflow MCP runtime supervision", () => {
       const legacyWorkflow = legacyStore.create({
         workflow_type: "change",
         objective: "pre-affinity workflow",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -623,6 +628,7 @@ describe("Workflow MCP runtime supervision", () => {
       const firstUseWorkflow = legacyStore.create({
         workflow_type: "change",
         objective: "first-use mutation workflow",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -683,6 +689,7 @@ describe("Workflow MCP runtime supervision", () => {
       const workflowB = secondStore.create({
         workflow_type: "change",
         objective: "runtime B",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -819,6 +826,7 @@ describe("Workflow MCP runtime supervision", () => {
     const createArgs = (objective: string, revision: string) => ({
       workflow_type: "change",
       objective,
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
       validation_requirements: ["validation"],

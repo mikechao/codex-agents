@@ -34,6 +34,12 @@ async function start(root: string) {
   const versionOffsets = new Map<string, number>();
   const call = async (name: string, arguments_: any) => {
     const args = { ...arguments_ };
+    if (
+      (name === "workflow_create" || name === "workflow_create_linked_followup") &&
+      !Object.hasOwn(args, "approved_plan")
+    ) {
+      args.approved_plan = null;
+    }
     const workflowId = args.workflow_id;
     if (typeof args.expected_version === "number" && workflowId) {
       args.expected_version += versionOffsets.get(workflowId) ?? 0;
@@ -94,6 +100,7 @@ function createInput(git: (...args: string[]) => string, options: any = {}) {
   return {
     workflow_type: options.workflow_type ?? "change",
     objective: options.objective ?? "protocol v2 objective",
+    approved_plan: options.approved_plan ?? null,
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion"],
     validation_requirements: options.validation_requirements ?? ["validation"],

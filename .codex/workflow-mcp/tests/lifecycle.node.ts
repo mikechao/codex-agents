@@ -23,6 +23,7 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
   return {
     workflow_type: options.workflow_type ?? "change",
     objective: options.objective ?? "lifecycle scenario",
+    approved_plan: options.approved_plan ?? null,
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
     validation_requirements: options.validation_requirements ?? ["validation A"],
@@ -452,6 +453,7 @@ function doLinkedFollowup(ctx: any, version: number, findingIds: string[]) {
     capability: capabilities.parent,
     expected_version: version + ctx.reviewVersionOffset,
     objective: "linked child",
+    approved_plan: null,
     approved_paths: ["note.txt"],
     acceptance_criteria: ["child criterion"],
     validation_requirements: ["child validation"],

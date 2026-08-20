@@ -15,6 +15,12 @@ function makeLegacyCompatibleCall(client: Client) {
   const versionOffsets = new Map<string, number>();
   return async (name: string, arguments_: any) => {
     const args = { ...arguments_ };
+    if (
+      (name === "workflow_create" || name === "workflow_create_linked_followup") &&
+      !Object.hasOwn(args, "approved_plan")
+    ) {
+      args.approved_plan = null;
+    }
     const workflowId = args.workflow_id;
     if (typeof args.expected_version === "number" && workflowId) {
       args.expected_version += versionOffsets.get(workflowId) ?? 0;
@@ -66,6 +72,7 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
       arguments: {
         workflow_type: "change",
         objective: "protocol",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["protocol criterion"],
         validation_requirements: ["protocol validation"],
@@ -245,6 +252,7 @@ test("startup corruption fails closed with an actionable stderr diagnostic", () 
     const created = store.create({
       workflow_type: "change",
       objective: "corrupt startup",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
       validation_requirements: ["validation"],
@@ -278,7 +286,7 @@ test("startup corruption fails closed with an actionable stderr diagnostic", () 
       (error: unknown) => {
         const result = error as { stdout?: string; stderr?: string };
         assert.equal(result.stdout ?? "", "");
-        assert.match(result.stderr ?? "", /ERROR_STATE_CORRUPT/);
+        assert.match(result.stderr ?? "", /ERROR_MIGRATION_REQUIRED/);
         return true;
       },
     );
@@ -304,6 +312,7 @@ test("role view projection over STDIO returns only role data without capabilitie
       arguments: {
         workflow_type: "change",
         objective: "role view protocol",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -422,6 +431,7 @@ test("exact create tool schema matches the normative contract", () => {
   assert.deepEqual(Object.keys(inputSchema.properties).sort(), [
     "acceptance_criteria",
     "approved_paths",
+    "approved_plan",
     "max_repair_cycles",
     "objective",
     "review_target",
@@ -431,6 +441,7 @@ test("exact create tool schema matches the normative contract", () => {
   assert.deepEqual(inputSchema.required, [
     "workflow_type",
     "objective",
+    "approved_plan",
     "approved_paths",
     "acceptance_criteria",
     "validation_requirements",
@@ -439,6 +450,9 @@ test("exact create tool schema matches the normative contract", () => {
   assert.deepEqual(inputSchema.properties.workflow_type.enum, ["change", "review_only"]);
   assert.equal(inputSchema.properties.objective.minLength, 1);
   assert.equal(inputSchema.properties.objective.maxLength, 4000);
+  assert.equal(inputSchema.properties.approved_plan.oneOf[0].type, "null");
+  assert.equal(inputSchema.properties.approved_plan.oneOf[1].minLength, 1);
+  assert.equal(inputSchema.properties.approved_plan.oneOf[1].maxLength, 1048576);
   assert.equal(inputSchema.properties.approved_paths.minItems, 1);
   assert.equal(inputSchema.properties.approved_paths.maxItems, 200);
   assert.equal(inputSchema.properties.acceptance_criteria.minItems, 1);
@@ -635,6 +649,7 @@ test("exact linked follow-up tool schema matches the normative contract", () => 
   assert.deepEqual(Object.keys(inputSchema.properties).sort(), [
     "acceptance_criteria",
     "approved_paths",
+    "approved_plan",
     "capability",
     "expected_version",
     "finding_ids",
@@ -648,6 +663,7 @@ test("exact linked follow-up tool schema matches the normative contract", () => 
     "capability",
     "expected_version",
     "objective",
+    "approved_plan",
     "approved_paths",
     "acceptance_criteria",
     "validation_requirements",
@@ -656,6 +672,7 @@ test("exact linked follow-up tool schema matches the normative contract", () => 
   ]);
   assert.equal(inputSchema.properties.objective.minLength, 1);
   assert.equal(inputSchema.properties.objective.maxLength, 4000);
+  assert.equal(inputSchema.properties.approved_plan.oneOf[0].type, "null");
   assert.equal(inputSchema.properties.approved_paths.minItems, 1);
   assert.equal(inputSchema.properties.approved_paths.maxItems, 200);
   assert.equal(inputSchema.properties.acceptance_criteria.minItems, 1);
@@ -699,6 +716,7 @@ test("implementation stops resume and concerns over STDIO", async () => {
       arguments: {
         workflow_type: "change",
         objective: "recover",
+        approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
         validation_requirements: ["validation"],
@@ -833,6 +851,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     const wtResult = await call("workflow_create", {
       workflow_type: "review_only",
       objective: "working-tree review only",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["review criterion"],
       validation_requirements: [],
@@ -889,6 +908,7 @@ test("review-only workflows over STDIO cover working-tree approval and range com
     const rangeResult = await call("workflow_create", {
       workflow_type: "review_only",
       objective: "range review only",
+      approved_plan: null,
       approved_paths: ["added.txt", "note.txt"],
       acceptance_criteria: ["review criterion"],
       validation_requirements: [],
@@ -967,6 +987,7 @@ test("review resume and repair exhaustion over STDIO", async () => {
     const wtResult = await call("workflow_create", {
       workflow_type: "review_only",
       objective: "recover review",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
       validation_requirements: [],

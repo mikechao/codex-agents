@@ -104,6 +104,70 @@ function errorCategory(callback: () => void): string {
   assert.fail("expected workflow error");
 }
 
+test("approved plan preserves exact text, visibility, persistence, and creation validation", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "approved-plan.sqlite");
+  const plan = `# Approved plan\n\n> quoted detail\n\n\`\`\`ts\nconst value = "exact";\n\`\`\`\n${"x".repeat(900_000)}`;
+  const input = createInput(root, git, { approved_plan: plan });
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    const created = store.create(input);
+    assert.equal(created.workflow.approved_plan, plan);
+    assert.equal(
+      store.get(created.workflow.workflow_id, "implementer", created.capabilities.implementer)
+        .approved_plan,
+      plan,
+    );
+    assert.equal(
+      "approved_plan" in
+        store.get(created.workflow.workflow_id, "reviewer", created.capabilities.reviewer),
+      false,
+    );
+    assert.equal(
+      "approved_plan" in
+        store.get(created.workflow.workflow_id, "committer", created.capabilities.committer),
+      false,
+    );
+    assert.equal(
+      errorCategory(() => store.create({ ...input, approved_plan: "" })),
+      "ERROR_INVALID_SHAPE",
+    );
+    const { approved_plan: _missing, ...missing } = input;
+    assert.equal(
+      errorCategory(() => store.create(missing)),
+      "ERROR_INVALID_SHAPE",
+    );
+    assert.equal(
+      errorCategory(() =>
+        store.submitImplementation({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capabilities.implementer,
+          expected_version: 0,
+          status: "DONE",
+          summary: "implemented",
+          agent_touched_paths: [],
+          acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+          validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+          known_failures: [],
+          finding_resolution_map: {},
+          approved_plan: "replacement",
+        }),
+      ),
+      "ERROR_INVALID_SHAPE",
+    );
+    store.close();
+    const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    assert.equal(
+      reopened.get(created.workflow.workflow_id, "parent", created.capabilities.parent)
+        .approved_plan,
+      plan,
+    );
+    reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function rawState(store: any, workflowId: string): any {
   const row = store.db
     .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
@@ -116,6 +180,7 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
   return {
     workflow_type: options.workflow_type ?? "change",
     objective: options.objective ?? "test workflow",
+    approved_plan: options.approved_plan ?? null,
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
     validation_requirements: options.validation_requirements ?? ["validation A"],
@@ -538,6 +603,7 @@ test("optional findings require a fresh linked workflow", () => {
       capability: created.capabilities.parent,
       expected_version: 2,
       objective: "authorized optional",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
       validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
@@ -898,6 +964,7 @@ test("optional follow-up is atomic and audit rows remain append-only", () => {
           capability: created.capabilities.parent,
           expected_version: 2,
           objective: "atomic child",
+          approved_plan: null,
           approved_paths: ["note.txt"],
           acceptance_criteria: ["criterion"],
           validation_requirements: ["validation"],
@@ -1132,6 +1199,7 @@ test("rejects extra mutation fields without changing workflow state", () => {
           capability: approved.capabilities.parent,
           expected_version: 2,
           objective: "child",
+          approved_plan: null,
           approved_paths: ["note.txt"],
           acceptance_criteria: ["criterion"],
           validation_requirements: ["validation"],
@@ -1399,7 +1467,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
     });
     const created = create(store, root, git, { objective: "v2 state" });
     const workflow = created.workflow;
-    assert.equal(workflow.schema_version, 2);
+    assert.equal(workflow.schema_version, 3);
     assert.equal(workflow.version, 0);
     assert.equal(workflow.workflow_type, "change");
     assert.equal(workflow.phase, "IMPLEMENTING");
@@ -2159,7 +2227,7 @@ test("restart persists execution contracts and review target", () => {
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const persisted = reopened.get(id, "parent", capabilities.parent);
-    assert.equal(persisted.schema_version, 2);
+    assert.equal(persisted.schema_version, 3);
     assert.equal(persisted.version, 0);
     assert.equal(persisted.phase, "IMPLEMENTING");
     assert.equal(persisted.objective, "restart contract");
@@ -2201,6 +2269,7 @@ const COMMON_KEYS = [
 const PARENT_EXTRA_KEYS = [
   "runtime_id",
   "runtime_revision",
+  "approved_plan",
   "base_head",
   "acceptance_criteria",
   "validation_requirements",
@@ -2229,6 +2298,7 @@ const PARENT_EXTRA_KEYS = [
   "commit_result",
 ];
 const IMPLEMENTER_EXTRA_KEYS = [
+  "approved_plan",
   "acceptance_criteria",
   "validation_requirements",
   "dirty_baseline_paths",
@@ -4210,6 +4280,7 @@ test("linked follow-up copies blocking findings from an exhausted source", () =>
       capability: caps.parent,
       expected_version: 3,
       objective: "exhausted follow-up",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
       validation_requirements: ["child validation"],
@@ -4288,6 +4359,7 @@ test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and mis
       capability: caps.parent,
       expected_version: 3,
       objective: "linked",
+      approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
       validation_requirements: ["validation"],
@@ -4339,6 +4411,7 @@ test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and mis
           capability: approving.capabilities.parent,
           expected_version: 1,
           objective: "linked",
+          approved_plan: null,
           approved_paths: ["note.txt"],
           acceptance_criteria: ["criterion"],
           validation_requirements: ["validation"],
@@ -4355,6 +4428,7 @@ test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and mis
           capability: approving.capabilities.parent,
           expected_version: 1,
           objective: "linked",
+          approved_plan: null,
           approved_paths: ["note.txt"],
           acceptance_criteria: ["criterion"],
           validation_requirements: ["validation"],
@@ -4416,6 +4490,7 @@ test("linked follow-up child from a commit-range review source accepts absent ch
       capability: range.capabilities.parent,
       expected_version: 1,
       objective: "range child",
+      approved_plan: null,
       approved_paths: ["new/file.txt", "note.txt"],
       acceptance_criteria: ["criterion"],
       validation_requirements: ["validation"],

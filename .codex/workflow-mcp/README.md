@@ -163,6 +163,13 @@ schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATIO
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use
 `workflow_prepare_commit` plus `workflow_submit_commit_result` after commit authorization.
 
+The current state stores `approved_plan` exactly in the JSON state: Plan-mode execution supplies the
+non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
+execution intent exposed only to parent and implementer views. Structured objective, paths, criteria,
+validations, and remediation/findings remain enforceable contracts. Linked follow-ups receive their
+own explicit plan input and never reconstruct or silently inherit the source plan. State schema changes
+are clean breaks and require resetting incompatible databases.
+
 ## Bootstrap and reload
 
 This installation uses the previously authorized prompt/receipt bootstrap. After changing the

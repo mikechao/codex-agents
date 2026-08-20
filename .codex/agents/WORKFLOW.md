@@ -124,7 +124,9 @@ under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED
 ### Role views and dispatch
 
 - Parent view: the full persisted workflow (minus capabilities, hashes, audits, internal fields,
-  and all receipt structures/digests). The parent owns user and commit authorization, repair and
+  and all receipt structures/digests). `approved_plan` is immutable execution intent exposed only
+  to the parent and implementer; structured objective, scope, and contracts remain enforceable
+  boundaries. The parent owns user and commit authorization, repair and
   resume authorization, retry, and linked follow-up creation.
 - Implementer view: objective, acceptance criteria, validation requirements, dirty
   baseline, remediation context, linked findings, final implementation fields, result arrays, finding
@@ -229,6 +231,7 @@ because no server-side snapshot exists in that mode.
 
 ```yaml
 objective: <approved implementation objective>
+approved_plan: <exact immutable approved plan text, or null for direct/non-plan work>
 owned_files: [<exact paths>]
 acceptance_criteria: [<observable criteria>]
 validation_required: [<commands or checks>]
@@ -362,7 +365,10 @@ known_failures: <none or concise list>
 
 ## Persistence schema
 
-Persisted Workflow MCP state has one current schema. Incompatible databases are rejected at startup
+Persisted Workflow MCP state has one current schema. `approved_plan` is stored as exact text in the
+state JSON, is required at creation (`null` for direct/non-plan workflows), and cannot be changed by
+ordinary mutations or runtime adoption. Linked follow-ups receive an explicit plan input rather than
+silently copying the source plan. Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
 `workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.

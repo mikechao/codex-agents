@@ -40,7 +40,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV2,
+  validateWorkflowStateV3,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -189,6 +189,12 @@ function changedFields(before: WorkflowState | null, after: WorkflowState): stri
   );
 }
 
+function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState): void {
+  if (before.approved_plan !== after.approved_plan) {
+    fail("ERROR_INVALID_TRANSITION", "approved plan is immutable");
+  }
+}
+
 function auditEnvelope(
   before: WorkflowState | null,
   after: WorkflowState,
@@ -301,7 +307,7 @@ function parseState(row: WorkflowRow): WorkflowState {
   if (
     typeof parsed !== "object" ||
     parsed === null ||
-    (parsed as { schema_version?: unknown }).schema_version !== 2
+    (parsed as { schema_version?: unknown }).schema_version !== 3
   ) {
     fail(
       "ERROR_MIGRATION_REQUIRED",
@@ -329,7 +335,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV2(parsed);
+  return validateWorkflowStateV3(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -559,7 +565,7 @@ export class WorkflowStore {
     return runtimeAffinityPair(state.runtime_id, state.runtime_revision);
   }
 
-  /** Bind a pre-affinity v2 row to this host's current immutable runtime on first use. */
+  /** Bind an un-affined current-schema row to this host's immutable runtime on first use. */
   adoptRuntime(workflowIdValue: unknown): RuntimeAffinity {
     this.#ensureOpen();
     const id = workflowId(workflowIdValue);
@@ -578,7 +584,8 @@ export class WorkflowStore {
           runtime_revision: this.runtimeRevision,
           version: (row.version + 1) as WorkflowVersion,
         };
-        validateWorkflowStateV2(next);
+        assertApprovedPlanUnchanged(state, next);
+        validateWorkflowStateV3(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -648,6 +655,7 @@ export class WorkflowStore {
         }
         const current = parseState(row);
         const next = action(current);
+        assertApprovedPlanUnchanged(current, next);
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
         const now = isoNow();
@@ -934,7 +942,7 @@ export class WorkflowStore {
         childState.runtime_id = parentAffinity.runtime_id;
         childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
         childState.workflow_id = childId;
-        validateWorkflowStateV2(childState);
+        validateWorkflowStateV3(childState);
         const childReceipt = createReceipt(this.root, childState.approved_paths, true);
         if (childReceipt.base_head !== followup.base_head)
           fail("ERROR_STALE_BASE", "scope base is stale");
