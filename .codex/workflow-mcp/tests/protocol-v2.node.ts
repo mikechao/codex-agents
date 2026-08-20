@@ -221,7 +221,6 @@ test("change workflow drives an external commit to COMMITTED over STDIO", async 
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: hash,
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");

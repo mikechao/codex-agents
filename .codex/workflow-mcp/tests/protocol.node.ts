@@ -227,7 +227,6 @@ test("STDIO protocol exposes tools and keeps stdout protocol-clean", async () =>
       expected_version: 7,
       attempt_id: preparedCommit.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
@@ -1386,7 +1385,6 @@ test("exact commit result and retry tool schemas match the normative contract", 
   assert.deepEqual(Object.keys(inputSchema.properties).sort(), [
     "attempt_id",
     "capability",
-    "commit_hash",
     "expected_version",
     "failure_summary",
     "outcome",
@@ -1398,7 +1396,6 @@ test("exact commit result and retry tool schemas match the normative contract", 
     "expected_version",
     "attempt_id",
     "outcome",
-    "commit_hash",
     "failure_summary",
   ]);
   assert.equal(inputSchema.properties.attempt_id.pattern, "^[0-9a-f-]{36}$");
@@ -1517,7 +1514,6 @@ test("commit result success over STDIO records a verified external commit", asyn
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: hash,
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
@@ -1666,7 +1662,6 @@ test("not committed failure and retry over STDIO", async () => {
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "not_committed",
-      commit_hash: null,
       failure_summary: "pre-commit hook blocked",
     });
     assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
@@ -1806,14 +1801,12 @@ test("commit mismatch over STDIO stops terminally and leaves no retry", async ()
       expected_version: 3,
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
-    git("commit", "-qm", "moved head");
     const mismatched = await call("workflow_submit_commit_result", {
       workflow_id: created.workflow_id,
       capability: caps.committer,
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: created.base_head,
       failure_summary: null,
     });
     assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");

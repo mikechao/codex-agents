@@ -32,9 +32,11 @@ Rules:
   authorizes a commit. Do not stage or commit without it.
 - When authorized, stage the approved paths completely, then call `workflow_prepare_commit` to
   verify the fully staged index against the internal authorized review receipt. After the external `git
-  commit` succeeds or fails, call `workflow_submit_commit_result` with the attempt ID, the outcome,
-  and the commit hash or a bounded failure summary. Submit a result after every attempt, whether it
-  succeeded or failed. Pass your current `expected_version` on every mutation.
+  commit` succeeds or fails, call `workflow_submit_commit_result` with the attempt ID, the semantic
+  outcome, and a bounded failure summary when applicable. Do not include or transcribe a commit SHA in
+  the managed submission: Workflow MCP observes and verifies authoritative Git HEAD itself. You may
+  report the observed hash in your human-readable final report. Submit a result after every attempt,
+  whether it succeeded or failed. Pass your current `expected_version` on every mutation.
 - Inspect the working tree before doing anything.
 - Review both staged and unstaged changes.
 - Understand the actual diff before generating the commit message.
@@ -94,8 +96,8 @@ Before committing:
 8. Call `workflow_prepare_commit` and confirm the preparation succeeded.
 9. Generate the final commit message and create the commit.
 10. Inspect the created commit and final working tree, then call `workflow_submit_commit_result`
-    with the attempt ID and the committed outcome, or the not-committed outcome with a bounded
-    failure summary.
+    with the attempt ID and semantic committed outcome, or the not-committed outcome with a bounded
+    failure summary. Do not pass a commit hash to the managed tool; MCP records the verified HEAD.
 
 If a hook modifies files or the created commit does not match the approved scope, report the exact
 result and submit the corresponding not-committed or failing outcome. Do not repair, amend, reset,

@@ -422,7 +422,6 @@ function doSubmitCommitResult(ctx: any, version: number, options: any) {
     expected_version: version + ctx.reviewVersionOffset,
     attempt_id: options.attemptId ?? ctx.prepared.commit_preparation.attempt_id,
     outcome: options.outcome,
-    commit_hash: options.commit_hash ?? null,
     failure_summary: options.failure_summary ?? null,
   });
 }
@@ -628,7 +627,6 @@ scenario("clean change lifecycle ends committed", [
     run: (ctx: any) =>
       doSubmitCommitResult(ctx, 4, {
         outcome: "committed",
-        commit_hash: ctx.git("rev-parse", "HEAD"),
       }),
     snapshots: [snap("parent", "COMMITTED", 5, ACTIONS.none, EVENTS.commitResult)],
   },
@@ -1139,7 +1137,6 @@ scenario(
       run: (ctx: any) =>
         doSubmitCommitResult(ctx, 7, {
           outcome: "committed",
-          commit_hash: ctx.git("rev-parse", "HEAD"),
         }),
       snapshots: [snap("parent", "COMMITTED", 8, ACTIONS.none, EVENTS.commitRetryResult)],
     },
@@ -1201,8 +1198,11 @@ scenario("commit mismatch stops terminally", [
     ],
   },
   {
-    name: "external commit moves head",
-    run: (ctx: any) => ctx.git("commit", "-qm", "committed anyway"),
+    name: "external commit moves head twice",
+    run: (ctx: any) => {
+      ctx.git("commit", "-qm", "committed anyway");
+      ctx.git("commit", "--allow-empty", "-qm", "unexpected second commit");
+    },
     snapshots: [
       snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared),
     ],
@@ -1212,7 +1212,6 @@ scenario("commit mismatch stops terminally", [
     run: (ctx: any) =>
       doSubmitCommitResult(ctx, 4, {
         outcome: "committed",
-        commit_hash: ctx.created.workflow.base_head,
       }),
     snapshots: [snap("parent", "STOPPED_COMMIT_MISMATCH", 5, ACTIONS.none, EVENTS.commitResult)],
   },

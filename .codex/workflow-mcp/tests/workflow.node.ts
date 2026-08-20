@@ -665,14 +665,12 @@ test("approved receipt gates commit and commit evidence", () => {
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
     git("commit", "-qm", "fixture change");
-    const hash = git("rev-parse", "HEAD");
     const committed = store.submitCommitResult({
       workflow_id: created.workflow.workflow_id,
       capability: created.capabilities.committer,
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: hash,
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
@@ -2381,7 +2379,6 @@ test("role views expose exact projection keys and sorted permitted actions", () 
       expected_version: 7,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.deepEqual(store.get(id, "committer", caps.committer).permitted_next_actions, []);
@@ -3051,7 +3048,6 @@ test("terminals cannot resume implementation or accept concerns", () => {
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(
@@ -4890,7 +4886,6 @@ test("commit result records a verified single-parent success", () => {
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: hash,
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
@@ -4941,17 +4936,14 @@ test("commit result rejects attempt, field combination, role, version, and phase
         expected_version: 4,
         attempt_id: attemptId,
         outcome: "committed",
-        commit_hash: git("rev-parse", "HEAD"),
         failure_summary: null,
         ...overrides,
       });
     const cases = [
       [{ attempt_id: "0".repeat(36) }, "ERROR_COMMIT_MISMATCH"],
       [{ outcome: "mismatch" }, "ERROR_INVALID_SHAPE"],
-      [{ outcome: "committed", commit_hash: null }, "ERROR_INVALID_SHAPE"],
-      [{ outcome: "committed", commit_hash: "xyz" }, "ERROR_INVALID_SHAPE"],
       [{ outcome: "committed", failure_summary: "failed" }, "ERROR_INVALID_SHAPE"],
-      [{ outcome: "not_committed", commit_hash: "0".repeat(40) }, "ERROR_INVALID_SHAPE"],
+      [{ commit_hash: "0".repeat(40) }, "ERROR_INVALID_SHAPE"],
       [{ outcome: "not_committed", failure_summary: null }, "ERROR_INVALID_SHAPE"],
       [{ outcome: "not_committed", failure_summary: "" }, "ERROR_INVALID_SHAPE"],
       [{ outcome: "not_committed", failure_summary: "x".repeat(2001) }, "ERROR_INVALID_SHAPE"],
@@ -4971,7 +4963,6 @@ test("commit result rejects attempt, field combination, role, version, and phase
           capability: caps.committer,
           expected_version: 4,
           outcome: "committed",
-          commit_hash: git("rev-parse", "HEAD"),
           failure_summary: null,
         }),
       ),
@@ -4985,7 +4976,6 @@ test("commit result rejects attempt, field combination, role, version, and phase
           expected_version: 4,
           attempt_id: attemptId,
           outcome: "committed",
-          commit_hash: git("rev-parse", "HEAD"),
           failure_summary: null,
         }),
       ),
@@ -4999,7 +4989,6 @@ test("commit result rejects attempt, field combination, role, version, and phase
           expected_version: 3,
           attempt_id: attemptId,
           outcome: "committed",
-          commit_hash: git("rev-parse", "HEAD"),
           failure_summary: null,
         }),
       ),
@@ -5014,7 +5003,6 @@ test("commit result rejects attempt, field combination, role, version, and phase
           expected_version: 0,
           attempt_id: attemptId,
           outcome: "committed",
-          commit_hash: git("rev-parse", "HEAD"),
           failure_summary: null,
         }),
       ),
@@ -5062,7 +5050,6 @@ test("hook and command failure with unchanged HEAD enters a retryable stop", () 
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "not_committed",
-      commit_hash: null,
       failure_summary: failureSummary,
     });
     assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
@@ -5113,7 +5100,6 @@ test("bounded commit failure is retained in state but absent from audit", () => 
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "not_committed",
-      commit_hash: null,
       failure_summary: failureSummary,
     });
     assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
@@ -5147,7 +5133,6 @@ test("retry clears the attempt and result and permits preparation again", () => 
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "not_committed",
-      commit_hash: null,
       failure_summary: "hook rejected",
     });
     assert.equal(stopped.phase, "STOPPED_NOT_COMMITTED");
@@ -5251,14 +5236,12 @@ test("committed results are terminal and cannot retry", () => {
       expected_version: 3,
     });
     git("commit", "-qm", "successful commit");
-    const hash = git("rev-parse", "HEAD");
     const committed = store.submitCommitResult({
       workflow_id: id,
       capability: caps.committer,
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: hash,
       failure_summary: null,
     });
     assert.equal(committed.phase, "COMMITTED");
@@ -5284,7 +5267,6 @@ test("committed results are terminal and cannot retry", () => {
           expected_version: 5,
           attempt_id: prepared.commit_preparation.attempt_id,
           outcome: "committed",
-          commit_hash: hash,
           failure_summary: null,
         }),
       ),
@@ -5312,14 +5294,12 @@ test("commit result verification mismatches stop terminally with deterministic c
       capability: headChanged.caps.committer,
       expected_version: 3,
     });
-    git("commit", "-qm", "moved head");
     const headResult = store.submitCommitResult({
       workflow_id: headChanged.id,
       capability: headChanged.caps.committer,
       expected_version: 4,
       attempt_id: preparedHead.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: headChanged.created.workflow.base_head,
       failure_summary: null,
     });
     assert.equal(headResult.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5340,7 +5320,6 @@ test("commit result verification mismatches stop terminally with deterministic c
       expected_version: 4,
       attempt_id: preparedParent.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(parentResult.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5362,7 +5341,6 @@ test("commit result verification mismatches stop terminally with deterministic c
       expected_version: 4,
       attempt_id: preparedTree.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(treeResult.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5391,7 +5369,6 @@ test("commit result verification mismatches stop terminally with deterministic c
       expected_version: 4,
       attempt_id: preparedPath.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(pathResult.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5431,7 +5408,6 @@ test("not committed claim after a changed HEAD enters a terminal mismatch", () =
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "not_committed",
-      commit_hash: null,
       failure_summary: "the commit did not run",
     });
     assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5475,7 +5451,6 @@ test("hook-created unexpected commit ends in a terminal mismatch", () => {
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5513,7 +5488,6 @@ test("commit mismatch stops are terminal and cannot retry or resume", () => {
       expected_version: 4,
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
-      commit_hash: git("rev-parse", "HEAD"),
       failure_summary: null,
     });
     assert.equal(mismatched.phase, "STOPPED_COMMIT_MISMATCH");
@@ -5550,7 +5524,6 @@ test("commit mismatch stops are terminal and cannot retry or resume", () => {
           expected_version: 5,
           attempt_id: prepared.commit_preparation.attempt_id,
           outcome: "committed",
-          commit_hash: git("rev-parse", "HEAD"),
           failure_summary: null,
         }),
       ),

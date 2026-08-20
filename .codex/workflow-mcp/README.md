@@ -146,10 +146,12 @@ workflows with a fresh review receipt; commit-range workflows reject it. After a
 committer stages complete approved paths and calls `workflow_prepare_commit`, which checks the
 current HEAD and the staged scope, file modes, and blob digests against the authorized receipt,
 rejects approved-path residue, and binds the exact prepared tree and path set without changing Git
-state. The committer then runs the external `git commit` and submits the result with
-`workflow_submit_commit_result` whether the attempt succeeded or failed. Result submission verifies
-the current HEAD, commit parent, prepared tree, and changed paths against the prepared attempt (or
-confirms that HEAD stayed unchanged for a not-committed result). A verified commit enters the
+state. The committer then runs the external `git commit` and submits only the semantic result with
+`workflow_submit_commit_result` whether the attempt succeeded or failed; it does not supply a commit
+SHA. Workflow MCP observes and verifies the authoritative Git state. Result submission verifies the
+current HEAD, commit parent, prepared tree, and changed paths against the prepared attempt (or
+confirms that HEAD stayed unchanged for a
+not-committed result), then persists the verified SHA. A verified commit enters the
 terminal `COMMITTED` phase; an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
 stop cleared by `workflow_retry_commit`; any verification mismatch enters the terminal
 `STOPPED_COMMIT_MISMATCH`.

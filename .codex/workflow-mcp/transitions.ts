@@ -954,21 +954,13 @@ export function prepareCommit(
   return next;
 }
 
-export function submitCommitResult(state: WorkflowState, input: unknown): WorkflowState {
+function commitResultInput(state: WorkflowState, input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_SHAPE", "commit result input is invalid");
   }
   const args = exactKeys(
     input,
-    [
-      "workflow_id",
-      "capability",
-      "expected_version",
-      "attempt_id",
-      "outcome",
-      "commit_hash",
-      "failure_summary",
-    ],
+    ["workflow_id", "capability", "expected_version", "attempt_id", "outcome", "failure_summary"],
     "commit result",
   );
   ensurePhase(state, "COMMIT_PREPARED");
@@ -978,27 +970,40 @@ export function submitCommitResult(state: WorkflowState, input: unknown): Workfl
   if (args.outcome !== "committed" && args.outcome !== "not_committed") {
     fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
   }
+  if (args.outcome === "committed" && args.failure_summary !== null) {
+    fail("ERROR_INVALID_SHAPE", "committed result cannot include a failure summary");
+  }
+  if (args.outcome === "not_committed") {
+    if (args.failure_summary === null || typeof args.failure_summary !== "string") {
+      fail("ERROR_INVALID_SHAPE", "not-committed result requires a failure summary");
+    }
+    boundedString(args.failure_summary, "failure_summary", 2000);
+  }
+  return args;
+}
+
+export function validateCommitResult(state: WorkflowState, input: unknown): void {
+  commitResultInput(state, input);
+}
+
+export function submitCommitResult(
+  state: WorkflowState,
+  input: unknown,
+  verifiedCommitHash: GitCommitSha | null,
+): WorkflowState {
+  const args = commitResultInput(state, input);
   const next = clone(state);
   if (args.outcome === "committed") {
-    if (typeof args.commit_hash !== "string" || !/^[0-9a-f]{40}$/u.test(args.commit_hash)) {
-      fail("ERROR_INVALID_SHAPE", "committed result requires a commit hash");
-    }
-    if (args.failure_summary !== null) {
-      fail("ERROR_INVALID_SHAPE", "committed result cannot include a failure summary");
+    if (verifiedCommitHash === null) {
+      fail("ERROR_COMMIT_MISMATCH", "committed result was not verified");
     }
     next.commit_result = {
       outcome: "committed",
-      commit_hash: args.commit_hash as GitCommitSha, // producer cast after the regex check
+      commit_hash: verifiedCommitHash,
       failure_summary: null,
     };
     next.phase = "COMMITTED";
   } else {
-    if (args.commit_hash !== null) {
-      fail("ERROR_INVALID_SHAPE", "not-committed result cannot include a commit hash");
-    }
-    if (args.failure_summary === null || typeof args.failure_summary !== "string") {
-      fail("ERROR_INVALID_SHAPE", "not-committed result requires a failure summary");
-    }
     next.commit_result = {
       outcome: "not_committed",
       commit_hash: null,

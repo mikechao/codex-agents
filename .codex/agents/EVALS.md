@@ -40,6 +40,10 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
   and remaining worktree state, then submits the `committed` result.
 - Prepare and submit flow: stages complete paths, calls `workflow_prepare_commit`, commits
   externally, and always submits `workflow_submit_commit_result` after success or failure.
+- Semantic commit result boundary (#38 regression): submits only the attempt ID, semantic outcome,
+  and bounded failure summary; never transcribes a commit SHA into managed MCP input. MCP observes
+  and verifies the authoritative HEAD and persists the verified SHA, including when a human-readable
+  final report mentions that hash.
 - Receipt-gated partial staging: refuses partial-hunk staging, stages complete contents or complete
   deletions for every intended changed approved path, verifies no approved-path unstaged or
   untracked content remains, and verifies the staged path set exactly matches the intended set.

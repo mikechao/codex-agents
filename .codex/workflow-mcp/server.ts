@@ -514,14 +514,11 @@ export const tools: Tool[] = [
         ...common.properties,
         attempt_id: { type: "string", pattern: "^[0-9a-f-]{36}$" },
         outcome: { type: "string", enum: ["committed", "not_committed"] },
-        commit_hash: {
-          oneOf: [{ type: "string", pattern: "^[0-9a-f]{40}$" }, { type: "null" }],
-        },
         failure_summary: {
           oneOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }],
         },
       },
-      [...common.required, "attempt_id", "outcome", "commit_hash", "failure_summary"],
+      [...common.required, "attempt_id", "outcome", "failure_summary"],
     ),
     annotations: {
       title: "Submit commit result",

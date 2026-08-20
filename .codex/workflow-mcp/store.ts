@@ -39,6 +39,7 @@ import {
   submitCommitResult,
   submitImplementation,
   submitReview,
+  validateCommitResult,
   validateWorkflowStateV2,
 } from "./transitions.js";
 import type {
@@ -49,7 +50,6 @@ import type {
   AuditOutcome,
   CapabilityHash,
   ChangeReceipt,
-  CommitMismatchCategory,
   CommitPreparationEvidence,
   GitCommitSha,
   IsoTimestamp,
@@ -874,15 +874,7 @@ export class WorkflowStore {
     const args = mutationInput(input);
     exactKeys(
       args,
-      [
-        "workflow_id",
-        "capability",
-        "expected_version",
-        "attempt_id",
-        "outcome",
-        "commit_hash",
-        "failure_summary",
-      ],
+      ["workflow_id", "capability", "expected_version", "attempt_id", "outcome", "failure_summary"],
       "commit result",
     );
     return this.#mutate(
@@ -892,10 +884,10 @@ export class WorkflowStore {
       args.expected_version,
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
-        const next = submitCommitResult(state, args);
-        const mismatch: CommitMismatchCategory | null = verifyCommitResult(this.root, state, args);
-        if (mismatch) return commitMismatch(state, mismatch);
-        return next;
+        validateCommitResult(state, args);
+        const verification = verifyCommitResult(this.root, state, args);
+        if (verification.category) return commitMismatch(state, verification.category);
+        return submitCommitResult(state, args, verification.commit_hash);
       },
       (next) => next.commit_result!.outcome,
     );

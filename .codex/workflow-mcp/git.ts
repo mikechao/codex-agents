@@ -339,43 +339,46 @@ function commitChangedPaths(
 export function verifyPreparedCommit(
   root: string,
   state: WorkflowState,
-  commitHash: unknown,
-): CommitMismatchCategory | null {
-  if (typeof commitHash !== "string" || !/^[0-9a-f]{40}$/u.test(commitHash)) {
-    return "HEAD_CHANGED";
-  }
+): { category: CommitMismatchCategory | null; commit_hash: GitCommitSha } {
   const preparation = state.commit_preparation;
-  if (!preparation || typeof preparation !== "object") {
-    return "PARENT_MISMATCH";
-  }
   const head = currentHead(root);
-  if (head !== commitHash) return "HEAD_CHANGED";
-  const parent = git(root, ["rev-list", "--parents", "-n", "1", commitHash]).trim().split(" ");
-  if (parent.length !== 2) return "PARENT_MISMATCH";
-  if (parent[1] !== preparation.prepared_head) return "PARENT_MISMATCH";
-  const tree = git(root, ["rev-parse", `${commitHash}^{tree}`]).trim() as GitTreeSha;
-  if (tree !== preparation.prepared_tree) return "TREE_MISMATCH";
-  const expected = [...preparation.expected_paths].sort();
-  const actual = commitChangedPaths(root, preparation.prepared_head, commitHash as GitCommitSha);
-  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) {
-    return "PATH_MISMATCH";
+  if (!preparation || typeof preparation !== "object") {
+    return { category: "PARENT_MISMATCH", commit_hash: head };
   }
-  return null;
+  if (head === preparation.prepared_head) {
+    return { category: "HEAD_CHANGED", commit_hash: head };
+  }
+  const parent = git(root, ["rev-list", "--parents", "-n", "1", head]).trim().split(" ");
+  if (parent.length !== 2) return { category: "PARENT_MISMATCH", commit_hash: head };
+  if (parent[1] !== preparation.prepared_head)
+    return { category: "PARENT_MISMATCH", commit_hash: head };
+  const tree = git(root, ["rev-parse", `${head}^{tree}`]).trim() as GitTreeSha;
+  if (tree !== preparation.prepared_tree) return { category: "TREE_MISMATCH", commit_hash: head };
+  const expected = [...preparation.expected_paths].sort();
+  const actual = commitChangedPaths(root, preparation.prepared_head, head);
+  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) {
+    return { category: "PATH_MISMATCH", commit_hash: head };
+  }
+  return { category: null, commit_hash: head };
 }
 
 export function verifyCommitResult(
   root: string,
   state: WorkflowState,
   input: Record<string, unknown>,
-): CommitMismatchCategory | null {
+): { category: CommitMismatchCategory | null; commit_hash: GitCommitSha | null } {
   if (input.outcome === "committed") {
-    return verifyPreparedCommit(root, state, input.commit_hash);
+    return verifyPreparedCommit(root, state);
   }
   if (input.outcome === "not_committed") {
     const preparation = state.commit_preparation;
-    if (!preparation || typeof preparation !== "object") return "HEAD_CHANGED";
-    if (currentHead(root) !== preparation.prepared_head) return "HEAD_CHANGED";
-    return null;
+    if (!preparation || typeof preparation !== "object") {
+      return { category: "HEAD_CHANGED", commit_hash: null };
+    }
+    if (currentHead(root) !== preparation.prepared_head) {
+      return { category: "HEAD_CHANGED", commit_hash: null };
+    }
+    return { category: null, commit_hash: null };
   }
   fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
 }
