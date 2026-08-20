@@ -25,6 +25,11 @@
       "argv": ["bun", "run", "validate"],
       "timeout_ms": 120000,
       "max_output_bytes": 65536
+    },
+    {
+      "argv": ["bun", "run", "test:coverage"],
+      "timeout_ms": 120000,
+      "max_output_bytes": 65536
     }
   ]
 }
