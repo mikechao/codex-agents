@@ -79,6 +79,8 @@ authoritative workflow, and automatically dispatches `implementer`, `code_review
 explicit user commit authorization—`committer`. It preserves the exact `workflow_id`, capability,
 and version through every handoff and cannot edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
+After an external Git commit succeeds, Workflow MCP itself observes and persists the verified commit
+SHA, without requiring the committer to submit it.
 
 ## Install into another repository
 
