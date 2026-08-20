@@ -255,6 +255,19 @@ test("changes the digest and scope hash when content changes", () => {
   });
 });
 
+test("unrelated untracked files do not affect an approved-path receipt", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "approved.txt"), "approved\n");
+    commit(root);
+    const before = receipt(root, ["approved.txt"]);
+    writeFileSync(join(root, "notes.txt"), "stale reference\n");
+    const withNotes = receipt(root, ["approved.txt"]);
+    assert.deepEqual(withNotes, before);
+    writeFileSync(join(root, "notes.txt"), "different stale reference\n");
+    assert.deepEqual(receipt(root, ["approved.txt"]), before);
+  });
+});
+
 test("reads tracked blobs larger than four MiB", () => {
   withRepository((root) => {
     const content = Buffer.alloc(4 * 1024 * 1024 + 1, 0x5a);

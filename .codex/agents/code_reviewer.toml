@@ -50,6 +50,24 @@ Rules:
   observed state, including a provably absent path. A working-tree path is provably absent when the
   authoritative receipt/direct inspection establishes that it is missing rather than inaccessible;
   that state is inspected evidence and is not, by itself, `INCONCLUSIVE`.
+- Define the semantic review corpus separately from the exact review target. For a working-tree
+  review, the corpus is all tracked repository content in the working tree plus present untracked
+  files whose exact paths appear in `approved_paths`. Unrelated untracked files and ignored files
+  are outside the semantic corpus and must not become findings merely because they are present in
+  the checkout. `include_untracked: true` includes untracked state only for those exact approved
+  paths; it does not authorize a checkout-wide untracked search.
+- Use Git-aware searches for repository-wide semantic or reference scans: use `git grep` over the
+  tracked working-tree corpus, then inspect an approved untracked path separately with an exact
+  literal path read when needed. Do not use `git grep --untracked`, `--no-index`,
+  `--recurse-submodules`, recursive-submodule search, or native workspace-wide grep/LSP searches
+  whose corpus cannot be bounded to the review corpus. Git grep exit code `1` means no matches and
+  is not a review failure. Command patterns cannot bind arguments to workflow state, so these
+  corpus-broadening restrictions are mandatory
+  contract behavior rather than an OpenCode permission assumption.
+- Contextual searches may use tracked content outside `approved_paths` to understand the approved
+  implementation, but contextual searches do not expand workflow scope or authorize findings
+  unrelated to the approved implementation. For a commit-range review, search tracked content at
+  `head_revision` only; do not use the current working-tree corpus or untracked files.
 - For a working-tree review, if an authoritative objective, acceptance criterion, validation
   requirement, or other contract requires an approved file or artifact to exist, a provably absent
   path is an actionable blocking finding describing the required artifact and its absence. Do not
@@ -82,6 +100,10 @@ Rules:
   runner is unavailable, return `INCONCLUSIVE` rather than claiming that validation passed. If
   validation changes the working-tree review target, reject approval and report the mutation as a
   blocking finding.
+- Semantic corpus filtering does not change validation execution or failure reporting. If an
+  authorized validation genuinely fails because of ambient checkout state, record the real failure
+  (or return `INCONCLUSIVE` when its cause cannot be established). Do not inspect arbitrary scratch
+  file contents to manufacture semantic findings, and do not mask an observable validation failure.
 - Prioritize functional defects, regressions, races and lifecycle issues, security or privacy
   problems, architecture violations, error handling gaps, and inadequate or misleading tests.
 - Report only actionable findings with a plausible failure mode. Do not report style-only or

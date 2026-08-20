@@ -81,6 +81,8 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
 
 test("reviewer is read-only with a narrow bash allowlist", () => {
   const content = opencode("code_reviewer.md");
+  const frontmatter = content.split("---\n")[1] ?? "";
+  assert.notEqual(frontmatter, "", "reviewer must have frontmatter");
   assert.match(content, /^  edit: deny$/m, "reviewer must not edit");
   assert.match(content, /^    "\*": deny$/m, "reviewer bash must fail closed");
   for (const allowed of [
@@ -92,6 +94,8 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     '"git log *": allow',
     '"git show *": allow',
     '"git rev-parse *": allow',
+    '"git grep": allow',
+    '"git grep *": allow',
     '"bun .codex/agents/change-receipt.ts *": allow',
     '"bun .codex/agents/reviewer-validation.ts *": allow',
   ]) {
@@ -106,9 +110,15 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     "checkout",
     "switch",
     "restore",
+    "revert",
+    "cherry-pick",
+    "rm",
+    "mv",
+    "clean",
+    "stash",
   ]) {
     assert.ok(
-      !new RegExp(`^\\s+"git ${denied}`).test(content),
+      !new RegExp(`^\\s+"git ${denied}[^"]*": allow$`, "m").test(frontmatter),
       `reviewer bash must not allow git ${denied}`,
     );
   }
@@ -139,9 +149,30 @@ test("reviewer contract distinguishes absent, required, and unknown path states"
     "actionable blocking finding describing the required artifact",
     "unknown, contradictory, or uninspectable",
     "path absent at both endpoints is rejected",
+    "semantic review corpus",
+    "all tracked repository content in the working tree plus present untracked files",
+    "Unrelated untracked files and ignored files are outside the semantic corpus",
+    "does not authorize a checkout-wide untracked search",
+    "git grep",
+    "Git grep exit code `1` means no matches",
+    "contextual searches do not expand workflow scope",
+    "tracked content at `head_revision` only",
+    "do not mask an observable validation failure",
   ]) {
     assert.ok(contract.includes(phrase), `reviewer contract must include: ${phrase}`);
   }
+});
+
+test("reviewer contract keeps semantic context separate from ownership and validation", () => {
+  const contract = readFileSync(
+    resolve(import.meta.dir, "../contracts/code_reviewer.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  assert.match(contract, /approved untracked path separately with an exact literal path read/);
+  assert.match(contract, /Do not use `git grep --untracked`, `--no-index`/);
+  assert.match(contract, /`--recurse-submodules`/);
+  assert.match(contract, /Semantic corpus filtering does not change validation execution/);
+  assert.match(contract, /ambient checkout state/);
 });
 
 test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {

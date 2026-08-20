@@ -150,8 +150,10 @@ overridden for the subagent models to resolve.
 OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the orchestrator
 has `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
 to the three workflow subagents; the reviewer
-  gets `edit: deny` plus a narrow bash allowlist containing only Git inspection, receipt inspection,
-  and the project-owned reviewer validation runner; the committer gets `edit: deny` and a fail-closed
+  gets `edit: deny` plus a narrow bash allowlist containing only Git inspection (including `git grep`),
+  receipt inspection, and the project-owned reviewer validation runner. Reviewer semantic searches
+  cover tracked content plus exact approved untracked paths, not ambient untracked or ignored files;
+  the committer gets `edit: deny` and a fail-closed
 bash allowlist for the documented commit flow (status/diff/log/show/rev-parse/ls-files
 inspection, approved `git add`/`git commit`, and the receipt command) that denies
 push/amend/rebase/reset/checkout/switch and filesystem mutation; the implementer keeps broad bash

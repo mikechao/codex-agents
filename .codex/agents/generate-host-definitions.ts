@@ -120,6 +120,8 @@ const ROLES: readonly RoleSpec[] = [
         '    "git log *": allow',
         '    "git show *": allow',
         '    "git rev-parse *": allow',
+        '    "git grep": allow',
+        '    "git grep *": allow',
         '    "bun .codex/agents/change-receipt.ts *": allow',
         '    "bun .codex/agents/reviewer-validation.ts *": allow',
         "  task:",

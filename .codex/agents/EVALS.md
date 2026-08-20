@@ -104,6 +104,13 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
   and speculation are omitted.
 - Prior-finding continuity: every prior finding is classified as `resolved`, `still_present`, or
   `superseded` before new findings are reported.
+- Semantic review corpus: stale references in tracked content remain actionable; the same references
+  in an approved untracked file remain actionable; identical references in unrelated untracked or
+  ignored `notes.txt` do not produce a finding; and an ambient file that causes an authorized
+  validation failure is reported as validation/environment interference rather than masked.
+- Reviewer search boundary: repository-wide scans use tracked `git grep` plus exact approved
+  untracked reads, while broad untracked/no-index/recursive-submodule searches and mutating reviewer
+  commands remain forbidden.
 
 ## Workflow loop
 

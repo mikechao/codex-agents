@@ -20,7 +20,7 @@ Host permission syntax differs and must not be treated as equivalent:
 - Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
   implementer and committer).
 - OpenCode has no filesystem sandbox. The reviewer gets `edit: deny` plus a narrow bash allowlist
-  (status/diff/log/show/rev-parse, the receipt command, and the project-owned
+  (status/diff/log/show/rev-parse/git grep, the receipt command, and the project-owned
   `.codex/agents/reviewer-validation.ts` runner); the committer gets `edit: deny` and a
   fail-closed bash allowlist covering the documented commit flow (status/diff/log/show/rev-parse/
   ls-files inspection, approved `git add`/`git commit`, and the receipt command) while denying
@@ -312,6 +312,12 @@ can authorize a later commit. Their `approved_paths` are an exact allowlist for 
 scope accounting, not an existence requirement: a path may be provably absent and still be reviewed
 and recorded as absent. A required-but-absent artifact is a blocking finding when an authoritative
 contract requires it; an unknown, contradictory, or uninspectable path state is `INCONCLUSIVE`.
+For semantic review, the repository-wide corpus is tracked working-tree content plus present
+untracked content at exact paths in `approved_paths`; unrelated untracked and ignored files remain
+outside that corpus. `include_untracked` includes untracked state only for those approved paths and
+does not authorize checkout-wide searches. `approved_paths` remains the exact ownership and receipt
+boundary even when tracked files outside that list are read for context. Ambient untracked files
+remain outside semantic review unless they observably interfere with an authorized validation.
 Commit-range reviews require explicit base and head revisions, all three include flags set to false,
 and never produce a commit receipt. A path absent at both commit-range endpoints remains rejected
 under the existing range rules. Contradictory include flags make the review `INCONCLUSIVE`.

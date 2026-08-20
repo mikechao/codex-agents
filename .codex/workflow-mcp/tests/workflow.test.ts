@@ -2773,6 +2773,7 @@ test("agent touched paths must be a subset of the approved scope", () => {
   const { root, git } = fixture();
   try {
     writeFileSync(join(root, "note.txt"), "modified\n");
+    writeFileSync(join(root, "other.txt"), "unapproved implementation output\n");
     const store: any = new WorkflowStore({
       repositoryRoot: root,
       databasePath: ":memory:",
@@ -2849,6 +2850,44 @@ test("derives scope changes from baseline receipt comparison and ignores self-re
     assert.equal(claimedResult.phase, "REVIEWING");
     assert.deepEqual(claimedResult.agent_touched_paths, []);
     assert.deepEqual(claimedResult.scope_changed_paths, ["new/file.txt"]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ambient untracked files do not invalidate an approved-path review snapshot", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: ":memory:",
+    });
+    const created = create(store, root, git, {
+      objective: "ambient review corpus",
+      approved_paths: ["note.txt"],
+    });
+    writeFileSync(join(root, "note.txt"), "approved implementation\n");
+    implementation(store, created, root, 0, "implemented");
+    const id = created.workflow.workflow_id;
+    const caps = created.capabilities;
+    store.beginReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 1,
+    });
+    writeFileSync(join(root, "notes.txt"), "stale reference outside approved scope\n");
+    const approved = store.submitReview({
+      workflow_id: id,
+      capability: caps.reviewer,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(approved.phase, "STOPPED_APPROVED");
+    assert.deepEqual(rawState(store, id).review_receipt.approved_paths, ["note.txt"]);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
