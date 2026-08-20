@@ -3,7 +3,7 @@
 // fragments in .codex/agents/contracts/. Codex TOML and OpenCode Markdown are
 // adapters over the same host-neutral contract prose; this generator is the
 // single place where host frontmatter (models, permissions, sandbox modes) is
-// declared, and .codex/agents/tests/contract-consistency.node.ts fails when the
+// declared, and .codex/agents/tests/contract-consistency.test.ts fails when the
 // checked-in generated files drift from this output.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";

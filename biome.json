@@ -15,7 +15,7 @@
   "linter": { "rules": { "preset": "recommended" } },
   "overrides": [
     {
-      "includes": ["**/*.node.ts"],
+      "includes": ["**/*.test.ts"],
       "linter": {
         "rules": {
           "suspicious": {

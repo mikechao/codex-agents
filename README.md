@@ -61,7 +61,7 @@ bun run check             # complete Biome check (format + lint + import hygiene
 bun run validate          # pre-completion gate: check + typecheck + full test suite
 ```
 
-TOML files (`.codex/agents/*.toml`, `.codex/config.toml`, `bunfig.toml`) stay outside Biome and
+TOML files (`.codex/agents/*.toml`, `.codex/config.toml`) stay outside Biome and
 continue to be validated through `Bun.TOML.parse` and the existing semantic assertions.
 
 ## Use this repository directly

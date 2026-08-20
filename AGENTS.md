@@ -44,7 +44,7 @@ Biome is the single formatter/linter for the supported sources included in the r
 `biome.json` (the hidden `.codex/**/*.ts` tree, `install-into.ts`, and root JSON config).
 `bun run format` applies Biome formatting; `bun run format:check`, `bun run lint`, and
 `bun run check` are read-only gates that must never modify the working tree. TOML stays outside
-Biome: `.codex/agents/*.toml`, `.codex/config.toml`, and `bunfig.toml` continue to rely on
+Biome: `.codex/agents/*.toml` and `.codex/config.toml` continue to rely on
 `Bun.TOML.parse` and the existing semantic assertions.
 
 `bun run validate` (`bun run check && bun run typecheck && bun run test`) is the normal
