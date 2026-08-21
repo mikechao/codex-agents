@@ -6,7 +6,7 @@ package manager (`bun install`/`bun run`); TypeScript/tsc handles static typeche
 listed in the root `biome.json`. The reusable `implementer`, `code_reviewer`, and `committer`
 definitions are host adapters: Codex TOML under `.codex/agents/` and OpenCode Markdown under
 `.opencode/agents/` are both generated from the canonical host-neutral fragments in
-`.codex/agents/contracts/` by `bun run generate:agents`; the checked-in definitions must stay
+`.codex/agents/contracts/` and `.codex/agents/model-policy.yaml` by `bun run generate:agents`; the checked-in definitions must stay
 byte-identical to the generator output (`bun run test:agents` enforces this). The project-scoped
 configuration in `.codex/config.toml` registers the local workflow-state server for Codex; the
 root `opencode.json` registers the same server for direct OpenCode use of this repository, and
@@ -20,6 +20,14 @@ copies the orchestrator into target repositories, defaults a new OpenCode config
 `default_agent`) to `orchestrator`, and preserves an existing explicit `default_agent` while still
 installing the orchestrator as an available primary agent. The historical v2
 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
+
+`.codex/agents/model-policy.yaml` is the only supported edit point for managed worker model and
+reasoning assignments. It supports distinct Codex and OpenCode assignments by role; the typed
+generator owns permissions, sandboxing, tools, and other structural host configuration. Generation
+and installation materialize fresh definitions in memory. Policy changes activate on generation or
+installation, not through hot reload, and running host sessions must be restarted to load changed
+definitions. Model policy is host metadata and is not carried in delegation prompts or Workflow MCP
+state.
 
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the generated host definitions, workflow documentation, MCP tool schemas and

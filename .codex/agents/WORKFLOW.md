@@ -32,9 +32,11 @@ Host permission syntax differs and must not be treated as equivalent:
   context size and isolation; the server-side role capability, `expected_version`, and transition
   checks remain authoritative and are unchanged between hosts.
 - Model/reasoning identity is host metadata, not contract prose: each generated definition
-  announces its own identity line (Codex model plus reasoning effort in the TOML, the OpenCode Go
-  provider/model ID in the Markdown), injected by the generator in place of the contract's
-  `__HOST_IDENTITY__` marker.
+  announces its own identity line (resolved model plus reasoning effort in both hosts), injected by
+  the generator in place of the contract's `__HOST_IDENTITY__` marker. Edit
+  `.codex/agents/model-policy.yaml` for these assignments; do not put policy in prompts or Workflow
+  MCP state. Generation and installation materialize definitions in memory, and running host
+  sessions must be restarted after policy changes.
 - OpenCode requires a dual-handoff terminal response: after the role's MCP submission tool
   (`workflow_submit_implementation`/`workflow_submit_review`/`workflow_submit_commit_result`)
   succeeds, the agent must still write a non-empty normal assistant text report to the parent

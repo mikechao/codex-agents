@@ -12,6 +12,15 @@ generator output. Host-specific permission syntax and model choices differ, but 
 meaning, role responsibilities, MCP calls, stop conditions, review semantics, and commit gates are
 identical.
 
+Managed worker model and reasoning assignments are centralized in
+`.codex/agents/model-policy.yaml`, the only supported policy edit point. The policy supports
+host-specific role assignments; structural permissions, sandboxing, tools, and behavioral contracts
+remain owned by the typed generator and contract fragments. Installation materializes fresh
+definitions in memory rather than depending on checked-in worker artifacts or mutating this provider
+checkout. Policy changes take effect on generation or installation, not through hot reload; restart
+running host sessions to load changed definitions. Policy is host metadata and is not carried in
+delegation prompts or Workflow MCP state.
+
 ## Set up this project
 
 ```sh
@@ -59,7 +68,7 @@ persistence, affinity, promotion, hot swapping, and cache GC.
 
 ```sh
 bun run start             # launch the workflow_state MCP server on STDIO
-bun run generate:agents   # regenerate host definitions from .codex/agents/contracts/
+bun run generate:agents   # regenerate checked-in host definitions from policy and contracts
 bun run typecheck         # strict tsc checks without emitting
 bun run test              # full suite: agents + workflow-MCP + installer tests
 bun run test:agents       # focused change-receipt and contract-consistency tests
@@ -111,9 +120,9 @@ After `bun install`, run:
 The installer requires Bun 1.3 or newer and a Git repository and installs both host adapters in
 one all-or-nothing step:
 
-- Codex: copies the agent definitions into `.codex/agents/` and registers this project's committed
-  `.codex/workflow-mcp/server.ts` by absolute path in `.codex/config.toml`.
-- OpenCode: copies the agent definitions into `.opencode/agents/` and registers that same absolute
+- Codex: materializes fresh policy-resolved agent definitions into `.codex/agents/` and registers
+  this project's committed `.codex/workflow-mcp/server.ts` by absolute path in `.codex/config.toml`.
+- OpenCode: materializes fresh policy-resolved agent definitions into `.opencode/agents/` and registers that same absolute
   provider server directly as a local MCP (`mcp.workflow_state`) in the project's
   `opencode.json` (or extends an existing `opencode.json`/`opencode.jsonc` without touching
   unrelated settings).
@@ -155,10 +164,9 @@ codex mcp get workflow_state
 Restart or reload OpenCode, then verify that the `workflow_state` tools are visible in a session
 (e.g. `opencode run "list your available workflow_state tools"`). Both hosts share the same
 durable workflow state for the repository, so a workflow started in one host is visible in the
-other. The generated OpenCode definitions pin `opencode-go/gpt-5.6-luna` for the implementer, reviewer,
-and committer (with high reasoning for the implementer and reviewer, and low reasoning for the
-committer), so the OpenCode Go provider must be connected (`/connect`) or the per-agent models
-overridden for the subagent models to resolve.
+other. The generated OpenCode definitions pin the provider/model IDs and reasoning declared by
+`.codex/agents/model-policy.yaml`, so the configured provider must be connected (`/connect`) or the
+per-agent models overridden for the subagent models to resolve.
 
 OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the orchestrator
 has `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only

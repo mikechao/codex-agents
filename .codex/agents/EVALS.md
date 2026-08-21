@@ -3,6 +3,11 @@
 Use these scenarios after changing an agent contract and before adding more instructions. Run them
 in a disposable branch or worktree when the scenario requires synthetic changes.
 
+Managed worker model and reasoning assignments are defined only in
+`.codex/agents/model-policy.yaml`. The generator resolves that policy during explicit generation or
+one-shot installation; it does not hot-reload policy, and policy is not delegated through prompts or
+Workflow MCP state. Restart host sessions after changing policy.
+
 ## Implementer
 
 - Authoritative view dispatch: the prompt carries only `workflow_id`, the implementer capability,

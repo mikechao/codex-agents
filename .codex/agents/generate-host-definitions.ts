@@ -1,61 +1,80 @@
 #!/usr/bin/env bun
 // Generates the host-specific agent definitions from the canonical contract
-// fragments in .codex/agents/contracts/. Codex TOML and OpenCode Markdown are
-// adapters over the same host-neutral contract prose; this generator is the
-// single place where host frontmatter (models, permissions, sandbox modes) is
-// declared, and .codex/agents/tests/contract-consistency.test.ts fails when the
-// checked-in generated files drift from this output.
+// fragments in .codex/agents/contracts/. Structural host configuration remains
+// in this typed adapter; model and reasoning choices live in model-policy.yaml.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { YAML } from "bun";
 
 const ROOT = resolve(import.meta.dir);
 const CONTRACTS_DIR = resolve(ROOT, "contracts");
 const CODEX_AGENTS_DIR = resolve(ROOT);
 const OPENCODE_AGENTS_DIR = resolve(ROOT, "../../.opencode/agents");
+export const MODEL_POLICY_PATH = resolve(ROOT, "model-policy.yaml");
 
-interface CodexConfig {
-  model: string;
-  reasoningEffort: string;
+export type HostName = "codex" | "opencode";
+export type RoleName = "implementer" | "code_reviewer" | "committer";
+export type ReasoningEffort = "low" | "medium" | "high";
+
+const ROLE_NAMES: readonly RoleName[] = ["implementer", "code_reviewer", "committer"];
+const HOST_NAMES: readonly HostName[] = ["codex", "opencode"];
+const REASONING_EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high"];
+
+export interface ModelPolicy {
+  models: Record<string, { codex: string; opencode: string }>;
+  agents: Record<RoleName, Record<HostName, { model: string; reasoning: ReasoningEffort }>>;
+}
+
+export interface GenerateOptions {
+  policy?: ModelPolicy;
+  policyPath?: string;
+  contractsDir?: string;
+  codexAgentsDir?: string;
+  opencodeAgentsDir?: string;
+}
+
+export interface GeneratedAgentDefinition {
+  role: RoleName;
+  host: HostName;
+  filename: string;
+  content: string;
+}
+
+export const HOST_IDENTITY_MARKER = "__HOST_IDENTITY__";
+export const OPENCODE_TERMINAL_SECTION_HEADING = "## Required terminal response (OpenCode-only)";
+
+interface CodexMetadata {
   sandboxMode: string;
 }
 
-interface OpenCodeConfig {
+interface OpenCodeMetadata {
   description: string;
-  model: string;
-  reasoningEffort?: string;
   permission: string[];
-  // OpenCode-only runtime handoff: the MCP tool that carries the authoritative
-  // workflow-state submission and the label of the required final report the
-  // agent must write after that tool call succeeds.
   terminalTool: string;
   finalReportLabel: string;
 }
 
 interface RoleSpec {
-  name: string;
+  name: RoleName;
   description: string;
-  codex: CodexConfig;
-  opencode: OpenCodeConfig;
+  codex: CodexMetadata;
+  opencode: OpenCodeMetadata;
 }
 
+// These are host serialization and behavioral boundaries, not policy values.
 const ROLES: readonly RoleSpec[] = [
   {
     name: "implementer",
     description:
       "Executes an approved implementation plan, validates the changes, and reports the results.",
-    codex: { model: "gpt-5.6-luna", reasoningEffort: "high", sandboxMode: "workspace-write" },
+    codex: { sandboxMode: "workspace-write" },
     opencode: {
       description:
         "Executes an approved implementation plan, validates the changes, and reports the results.",
-      model: "openai/gpt-5.6-luna",
-      reasoningEffort: "high",
       permission: [
         "  edit: allow",
         "  bash:",
-        // Broad bash for validation, with explicit denies for the Git/history
-        // operations the contract forbids. Rules match last-match-wins, so the
-        // denies must follow the catch-all allow.
         '    "*": allow',
         '    "git add": deny',
         '    "git add *": deny',
@@ -87,8 +106,6 @@ const ROLES: readonly RoleSpec[] = [
         '    "git stash *": deny',
         "  task:",
         '    "*": deny',
-        // Defense in depth: the server-side role capability check stays
-        // authoritative; exposing only this role's tools reduces context.
         "  workflow_state_*: deny",
         "  workflow_state_workflow_get: allow",
         "  workflow_state_workflow_submit_implementation: allow",
@@ -100,15 +117,10 @@ const ROLES: readonly RoleSpec[] = [
   {
     name: "code_reviewer",
     description: "Performs an independent, read-only review of an approved implementation diff.",
-    codex: { model: "gpt-5.6-sol", reasoningEffort: "medium", sandboxMode: "read-only" },
+    codex: { sandboxMode: "read-only" },
     opencode: {
       description: "Performs an independent, read-only review of an approved implementation diff.",
-      model: "openai/gpt-5.6-luna",
-      reasoningEffort: "high",
       permission: [
-        // OpenCode permissions are not equivalent to the Codex read-only
-        // filesystem sandbox; edit denial plus a narrow bash allowlist is the
-        // closest equivalent and must stay fail-closed.
         "  edit: deny",
         "  bash:",
         '    "*": deny',
@@ -139,17 +151,11 @@ const ROLES: readonly RoleSpec[] = [
     name: "committer",
     description:
       "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-    codex: { model: "gpt-5.6-luna", reasoningEffort: "medium", sandboxMode: "workspace-write" },
+    codex: { sandboxMode: "workspace-write" },
     opencode: {
       description:
         "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-      model: "openai/gpt-5.6-luna",
-      reasoningEffort: "high",
       permission: [
-        // edit denial is stricter than the Codex workspace-write sandbox: the
-        // committer must never modify source files. bash fails closed with an
-        // allowlist for the documented commit flow, and the specific denies
-        // follow the allows so last-match-wins applies.
         "  edit: deny",
         "  bash:",
         '    "*": deny',
@@ -207,62 +213,183 @@ const ROLES: readonly RoleSpec[] = [
   },
 ];
 
-function tomlEscape(value: string): string {
-  if (value.includes('"""')) {
-    throw new Error(`contract body contains a TOML terminator: ${value}`);
+function fail(context: string, detail: string): never {
+  throw new Error(`Invalid model policy${context ? ` ${context}` : ""}: ${detail}`);
+}
+
+function record(value: unknown, context: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail(`at ${context}`, "expected an object");
   }
+  return value as Record<string, unknown>;
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  context: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    fail(`at ${context}`, `expected exactly: ${wanted.join(", ")}`);
+  }
+}
+
+function safeModelIdentifier(value: unknown, context: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+    fail(`at ${context}`, "model identifier must be a non-empty string");
+  }
+  if (
+    value.includes("\n") ||
+    value.includes("\r") ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(value)
+  ) {
+    fail(`at ${context}`, "model identifier must be single-line and safely renderable");
+  }
+  return value;
+}
+
+function reasoning(value: unknown, context: string): ReasoningEffort {
+  if (typeof value !== "string" || !REASONING_EFFORTS.includes(value as ReasoningEffort)) {
+    fail(`at ${context}`, `reasoning must be one of: ${REASONING_EFFORTS.join(", ")}`);
+  }
+  return value as ReasoningEffort;
+}
+
+function rejectDuplicateBlockKeys(text: string, source: string): void {
+  const stack: Array<{ indent: number; path: string }> = [];
+  const seen = new Set<string>();
+  for (const [lineNumber, line] of text.split(/\r?\n/u).entries()) {
+    const match = /^(\s*)([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u.exec(line);
+    if (match === null || line.trimStart().startsWith("#")) continue;
+    const indent = match[1].length;
+    while (stack.at(-1)?.indent !== undefined && (stack.at(-1)?.indent ?? 0) >= indent) {
+      stack.pop();
+    }
+    const path = [...stack.map((item) => item.path), match[2]].join(".");
+    if (seen.has(path)) {
+      throw new Error(
+        `Invalid model policy ${source}: duplicate key ${path} at line ${lineNumber + 1}`,
+      );
+    }
+    seen.add(path);
+    stack.push({ indent, path });
+  }
+}
+
+export function parseModelPolicy(text: string, source = "model-policy.yaml"): ModelPolicy {
+  let parsed: unknown;
+  try {
+    rejectDuplicateBlockKeys(text, source);
+    parsed = YAML.parse(text);
+  } catch (cause) {
+    throw new Error(
+      `Invalid model policy ${source}: malformed YAML (${cause instanceof Error ? cause.message : String(cause)})`,
+      { cause },
+    );
+  }
+  const root = record(parsed, "root");
+  exactKeys(root, ["models", "agents"], "root");
+  const modelsRecord = record(root.models, "models");
+  const models: Record<string, { codex: string; opencode: string }> = {};
+  for (const [alias, raw] of Object.entries(modelsRecord)) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(alias)) fail(`at models`, `invalid model alias: ${alias}`);
+    const model = record(raw, `models.${alias}`);
+    exactKeys(model, HOST_NAMES, `models.${alias}`);
+    models[alias] = {
+      codex: safeModelIdentifier(model.codex, `models.${alias}.codex`),
+      opencode: safeModelIdentifier(model.opencode, `models.${alias}.opencode`),
+    };
+  }
+  if (Object.keys(models).length === 0) fail("at models", "at least one model alias is required");
+
+  const agentsRecord = record(root.agents, "agents");
+  exactKeys(agentsRecord, ROLE_NAMES, "agents");
+  const agents = {} as ModelPolicy["agents"];
+  for (const role of ROLE_NAMES) {
+    const roleRecord = record(agentsRecord[role], `agents.${role}`);
+    exactKeys(roleRecord, HOST_NAMES, `agents.${role}`);
+    const hostAssignments = {} as Record<HostName, { model: string; reasoning: ReasoningEffort }>;
+    for (const host of HOST_NAMES) {
+      const assignment = record(roleRecord[host], `agents.${role}.${host}`);
+      exactKeys(assignment, ["model", "reasoning"], `agents.${role}.${host}`);
+      if (typeof assignment.model !== "string" || !Object.hasOwn(models, assignment.model)) {
+        fail(`at agents.${role}.${host}.model`, `unknown model alias: ${String(assignment.model)}`);
+      }
+      hostAssignments[host] = {
+        model: assignment.model,
+        reasoning: reasoning(assignment.reasoning, `agents.${role}.${host}.reasoning`),
+      };
+    }
+    agents[role] = hostAssignments;
+  }
+  return { models, agents };
+}
+
+export function loadModelPolicy(policyPath = MODEL_POLICY_PATH): ModelPolicy {
+  return parseModelPolicy(readFileSync(policyPath, "utf8"), policyPath);
+}
+
+export function resolveModelPolicy(
+  policy: ModelPolicy,
+  role: RoleName,
+  host: HostName,
+): { model: string; reasoning: ReasoningEffort } {
+  const assignment = policy.agents[role]?.[host];
+  if (assignment === undefined) throw new Error(`No model policy assignment for ${role}/${host}`);
+  return { model: policy.models[assignment.model][host], reasoning: assignment.reasoning };
+}
+
+function tomlEscape(value: string): string {
+  if (value.includes('"""')) throw new Error(`contract body contains a TOML terminator: ${value}`);
   return value.replace(/\\/g, "\\\\");
 }
 
-// Model/reasoning identity is host-specific metadata; the shared contract
-// prose carries this marker and each host injects its own identity line.
-const HOST_IDENTITY_MARKER = "__HOST_IDENTITY__";
-
-// OpenCode-only terminal-response section appended after the shared contract
-// body by opencodeTerminalHandoff. Exported so the consistency test can strip
-// it before the Codex/OpenCode equivalence comparison and assert its presence
-// and absence respectively. Codex TOML never carries this section.
-export const OPENCODE_TERMINAL_SECTION_HEADING = "## Required terminal response (OpenCode-only)";
-
-function injectHostIdentity(body: string, identity: string, role: string): string {
-  if (!body.includes(HOST_IDENTITY_MARKER)) {
-    throw new Error(`contract for ${role} is missing the ${HOST_IDENTITY_MARKER} identity marker`);
-  }
+function injectHostIdentity(body: string, identity: string, role: RoleName): string {
+  const count = body.split(HOST_IDENTITY_MARKER).length - 1;
+  if (count !== 1)
+    throw new Error(
+      `contract for ${role} must contain exactly one ${HOST_IDENTITY_MARKER} identity marker`,
+    );
   return body.replace(HOST_IDENTITY_MARKER, identity);
 }
 
-function codexToml(spec: RoleSpec, body: string): string {
+function codexToml(
+  spec: RoleSpec,
+  assignment: { model: string; reasoning: ReasoningEffort },
+  body: string,
+): string {
   const header = [
     `name = "${spec.name}"`,
     `description = "${spec.description}"`,
-    `model = "${spec.codex.model}"`,
-    `model_reasoning_effort = "${spec.codex.reasoningEffort}"`,
+    `model = "${assignment.model}"`,
+    `model_reasoning_effort = "${assignment.reasoning}"`,
     `sandbox_mode = "${spec.codex.sandboxMode}"`,
   ].join("\n");
-  const identity = `${spec.codex.model} | Reasoning: ${spec.codex.reasoningEffort}`;
+  const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
   return `${header}\n\ndeveloper_instructions = """\n${tomlEscape(injectHostIdentity(body, identity, spec.name))}\n"""\n`;
 }
 
-function opencodeMarkdown(spec: RoleSpec, body: string): string {
+function opencodeMarkdown(
+  spec: RoleSpec,
+  assignment: { model: string; reasoning: ReasoningEffort },
+  body: string,
+): string {
   const frontmatter = [
     "---",
     `description: ${spec.opencode.description}`,
     "mode: subagent",
-    `model: ${spec.opencode.model}`,
-    ...(spec.opencode.reasoningEffort ? [`reasoningEffort: ${spec.opencode.reasoningEffort}`] : []),
+    `model: ${assignment.model}`,
+    `reasoningEffort: ${assignment.reasoning}`,
     "permission:",
     ...spec.opencode.permission,
     "---",
   ].join("\n");
-  const contract = injectHostIdentity(body, spec.opencode.model, spec.name);
-  return `${frontmatter}\n${contract}${opencodeTerminalHandoff(spec)}\n`;
+  const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
+  return `${frontmatter}\n${injectHostIdentity(body, identity, spec.name)}${opencodeTerminalHandoff(spec)}\n`;
 }
 
-// OpenCode-only runtime ordering section appended after the shared contract
-// body. It does not restate contract behavior; it pins the host-specific
-// requirement that the agent always ends with a non-empty normal assistant
-// text response after (not instead of) its terminal MCP submission call. Codex
-// TOML output must remain byte-identical, so this never touches codexToml.
 function opencodeTerminalHandoff(spec: RoleSpec): string {
   const { terminalTool, finalReportLabel } = spec.opencode;
   const failureClause =
@@ -288,17 +415,41 @@ function opencodeTerminalHandoff(spec: RoleSpec): string {
   ].join("\n");
 }
 
+export function generateDefinitionManifest(
+  options: GenerateOptions = {},
+): GeneratedAgentDefinition[] {
+  const policy = options.policy ?? loadModelPolicy(options.policyPath ?? MODEL_POLICY_PATH);
+  const contractsDir = options.contractsDir ?? CONTRACTS_DIR;
+  const manifest: GeneratedAgentDefinition[] = [];
+  for (const spec of ROLES) {
+    const body = readFileSync(resolve(contractsDir, `${spec.name}.md`), "utf8").trimEnd();
+    for (const host of HOST_NAMES) {
+      const assignment = resolveModelPolicy(policy, spec.name, host);
+      manifest.push({
+        role: spec.name,
+        host,
+        filename: host === "codex" ? `${spec.name}.toml` : `${spec.name}.md`,
+        content:
+          host === "codex"
+            ? codexToml(spec, assignment, body)
+            : opencodeMarkdown(spec, assignment, body),
+      });
+    }
+  }
+  return manifest;
+}
+
 export interface GeneratedDefinitions {
   [path: string]: string;
 }
 
-export function generateDefinitions(): GeneratedDefinitions {
+export function generateDefinitions(options: GenerateOptions = {}): GeneratedDefinitions {
+  const codexDir = options.codexAgentsDir ?? CODEX_AGENTS_DIR;
+  const opencodeDir = options.opencodeAgentsDir ?? OPENCODE_AGENTS_DIR;
   const definitions: GeneratedDefinitions = {};
-  for (const spec of ROLES) {
-    const contractPath = resolve(CONTRACTS_DIR, `${spec.name}.md`);
-    const body = readFileSync(contractPath, "utf8").trimEnd();
-    definitions[resolve(CODEX_AGENTS_DIR, `${spec.name}.toml`)] = codexToml(spec, body);
-    definitions[resolve(OPENCODE_AGENTS_DIR, `${spec.name}.md`)] = opencodeMarkdown(spec, body);
+  for (const definition of generateDefinitionManifest(options)) {
+    const directory = definition.host === "codex" ? codexDir : opencodeDir;
+    definitions[resolve(directory, definition.filename)] = definition.content;
   }
   return definitions;
 }
@@ -306,21 +457,17 @@ export function generateDefinitions(): GeneratedDefinitions {
 function main(args: readonly string[]): number {
   const definitions = generateDefinitions();
   if (!args.includes("--write")) {
-    for (const [path, content] of Object.entries(definitions)) {
+    for (const [path, content] of Object.entries(definitions))
       process.stdout.write(`== ${path}\n${content}`);
-    }
     return 0;
   }
   for (const [path, content] of Object.entries(definitions)) {
-    if (!existsSync(dirname(path))) {
+    if (!existsSync(dirname(path)))
       throw new Error(`generator output directory is missing: ${dirname(path)}`);
-    }
     writeFileSync(path, content);
   }
   process.stdout.write(`Wrote ${Object.keys(definitions).length} host agent definitions.\n`);
   return 0;
 }
 
-if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2));
-}
+if (import.meta.main) process.exitCode = main(process.argv.slice(2));

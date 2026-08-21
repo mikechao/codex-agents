@@ -14,6 +14,10 @@ import {
 import { basename, resolve } from "node:path";
 import { spawnSync, TOML } from "bun";
 import { applyEdits, modify, type ParseError, parse as parseJsonc } from "jsonc-parser";
+import {
+  type GeneratedAgentDefinition,
+  generateDefinitionManifest,
+} from "./.codex/agents/generate-host-definitions.js";
 
 const REGISTRATION_SECTION = ["mcp_servers", "workflow_state"];
 const REQUIRED_SOURCE_FILES = [
@@ -21,35 +25,43 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
   ".codex/agents/reviewer-validation.ts",
   ".codex/reviewer-validation.json",
-  ".codex/agents/code_reviewer.toml",
-  ".codex/agents/committer.toml",
-  ".codex/agents/implementer.toml",
+  ".codex/agents/model-policy.yaml",
+  ".codex/agents/generate-host-definitions.ts",
+  ".codex/agents/contracts/code_reviewer.md",
+  ".codex/agents/contracts/committer.md",
+  ".codex/agents/contracts/implementer.md",
   ".codex/agents/WORKFLOW.md",
-  ".opencode/agents/code_reviewer.md",
-  ".opencode/agents/committer.md",
-  ".opencode/agents/implementer.md",
   ".opencode/agents/orchestrator.md",
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
   ".codex/agents/reviewer-validation.ts",
-  ".codex/agents/code_reviewer.toml",
-  ".codex/agents/committer.toml",
-  ".codex/agents/implementer.toml",
   ".codex/agents/WORKFLOW.md",
   ".codex/agents/EVALS.md",
   ".codex/agents/EVAL_RESULTS.md",
 ];
-const OPENCODE_COPY_SOURCE_FILES = [
-  ".opencode/agents/implementer.md",
-  ".opencode/agents/code_reviewer.md",
-  ".opencode/agents/committer.md",
-  ".opencode/agents/orchestrator.md",
-];
+const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
+
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 const OPENCODE_DEFAULT_AGENT = "orchestrator";
+
+export function materializeAgentDefinitions(
+  sourceRoot: string,
+  codexDestination: string,
+  opencodeDestination: string,
+  manifest: readonly GeneratedAgentDefinition[] = generateDefinitionManifest({
+    policyPath: resolve(sourceRoot, ".codex/agents/model-policy.yaml"),
+    contractsDir: resolve(sourceRoot, ".codex/agents/contracts"),
+  }),
+): readonly GeneratedAgentDefinition[] {
+  for (const definition of manifest) {
+    const destination = definition.host === "codex" ? codexDestination : opencodeDestination;
+    writeFileSync(resolve(destination, definition.filename), definition.content);
+  }
+  return manifest;
+}
 
 function error(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -571,16 +583,6 @@ export function main(args: readonly string[]): number {
   }
   const opencodeAgentsTarget = resolve(target, ".opencode/agents");
   const opencodeAgentsExisting = existsSync(opencodeAgentsTarget);
-  if (opencodeAgentsExisting) {
-    for (const file of OPENCODE_COPY_SOURCE_FILES) {
-      const managedName = file.slice(".opencode/agents/".length);
-      if (existsSync(resolve(opencodeAgentsTarget, managedName))) {
-        error(
-          `Refusing to replace existing OpenCode agent definitions: ${resolve(opencodeAgentsTarget, managedName)}`,
-        );
-      }
-    }
-  }
   const opencodeConfig = findOpenCodeConfig(target);
   if (opencodeConfig !== null && hasOpenCodeWorkflowStateRegistration(opencodeConfig)) {
     error(`Refusing to replace existing OpenCode workflow_state registration: ${opencodeConfig}`);
@@ -593,6 +595,31 @@ export function main(args: readonly string[]): number {
   for (const file of REQUIRED_SOURCE_FILES) {
     if (!existsSync(resolve(projectRoot, file))) {
       error(`Required agent definition missing: ${projectRoot}/${file}`);
+    }
+  }
+  let generatedManifest: readonly GeneratedAgentDefinition[];
+  try {
+    generatedManifest = generateDefinitionManifest({
+      policyPath: resolve(projectRoot, ".codex/agents/model-policy.yaml"),
+      contractsDir: resolve(projectRoot, ".codex/agents/contracts"),
+    });
+  } catch (cause) {
+    error(
+      `Unable to materialize agent definitions: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  if (opencodeAgentsExisting) {
+    for (const definition of generatedManifest.filter((item) => item.host === "opencode")) {
+      if (existsSync(resolve(opencodeAgentsTarget, definition.filename))) {
+        error(
+          `Refusing to replace existing OpenCode agent definitions: ${resolve(opencodeAgentsTarget, definition.filename)}`,
+        );
+      }
+    }
+    if (existsSync(resolve(opencodeAgentsTarget, "orchestrator.md"))) {
+      error(
+        `Refusing to replace existing OpenCode agent definitions: ${resolve(opencodeAgentsTarget, "orchestrator.md")}`,
+      );
     }
   }
   try {
@@ -643,6 +670,12 @@ export function main(args: readonly string[]): number {
         );
       }
     }
+    materializeAgentDefinitions(
+      projectRoot,
+      agentsStaging,
+      opencodeAgentsStaging,
+      generatedManifest,
+    );
     if (reviewerPolicyOriginal === null) {
       cpSync(
         resolve(projectRoot, ".codex/reviewer-validation.json"),

@@ -13,9 +13,41 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { TOML } from "bun";
-import { commitStaged, hasWorkflowStateRegistration } from "../../../install-into.js";
+import {
+  commitStaged,
+  hasWorkflowStateRegistration,
+  materializeAgentDefinitions,
+} from "../../../install-into.js";
+import { generateDefinitionManifest } from "../../agents/generate-host-definitions.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
+
+test("materialization replaces stale worker artifacts from policy and contracts", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "materialize-agents-")));
+  const codex = join(root, "codex");
+  const opencode = join(root, "opencode");
+  mkdirSync(codex, { recursive: true });
+  mkdirSync(opencode, { recursive: true });
+  try {
+    writeFileSync(join(codex, "implementer.toml"), "stale\n");
+    writeFileSync(join(opencode, "implementer.md"), "stale\n");
+    const manifest = materializeAgentDefinitions(
+      resolve(import.meta.dir, "../../.."),
+      codex,
+      opencode,
+    );
+    for (const definition of manifest) {
+      const destination = definition.host === "codex" ? codex : opencode;
+      assert.equal(
+        readFileSync(join(destination, definition.filename), "utf8"),
+        definition.content,
+      );
+      assert.notEqual(definition.content, "stale\n");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "install-into-")));
@@ -68,6 +100,14 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
       "WORKFLOW.md",
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
+    }
+    for (const definition of generateDefinitionManifest()) {
+      const destination = definition.host === "codex" ? ".codex/agents" : ".opencode/agents";
+      assert.equal(
+        readFileSync(join(root, destination, definition.filename), "utf8"),
+        definition.content,
+        `${definition.host}/${definition.role} must be materialized from current policy`,
+      );
     }
     assert.ok(existsSync(join(root, ".codex/reviewer-validation.json")));
     const reviewerPolicy = JSON.parse(

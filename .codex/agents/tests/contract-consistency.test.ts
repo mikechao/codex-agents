@@ -4,7 +4,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   generateDefinitions,
+  loadModelPolicy,
   OPENCODE_TERMINAL_SECTION_HEADING,
+  parseModelPolicy,
+  resolveModelPolicy,
 } from "../generate-host-definitions.js";
 
 const agentsDir = resolve(import.meta.dir, "..");
@@ -20,30 +23,116 @@ for (const [path, content] of Object.entries(generateDefinitions())) {
 const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");
 
+test("the default model policy preserves the effective host assignments", () => {
+  const policy = loadModelPolicy();
+  assert.deepEqual(resolveModelPolicy(policy, "implementer", "codex"), {
+    model: "gpt-5.6-luna",
+    reasoning: "high",
+  });
+  assert.deepEqual(resolveModelPolicy(policy, "code_reviewer", "codex"), {
+    model: "gpt-5.6-sol",
+    reasoning: "medium",
+  });
+  assert.deepEqual(resolveModelPolicy(policy, "code_reviewer", "opencode"), {
+    model: "openai/gpt-5.6-luna",
+    reasoning: "high",
+  });
+});
+
+test("model aliases and host-specific reasoning resolve independently", () => {
+  const policy = parseModelPolicy(`models:
+  luna:
+    codex: codex-new
+    opencode: provider/new
+agents:
+  implementer:
+    codex:
+      model: luna
+      reasoning: low
+    opencode:
+      model: luna
+      reasoning: medium
+  code_reviewer:
+    codex:
+      model: luna
+      reasoning: low
+    opencode:
+      model: luna
+      reasoning: low
+  committer:
+    codex:
+      model: luna
+      reasoning: low
+    opencode:
+      model: luna
+      reasoning: low
+`);
+  assert.deepEqual(resolveModelPolicy(policy, "implementer", "codex"), {
+    model: "codex-new",
+    reasoning: "low",
+  });
+  assert.deepEqual(resolveModelPolicy(policy, "implementer", "opencode"), {
+    model: "provider/new",
+    reasoning: "medium",
+  });
+});
+
+test("model policy validation rejects malformed structures and unsafe values", () => {
+  const base = `models:
+  luna:
+    codex: gpt-5.6-luna
+    opencode: openai/gpt-5.6-luna
+agents:
+  implementer:
+    codex: { model: luna, reasoning: high }
+    opencode: { model: luna, reasoning: high }
+  code_reviewer:
+    codex: { model: luna, reasoning: high }
+    opencode: { model: luna, reasoning: high }
+  committer:
+    codex: { model: luna, reasoning: high }
+    opencode: { model: luna, reasoning: high }
+`;
+  assert.throws(() => parseModelPolicy("not: [valid"), /malformed YAML/);
+  assert.throws(
+    () => parseModelPolicy(base.replace("  luna:\n", "  luna:\n  luna:\n")),
+    /duplicate key models\.luna/,
+  );
+  assert.throws(
+    () => parseModelPolicy(base.replace("  committer:\n", "")),
+    /expected exactly|malformed YAML|duplicate key/,
+  );
+  assert.throws(() => parseModelPolicy(`${base}extra: true\n`), /expected exactly/);
+  assert.throws(
+    () => parseModelPolicy(base.replace("model: luna", "model: missing")),
+    /unknown model alias/,
+  );
+  assert.throws(
+    () => parseModelPolicy(base.replace("reasoning: high", "reasoning: xhigh")),
+    /reasoning must be one of/,
+  );
+  assert.throws(
+    () => parseModelPolicy(base.replace("codex: gpt-5.6-luna", "codex: bad model")),
+    /safely renderable/,
+  );
+});
+
 test("OpenCode definitions are subagents with host-native permissions", () => {
-  const expectedModels: Record<string, string> = {
-    implementer: "openai/gpt-5.6-luna",
-    code_reviewer: "openai/gpt-5.6-luna",
-    committer: "openai/gpt-5.6-luna",
-  };
-  const expectedReasoning: Record<string, string> = {
-    implementer: "high",
-    code_reviewer: "high",
-    committer: "high",
-  };
+  const policy = loadModelPolicy();
   for (const name of ["implementer.md", "code_reviewer.md", "committer.md"]) {
-    const role = name.replace(/\.md$/, "");
+    const role = name.replace(/\.md$/, "") as "implementer" | "code_reviewer" | "committer";
+    const assignment = resolveModelPolicy(policy, role, "opencode");
     const content = opencode(name);
     assert.match(content, /^---\n/, `${name} must start with YAML frontmatter`);
     assert.match(content, /^mode: subagent$/m, `${name} must be a subagent`);
     assert.match(
       content,
-      new RegExp(`^model: ${expectedModels[role]}$`, "m"),
+      new RegExp(`^model: ${assignment.model}$`, "m"),
       `${name} must pin its configured OpenCode model`,
     );
     assert.match(
       content,
-      new RegExp(`^reasoningEffort: ${expectedReasoning[role]}$`, "m"),
+      new RegExp(`^reasoningEffort: ${assignment.reasoning}$`, "m"),
       `${name} must pin its configured reasoning effort`,
     );
     assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
@@ -394,10 +483,14 @@ test("contract fragments are host-neutral and each host injects its own identity
       /"Agent: \w+ \| Model: [^"|]+\| Reasoning: \w+"/,
       `${role} Codex definition must announce the Codex model and reasoning effort`,
     );
-    const expectedModel = "openai/gpt-5.6-luna";
+    const expectedModel = resolveModelPolicy(
+      loadModelPolicy(),
+      role as "implementer" | "code_reviewer" | "committer",
+      "opencode",
+    ).model;
     assert.match(
       opencode(`${role}.md`),
-      new RegExp(`"Agent: ${role} \\| Model: ${expectedModel}"`),
+      new RegExp(`"Agent: ${role} \\| Model: ${expectedModel}(?: \\| Reasoning: \\w+)?"`),
       `${role} OpenCode definition must announce its OpenCode Go provider/model ID`,
     );
   }
