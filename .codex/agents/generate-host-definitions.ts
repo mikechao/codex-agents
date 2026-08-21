@@ -32,6 +32,17 @@ export interface GenerateOptions {
   contractsDir?: string;
   codexAgentsDir?: string;
   opencodeAgentsDir?: string;
+  codexWorkflowMcp?: CodexWorkflowMcpTransport;
+}
+
+export interface CodexWorkflowMcpTransport {
+  enabled: boolean;
+  command: string;
+  args: readonly string[];
+  startupTimeoutSec: number;
+  toolTimeoutSec: number;
+  required: boolean;
+  defaultToolsApprovalMode: string;
 }
 
 export interface GeneratedAgentDefinition {
@@ -72,6 +83,33 @@ export const CODEX_WORKFLOW_MCP_ENABLED_TOOLS = {
   code_reviewer: ["workflow_get", "workflow_begin_review", "workflow_submit_review"],
   committer: ["workflow_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
 } as const satisfies Record<RoleName, readonly string[]>;
+
+// A standalone Codex custom-agent file is parsed as a complete ConfigToml
+// before it is layered onto the parent configuration. Keep a complete,
+// disabled registration in the checked-in self-host definitions so those
+// files remain valid without enabling the repository's own server. Installer
+// materialization supplies the enabled absolute provider registration instead.
+export const SELF_HOST_CODEX_WORKFLOW_MCP: CodexWorkflowMcpTransport = {
+  enabled: false,
+  command: "sh",
+  args: [
+    "-c",
+    'export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT="$PWD"; bootstrap=$(mktemp) && trap \'rm -f "$bootstrap"\' EXIT && git show HEAD:.codex/workflow-mcp/bootstrap.ts >"$bootstrap" && bun --no-warnings "$bootstrap"; status=$?; exit "$status"',
+  ],
+  startupTimeoutSec: 10,
+  toolTimeoutSec: 30,
+  required: false,
+  defaultToolsApprovalMode: "prompt",
+};
+
+export function enabledCodexWorkflowMcp(serverPath: string): CodexWorkflowMcpTransport {
+  return {
+    ...SELF_HOST_CODEX_WORKFLOW_MCP,
+    enabled: true,
+    command: "bun",
+    args: [resolve(serverPath)],
+  };
+}
 
 // These are host serialization and behavioral boundaries, not policy values.
 const ROLES: readonly RoleSpec[] = [
@@ -366,6 +404,17 @@ function tomlEscape(value: string): string {
   return value.replace(/\\/g, "\\\\");
 }
 
+function tomlBasicString(value: string): string {
+  if (value.includes('"""'))
+    throw new Error(`transport value contains a TOML terminator: ${value}`);
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+}
+
 function injectHostIdentity(body: string, identity: string, role: RoleName): string {
   const count = body.split(HOST_IDENTITY_MARKER).length - 1;
   if (count !== 1)
@@ -379,6 +428,7 @@ function codexToml(
   spec: RoleSpec,
   assignment: { model: string; reasoning: ReasoningEffort },
   body: string,
+  transport: CodexWorkflowMcpTransport,
 ): string {
   const header = [
     `name = "${spec.name}"`,
@@ -389,6 +439,13 @@ function codexToml(
   ].join("\n");
   const workflowMcp = [
     "[mcp_servers.workflow_state]",
+    `enabled = ${transport.enabled}`,
+    `command = "${tomlBasicString(transport.command)}"`,
+    `args = [${transport.args.map((arg) => `"${tomlBasicString(arg)}"`).join(", ")}]`,
+    `startup_timeout_sec = ${transport.startupTimeoutSec}`,
+    `tool_timeout_sec = ${transport.toolTimeoutSec}`,
+    `required = ${transport.required}`,
+    `default_tools_approval_mode = "${tomlBasicString(transport.defaultToolsApprovalMode)}"`,
     `enabled_tools = [${spec.codex.workflowMcpEnabledTools.map((tool) => `"${tomlEscape(tool)}"`).join(", ")}]`,
   ].join("\n");
   const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
@@ -444,6 +501,7 @@ export function generateDefinitionManifest(
 ): GeneratedAgentDefinition[] {
   const policy = options.policy ?? loadModelPolicy(options.policyPath ?? MODEL_POLICY_PATH);
   const contractsDir = options.contractsDir ?? CONTRACTS_DIR;
+  const codexWorkflowMcp = options.codexWorkflowMcp ?? SELF_HOST_CODEX_WORKFLOW_MCP;
   const manifest: GeneratedAgentDefinition[] = [];
   for (const spec of ROLES) {
     const body = readFileSync(resolve(contractsDir, `${spec.name}.md`), "utf8").trimEnd();
@@ -455,7 +513,7 @@ export function generateDefinitionManifest(
         filename: host === "codex" ? `${spec.name}.toml` : `${spec.name}.md`,
         content:
           host === "codex"
-            ? codexToml(spec, assignment, body)
+            ? codexToml(spec, assignment, body, codexWorkflowMcp)
             : opencodeMarkdown(spec, assignment, body),
       });
     }

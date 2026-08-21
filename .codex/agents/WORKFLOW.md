@@ -18,7 +18,11 @@ and share its durable per-repository state.
 Host permission syntax differs and must not be treated as equivalent:
 
 - Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
-  implementer and committer).
+  implementer and committer). Each standalone worker definition is also a complete ConfigToml
+  layer: its `[mcp_servers.workflow_state]` table must contain exactly one valid transport (`command`
+  or `url`) in addition to the role's allowlist. Checked-in definitions carry the disabled self-host
+  bootstrap stdio registration; installer materialization carries the enabled absolute provider
+  stdio registration matching the installed parent.
 - The target Codex CLI version is `0.148.0`. Its standalone custom-agent TOML layers support an
   `[mcp_servers.<id>]` table, including `enabled_tools` as a fail-closed allowlist of MCP tool
   names. The generated worker layers therefore allow only the role's Workflow MCP tools:

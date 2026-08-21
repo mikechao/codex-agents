@@ -96,4 +96,11 @@ Do not delegate the implementation to another subagent.
 """
 
 [mcp_servers.workflow_state]
+enabled = false
+command = "sh"
+args = ["-c", "export WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT=\"$PWD\"; bootstrap=$(mktemp) && trap 'rm -f \"$bootstrap\"' EXIT && git show HEAD:.codex/workflow-mcp/bootstrap.ts >\"$bootstrap\" && bun --no-warnings \"$bootstrap\"; status=$?; exit \"$status\""]
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+required = false
+default_tools_approval_mode = "prompt"
 enabled_tools = ["workflow_get", "workflow_submit_implementation"]

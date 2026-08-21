@@ -20,6 +20,7 @@ import {
 } from "../../../install-into.js";
 import {
   CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
+  enabledCodexWorkflowMcp,
   generateDefinitionManifest,
 } from "../../agents/generate-host-definitions.js";
 
@@ -104,7 +105,12 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
-    for (const definition of generateDefinitionManifest()) {
+    const installedManifest = generateDefinitionManifest({
+      codexWorkflowMcp: enabledCodexWorkflowMcp(
+        resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
+      ),
+    });
+    for (const definition of installedManifest) {
       const destination = definition.host === "codex" ? ".codex/agents" : ".opencode/agents";
       assert.equal(
         readFileSync(join(root, destination, definition.filename), "utf8"),
@@ -112,13 +118,34 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `${definition.host}/${definition.role} must be materialized from current policy`,
       );
     }
-    for (const definition of generateDefinitionManifest().filter(
-      (candidate) => candidate.host === "codex",
-    )) {
+    for (const definition of installedManifest.filter((candidate) => candidate.host === "codex")) {
       const role = definition.role;
       const parsedDefinition = TOML.parse(definition.content) as {
-        mcp_servers: { workflow_state: { enabled_tools: unknown } };
+        mcp_servers: {
+          workflow_state: {
+            enabled: boolean;
+            command: string;
+            args: string[];
+            startup_timeout_sec: number;
+            tool_timeout_sec: number;
+            required: boolean;
+            default_tools_approval_mode: string;
+            enabled_tools: unknown;
+          };
+        };
       };
+      assert.equal(parsedDefinition.mcp_servers.workflow_state.enabled, true);
+      assert.equal(parsedDefinition.mcp_servers.workflow_state.command, "bun");
+      assert.deepEqual(parsedDefinition.mcp_servers.workflow_state.args, [
+        resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
+      ]);
+      assert.equal(parsedDefinition.mcp_servers.workflow_state.startup_timeout_sec, 10);
+      assert.equal(parsedDefinition.mcp_servers.workflow_state.tool_timeout_sec, 30);
+      assert.equal(parsedDefinition.mcp_servers.workflow_state.required, false);
+      assert.equal(
+        parsedDefinition.mcp_servers.workflow_state.default_tools_approval_mode,
+        "prompt",
+      );
       assert.deepEqual(
         parsedDefinition.mcp_servers.workflow_state.enabled_tools,
         CODEX_WORKFLOW_MCP_ENABLED_TOOLS[role],

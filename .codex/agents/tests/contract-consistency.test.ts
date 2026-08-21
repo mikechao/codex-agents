@@ -12,6 +12,7 @@ import {
   OPENCODE_TERMINAL_SECTION_HEADING,
   parseModelPolicy,
   resolveModelPolicy,
+  SELF_HOST_CODEX_WORKFLOW_MCP,
 } from "../generate-host-definitions.js";
 
 const agentsDir = resolve(import.meta.dir, "..");
@@ -34,9 +35,34 @@ test("Codex workers have exact fail-closed Workflow MCP allowlists", () => {
   for (const role of ["implementer", "code_reviewer", "committer"] as const) {
     const content = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
     const parsed = TOML.parse(content) as {
-      mcp_servers?: { workflow_state?: { enabled_tools?: unknown } };
+      mcp_servers?: {
+        workflow_state?: {
+          enabled?: unknown;
+          command?: unknown;
+          url?: unknown;
+          args?: unknown;
+          startup_timeout_sec?: unknown;
+          tool_timeout_sec?: unknown;
+          required?: unknown;
+          default_tools_approval_mode?: unknown;
+          enabled_tools?: unknown;
+        };
+      };
     };
-    const enabledTools = parsed.mcp_servers?.workflow_state?.enabled_tools;
+    const server = parsed.mcp_servers?.workflow_state;
+    assert.ok(server, `${role} must declare workflow_state`);
+    assert.equal(server.enabled, false, `${role} self-host registration must stay disabled`);
+    assert.equal(server.command, SELF_HOST_CODEX_WORKFLOW_MCP.command);
+    assert.deepEqual(server.args, SELF_HOST_CODEX_WORKFLOW_MCP.args);
+    assert.equal(server.url, undefined, `${role} must use stdio rather than URL transport`);
+    assert.equal(server.startup_timeout_sec, SELF_HOST_CODEX_WORKFLOW_MCP.startupTimeoutSec);
+    assert.equal(server.tool_timeout_sec, SELF_HOST_CODEX_WORKFLOW_MCP.toolTimeoutSec);
+    assert.equal(server.required, SELF_HOST_CODEX_WORKFLOW_MCP.required);
+    assert.equal(
+      server.default_tools_approval_mode,
+      SELF_HOST_CODEX_WORKFLOW_MCP.defaultToolsApprovalMode,
+    );
+    const enabledTools = server.enabled_tools;
     assert.deepEqual(enabledTools, CODEX_WORKFLOW_MCP_ENABLED_TOOLS[role]);
     assert.ok(Array.isArray(enabledTools) && enabledTools.length > 0);
     assert.ok(!content.includes('enabled_tools = ["*"]'));

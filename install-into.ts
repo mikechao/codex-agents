@@ -15,6 +15,7 @@ import { basename, resolve } from "node:path";
 import { spawnSync, TOML } from "bun";
 import { applyEdits, modify, type ParseError, parse as parseJsonc } from "jsonc-parser";
 import {
+  enabledCodexWorkflowMcp,
   type GeneratedAgentDefinition,
   generateDefinitionManifest,
 } from "./.codex/agents/generate-host-definitions.js";
@@ -51,16 +52,22 @@ export function materializeAgentDefinitions(
   sourceRoot: string,
   codexDestination: string,
   opencodeDestination: string,
-  manifest: readonly GeneratedAgentDefinition[] = generateDefinitionManifest({
-    policyPath: resolve(sourceRoot, ".codex/agents/model-policy.yaml"),
-    contractsDir: resolve(sourceRoot, ".codex/agents/contracts"),
-  }),
+  manifest?: readonly GeneratedAgentDefinition[],
 ): readonly GeneratedAgentDefinition[] {
-  for (const definition of manifest) {
+  const definitions =
+    manifest ??
+    generateDefinitionManifest({
+      policyPath: resolve(sourceRoot, ".codex/agents/model-policy.yaml"),
+      contractsDir: resolve(sourceRoot, ".codex/agents/contracts"),
+      codexWorkflowMcp: enabledCodexWorkflowMcp(
+        resolve(sourceRoot, ".codex/workflow-mcp/server.ts"),
+      ),
+    });
+  for (const definition of definitions) {
     const destination = definition.host === "codex" ? codexDestination : opencodeDestination;
     writeFileSync(resolve(destination, definition.filename), definition.content);
   }
-  return manifest;
+  return definitions;
 }
 
 function error(message: string): never {
@@ -598,10 +605,12 @@ export function main(args: readonly string[]): number {
     }
   }
   let generatedManifest: readonly GeneratedAgentDefinition[];
+  const serverPath = resolve(projectRoot, ".codex/workflow-mcp/server.ts");
   try {
     generatedManifest = generateDefinitionManifest({
       policyPath: resolve(projectRoot, ".codex/agents/model-policy.yaml"),
       contractsDir: resolve(projectRoot, ".codex/agents/contracts"),
+      codexWorkflowMcp: enabledCodexWorkflowMcp(serverPath),
     });
   } catch (cause) {
     error(
@@ -636,7 +645,6 @@ export function main(args: readonly string[]): number {
       `Staged config is not valid TOML; refusing to install: ${config} (${cause instanceof Error ? cause.message : String(cause)})`,
     );
   }
-  const serverPath = resolve(projectRoot, ".codex/workflow-mcp/server.ts");
   const opencodeConfigTarget = opencodeConfig ?? resolve(target, "opencode.json");
   const opencodeConfigOriginal =
     opencodeConfig === null ? null : readFileSync(opencodeConfig, "utf8");
