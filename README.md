@@ -40,6 +40,12 @@ parent may use `workflow_expand_scope` only with fresh user authorization naming
 Workflow MCP records clean/absent baselines, rejects dirty paths, and requires fresh implementation
 and review evidence after expansion.
 
+Workflow creation also accepts optional generic work-item provenance. Records preserve provider-neutral
+metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v6, survive
+restart, and flow automatically through linked follow-ups. Only parent and committer views expose this
+metadata; it is not authorization, scope, review evidence, or tracker mutation. Committers render
+authoritative items as neutral `Refs <display_ref>` lines and never infer IDs or emit completion keywords.
+
 The Workflow MCP runtime can be materialized independently from a committed revision with
 `resolveRuntimeArtifact` from `.codex/workflow-mcp/index.ts`. It returns a deterministic `runtime_id`
 and absolute Bun `runtimePath` from an external, content-addressed cache. The `runtime_id` hashes the

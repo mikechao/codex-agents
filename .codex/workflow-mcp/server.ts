@@ -154,6 +154,18 @@ const validationRequirementSchema: JsonSchema = {
   ],
 };
 
+const workItemSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    provider: { type: "string", minLength: 1, maxLength: 64 },
+    id: { type: "string", minLength: 1, maxLength: 200 },
+    display_ref: { type: "string", minLength: 1, maxLength: 200 },
+    url: { oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 2048 }] },
+  },
+  required: ["provider", "id", "display_ref"],
+  additionalProperties: false,
+};
+
 export const tools: Tool[] = [
   {
     name: "workflow_expand_scope",
@@ -202,6 +214,7 @@ export const tools: Tool[] = [
         },
         review_target: createReviewTargetSchema,
         max_repair_cycles: { type: "integer", minimum: 0, maximum: 2 },
+        work_items: { type: "array", items: workItemSchema, minItems: 0, maxItems: 50 },
       },
       [
         "workflow_type",

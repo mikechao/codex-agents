@@ -155,6 +155,14 @@ in a disposable branch or worktree when the scenario requires synthetic changes.
 
 ## Workflow-state MCP server
 
+- Generic work-item provenance: creation accepts omitted/empty, mixed-provider, custom-provider, and
+  exact-duplicate references; rejects bounds, unknown fields, whitespace/control/newline injection,
+  and invalid URLs; persists through restart; exposes items only to parent/committer; and rejects any
+  post-creation replacement across repair, scope, runtime, review, commit, and linked transitions.
+- Neutral reference rendering: with empty, repeated, and multiple display references, the committer
+  emits deterministic first-occurrence `Refs <display_ref>` lines only from its authenticated view and
+  never infers IDs or emits tracker completion keywords.
+
 - Implementation state: `DONE` requires exact agent-touched paths, acceptance/validation evidence,
   a current complete receipt, and advances to `REVIEWING`; other statuses stop with deterministic
   phases and persist their status without falsely entering review.

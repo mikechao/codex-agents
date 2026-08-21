@@ -81,6 +81,10 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "exact returned `workflow_id`",
     "implement the plan",
     "stop at `STOPPED_APPROVED`",
+    "explicit work-item metadata",
+    "work_items",
+    "do not discover identifiers externally",
+    "retranscribe them when creating linked follow-ups",
   ]) {
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
   }

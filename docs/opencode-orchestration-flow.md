@@ -35,6 +35,13 @@ immutable `approved_plan`; Orchestrator must not summarize or reconstruct it. Di
 reviewer and committer views retain least-context projections. Objective, paths, acceptance criteria,
 validation requirements, and authorized remediation/findings remain structured enforcement fields.
 
+The orchestrator passes only explicit user-approved work-item metadata to `workflow_create`; absent
+tracker metadata is represented as `work_items: []`. These generic immutable references are schema v6
+state, shown only to parent and committer, and inherited automatically by linked follow-ups. Linked
+creation never accepts retranscribed replacements or externally discovered identifiers. The committer
+renders exact authoritative display references as neutral `Refs <display_ref>` lines, with no tracker
+API calls and no `Fixes`/`Closes`/`Resolves` completion semantics.
+
 ## Identity and handoffs
 
 The authoritative server is the source of truth. Every worker handoff carries exactly these values:

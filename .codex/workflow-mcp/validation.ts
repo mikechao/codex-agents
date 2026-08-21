@@ -26,6 +26,7 @@ import type {
   ValidationStatus,
   WorkflowId,
   WorkflowVersion,
+  WorkItemReference,
 } from "./types.js";
 
 export const MAX_PATHS = 200;
@@ -64,6 +65,79 @@ export const VALIDATION_STATUSES: ReadonlySet<ValidationStatus> = new Set([
 ]);
 
 export const ROLES: readonly Role[] = ["parent", "implementer", "reviewer", "committer"];
+
+function hasWorkItemControl(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return (
+      (code >= 0 && code <= 0x1f) ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029
+    );
+  });
+}
+
+export function workItems(value: unknown): WorkItemReference[] {
+  if (!Array.isArray(value) || value.length > 50) {
+    fail("ERROR_INVALID_SHAPE", "work_items is invalid");
+  }
+  const result: WorkItemReference[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const record = exactKeys(item, ["provider", "id", "display_ref"], "work item", ["url"]);
+    for (const [name, max] of [
+      ["provider", 64],
+      ["id", 200],
+      ["display_ref", 200],
+    ] as const) {
+      const field = record[name];
+      if (
+        typeof field !== "string" ||
+        field.length === 0 ||
+        field.length > max ||
+        field.trim() !== field ||
+        hasWorkItemControl(field)
+      ) {
+        fail("ERROR_INVALID_SHAPE", `work item ${name} is invalid`);
+      }
+    }
+    let url: string | null = null;
+    const suppliedUrl = record.url ?? null;
+    if (suppliedUrl !== null) {
+      if (
+        typeof suppliedUrl !== "string" ||
+        suppliedUrl.length === 0 ||
+        suppliedUrl.length > 2048 ||
+        suppliedUrl.trim() !== suppliedUrl ||
+        hasWorkItemControl(suppliedUrl)
+      ) {
+        fail("ERROR_INVALID_SHAPE", "work item url is invalid");
+      }
+      try {
+        const parsed = new URL(suppliedUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          fail("ERROR_INVALID_SHAPE", "work item url is invalid");
+        }
+      } catch {
+        fail("ERROR_INVALID_SHAPE", "work item url is invalid");
+      }
+      url = suppliedUrl;
+    }
+    const normalized = {
+      provider: record.provider as string,
+      id: record.id as string,
+      display_ref: record.display_ref as string,
+      url,
+    };
+    const key = canonicalJson(normalized);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(normalized);
+    }
+  }
+  return result;
+}
 
 export function boundedString(value: unknown, name: string, max = MAX_TEXT): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) {

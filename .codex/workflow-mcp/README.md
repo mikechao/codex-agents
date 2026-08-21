@@ -3,6 +3,16 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
+Workflow state schema v6 optionally persists generic immutable `work_items` provenance. Each
+provider-neutral record has `provider`, `id`, exact `display_ref`, and nullable absolute HTTP(S) `url`.
+The field survives restart and is inherited by linked follow-ups; parent and committer views expose it,
+while implementer and reviewer views omit it. It cannot broaden scope, criteria, remediation, receipts,
+review, or commit authorization. Schema v5 state requires a clean reset rather than implicit migration.
+
+Managed commits use only authoritative committer-view provenance: one neutral `Refs <display_ref>`
+line per distinct display reference, preserving exact text and first occurrence. Empty provenance emits
+no lines; there is no tracker discovery/API call and no `Fixes`, `Closes`, or `Resolves` inference.
+
 Run it through the project-scoped `.codex/config.toml` (Codex) or the `workflow_state` local MCP
 registration that `install-into.ts` writes into the project's `opencode.json`/`opencode.jsonc`
 (OpenCode), or directly:

@@ -224,6 +224,22 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
 });
 
+test("committer references are authoritative, neutral, and non-closing", () => {
+  const contract = readFileSync(resolve(import.meta.dir, "../contracts/committer.md"), "utf8");
+  for (const phrase of [
+    "sole authoritative source of work-item references",
+    "Refs <display_ref>",
+    "preserving its exact spelling",
+    "Emit no reference",
+    "infer references from prompts",
+    "Fixes`, `Closes`, `Resolves",
+    "Do not add a runtime commit-message formatter",
+    "tracker API",
+  ]) {
+    assert.ok(contract.includes(phrase), `committer contract must include: ${phrase}`);
+  }
+});
+
 test("implementer may edit but never stages, commits, or rewrites history", () => {
   const content = opencode("implementer.md");
   assert.match(content, /^  edit: allow$/m, "implementer must be able to edit the approved scope");

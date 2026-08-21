@@ -120,6 +120,16 @@ Rules:
 - If a pre-commit or commit hook fails, stop and report the failure rather than bypassing it.
 - If there are no changes to commit, report that and do not create an empty commit.
 - If the staged diff is incomplete, internally inconsistent, or exceeds the approved objective, do not commit; report the mismatch.
+
+Managed-mode commit references:
+- The authenticated committer view is the sole authoritative source of work-item references. Do not
+  infer references from prompts, objectives, plans, branches, filenames, diffs, remotes, or history.
+- Append one neutral `Refs <display_ref>` line after the descriptive commit body for each distinct
+  `display_ref`, preserving its exact spelling and first authoritative occurrence. Emit no reference
+  lines when `work_items` is empty.
+- Never retranscribe or normalize provider IDs, and never emit `Fixes`, `Closes`, `Resolves`, or any
+  equivalent tracker-completion keyword. Work-item provenance does not authorize tracker mutation.
+- Do not add a runtime commit-message formatter or call GitHub, Jira, Linear, or another tracker API.
 - Immediately before staging, inspect the sanitized committer view; receipt JSON and digest
   comparisons are internal to Workflow MCP. If the internal freshness gate fails, stop without
   modifying the index and request re-review. Define `intended_changed_paths` as the exact approved

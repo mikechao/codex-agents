@@ -31,6 +31,7 @@ import type {
   WorkflowState,
   WorkflowType,
   WorkflowVersion,
+  WorkItemReference,
 } from "./types.js";
 import {
   ACCEPTANCE_STATUSES,
@@ -60,6 +61,7 @@ import {
   stringList,
   userAuthorization,
   VALIDATION_STATUSES,
+  workItems,
 } from "./validation.js";
 
 export const SCHEMA_VERSION = CURRENT_STATE_SCHEMA_VERSION;
@@ -132,7 +134,7 @@ export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set(
   "PATH_MISMATCH",
 ]);
 
-const V5_STATE_KEYS: readonly string[] = [
+const V6_STATE_KEYS: readonly string[] = [
   "schema_version",
   "version",
   "workflow_id",
@@ -142,6 +144,7 @@ const V5_STATE_KEYS: readonly string[] = [
   "phase",
   "objective",
   "approved_plan",
+  "work_items",
   "base_head",
   "approved_paths",
   "scope_expansions",
@@ -263,6 +266,7 @@ const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly
     "recovery_context",
   ],
   committer: [
+    "work_items",
     "acceptance_criteria",
     "validation_requirements",
     "dirty_baseline_paths",
@@ -455,6 +459,7 @@ interface BaseStateOptions {
   remediationContext?: RemediationContext | null;
   linkedContinuation?: LinkedContinuation | null;
   supersededByWorkflowId?: WorkflowId | null;
+  workItems?: WorkItemReference[];
 }
 
 function baseState({
@@ -470,6 +475,7 @@ function baseState({
   remediationContext = null,
   linkedContinuation = null,
   supersededByWorkflowId = null,
+  workItems: inheritedWorkItems = [],
 }: BaseStateOptions): WorkflowState {
   return {
     schema_version: SCHEMA_VERSION,
@@ -481,6 +487,7 @@ function baseState({
     phase: workflowType === "review_only" ? "REVIEWING" : "IMPLEMENTING",
     objective,
     approved_plan: approvedPlan,
+    work_items: clone(inheritedWorkItems),
     base_head: baseHead,
     approved_paths: approvedPaths,
     scope_expansions: [],
@@ -638,6 +645,7 @@ export function createState(
         "parent_workflow_id",
         100,
       ) as WorkflowId | null, // brand cast; documented
+      workItems: [],
     });
   }
   const args = exactKeys(
@@ -653,7 +661,7 @@ export function createState(
       "max_repair_cycles",
     ],
     "workflow create",
-    ["max_repair_cycles"],
+    ["max_repair_cycles", "work_items"],
   );
   if (args.workflow_type !== "change" && args.workflow_type !== "review_only") {
     fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "workflow type is not supported");
@@ -676,6 +684,7 @@ export function createState(
     baseHead: target.base_revision,
     maxRepairCycles,
     workflowType: args.workflow_type,
+    workItems: workItems(args.work_items ?? []),
   });
   state.acceptance_criteria = contractList(
     args.acceptance_criteria,
@@ -1411,6 +1420,7 @@ export interface LinkedFollowupPlan {
   root_workflow_id: WorkflowId;
   lineage_workflow_ids: WorkflowId[];
   review_stage: "remediation";
+  work_items: WorkItemReference[];
 }
 
 export function linkedFollowupInput(
@@ -1486,6 +1496,7 @@ export function linkedFollowupInput(
     root_workflow_id: root,
     lineage_workflow_ids: lineage,
     review_stage: "remediation",
+    work_items: clone(state.work_items),
   };
 }
 
@@ -1508,6 +1519,7 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
       review_stage: followup.review_stage,
       remediation_review_receipt: null,
     },
+    workItems: followup.work_items,
     remediationContext: {
       policy: "explicitly_authorized",
       authorized_finding_ids: followup.authorized_finding_ids,
@@ -1655,6 +1667,15 @@ function stringArrayShape(value: unknown, maxItems: number, maxLength: number): 
   if (!Array.isArray(value) || value.length > maxItems) corrupt();
   for (const item of value) {
     if (typeof item !== "string" || item.length === 0 || item.length > maxLength) corrupt();
+  }
+}
+
+function workItemsShape(value: unknown): void {
+  try {
+    const parsed = workItems(value);
+    if (canonicalJson(parsed) !== canonicalJson(value)) corrupt();
+  } catch {
+    corrupt();
   }
 }
 
@@ -2060,12 +2081,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v5 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v6 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV5(value: unknown): WorkflowState {
+export function validateWorkflowStateV6(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V5_STATE_KEYS].sort();
+  const required = [...V6_STATE_KEYS].sort();
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -2080,6 +2101,7 @@ export function validateWorkflowStateV5(value: unknown): WorkflowState {
   if (typeof value.phase !== "string" || !PHASES.includes(value.phase as WorkflowPhase)) corrupt();
   bounded(value.objective, MAX_TEXT);
   if (value.approved_plan !== null) bounded(value.approved_plan, MAX_APPROVED_PLAN);
+  workItemsShape(value.work_items);
   sha40(value.base_head);
   pathList(value.approved_paths, false);
   scopeExpansionShape(value.scope_expansions);
@@ -2293,8 +2315,11 @@ export function validateWorkflowStateV5(value: unknown): WorkflowState {
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
 
-/** @deprecated retained for source compatibility; persisted state is schema v5 only. */
-export const validateWorkflowStateV4 = validateWorkflowStateV5;
+/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
+export const validateWorkflowStateV5 = validateWorkflowStateV6;
 
-/** @deprecated retained for source compatibility; persisted state is schema v5 only. */
+/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
+export const validateWorkflowStateV4 = validateWorkflowStateV6;
+
+/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
 export const validateWorkflowStateV3 = validateWorkflowStateV4;

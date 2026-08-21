@@ -47,7 +47,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV5,
+  validateWorkflowStateV6,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -201,6 +201,12 @@ function changedFields(before: WorkflowState | null, after: WorkflowState): stri
 function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState): void {
   if (before.approved_plan !== after.approved_plan) {
     fail("ERROR_INVALID_TRANSITION", "approved plan is immutable");
+  }
+}
+
+function assertWorkItemsUnchanged(before: WorkflowState, after: WorkflowState): void {
+  if (canonicalJson(before.work_items) !== canonicalJson(after.work_items)) {
+    fail("ERROR_INVALID_TRANSITION", "work-item provenance is immutable");
   }
 }
 
@@ -358,7 +364,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV5(parsed);
+  return validateWorkflowStateV6(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -669,8 +675,9 @@ export class WorkflowStore {
           version: (row.version + 1) as WorkflowVersion,
         };
         assertApprovedPlanUnchanged(state, next);
+        assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV5(next);
+        validateWorkflowStateV6(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -759,6 +766,7 @@ export class WorkflowStore {
         const current = parseState(row);
         const next = action(current);
         assertApprovedPlanUnchanged(current, next);
+        assertWorkItemsUnchanged(current, next);
         const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
         if (resolvedEventType === "SCOPE_EXPANDED") {
           if (
@@ -785,7 +793,7 @@ export class WorkflowStore {
         }
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
-        validateWorkflowStateV5(next);
+        validateWorkflowStateV6(next);
         const now = isoNow();
         const result = this.db
           .prepare(
@@ -1150,7 +1158,7 @@ export class WorkflowStore {
           fail("ERROR_STALE_BASE", "scope base is stale");
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV5(childState);
+        validateWorkflowStateV6(childState);
         const childCapabilities: RoleCapabilities = {
           parent: issueCapability(),
           implementer: issueCapability(),
@@ -1186,7 +1194,8 @@ export class WorkflowStore {
           superseded_by_workflow_id: childId,
           version: (expectedVersionNumber + 1) as WorkflowVersion,
         };
-        validateWorkflowStateV5(next);
+        assertWorkItemsUnchanged(state, next);
+        validateWorkflowStateV6(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",

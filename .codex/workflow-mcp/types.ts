@@ -27,6 +27,13 @@ export type CapabilityHash = Brand<string, "CapabilityHash">;
 export type IsoTimestamp = Brand<string, "IsoTimestamp">;
 export type CommitAttemptId = Brand<string, "CommitAttemptId">;
 
+export interface WorkItemReference {
+  provider: string;
+  id: string;
+  display_ref: string;
+  url: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // 3. Core unions
 // ---------------------------------------------------------------------------
@@ -306,7 +313,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 5;
+  schema_version: 6;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -316,6 +323,7 @@ export interface WorkflowState {
   phase: WorkflowPhase;
   objective: string;
   approved_plan: string | null;
+  work_items: WorkItemReference[];
   base_head: GitCommitSha;
   approved_paths: ExactRepoPath[];
   scope_expansions: ScopeExpansion[];
@@ -397,7 +405,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 5;
+  schema_version: 6;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -519,6 +527,7 @@ export type ReviewerView = Omit<ReviewerViewBase, "workflow_type"> &
   (({ workflow_type: "change" } & ImplementerHandoffView) | { workflow_type: "review_only" });
 
 export interface CommitterView extends RoleViewCommon {
+  work_items: WorkItemReference[];
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   dirty_baseline_paths: ExactRepoPath[];

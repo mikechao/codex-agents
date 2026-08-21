@@ -169,6 +169,18 @@ stops and reports the mismatch without creating the workflow. It never edits the
 reviewer validations, silently drops required checks, or claims an unavailable executable check
 passed manually. A missing or malformed policy is a stop condition rather than a reason to guess.
 
+### Generic work-item provenance
+
+Workflow creation may include optional `work_items` records with provider-neutral `provider`, `id`,
+exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v6 state,
+survives restart, is visible only to parent and committer views, and is inherited by linked follow-ups
+without caller retranscription. It is separate from scope, criteria, remediation, receipts, review,
+and commit authorization. Schema v5 databases require a clean reset rather than backfill.
+
+The committer renders only authoritative items as one neutral `Refs <display_ref>` line per distinct
+display reference, preserving first occurrence and exact text. Empty provenance emits no lines; no
+tracker API is called and no completion keyword is inferred.
+
 ### Commit flow
 
 A commit is authorized only for an approved working-tree workflow with a fresh internal review

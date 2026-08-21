@@ -436,6 +436,7 @@ test("exact create tool schema matches the normative contract", () => {
     "objective",
     "review_target",
     "validation_requirements",
+    "work_items",
     "workflow_type",
   ]);
   assert.deepEqual(inputSchema.required, [
@@ -465,6 +466,11 @@ test("exact create tool schema matches the normative contract", () => {
   assert.equal(structuredValidation.properties.argv.oneOf[0].type, "null");
   assert.equal(inputSchema.properties.max_repair_cycles.minimum, 0);
   assert.equal(inputSchema.properties.max_repair_cycles.maximum, 2);
+  const workItem = inputSchema.properties.work_items;
+  assert.equal(workItem.minItems, 0);
+  assert.equal(workItem.maxItems, 50);
+  assert.deepEqual(workItem.items.required, ["provider", "id", "display_ref"]);
+  assert.equal(workItem.items.additionalProperties, false);
   const target = inputSchema.properties.review_target;
   assert.deepEqual(target.oneOf.map((entry: any) => entry.properties.review_mode.enum[0]).sort(), [
     "commit_range",

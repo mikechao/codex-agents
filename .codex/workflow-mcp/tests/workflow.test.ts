@@ -302,6 +302,7 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
     workflow_type: options.workflow_type ?? "change",
     objective: options.objective ?? "test workflow",
     approved_plan: options.approved_plan ?? null,
+    ...(options.work_items === undefined ? {} : { work_items: options.work_items }),
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
     validation_requirements: options.validation_requirements ?? ["validation A"],
@@ -382,6 +383,51 @@ function create(store: any, root: string, git: (...args: string[]) => string, op
   store.__legacyVersionOffsets[result.workflow.workflow_id] = 0;
   return result;
 }
+
+test("work-item provenance is normalized, persisted, and least-authority projected", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "work-items.sqlite");
+  const item = {
+    provider: "custom-tracker",
+    id: "abc-7",
+    display_ref: "ABC-7",
+    url: "https://tracker.example/items/abc-7",
+  };
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    const created = create(store, root, git, { work_items: [item, item] });
+    const id = created.workflow.workflow_id;
+    assert.deepEqual(created.workflow.work_items, [item]);
+    assert.deepEqual(store.get(id, "committer", created.capabilities.committer).work_items, [item]);
+    assert.equal(
+      "work_items" in store.get(id, "implementer", created.capabilities.implementer),
+      false,
+    );
+    assert.equal("work_items" in store.get(id, "reviewer", created.capabilities.reviewer), false);
+    store.close();
+    const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+    assert.deepEqual(reopened.get(id, "parent", created.capabilities.parent).work_items, [item]);
+    reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("work-item URL omission normalizes to null", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = create(store, root, git, {
+      work_items: [{ provider: "custom", id: "7", display_ref: "C-7" }],
+    });
+    assert.deepEqual(created.workflow.work_items, [
+      { provider: "custom", id: "7", display_ref: "C-7", url: null },
+    ]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("store database runs in Bun SQLite strict mode for named bindings", () => {
   const { root } = fixture();
@@ -1594,7 +1640,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
     });
     const created = create(store, root, git, { objective: "v2 state" });
     const workflow = created.workflow;
-    assert.equal(workflow.schema_version, 5);
+    assert.equal(workflow.schema_version, 6);
     assert.equal(workflow.version, 0);
     assert.equal(workflow.workflow_type, "change");
     assert.equal(workflow.phase, "IMPLEMENTING");
@@ -2354,7 +2400,7 @@ test("restart persists execution contracts and review target", () => {
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const persisted = reopened.get(id, "parent", capabilities.parent);
-    assert.equal(persisted.schema_version, 5);
+    assert.equal(persisted.schema_version, 6);
     assert.equal(persisted.version, 0);
     assert.equal(persisted.phase, "IMPLEMENTING");
     assert.equal(persisted.objective, "restart contract");
@@ -2397,6 +2443,7 @@ const PARENT_EXTRA_KEYS = [
   "runtime_id",
   "runtime_revision",
   "approved_plan",
+  "work_items",
   "base_head",
   "scope_expansions",
   "approved_path_baselines",
@@ -2466,6 +2513,7 @@ const REVIEWER_EXTRA_KEYS = [
   "recovery_context",
 ];
 const COMMITTER_EXTRA_KEYS = [
+  "work_items",
   "acceptance_criteria",
   "validation_requirements",
   "dirty_baseline_paths",
