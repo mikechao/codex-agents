@@ -46,6 +46,7 @@ export const OPENCODE_TERMINAL_SECTION_HEADING = "## Required terminal response 
 
 interface CodexMetadata {
   sandboxMode: string;
+  workflowMcpEnabledTools: readonly string[];
 }
 
 interface OpenCodeMetadata {
@@ -62,13 +63,26 @@ interface RoleSpec {
   opencode: OpenCodeMetadata;
 }
 
+// Codex custom-agent layers use the MCP server's enabled_tools allowlist as a
+// fail-closed boundary. Keep this mapping in typed host metadata rather than
+// in model-policy.yaml, which is intentionally limited to model assignments
+// and reasoning effort.
+export const CODEX_WORKFLOW_MCP_ENABLED_TOOLS = {
+  implementer: ["workflow_get", "workflow_submit_implementation"],
+  code_reviewer: ["workflow_get", "workflow_begin_review", "workflow_submit_review"],
+  committer: ["workflow_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
+} as const satisfies Record<RoleName, readonly string[]>;
+
 // These are host serialization and behavioral boundaries, not policy values.
 const ROLES: readonly RoleSpec[] = [
   {
     name: "implementer",
     description:
       "Executes an approved implementation plan, validates the changes, and reports the results.",
-    codex: { sandboxMode: "workspace-write" },
+    codex: {
+      sandboxMode: "workspace-write",
+      workflowMcpEnabledTools: CODEX_WORKFLOW_MCP_ENABLED_TOOLS.implementer,
+    },
     opencode: {
       description:
         "Executes an approved implementation plan, validates the changes, and reports the results.",
@@ -117,7 +131,10 @@ const ROLES: readonly RoleSpec[] = [
   {
     name: "code_reviewer",
     description: "Performs an independent, read-only review of an approved implementation diff.",
-    codex: { sandboxMode: "read-only" },
+    codex: {
+      sandboxMode: "read-only",
+      workflowMcpEnabledTools: CODEX_WORKFLOW_MCP_ENABLED_TOOLS.code_reviewer,
+    },
     opencode: {
       description: "Performs an independent, read-only review of an approved implementation diff.",
       permission: [
@@ -151,7 +168,10 @@ const ROLES: readonly RoleSpec[] = [
     name: "committer",
     description:
       "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
-    codex: { sandboxMode: "workspace-write" },
+    codex: {
+      sandboxMode: "workspace-write",
+      workflowMcpEnabledTools: CODEX_WORKFLOW_MCP_ENABLED_TOOLS.committer,
+    },
     opencode: {
       description:
         "Stages relevant project changes, generates an accurate commit message, and creates a Git commit.",
@@ -367,8 +387,12 @@ function codexToml(
     `model_reasoning_effort = "${assignment.reasoning}"`,
     `sandbox_mode = "${spec.codex.sandboxMode}"`,
   ].join("\n");
+  const workflowMcp = [
+    "[mcp_servers.workflow_state]",
+    `enabled_tools = [${spec.codex.workflowMcpEnabledTools.map((tool) => `"${tomlEscape(tool)}"`).join(", ")}]`,
+  ].join("\n");
   const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
-  return `${header}\n\ndeveloper_instructions = """\n${tomlEscape(injectHostIdentity(body, identity, spec.name))}\n"""\n`;
+  return `${header}\n\ndeveloper_instructions = """\n${tomlEscape(injectHostIdentity(body, identity, spec.name))}\n"""\n\n${workflowMcp}\n`;
 }
 
 function opencodeMarkdown(

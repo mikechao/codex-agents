@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { TOML } from "bun";
 import {
+  CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
   generateDefinitions,
   loadModelPolicy,
   OPENCODE_TERMINAL_SECTION_HEADING,
@@ -21,6 +23,43 @@ for (const [path, content] of Object.entries(generateDefinitions())) {
     assert.equal(readFileSync(path, "utf8"), content);
   });
 }
+
+test("Codex workers have exact fail-closed Workflow MCP allowlists", () => {
+  const parentOnlyTools = [
+    "workflow_create",
+    "workflow_get_audit",
+    "workflow_expand_scope",
+    "workflow_authorize_commit",
+  ];
+  for (const role of ["implementer", "code_reviewer", "committer"] as const) {
+    const content = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
+    const parsed = TOML.parse(content) as {
+      mcp_servers?: { workflow_state?: { enabled_tools?: unknown } };
+    };
+    const enabledTools = parsed.mcp_servers?.workflow_state?.enabled_tools;
+    assert.deepEqual(enabledTools, CODEX_WORKFLOW_MCP_ENABLED_TOOLS[role]);
+    assert.ok(Array.isArray(enabledTools) && enabledTools.length > 0);
+    assert.ok(!content.includes('enabled_tools = ["*"]'));
+    for (const tool of parentOnlyTools) assert.ok(!enabledTools.includes(tool));
+    for (const otherRole of ["implementer", "code_reviewer", "committer"] as const) {
+      for (const tool of CODEX_WORKFLOW_MCP_ENABLED_TOOLS[otherRole]) {
+        if (!(CODEX_WORKFLOW_MCP_ENABLED_TOOLS[role] as readonly string[]).includes(tool)) {
+          assert.ok(!enabledTools.includes(tool), `${role} must exclude ${tool}`);
+        }
+      }
+    }
+  }
+});
+
+test("Workflow MCP isolation stays in typed host metadata, not model policy", () => {
+  const policy = readFileSync(resolve(agentsDir, "model-policy.yaml"), "utf8");
+  assert.doesNotMatch(policy, /enabled_tools|workflow_state|workflow_submit/u);
+  for (const role of ["implementer", "code_reviewer", "committer"] as const) {
+    const content = readFileSync(resolve(agentsDir, `${role}.toml`), "utf8");
+    assert.doesNotMatch(content, /workflow_state_workflow_/u);
+    assert.match(content, /\[mcp_servers\.workflow_state\]/u);
+  }
+});
 
 const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");

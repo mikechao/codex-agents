@@ -94,3 +94,6 @@ Do not restate the authoritative view's state in your report when MCP is availab
 Do the implementation yourself.
 Do not delegate the implementation to another subagent.
 """
+
+[mcp_servers.workflow_state]
+enabled_tools = ["workflow_get", "workflow_submit_implementation"]

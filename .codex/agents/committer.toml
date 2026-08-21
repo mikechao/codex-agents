@@ -140,3 +140,6 @@ Git result manually; do not restate the authoritative view's state when MCP is a
 Do the commit work yourself.
 Do not delegate this task to another subagent.
 """
+
+[mcp_servers.workflow_state]
+enabled_tools = ["workflow_get", "workflow_prepare_commit", "workflow_submit_commit_result"]

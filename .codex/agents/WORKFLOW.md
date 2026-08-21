@@ -19,6 +19,15 @@ Host permission syntax differs and must not be treated as equivalent:
 
 - Codex uses filesystem `sandbox_mode` (`read-only` for the reviewer, `workspace-write` for the
   implementer and committer).
+- The target Codex CLI version is `0.148.0`. Its standalone custom-agent TOML layers support an
+  `[mcp_servers.<id>]` table, including `enabled_tools` as a fail-closed allowlist of MCP tool
+  names. The generated worker layers therefore allow only the role's Workflow MCP tools:
+  implementer (`workflow_get`, `workflow_submit_implementation`), code reviewer
+  (`workflow_get`, `workflow_begin_review`, `workflow_submit_review`), and committer
+  (`workflow_get`, `workflow_prepare_commit`, `workflow_submit_commit_result`). The parent
+  registration remains unrestricted; this repository's own `.codex/config.toml` keeps its agent
+  and Workflow MCP registrations disabled. Automated checks verify the serialized configuration,
+  not Codex runtime enforcement.
 - OpenCode has no filesystem sandbox. The reviewer gets `edit: deny` plus a narrow bash allowlist
   (status/diff/log/show/rev-parse/git grep, the receipt command, and the project-owned
   `.codex/agents/reviewer-validation.ts` runner); the committer gets `edit: deny` and a
@@ -218,6 +227,29 @@ does not inject tools into an already-running host. Before reload, fail closed a
 whether prompt-only degraded mode is authorized; after reload, MCP is authoritative only when the
 tools and instructions are visible. The config's `default_tools_approval_mode = "prompt"` keeps
 workflow tool calls approval-sensitive in the host.
+
+### Separate Codex runtime smoke gate
+
+This is a disposable, manual gate for Codex CLI `0.148.0`, not a step in the OpenCode
+implementation workflow. It is required before claiming that issue #28 is unblocked:
+
+1. Make a disposable copy of the repository, verify it is clean, and use a disposable Workflow
+   MCP state location. Do not run this against an active workflow or production state.
+2. Start Codex in that copy, reload the project configuration, and spawn each configured custom
+   worker (`implementer`, `code_reviewer`, and `committer`) one at a time. Capture the actual
+   Workflow MCP tool list shown to each worker during initialization or its MCP inspection command.
+3. For each worker, perform one representative permitted operation in a disposable workflow. Then
+   attempt a cross-role operation (for example, implementer -> `workflow_submit_review`) and a
+   parent-only operation (for example, `workflow_create` or `workflow_get_audit`). Each forbidden
+   operation must be absent from the worker's exposed tool surface or fail closed; record the
+   observed result and the Codex version.
+4. Confirm the parent session still exposes the unrestricted Workflow MCP registration and that
+   the repository's self-host configuration remains disabled. Preserve the transcript or screenshots
+   as external evidence; do not claim success from the generated TOML alone.
+
+If any worker exposes an unexpected tool or a forbidden call succeeds, record **#28 remains
+blocked** with the observed Codex limitation. Record **#28 prerequisite satisfied** only after all
+three worker surfaces and representative denial attempts pass.
 
 ## Review/fix/re-review transition
 

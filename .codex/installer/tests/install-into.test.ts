@@ -18,7 +18,10 @@ import {
   hasWorkflowStateRegistration,
   materializeAgentDefinitions,
 } from "../../../install-into.js";
-import { generateDefinitionManifest } from "../../agents/generate-host-definitions.js";
+import {
+  CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
+  generateDefinitionManifest,
+} from "../../agents/generate-host-definitions.js";
 
 const installer = resolve(import.meta.dir, "../../../install-into.ts");
 
@@ -109,6 +112,19 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `${definition.host}/${definition.role} must be materialized from current policy`,
       );
     }
+    for (const definition of generateDefinitionManifest().filter(
+      (candidate) => candidate.host === "codex",
+    )) {
+      const role = definition.role;
+      const parsedDefinition = TOML.parse(definition.content) as {
+        mcp_servers: { workflow_state: { enabled_tools: unknown } };
+      };
+      assert.deepEqual(
+        parsedDefinition.mcp_servers.workflow_state.enabled_tools,
+        CODEX_WORKFLOW_MCP_ENABLED_TOOLS[role],
+        `${role} Codex allowlist must survive materialization`,
+      );
+    }
     assert.ok(existsSync(join(root, ".codex/reviewer-validation.json")));
     const reviewerPolicy = JSON.parse(
       readFileSync(join(root, ".codex/reviewer-validation.json"), "utf8"),
@@ -142,6 +158,18 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     assert.deepEqual(parsed.mcp_servers.workflow_state.args, [
       resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
     ]);
+    assert.ok(
+      !Object.hasOwn(parsed.mcp_servers.workflow_state, "enabled_tools"),
+      "the parent Workflow MCP registration must remain unrestricted",
+    );
+    const selfHostedConfig = TOML.parse(
+      readFileSync(resolve(import.meta.dir, "../../config.toml"), "utf8"),
+    ) as {
+      agents: { enabled: boolean };
+      mcp_servers: { workflow_state: { enabled: boolean } };
+    };
+    assert.equal(selfHostedConfig.agents.enabled, false);
+    assert.equal(selfHostedConfig.mcp_servers.workflow_state.enabled, false);
     assert.ok(!existsSync(join(root, ".codex/.agents.install.")));
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
   } finally {

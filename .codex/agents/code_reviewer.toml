@@ -163,3 +163,6 @@ documented in WORKFLOW.md; do not restate the authoritative view's state when MC
 
 Do the review yourself. Do not modify the repository or authorize a commit.
 """
+
+[mcp_servers.workflow_state]
+enabled_tools = ["workflow_get", "workflow_begin_review", "workflow_submit_review"]
