@@ -364,14 +364,24 @@ test("range review to linked change and approval over STDIO", async () => {
       implementInput(child.workflow_id, childCaps, 0, {
         summary: "linked child implemented",
         implementation_receipt: receipt(["note.txt"]),
+        finding_resolution_map: { "RANGE-OPT-1": "resolved" },
       }),
     );
     assert.equal(implemented.phase, "REVIEWING");
 
     writeFileSync(join(root, "note.txt"), "child after\n");
-    const childApproved = await call(
+    const remediationApproved = await call(
       "workflow_submit_review",
       reviewInput(child.workflow_id, childCaps, 1, {
+        review_receipt: receipt(["note.txt"]),
+        review_target: workingTarget(child.base_head, ["note.txt"]),
+        prior_finding_classifications: { "RANGE-OPT-1": "resolved" },
+      }),
+    );
+    assert.equal(remediationApproved.phase, "REVIEWING");
+    const childApproved = await call(
+      "workflow_submit_review",
+      reviewInput(child.workflow_id, childCaps, 2, {
         review_receipt: receipt(["note.txt"]),
         review_target: workingTarget(child.base_head, ["note.txt"]),
       }),
@@ -381,7 +391,7 @@ test("range review to linked change and approval over STDIO", async () => {
     const childAuthorized = await call("workflow_authorize_commit", {
       workflow_id: child.workflow_id,
       capability: childCaps.parent,
-      expected_version: 2,
+      expected_version: 3,
       user_authorization: "protocol v2 child commit authorization",
     });
     assert.equal(childAuthorized.phase, "COMMIT_AUTHORIZED");

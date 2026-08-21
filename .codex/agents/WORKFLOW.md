@@ -240,6 +240,11 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
 An `APPROVED` review is therefore the automatic stopping point. The repair-cycle allowance is a
 safety limit, not permission to pursue every possible improvement.
 
+Linked follow-ups are an explicit two-stage exception: the child keeps a narrow mutation allowlist
+for authorized remediation, then requires a fresh independent combined review over the inherited
+logical-change scope before commit eligibility. The source is superseded atomically so only the
+active linked leaf can eventually authorize and prepare a commit.
+
 ## Prompt-only degraded mode
 
 Use this mode only when the user explicitly authorizes it for a stopped, non-trivial workflow. The

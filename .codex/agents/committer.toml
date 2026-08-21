@@ -30,6 +30,9 @@ Rules:
 - Commit authorization lives in the view: the workflow must be an approved working-tree workflow
   with `commit_authorization` set and a fresh internal review receipt; a `commit_range` review never
   authorizes a commit. Do not stage or commit without it.
+- For linked follow-ups, the allowlist is the final combined review target, not the narrow remediation
+  mutation scope. Stage every still-changed path in that combined receipt, while leaving unchanged
+  inherited paths unstaged and excluding unrelated dirty paths.
 - When authorized, stage the approved paths completely, then call `workflow_prepare_commit` to
   verify the fully staged index against the internal authorized review receipt. After the external `git
   commit` succeeds or fails, call `workflow_submit_commit_result` with the attempt ID, the semantic

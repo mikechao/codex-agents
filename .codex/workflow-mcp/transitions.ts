@@ -16,6 +16,7 @@ import type {
   FindingSeverity,
   GitCommitSha,
   ImplementerView,
+  LinkedContinuation,
   ParentView,
   RemediationContext,
   ReviewerView,
@@ -131,7 +132,7 @@ export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set(
   "PATH_MISMATCH",
 ]);
 
-const V4_STATE_KEYS: readonly string[] = [
+const V5_STATE_KEYS: readonly string[] = [
   "schema_version",
   "version",
   "workflow_id",
@@ -155,6 +156,8 @@ const V4_STATE_KEYS: readonly string[] = [
   "max_repair_cycles",
   "parent_workflow_id",
   "source_workflow_id",
+  "superseded_by_workflow_id",
+  "linked_continuation",
   "linked_findings",
   "remediation_context",
   "implementation_summary",
@@ -198,6 +201,8 @@ const ROLE_VIEW_COMMON: readonly string[] = [
   "repair_cycle",
   "max_repair_cycles",
   "review_target",
+  "superseded_by_workflow_id",
+  "linked_continuation",
 ];
 
 const REVIEWER_IMPLEMENTER_HANDOFF: readonly string[] = [
@@ -239,6 +244,7 @@ const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly
     "acceptance_criteria",
     "validation_requirements",
     "dirty_baseline_paths",
+    "linked_findings",
     "implementation_summary",
     "implementation_status",
     "implementation_receipt",
@@ -357,6 +363,12 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
           : false,
     );
   }
+  if (actorRole === "parent" && state.superseded_by_workflow_id) {
+    actions = actions.filter(
+      (action) =>
+        action !== "workflow_authorize_commit" && action !== "workflow_create_linked_followup",
+    );
+  }
   return actions.sort();
 }
 
@@ -369,7 +381,20 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
   const view: Record<string, unknown> = {};
   const raw = state as unknown as Record<string, unknown>;
   for (const key of ROLE_VIEW_COMMON) {
-    if (key in raw) view[key] = clone(raw[key]);
+    if (key in raw) {
+      if (
+        (key === "superseded_by_workflow_id" || key === "linked_continuation") &&
+        raw[key] === null
+      ) {
+        continue;
+      }
+      if (key === "linked_continuation" && raw[key] !== null) {
+        const continuation = raw[key] as LinkedContinuation;
+        view[key] = { ...clone(continuation), remediation_review_receipt: null };
+      } else {
+        view[key] = clone(raw[key]);
+      }
+    }
   }
   view.permitted_next_actions = permittedNextActions(state, actorRole);
   if (actorRole === "parent") {
@@ -396,6 +421,12 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
         ? ROLE_VIEW_EXTRA[actorRole].filter((key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key))
         : ROLE_VIEW_EXTRA[actorRole];
     for (const key of extra) {
+      if (
+        key === "linked_findings" &&
+        actorRole === "reviewer" &&
+        state.linked_continuation === null
+      )
+        continue;
       if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
@@ -422,6 +453,8 @@ interface BaseStateOptions {
   sourceWorkflowId?: WorkflowId | null;
   linkedFindings?: ReviewFinding[];
   remediationContext?: RemediationContext | null;
+  linkedContinuation?: LinkedContinuation | null;
+  supersededByWorkflowId?: WorkflowId | null;
 }
 
 function baseState({
@@ -435,6 +468,8 @@ function baseState({
   sourceWorkflowId = null,
   linkedFindings = [],
   remediationContext = null,
+  linkedContinuation = null,
+  supersededByWorkflowId = null,
 }: BaseStateOptions): WorkflowState {
   return {
     schema_version: SCHEMA_VERSION,
@@ -468,6 +503,8 @@ function baseState({
     max_repair_cycles: maxRepairCycles,
     parent_workflow_id: parentWorkflowId,
     source_workflow_id: sourceWorkflowId,
+    superseded_by_workflow_id: supersededByWorkflowId,
+    linked_continuation: linkedContinuation,
     linked_findings: linkedFindings,
     remediation_context: remediationContext,
     implementation_summary: null,
@@ -719,9 +756,20 @@ export function submitImplementation(
     VALIDATION_STATUSES,
   );
   const knownFailures = stringList(args.known_failures, "known_failures");
-  const priorIds = state.blocking_findings.map((finding) => finding.finding_id);
+  const priorIds = (
+    state.linked_continuation?.review_stage === "remediation"
+      ? [
+          ...state.linked_findings.map((finding) => finding.finding_id),
+          ...state.blocking_findings.map((finding) => finding.finding_id),
+        ]
+      : state.blocking_findings.map((finding) => finding.finding_id)
+  ).filter((id, index, ids) => ids.indexOf(id) === index);
   const resolution = resolutionMap(args.finding_resolution_map, priorIds, "finding_resolution_map");
-  if (state.phase === "IMPLEMENTING" && Object.keys(resolution).length > 0) {
+  if (
+    state.phase === "IMPLEMENTING" &&
+    state.linked_findings.length === 0 &&
+    Object.keys(resolution).length > 0
+  ) {
     fail("ERROR_INVALID_FINDING", "initial implementation has prior resolutions");
   }
   const next = clone(state);
@@ -825,7 +873,19 @@ export function expandScope(
   const next = clone(state);
   const resultingPaths = [...state.approved_paths, ...addedPaths].sort();
   next.approved_paths = resultingPaths;
-  next.review_target = { ...next.review_target, approved_paths: resultingPaths };
+  const combinedPaths = next.linked_continuation?.combined_review_paths ?? resultingPaths;
+  if (next.linked_continuation) {
+    next.linked_continuation.combined_review_paths = [
+      ...new Set([...combinedPaths, ...addedPaths]),
+    ].sort();
+  }
+  next.review_target = {
+    ...next.review_target,
+    approved_paths:
+      next.linked_continuation?.review_stage === "combined"
+        ? next.linked_continuation.combined_review_paths
+        : resultingPaths,
+  };
   next.scope_expansions.push({
     expansion_id: randomUUID(),
     added_paths: addedPaths,
@@ -964,10 +1024,15 @@ export function submitReview(
   if (new Set(unionIds).size !== unionIds.length) {
     fail("ERROR_INVALID_FINDING", "finding ID is duplicated across buckets");
   }
+  const carriedIds =
+    state.linked_continuation?.review_stage === "remediation"
+      ? state.linked_findings.map((item) => item.finding_id)
+      : [];
   const priorIds = [
+    ...carriedIds,
     ...state.blocking_findings.map((item) => item.finding_id),
     ...state.optional_findings.map((item) => item.finding_id),
-  ];
+  ].filter((id, index, ids) => ids.indexOf(id) === index);
   const classifications = resolutionMap(
     args.prior_finding_classifications,
     priorIds,
@@ -975,17 +1040,26 @@ export function submitReview(
   );
   for (const [id, status] of Object.entries(classifications)) {
     if (status === "still_present") {
-      const prior = state.blocking_findings.find((item) => item.finding_id === id);
+      const prior =
+        state.blocking_findings.find((item) => item.finding_id === id) ??
+        state.optional_findings.find((item) => item.finding_id === id) ??
+        (state.linked_continuation?.review_stage === "remediation"
+          ? state.linked_findings.find((item) => item.finding_id === id)
+          : undefined);
       if (prior) {
-        const current = blockingFindings.find((item) => item.finding_id === id);
-        if (!current || current.severity !== prior.severity || current.blocking !== true) {
+        const current = (prior.blocking ? blockingFindings : optionalFindings).find(
+          (item) => item.finding_id === id,
+        );
+        if (
+          !current ||
+          current.severity !== prior.severity ||
+          current.blocking !== prior.blocking
+        ) {
           fail("ERROR_INVALID_FINDING", "still-present blocker changed bucket or severity");
         }
         continue;
       }
-      if (!optionalFindings.some((item) => item.finding_id === id)) {
-        fail("ERROR_INVALID_FINDING", "still-present optional finding changed bucket or severity");
-      }
+      fail("ERROR_INVALID_FINDING", "still-present finding changed bucket or severity");
     }
   }
   if (
@@ -1006,7 +1080,34 @@ export function submitReview(
   next.prior_finding_classifications = classifications;
   next.review_receipt = finalReceipt ? clone(finalReceipt) : null;
   next.review_start_receipt = null;
-  if (args.review_status === "APPROVED") next.phase = "STOPPED_APPROVED";
+  if (args.review_status === "APPROVED") {
+    const continuation = state.linked_continuation;
+    if (continuation?.review_stage === "remediation") {
+      const unresolvedFinding = state.linked_findings.some(
+        (finding) =>
+          classifications[finding.finding_id] !== "resolved" &&
+          classifications[finding.finding_id] !== "superseded",
+      );
+      if (unresolvedFinding) {
+        fail("ERROR_INVALID_REVIEW", "carried findings must be resolved before combined review");
+      }
+      if (!finalReceipt) fail("ERROR_INVALID_REVIEW", "remediation approval requires a receipt");
+      next.linked_continuation = {
+        ...continuation,
+        remediation_review_receipt: clone(finalReceipt),
+        review_stage: "combined",
+      };
+      next.review_receipt = null;
+      next.review_target = {
+        ...next.review_target,
+        approved_paths: continuation.combined_review_paths,
+        base_revision: continuation.original_base_head,
+      };
+      next.phase = "REVIEWING";
+    } else {
+      next.phase = "STOPPED_APPROVED";
+    }
+  }
   if (args.review_status === "INCONCLUSIVE") {
     next.phase = "STOPPED_INCONCLUSIVE";
     next.stop_context = {
@@ -1305,6 +1406,11 @@ export interface LinkedFollowupPlan {
   authorized_finding_ids: FindingId[];
   linked_findings: ReviewFinding[];
   user_authorization: string;
+  combined_review_paths: ExactRepoPath[];
+  original_base_head: GitCommitSha;
+  root_workflow_id: WorkflowId;
+  lineage_workflow_ids: WorkflowId[];
+  review_stage: "remediation";
 }
 
 export function linkedFollowupInput(
@@ -1333,6 +1439,9 @@ export function linkedFollowupInput(
     "linked follow-up",
   );
   ensurePhase(state, "STOPPED_APPROVED", "STOPPED_REPAIR_EXHAUSTED");
+  if (state.superseded_by_workflow_id) {
+    fail("ERROR_INVALID_FOLLOWUP", "workflow already has an active linked successor");
+  }
   const ids = findingIdList(args.finding_ids, "finding_ids", "ERROR_INVALID_FOLLOWUP");
   const blocking = new Set(state.blocking_findings.map((finding) => finding.finding_id));
   const optional = new Set(state.optional_findings.map((finding) => finding.finding_id));
@@ -1344,19 +1453,39 @@ export function linkedFollowupInput(
   const linkedFindings = [...state.blocking_findings, ...state.optional_findings].filter(
     (finding) => ids.includes(finding.finding_id),
   );
+  const remediationPaths = exactPaths(args.approved_paths, repositoryRoot);
+  const isWorkingTree = state.review_target.review_mode === "working_tree";
+  const inheritedCombined =
+    state.linked_continuation?.combined_review_paths ?? state.review_target.approved_paths;
+  const combinedPaths = [...new Set([...inheritedCombined, ...remediationPaths])].sort();
+  const originalBase = isWorkingTree
+    ? (state.linked_continuation?.original_base_head ?? state.base_head)
+    : currentHead;
+  if (currentHead !== originalBase) fail("ERROR_STALE_BASE", "linked follow-up base is stale");
+  const root = state.linked_continuation?.root_workflow_id ?? state.workflow_id;
+  if (!root || !state.workflow_id)
+    fail("ERROR_STATE_CORRUPT", "linked workflow provenance is missing");
+  const lineage = state.linked_continuation
+    ? [...state.linked_continuation.lineage_workflow_ids, state.workflow_id]
+    : [state.workflow_id];
   return {
     objective: boundedString(args.objective, "objective"),
     approved_plan: approvedPlan(args.approved_plan),
-    approved_paths: exactPaths(args.approved_paths, repositoryRoot),
+    approved_paths: remediationPaths,
     acceptance_criteria: args.acceptance_criteria as string[], // raw passthrough to the child
     validation_requirements: args.validation_requirements as string[],
-    base_head: revision(currentHead, "base_head"),
+    base_head: revision(originalBase, "base_head"),
     max_repair_cycles: state.max_repair_cycles,
     parent_workflow_id: state.workflow_id,
     source_workflow_id: state.workflow_id,
     authorized_finding_ids: ids.slice().sort(),
     linked_findings: linkedFindings,
     user_authorization: userAuthorization(args.user_authorization),
+    combined_review_paths: combinedPaths,
+    original_base_head: revision(originalBase, "original_base_head"),
+    root_workflow_id: root,
+    lineage_workflow_ids: lineage,
+    review_stage: "remediation",
   };
 }
 
@@ -1370,6 +1499,15 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
     parentWorkflowId: followup.parent_workflow_id,
     sourceWorkflowId: followup.source_workflow_id,
     linkedFindings: followup.linked_findings,
+    linkedContinuation: {
+      root_workflow_id: followup.root_workflow_id,
+      predecessor_workflow_id: followup.source_workflow_id as WorkflowId,
+      lineage_workflow_ids: followup.lineage_workflow_ids,
+      original_base_head: followup.original_base_head,
+      combined_review_paths: followup.combined_review_paths,
+      review_stage: followup.review_stage,
+      remediation_review_receipt: null,
+    },
     remediationContext: {
       policy: "explicitly_authorized",
       authorized_finding_ids: followup.authorized_finding_ids,
@@ -1781,6 +1919,35 @@ function remediationContextShape(value: unknown): void {
   bounded(value.user_authorization, MAX_DETAIL);
 }
 
+function linkedContinuationShape(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, [
+    "root_workflow_id",
+    "predecessor_workflow_id",
+    "lineage_workflow_ids",
+    "original_base_head",
+    "combined_review_paths",
+    "review_stage",
+    "remediation_review_receipt",
+  ]);
+  for (const key of ["root_workflow_id", "predecessor_workflow_id"] as const) {
+    if (typeof value[key] !== "string" || !/^[0-9a-f-]{36}$/u.test(value[key] as string)) corrupt();
+  }
+  stringArrayShape(value.lineage_workflow_ids, MAX_PATHS, 100);
+  if ((value.lineage_workflow_ids as string[]).length === 0) corrupt();
+  sha40(value.original_base_head);
+  pathList(value.combined_review_paths, false);
+  if (value.review_stage !== "remediation" && value.review_stage !== "combined") corrupt();
+  nullableReceipt(value.remediation_review_receipt);
+  if (
+    value.review_stage === "remediation" &&
+    value.remediation_review_receipt !== null &&
+    value.remediation_review_receipt !== undefined
+  )
+    corrupt();
+}
+
 function stopContextShape(value: unknown): void {
   if (value === null || value === undefined) return;
   if (!isObject(value)) corrupt();
@@ -1893,12 +2060,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v4 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v5 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV4(value: unknown): WorkflowState {
+export function validateWorkflowStateV5(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V4_STATE_KEYS].sort();
+  const required = [...V5_STATE_KEYS].sort();
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -1924,9 +2091,18 @@ export function validateWorkflowStateV4(value: unknown): WorkflowState {
       (value.approved_path_baselines as unknown[]).length > 0)
   )
     corrupt();
+  const linked = value.linked_continuation;
   if (
+    linked === null &&
     canonicalJson((value.review_target as { approved_paths: unknown }).approved_paths) !==
-    canonicalJson(value.approved_paths)
+      canonicalJson(value.approved_paths)
+  )
+    corrupt();
+  linkedContinuationShape(linked);
+  if (
+    value.superseded_by_workflow_id !== null &&
+    (typeof value.superseded_by_workflow_id !== "string" ||
+      !/^[0-9a-f-]{36}$/u.test(value.superseded_by_workflow_id))
   )
     corrupt();
   const initialPaths = new Set(
@@ -2004,6 +2180,50 @@ export function validateWorkflowStateV4(value: unknown): WorkflowState {
     canonicalJson([...evolvingScope].sort()) !== canonicalJson(value.approved_paths)
   )
     corrupt();
+  if (linked) {
+    const continuation = linked as {
+      combined_review_paths: string[];
+      original_base_head: string;
+      review_stage: "remediation" | "combined";
+      predecessor_workflow_id: string;
+      root_workflow_id: string;
+      lineage_workflow_ids: string[];
+    };
+    if (
+      (value.approved_paths as string[]).some(
+        (path) => !continuation.combined_review_paths.includes(path),
+      )
+    )
+      corrupt();
+    if (continuation.original_base_head !== value.base_head) corrupt();
+    if (continuation.predecessor_workflow_id !== value.source_workflow_id) corrupt();
+    if (
+      continuation.review_stage === "combined" &&
+      canonicalJson((value.review_target as { approved_paths: unknown }).approved_paths) !==
+        canonicalJson(continuation.combined_review_paths)
+    )
+      corrupt();
+    if (
+      continuation.review_stage === "remediation" &&
+      canonicalJson((value.review_target as { approved_paths: unknown }).approved_paths) !==
+        canonicalJson(value.approved_paths)
+    )
+      corrupt();
+    if (continuation.lineage_workflow_ids.at(-1) !== continuation.predecessor_workflow_id)
+      corrupt();
+    if (continuation.lineage_workflow_ids[0] !== continuation.root_workflow_id) corrupt();
+    if (
+      value.review_receipt !== null &&
+      value.review_receipt !== undefined &&
+      value.phase !== "STOPPED_APPROVED" &&
+      value.phase !== "COMMIT_AUTHORIZED" &&
+      value.phase !== "COMMIT_PREPARED" &&
+      value.phase !== "STOPPED_COMMIT_PREPARATION" &&
+      value.phase !== "STOPPED_NOT_COMMITTED"
+    )
+      corrupt();
+  }
+  if (value.superseded_by_workflow_id !== null && value.commit_authorization !== null) corrupt();
   contractsShape(value.acceptance_criteria, "AC");
   contractsShape(value.validation_requirements, "VAL");
   reviewTargetShape(value.review_target);
@@ -2056,6 +2276,13 @@ export function validateWorkflowStateV4(value: unknown): WorkflowState {
   findingsShape(value.blocking_findings, true);
   findingsShape(value.optional_findings, false);
   nullableReceipt(value.review_receipt);
+  if (
+    linked &&
+    (linked as { review_stage?: string }).review_stage === "remediation" &&
+    value.review_receipt !== null &&
+    value.review_receipt !== undefined
+  )
+    corrupt();
   stopContextShape(value.stop_context);
   recoveryContextShape(value.recovery_context);
   stringArrayShape(value.repair_authorized_ids, MAX_FINDINGS, 80);
@@ -2066,5 +2293,8 @@ export function validateWorkflowStateV4(value: unknown): WorkflowState {
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
 
-/** @deprecated retained for source compatibility; persisted state is schema v4 only. */
+/** @deprecated retained for source compatibility; persisted state is schema v5 only. */
+export const validateWorkflowStateV4 = validateWorkflowStateV5;
+
+/** @deprecated retained for source compatibility; persisted state is schema v5 only. */
 export const validateWorkflowStateV3 = validateWorkflowStateV4;

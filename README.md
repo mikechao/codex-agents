@@ -32,7 +32,10 @@ Workflow creation records the exact approved Plan-mode text as immutable `approv
 or non-plan workflows explicitly pass `null`; structured objective, paths, acceptance criteria, and
 validation requirements remain the enforceable workflow contract. The plan is visible to the parent
 and implementer only, and linked follow-ups provide an explicit plan rather than inheriting one.
-Approved paths are an append-only execution scope. In an active working-tree change workflow, the
+Approved paths are an append-only narrow mutation scope. Linked follow-ups retain that remediation
+allowlist, then require a fresh independent combined review over the inherited logical-change paths
+before commit eligibility; the source is superseded so only the active leaf can commit. In an active
+working-tree change workflow, the
 parent may use `workflow_expand_scope` only with fresh user authorization naming exact new paths;
 Workflow MCP records clean/absent baselines, rejects dirty paths, and requires fresh implementation
 and review evidence after expansion.

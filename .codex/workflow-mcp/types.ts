@@ -306,7 +306,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 4;
+  schema_version: 5;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -330,6 +330,8 @@ export interface WorkflowState {
   max_repair_cycles: number; // runtime-validated 0..2
   parent_workflow_id: WorkflowId | null;
   source_workflow_id: WorkflowId | null;
+  superseded_by_workflow_id: WorkflowId | null;
+  linked_continuation: LinkedContinuation | null;
   linked_findings: ReviewFinding[];
   remediation_context: RemediationContext | null;
   implementation_summary: string | null;
@@ -352,6 +354,18 @@ export interface WorkflowState {
   commit_authorization: CommitAuthorization | null;
   commit_preparation: CommitPreparation | null;
   commit_result: CommitResult | null;
+}
+
+export type LinkedReviewStage = "remediation" | "combined";
+
+export interface LinkedContinuation {
+  root_workflow_id: WorkflowId;
+  predecessor_workflow_id: WorkflowId;
+  lineage_workflow_ids: WorkflowId[];
+  original_base_head: GitCommitSha;
+  combined_review_paths: ExactRepoPath[];
+  review_stage: LinkedReviewStage;
+  remediation_review_receipt: ChangeReceipt | null;
 }
 
 export type StopContext =
@@ -383,7 +397,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 4;
+  schema_version: 5;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -392,6 +406,12 @@ export interface RoleViewCommon {
   repair_cycle: number;
   max_repair_cycles: number;
   review_target: ReviewTarget;
+  superseded_by_workflow_id: WorkflowId | null;
+  linked_continuation:
+    | (Omit<LinkedContinuation, "remediation_review_receipt"> & {
+        remediation_review_receipt: null;
+      })
+    | null;
   permitted_next_actions: WorkflowAction[];
 }
 
@@ -486,6 +506,7 @@ export interface ReviewerViewBase extends RoleViewCommon {
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   dirty_baseline_paths: ExactRepoPath[];
+  linked_findings: ReviewFinding[];
   blocking_findings: BlockingFinding[];
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;

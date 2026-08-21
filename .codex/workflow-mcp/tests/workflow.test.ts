@@ -785,7 +785,11 @@ test("optional findings require a fresh linked workflow", () => {
     );
     const parentBeforeState = JSON.parse(parentBefore);
     assert.equal(parentBeforeState.version, parentAfter.version - 1);
-    assert.deepEqual({ ...parentAfter, version: parentBeforeState.version }, parentBeforeState);
+    assert.deepEqual(
+      { ...parentAfter, version: parentBeforeState.version, superseded_by_workflow_id: null },
+      parentBeforeState,
+    );
+    assert.equal(parentAfter.superseded_by_workflow_id, linked.workflow.workflow_id);
     const childImplementer = store.get(
       linked.workflow.workflow_id,
       "implementer",
@@ -1590,7 +1594,7 @@ test("v2 creation constructs every normative state key and stores a verified dig
     });
     const created = create(store, root, git, { objective: "v2 state" });
     const workflow = created.workflow;
-    assert.equal(workflow.schema_version, 4);
+    assert.equal(workflow.schema_version, 5);
     assert.equal(workflow.version, 0);
     assert.equal(workflow.workflow_type, "change");
     assert.equal(workflow.phase, "IMPLEMENTING");
@@ -2350,7 +2354,7 @@ test("restart persists execution contracts and review target", () => {
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const persisted = reopened.get(id, "parent", capabilities.parent);
-    assert.equal(persisted.schema_version, 4);
+    assert.equal(persisted.schema_version, 5);
     assert.equal(persisted.version, 0);
     assert.equal(persisted.phase, "IMPLEMENTING");
     assert.equal(persisted.objective, "restart contract");
@@ -4481,6 +4485,262 @@ test("linked follow-up copies blocking findings from an exhausted source", () =>
   }
 });
 
+test("linked remediation preserves a carried blocking finding that remains present", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath: ":memory:",
+    });
+    const source = create(store, root, git, {
+      objective: "carried blocker source",
+      max_repair_cycles: 1,
+    });
+    implementation(store, source, root, 0, "implemented");
+    const blocker = {
+      finding_id: "CARRIED-BLOCKER",
+      severity: "P1",
+      blocking: true,
+      file_and_line: "note.txt:1",
+      failure_scenario: "the blocker remains",
+      impact: "the repair cannot be approved",
+      violated_requirement: "blocking findings remain blocking",
+      remediation: "continue the repair",
+      missing_or_inadequate_test: "carried blocker regression",
+    };
+    review(store, source, root, 1, "CHANGES_REQUESTED", [blocker], []);
+    store.authorizeRepair({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 2,
+      finding_ids: [blocker.finding_id],
+    });
+    implementation(store, source, root, 3, "blocker still present", {
+      [blocker.finding_id]: "still_present",
+    });
+    review(store, source, root, 4, "CHANGES_REQUESTED", [blocker], [], {
+      [blocker.finding_id]: "still_present",
+    });
+    store.finalizeRepairExhausted({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 5,
+    });
+
+    const linked = store.createLinkedFollowup({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 6,
+      objective: "carried blocker child",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["child criterion"],
+      validation_requirements: ["child validation"],
+      finding_ids: [blocker.finding_id],
+      user_authorization: "user authorized carried blocker repair",
+    });
+    implementation(store, linked, root, 0, "carried blocker remains", {
+      [blocker.finding_id]: "still_present",
+    });
+    const childReview = review(store, linked, root, 1, "CHANGES_REQUESTED", [blocker], [], {
+      [blocker.finding_id]: "still_present",
+    });
+    assert.equal(childReview.phase, "REPAIR_REQUIRED");
+    assert.deepEqual(childReview.blocking_findings, [blocker]);
+
+    const repairing = store.__legacyOriginals.authorizeRepair({
+      workflow_id: linked.workflow.workflow_id,
+      capability: linked.capabilities.parent,
+      expected_version: store.get(linked.workflow.workflow_id, "parent", linked.capabilities.parent)
+        .version,
+      finding_ids: [blocker.finding_id],
+    });
+    assert.equal(repairing.phase, "REPAIRING");
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linked remediation requires resolutions for carried and newly discovered blockers", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const source = create(store, root, git, { objective: "linked resolution source" });
+    implementation(store, source, root, 0, "implemented");
+    const carried = {
+      finding_id: "LINKED-CARRIED",
+      severity: "P3",
+      blocking: false,
+      file_and_line: "note.txt:1",
+      failure_scenario: "the carried concern remains",
+      impact: "the linked repair is incomplete",
+      violated_requirement: "linked findings are resolved",
+      remediation: "resolve the carried concern",
+      missing_or_inadequate_test: "linked resolution regression",
+    };
+    review(store, source, root, 1, "APPROVED", [], [carried]);
+    const linked = store.createLinkedFollowup({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 2,
+      objective: "linked resolution child",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["child criterion"],
+      validation_requirements: ["child validation"],
+      finding_ids: [carried.finding_id],
+      user_authorization: "user authorized linked resolution",
+    });
+    implementation(store, linked, root, 0, "carried concern resolved", {
+      [carried.finding_id]: "resolved",
+    });
+    const discovered = {
+      finding_id: "LINKED-NEW-BLOCKER",
+      severity: "P1",
+      blocking: true,
+      file_and_line: "note.txt:2",
+      failure_scenario: "the remediation introduces a new blocker",
+      impact: "the linked repair cannot be approved",
+      violated_requirement: "new blockers require repair evidence",
+      remediation: "resolve the newly discovered blocker",
+      missing_or_inadequate_test: "new linked blocker regression",
+    };
+    review(store, linked, root, 1, "CHANGES_REQUESTED", [discovered], [], {
+      [carried.finding_id]: "resolved",
+    });
+    store.__legacyOriginals.authorizeRepair({
+      workflow_id: linked.workflow.workflow_id,
+      capability: linked.capabilities.parent,
+      expected_version: store.get(linked.workflow.workflow_id, "parent", linked.capabilities.parent)
+        .version,
+      finding_ids: [discovered.finding_id],
+    });
+
+    const submitRepair = (finding_resolution_map: Record<string, string>) =>
+      store.__legacyOriginals.submitImplementation({
+        workflow_id: linked.workflow.workflow_id,
+        capability: linked.capabilities.implementer,
+        expected_version: store.get(
+          linked.workflow.workflow_id,
+          "parent",
+          linked.capabilities.parent,
+        ).version,
+        status: "DONE",
+        summary: "linked blocker repaired",
+        agent_touched_paths: [],
+        acceptance_results: linked.workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
+          criterion_id,
+          status: "satisfied",
+          evidence: "acceptance evidence",
+        })),
+        validation_results: linked.workflow.validation_requirements.map(
+          ({ validation_id }: any) => ({
+            validation_id,
+            status: "passed",
+            evidence: "validation evidence",
+          }),
+        ),
+        known_failures: [],
+        finding_resolution_map,
+      });
+
+    assert.equal(
+      errorCategory(() => submitRepair({ [carried.finding_id]: "resolved" })),
+      "ERROR_INVALID_FINDING",
+    );
+    assert.equal(
+      errorCategory(() => submitRepair({ [discovered.finding_id]: "resolved" })),
+      "ERROR_INVALID_FINDING",
+    );
+    const repaired = submitRepair({
+      [carried.finding_id]: "resolved",
+      [discovered.finding_id]: "resolved",
+    });
+    assert.equal(repaired.phase, "REVIEWING");
+    assert.deepEqual(repaired.finding_resolution_map, {
+      [carried.finding_id]: "resolved",
+      [discovered.finding_id]: "resolved",
+    });
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linked remediation cannot advance while an authorized optional finding remains", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const source = create(store, root, git, { objective: "optional remediation source" });
+    implementation(store, source, root, 0, "implemented");
+    const carried = {
+      finding_id: "LINKED-OPTIONAL-UNRESOLVED",
+      severity: "P3",
+      blocking: false,
+      file_and_line: "note.txt:1",
+      failure_scenario: "the authorized optional finding remains",
+      impact: "the remediation can advance without doing its authorized work",
+      violated_requirement: "carried findings are resolved before combined review",
+      remediation: "resolve the carried optional finding",
+      missing_or_inadequate_test: "unresolved optional remediation regression",
+    };
+    review(store, source, root, 1, "APPROVED", [], [carried]);
+    const linked = store.createLinkedFollowup({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 2,
+      objective: "resolve optional finding",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["child criterion"],
+      validation_requirements: ["child validation"],
+      finding_ids: [carried.finding_id],
+      user_authorization: "user authorized optional remediation",
+    });
+    implementation(store, linked, root, 0, "optional finding remains", {
+      [carried.finding_id]: "still_present",
+    });
+    store.__legacyOriginals.beginReview({
+      workflow_id: linked.workflow.workflow_id,
+      capability: linked.capabilities.reviewer,
+      expected_version: 1,
+    });
+    const submitApproval = (
+      optional_findings: any[],
+      prior_finding_classifications: Record<string, string>,
+    ) =>
+      store.__legacyOriginals.submitReview({
+        workflow_id: linked.workflow.workflow_id,
+        capability: linked.capabilities.reviewer,
+        expected_version: store.get(
+          linked.workflow.workflow_id,
+          "parent",
+          linked.capabilities.parent,
+        ).version,
+        review_status: "APPROVED",
+        blocking_findings: [],
+        optional_findings,
+        prior_finding_classifications,
+      });
+
+    assert.equal(
+      errorCategory(() => submitApproval([carried], { [carried.finding_id]: "still_present" })),
+      "ERROR_INVALID_REVIEW",
+    );
+    const afterRejection = rawState(store, linked.workflow.workflow_id);
+    assert.equal(afterRejection.phase, "REVIEWING");
+    assert.equal(afterRejection.linked_continuation.review_stage, "remediation");
+
+    const advanced = submitApproval([], { [carried.finding_id]: "resolved" });
+    assert.equal(advanced.phase, "REVIEWING");
+    assert.equal(advanced.linked_continuation.review_stage, "combined");
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("linked follow-up rejects unknown, duplicate, and mixed finding IDs and missing auth or bad phase", () => {
   const { root, git } = fixture();
   try {
@@ -4685,6 +4945,24 @@ test("linked follow-up child from a commit-range review source accepts absent ch
       repair_cycle: 0,
       user_authorization: "authorized",
     });
+    assert.deepEqual(childState.linked_continuation.combined_review_paths, [
+      "added.txt",
+      "new/file.txt",
+      "note.txt",
+    ]);
+    implementation(store, linked, root, 0, "range finding resolved", {
+      "RANGE-OPT": "resolved",
+    });
+    const remediationApproved = review(store, linked, root, 1, "APPROVED", [], [], {
+      "RANGE-OPT": "resolved",
+    });
+    assert.equal(remediationApproved.phase, "REVIEWING");
+    assert.equal(remediationApproved.linked_continuation.review_stage, "combined");
+    assert.deepEqual(remediationApproved.review_target.approved_paths, [
+      "added.txt",
+      "new/file.txt",
+      "note.txt",
+    ]);
     assert.equal(
       store.get(range.workflow.workflow_id, "parent", range.capabilities.parent).version,
       2,
@@ -5095,6 +5373,115 @@ test("review-invalidating preparation failures require fresh review and authoriz
     });
     assert.equal(headReturned.phase, "REVIEWING");
     assert.equal(headReturned.review_target.base_revision, git("rev-parse", "HEAD"));
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linked combined review recovers coherently after HEAD changes", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const source = create(store, root, git, {
+      objective: "linked stale recovery source",
+      approved_paths: ["note.txt", "parent.txt"],
+    });
+    implementation(store, source, root, 0, "source implemented");
+    writeFileSync(join(root, "note.txt"), "source note\n");
+    writeFileSync(join(root, "parent.txt"), "source parent\n");
+    const linkedFinding = {
+      finding_id: "LINKED-STALE-RECOVERY",
+      severity: "P3",
+      blocking: false,
+      file_and_line: "note.txt:1",
+      failure_scenario: "stale recovery fails",
+      impact: "recovery is stranded",
+      violated_requirement: "recovery remains usable",
+      remediation: "refresh the combined review",
+      missing_or_inadequate_test: "HEAD drift recovery test",
+    };
+    review(store, source, root, 1, "APPROVED", [], [linkedFinding]);
+
+    const linked = store.createLinkedFollowup({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capabilities.parent,
+      expected_version: 2,
+      objective: "linked stale recovery child",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["child criterion"],
+      validation_requirements: ["child validation"],
+      finding_ids: ["LINKED-STALE-RECOVERY"],
+      user_authorization: "authorized linked recovery",
+    });
+    implementation(store, linked, root, 0, "child implemented", {
+      "LINKED-STALE-RECOVERY": "resolved",
+    });
+    writeFileSync(join(root, "note.txt"), "child note\n");
+    review(store, linked, root, 1, "APPROVED", [], [], {
+      "LINKED-STALE-RECOVERY": "resolved",
+    });
+    const combined = rawState(store, linked.workflow.workflow_id);
+    assert.equal(combined.linked_continuation.review_stage, "combined");
+    assert.deepEqual(combined.review_target.approved_paths, ["note.txt", "parent.txt"]);
+
+    const childId = linked.workflow.workflow_id;
+    const childCaps = linked.capabilities;
+    store.__legacyOriginals.beginReview({
+      workflow_id: childId,
+      capability: childCaps.reviewer,
+      expected_version: 3,
+    });
+    const combinedApproved = store.__legacyOriginals.submitReview({
+      workflow_id: childId,
+      capability: childCaps.reviewer,
+      expected_version: 4,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(combinedApproved.phase, "STOPPED_APPROVED");
+    const authorized = store.__legacyOriginals.authorizeCommit({
+      workflow_id: childId,
+      capability: childCaps.parent,
+      expected_version: 5,
+      user_authorization: "authorize linked recovery commit",
+    });
+    assert.equal(authorized.phase, "COMMIT_AUTHORIZED");
+    git("add", "note.txt", "parent.txt");
+    writeFileSync(join(root, "external.txt"), "external\n");
+    git("add", "external.txt");
+    git("commit", "-qm", "external head change");
+    const stopped = store.__legacyOriginals.prepareCommit({
+      workflow_id: childId,
+      capability: childCaps.committer,
+      expected_version: 6,
+    });
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STALE_RECEIPT");
+
+    const returned = store.__legacyOriginals.returnCommitToReview({
+      workflow_id: childId,
+      capability: childCaps.parent,
+      expected_version: 7,
+      review_context: "refresh linked combined review after external HEAD change",
+    });
+    assert.equal(returned.phase, "REVIEWING");
+    assert.equal(returned.review_target.base_revision, git("rev-parse", "HEAD"));
+    assert.equal(
+      rawState(store, childId).linked_continuation.original_base_head,
+      returned.base_head,
+    );
+
+    const begun = store.__legacyOriginals.beginReview({
+      workflow_id: childId,
+      capability: childCaps.reviewer,
+      expected_version: 8,
+    });
+    assert.equal(begun.phase, "REVIEWING");
+    assert.deepEqual(begun.review_target.approved_paths, ["note.txt", "parent.txt"]);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

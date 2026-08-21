@@ -145,7 +145,11 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
   bounded cycles with `workflow_authorize_repair`; when the final cycle is reached,
   `workflow_finalize_repair_exhausted` stops terminally.
 - `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh cycle-0 linked change workflow
-  with `workflow_create_linked_followup`, copying the exact findings and remediation context.
+  with `workflow_create_linked_followup`, copying the exact findings and remediation context. The
+  child mutation allowlist remains narrow; remediation approval transitions it back to `REVIEWING`
+  with an authoritative combined target covering the inherited logical-change scope. Only a fresh
+  independent approval of that combined target can authorize a commit, and the source workflow is
+  superseded so it cannot create a competing successor or commit.
   `APPROVED` is a hard stop for optional findings; explicit optional work creates that fresh linked
   workflow instead of silently continuing the loop.
 
@@ -174,7 +178,8 @@ review and fresh commit authorization. No committer action is permitted while st
 
 ## Persistence schema
 
-Workflow MCP supports one current persisted schema. Incompatible SQLite tables and persisted state
+Workflow MCP supports one current persisted schema (v5, including linked-continuation provenance).
+Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use
 `workflow_prepare_commit` plus `workflow_submit_commit_result` after commit authorization.

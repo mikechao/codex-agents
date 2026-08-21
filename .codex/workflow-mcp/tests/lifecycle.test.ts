@@ -936,7 +936,7 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
     name: "optional from approved: link optional child",
     run: (ctx: any) => doLinkedFollowup(ctx, 2, ["F-OPT"]),
     snapshots: [
-      snap("parent", "STOPPED_APPROVED", 3, ACTIONS.approved, EVENTS.approvedLinked),
+      snap("parent", "STOPPED_APPROVED", 3, ACTIONS.none, EVENTS.approvedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
     ],
   },
@@ -991,7 +991,7 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
     name: "blocker from exhausted: link blocker child",
     run: (ctx: any) => doLinkedFollowup(ctx, 6, ["F-BLK"]),
     snapshots: [
-      snap("parent", "STOPPED_REPAIR_EXHAUSTED", 7, ACTIONS.exhausted, EVENTS.exhaustedLinked),
+      snap("parent", "STOPPED_REPAIR_EXHAUSTED", 7, ACTIONS.none, EVENTS.exhaustedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
     ],
   },

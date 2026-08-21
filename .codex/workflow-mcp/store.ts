@@ -47,7 +47,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV4,
+  validateWorkflowStateV5,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -216,6 +216,17 @@ function assertScopeUnchanged(before: WorkflowState, after: WorkflowState): void
   }
 }
 
+function isLinkedReviewStageTransition(before: WorkflowState, after: WorkflowState): boolean {
+  const continuation = after.linked_continuation;
+  return (
+    before.linked_continuation?.review_stage === "remediation" &&
+    continuation?.review_stage === "combined" &&
+    canonicalJson(before.approved_paths) === canonicalJson(after.approved_paths) &&
+    canonicalJson(after.review_target.approved_paths) ===
+      canonicalJson(continuation.combined_review_paths)
+  );
+}
+
 function auditEnvelope(
   before: WorkflowState | null,
   after: WorkflowState,
@@ -347,7 +358,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV4(parsed);
+  return validateWorkflowStateV5(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -608,10 +619,23 @@ export class WorkflowStore {
         const head = currentHead(this.root);
         if (head !== state.base_head) fail("ERROR_STALE_BASE", "scope base is stale");
         const stagedChanges = stagedScopeChanges(this.root, addedPaths);
-        if (stagedChanges.length > 0) {
+        const inheritedCombined = state.linked_continuation?.combined_review_paths ?? [];
+        const expandingInherited =
+          state.linked_continuation?.review_stage === "combined" &&
+          addedPaths.every((path) => inheritedCombined.includes(path));
+        if (stagedChanges.length > 0 && !expandingInherited) {
           fail("ERROR_SCOPE_EXPANSION_DIRTY", "scope expansion paths have staged changes");
         }
         const baseline = createReceipt(this.root, addedPaths, true);
+        if (expandingInherited) {
+          baseline.paths = baseline.paths.map((entry) =>
+            entry.state === "deleted"
+              ? { path: entry.path, state: "absent", kind: "missing" }
+              : entry.state === "modified" || entry.state === "added"
+                ? { ...entry, state: "unchanged" }
+                : entry,
+          ) as typeof baseline.paths;
+        }
         return expandScope(state, args, baseline, this.root);
       },
     );
@@ -646,7 +670,7 @@ export class WorkflowStore {
         };
         assertApprovedPlanUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV4(next);
+        validateWorkflowStateV5(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -748,16 +772,20 @@ export class WorkflowStore {
                 current.approved_paths.includes(path) ||
                 next.scope_expansions.at(-1)?.added_paths.includes(path),
             ) ||
-            canonicalJson(next.review_target.approved_paths) !== canonicalJson(next.approved_paths)
+            (next.linked_continuation?.review_stage === "combined"
+              ? canonicalJson(next.review_target.approved_paths) !==
+                canonicalJson(next.linked_continuation.combined_review_paths)
+              : canonicalJson(next.review_target.approved_paths) !==
+                canonicalJson(next.approved_paths))
           ) {
             fail("ERROR_INVALID_TRANSITION", "scope expansion history is not append-only");
           }
-        } else {
+        } else if (!isLinkedReviewStageTransition(current, next)) {
           assertScopeUnchanged(current, next);
         }
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
-        validateWorkflowStateV4(next);
+        validateWorkflowStateV5(next);
         const now = isoNow();
         const result = this.db
           .prepare(
@@ -827,7 +855,7 @@ export class WorkflowStore {
         if (state.review_target.review_mode !== "working_tree") {
           fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
         }
-        const startReceipt = createReceipt(this.root, state.approved_paths, true);
+        const startReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
         if (startReceipt.base_head !== state.base_head) {
           fail("ERROR_STALE_RECEIPT", "review snapshot base is stale; begin review again");
         }
@@ -871,7 +899,11 @@ export class WorkflowStore {
       (state) => {
         if (
           state.review_target.base_revision !== state.base_head ||
-          canonicalJson(state.review_target.approved_paths) !== canonicalJson(state.approved_paths)
+          (state.linked_continuation?.review_stage === "combined"
+            ? canonicalJson(state.review_target.approved_paths) !==
+              canonicalJson(state.linked_continuation.combined_review_paths)
+            : canonicalJson(state.review_target.approved_paths) !==
+              canonicalJson(state.approved_paths))
         ) {
           fail("ERROR_INVALID_REVIEW", "authoritative review target is stale or corrupt");
         }
@@ -889,7 +921,7 @@ export class WorkflowStore {
             fail("ERROR_INVALID_REVIEW", "working-tree review must begin before submission");
           }
           if (args.review_status === "APPROVED") {
-            finalReceipt = createReceipt(this.root, state.approved_paths, true);
+            finalReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
             if (finalReceipt.base_head !== state.base_head) {
               fail("ERROR_STALE_RECEIPT", "review base changed; begin a new review");
             }
@@ -956,8 +988,16 @@ export class WorkflowStore {
         if (state.review_target.review_mode !== "working_tree") {
           fail("ERROR_COMMIT_NOT_ALLOWED", "commit authorization requires a working-tree review");
         }
+        if (state.superseded_by_workflow_id) {
+          fail("ERROR_COMMIT_NOT_ALLOWED", "superseded workflow cannot authorize a commit");
+        }
         if (!state.review_receipt) fail("ERROR_STALE_RECEIPT", "review receipt is missing");
-        verifyReviewReceipt(this.root, state.review_receipt, state.approved_paths, state.base_head);
+        verifyReviewReceipt(
+          this.root,
+          state.review_receipt,
+          state.review_target.approved_paths,
+          state.base_head,
+        );
         return authorizeCommit(state, args);
       },
     );
@@ -1023,6 +1063,16 @@ export class WorkflowStore {
           }
           next.base_head = head;
           next.review_target = { ...next.review_target, base_revision: head };
+          if (next.linked_continuation?.review_stage === "combined") {
+            // A linked combined review has an invariant tying its inherited base to the
+            // continuation provenance. Rebase both sides together after an external HEAD
+            // change so recovery can begin a fresh combined review instead of leaving a
+            // state that validation rejects.
+            next.linked_continuation = {
+              ...next.linked_continuation,
+              original_base_head: head,
+            };
+          }
           next.initial_receipt = initialReceipt;
           next.dirty_baseline_paths = dirtyBaselinePaths(initialReceipt);
         }
@@ -1100,7 +1150,7 @@ export class WorkflowStore {
           fail("ERROR_STALE_BASE", "scope base is stale");
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV4(childState);
+        validateWorkflowStateV5(childState);
         const childCapabilities: RoleCapabilities = {
           parent: issueCapability(),
           implementer: issueCapability(),
@@ -1131,7 +1181,12 @@ export class WorkflowStore {
           "parent",
           auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
         );
-        const next = { ...state, version: (expectedVersionNumber + 1) as WorkflowVersion };
+        const next = {
+          ...state,
+          superseded_by_workflow_id: childId,
+          version: (expectedVersionNumber + 1) as WorkflowVersion,
+        };
+        validateWorkflowStateV5(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",

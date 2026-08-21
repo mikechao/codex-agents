@@ -139,7 +139,10 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
 3. If review has blocking findings, authorize repair using exactly the returned blocking finding
    IDs, send `implementer` back for that bounded repair cycle, refresh the parent view, and
    re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize the exhausted
-   stop and do not commit.
+    stop and do not commit. Linked follow-ups are deliberately two-stage: dispatch the child
+    implementer only for its narrow remediation paths, then dispatch a fresh reviewer for the
+    inherited combined target after carried findings are resolved. Remediation approval is never
+    final approval.
 4. On approval, stop at `STOPPED_APPROVED`, report optional findings without dispatching optional
    remediation, and request explicit user authorization to commit.
 5. Only after the user explicitly authorizes the commit, call the parent commit-authorization tool,

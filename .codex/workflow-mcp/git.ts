@@ -300,7 +300,8 @@ export function prepareCommitReceipt(
   }
   const receipt = state.review_receipt;
   if (!receipt) fail("ERROR_STALE_RECEIPT", "receipt scope or base is stale");
-  const fresh = verifyReviewReceipt(root, receipt, state.approved_paths, state.base_head);
+  const reviewPaths = state.review_target.approved_paths ?? state.approved_paths;
+  const fresh = verifyReviewReceipt(root, receipt, reviewPaths, state.base_head);
   const expectedPaths = receipt.paths
     .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
     .map((entry) => entry.path)
@@ -313,7 +314,7 @@ export function prepareCommitReceipt(
   ) {
     fail("ERROR_STAGED_SCOPE", "staged scope does not match the review receipt");
   }
-  if (approvedResidue(root, state.approved_paths, staged).length > 0) {
+  if (approvedResidue(root, reviewPaths, staged).length > 0) {
     fail("ERROR_STAGED_SCOPE", "approved paths have unstaged or untracked residue");
   }
   const entries = stagedEntries(root);
