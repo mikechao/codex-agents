@@ -107,8 +107,8 @@ Before `workflow_create`, extract only explicit work-item metadata from the user
 context and pass it as `work_items`. Use `[]` when no tracker metadata is supplied (omission remains
 valid at the protocol boundary). Preserve each provider, ID, exact display reference, and optional
 absolute HTTP(S) URL; do not discover identifiers externally, infer them from issue text, branches,
-filenames, diffs, or history, or retranscribe them when creating linked follow-ups. For this issue the
-authorized item is `{"provider":"github","id":"47","display_ref":"#47","url":"https://github.com/mikechao/codex-agents/issues/47"}`.
+filenames, diffs, or history, or retranscribe them when creating linked follow-ups. Linked
+follow-ups inherit the authoritative work-item state without caller retranscription.
 
 For non-trivial work, create the authoritative `workflow_state` workflow before any implementation
 mutation, or reuse the workflow ID already supplied by the current orchestration context. For a new

@@ -165,8 +165,9 @@ Workflow MCP state. Restart host sessions after changing policy.
   and invalid URLs; persists through restart; exposes items only to parent/committer; and rejects any
   post-creation replacement across repair, scope, runtime, review, commit, and linked transitions.
 - Neutral reference rendering: with empty, repeated, and multiple display references, the committer
-  emits deterministic first-occurrence `Refs <display_ref>` lines only from its authenticated view and
-  never infers IDs or emits tracker completion keywords.
+  emits deterministic first-occurrence `Refs <display_ref>` lines only from its authenticated view,
+  passes commit paragraphs as separate `-m` arguments so Git writes real blank lines, and never infers
+  IDs or emits tracker completion keywords.
 
 - Implementation state: `DONE` requires exact agent-touched paths, acceptance/validation evidence,
   a current complete receipt, and advances to `REVIEWING`; other statuses stop with deterministic

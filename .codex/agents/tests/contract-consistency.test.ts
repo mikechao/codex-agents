@@ -1,6 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
   generateDefinitions,
@@ -22,6 +24,53 @@ for (const [path, content] of Object.entries(generateDefinitions())) {
 
 const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");
+
+test("reusable agent definitions contain no concrete work-item instances", () => {
+  const orchestratorPath = resolve(import.meta.dir, "../../../.opencode/agents/orchestrator.md");
+  const definitions = [
+    ...Object.entries(generateDefinitions()),
+    [orchestratorPath, readFileSync(orchestratorPath, "utf8")],
+  ] as const;
+  for (const [path, content] of definitions) {
+    assert.doesNotMatch(content, /^\s*Refs\s+#\d+\s*$/mu, `${path} contains a numeric Refs line`);
+    assert.doesNotMatch(
+      content,
+      /display_ref[^\n]*#\d+/u,
+      `${path} contains a concrete display_ref value`,
+    );
+    assert.doesNotMatch(
+      content,
+      /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+/u,
+      `${path} contains a concrete GitHub issue URL`,
+    );
+  }
+});
+
+test("commit references use real Git message paragraphs", () => {
+  const repository = mkdtempSync(resolve(tmpdir(), "agent-contract-git-"));
+  const git = (args: string[]) =>
+    execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" });
+
+  try {
+    git(["init", "--quiet"]);
+    git(["config", "user.name", "Contract Test"]);
+    git(["config", "user.email", "contract-test@example.com"]);
+    writeFileSync(resolve(repository, "tracked.txt"), "contract test\n");
+    git(["add", "tracked.txt"]);
+    git(["commit", "--quiet", "-m", "Add contract test"]);
+
+    const subject = "Verify neutral work-item references";
+    const body = "Keep commit paragraphs separate.";
+    git(["commit", "--quiet", "--allow-empty", "-m", subject, "-m", body, "-m", "Refs #30"]);
+    const message = git(["show", "-s", "--format=%B", "HEAD"]);
+
+    assert.equal(message, `${subject}\n\n${body}\n\nRefs #30\n\n`);
+    assert.ok(!message.includes("\\n"), "commit message must not contain literal backslash-n text");
+    assert.ok(!message.includes("Refs #47"), "regression commit must use the alternate work item");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test("the default model policy preserves the effective host assignments", () => {
   const policy = loadModelPolicy();

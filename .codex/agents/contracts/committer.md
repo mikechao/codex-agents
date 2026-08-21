@@ -91,6 +91,9 @@ Commit message:
 - Describe the primary purpose of the change rather than listing implementation details.
 - Follow the repository's existing commit-message conventions when they can be determined from recent history.
 - Use a commit body when the changes are substantial enough that additional context is useful.
+- Pass the subject, each body paragraph, and each neutral reference line as separate `git commit -m`
+  arguments. Do not encode paragraph separators as literal backslash-n text; Git must create the real blank
+  lines between paragraphs.
 - Do not invent issue numbers, ticket IDs, or breaking-change notices.
 
 Before committing:
