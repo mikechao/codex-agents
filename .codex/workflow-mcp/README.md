@@ -42,6 +42,24 @@ State is stored in a stable, repository-hash-partitioned path under the user's C
 Tests may pass an explicit database path. The server does not read PGlite, corpus data, browser
 storage, or portable backups, and emits no logs on stdout.
 
+## Opt-in diagnostics
+
+The tactical diagnostic flight recorder is disabled unless `WORKFLOW_MCP_DIAGNOSTICS=1` is present
+in the process environment. When enabled, each supervisor or runtime process appends bounded JSONL
+records to `~/.codex/state/workflow-mcp/<repository-hash>/diagnostics/`, using one
+`supervisor-<pid>.jsonl` or `runtime-<pid>.jsonl` file. Files stop recording at 64 KiB and startup
+keeps only the newest eight files for each process layer; cleanup and write failures are ignored.
+
+Records are limited to timestamps, process/layer, JSON-RPC correlation IDs, method/tool names,
+bounded workflow-ID metadata, database path, lookup outcome, bounded runtime identity/revision,
+phase/version, and a small safe error category set. They never contain request arguments or results,
+capabilities, hashes or attestation material, environment contents, authorization text, plans,
+findings, or receipts. Supervisor records show request receipt, affinity, selected runtime,
+forwarding, and routing outcomes; runtime records show tool receipt and result. A malformed ID and a
+valid but absent ID are therefore distinguishable only in diagnostics while both remain public
+`ERROR_NOT_FOUND` results. A lookup record localizes a problem to the supervisor-store or
+runtime-store layer; diagnostics are observational and outside WorkflowState and audit authority.
+
 ## Runtime artifacts
 
 `materializeRuntimeArtifact(repositoryRoot, revision)` (also exported as

@@ -1,10 +1,11 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { diagnosticsDirectory } from "../diagnostics.js";
 import { WorkflowStore } from "../store.js";
 import { fixture, receipt } from "./test-fixtures.js";
 
@@ -22,12 +23,16 @@ function target(base: string, paths = ["note.txt"]) {
   };
 }
 
-async function start(root: string) {
+async function start(root: string, diagnostics = false) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--no-warnings", SERVER],
     cwd: root,
-    env: { ...process.env, WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite") },
+    env: {
+      ...process.env,
+      WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite"),
+      ...(diagnostics ? { WORKFLOW_MCP_DIAGNOSTICS: "1" } : {}),
+    },
     stderr: "pipe",
   });
   const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
@@ -281,6 +286,36 @@ test("test fixture receipts remain available only for direct receipt assertions"
     const current = receipt(root);
     assert.equal(current.approved_paths[0], "note.txt");
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("opt-in child diagnostics correlate tool receipt and result without touching stdout", async () => {
+  const { root, git } = fixture();
+  const { client, transport, call } = await start(root, true);
+  try {
+    const created = await call("workflow_create", createArgs(git));
+    await call("workflow_parent_get", { workflow_id: created.workflow.workflow_id });
+    const directory = diagnosticsDirectory(root);
+    const files = readdirSync(directory).filter((entry) => /^runtime-\d+\.jsonl$/u.test(entry));
+    assert.equal(files.length, 1);
+    const records = readFileSync(join(directory, files[0]), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const receipts = records.filter((record) => record.event === "tool_receipt");
+    const results = records.filter((record) => record.event === "tool_result");
+    assert.ok(receipts.some((record) => record.tool === "workflow_parent_get"));
+    const receipt = receipts.find((record) => record.tool === "workflow_parent_get");
+    assert.ok(
+      results.some(
+        (record) => record.request_id === receipt.request_id && record.outcome === "success",
+      ),
+    );
+  } finally {
+    await client.close();
+    await transport.close();
+    rmSync(diagnosticsDirectory(root), { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });
