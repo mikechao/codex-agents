@@ -9,6 +9,7 @@ import type {
   CommitPreparationEvidence,
   CommitRangeReviewTarget,
   ContentDigest,
+  DirtyScopeAdoptionIndexState,
   ErrorCategory,
   ExactRepoPath,
   GitBlobSha,
@@ -231,6 +232,50 @@ export function stagedScopeChanges(
   return [
     ...new Set(output.split("\0").filter((path) => expected.has(path as ExactRepoPath))),
   ].sort() as ExactRepoPath[];
+}
+
+/**
+ * Resolve the index-side state for dirty-scope adoption. Ordinary review receipts intentionally
+ * describe the worktree; adoption must additionally bind the staged index so staged-only changes
+ * cannot be silently treated as clean.
+ */
+export function stagedAdoptionStates(
+  root: string,
+  expectedPaths: ReadonlyArray<ExactRepoPath>,
+  baseHead: GitCommitSha,
+): DirtyScopeAdoptionIndexState[] {
+  const staged = new Set(stagedScopeChanges(root, expectedPaths));
+  const index = stagedEntries(root);
+  return expectedPaths.map((path) => {
+    const head = treeEntry(root, baseHead, path);
+    const indexed = index.get(path);
+    if (!staged.has(path)) {
+      if (!head) return { path, state: "absent", kind: "missing" };
+      return {
+        path,
+        state: "unchanged",
+        kind: head.mode === "120000" ? "symlink" : "file",
+        mode: head.mode as GitFileMode,
+        digest: blobDigest(root, head.object as GitBlobSha),
+      };
+    }
+    if (!indexed) {
+      if (!head) fail("ERROR_GIT", "staged index state is inconsistent");
+      return { path, state: "deleted", kind: "missing", mode: head.mode as GitFileMode };
+    }
+    const state = !head
+      ? "added"
+      : head.mode !== indexed.mode || head.object !== indexed.object
+        ? "modified"
+        : "unchanged";
+    return {
+      path,
+      state,
+      kind: indexed.mode === "120000" ? "symlink" : "file",
+      mode: indexed.mode,
+      digest: blobDigest(root, indexed.object),
+    };
+  });
 }
 
 function exactChangedPaths(root: string, prefix: readonly string[]): ExactRepoPath[] {

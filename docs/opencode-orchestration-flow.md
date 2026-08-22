@@ -197,7 +197,10 @@ blocker, an unchanged-HEAD commit retry (`STOPPED_NOT_COMMITTED`), or a receipt/
 (`STOPPED_COMMIT_MISMATCH`). A linked follow-up is a separate, explicitly authorized cycle for work
 that is not part of the approved implementation; it is not an excuse to continue after approval.
 These paths preserve the same authoritative identity and require the corresponding parent
-transition.
+transition. For `STOPPED_INCONCLUSIVE`, a parent may explicitly adopt exact dirty paths from an
+earlier scope expansion. Adoption is content-committed at authorization time and guarded both
+before review resume and when the expanded review-start receipt is established; historical-runtime
+recovery allows only those narrow guards and the adoption itself.
 
 For self-hosting, the regression scenario is A -> edit approved runtime paths -> test/review -> commit
 B -> restart -> create a new workflow under B -> resume the unfinished workflow under A. Missing or

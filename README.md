@@ -47,7 +47,10 @@ before commit eligibility; the source is superseded so only the active leaf can 
 working-tree change workflow, the
 parent may use `workflow_expand_scope` only with fresh user authorization naming exact new paths;
 Workflow MCP records clean/absent baselines, rejects dirty paths, and requires fresh implementation
-and review evidence after expansion.
+and review evidence after expansion. If an inconclusive review needs to recover an already-expanded
+path that is now dirty, the parent may explicitly use `workflow_adopt_dirty_scope`; Workflow MCP
+commits an authorization-time content commitment and verifies it before resume and review snapshot
+creation.
 
 Workflow creation also accepts optional generic work-item provenance. Records preserve provider-neutral
 metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v6, survive

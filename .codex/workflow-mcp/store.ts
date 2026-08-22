@@ -16,6 +16,7 @@ import {
   prepareCommitReceipt,
   repositoryRoot,
   reviewRange,
+  stagedAdoptionStates,
   stagedScopeChanges,
   verifyCommitResult,
   verifyReviewReceipt,
@@ -28,6 +29,7 @@ import {
 } from "./runtime-artifact.js";
 import {
   acceptConcerns,
+  adoptDirtyScope,
   approvedPathBaselineView,
   authorizeCommit,
   authorizeRepair,
@@ -64,6 +66,9 @@ import type {
   ChangeReceipt,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
+  DirtyScopeAdoptionAudit,
+  DirtyScopeAdoptionIndexState,
+  DirtyScopeAdoptionState,
   GitCommitSha,
   IsoTimestamp,
   ParentCapability,
@@ -374,6 +379,36 @@ function validatePersistedRows(db: Database): void {
   for (const row of rows) parseState(row);
 }
 
+function adoptionStates(
+  receipt: ChangeReceipt,
+  paths: ReadonlyArray<string>,
+): DirtyScopeAdoptionState[] {
+  return paths.map((path) => {
+    const entry = receipt.paths.find((candidate) => candidate.path === path);
+    if (!entry) {
+      fail("ERROR_STALE_ADOPTION", "adopted path is no longer dirty");
+    }
+    return {
+      path: entry.path,
+      state: entry.state,
+      kind: entry.kind,
+      ...("mode" in entry ? { mode: entry.mode } : {}),
+    };
+  });
+}
+
+function adoptionCommitment(
+  baseHead: GitCommitSha,
+  receiptPaths: ChangeReceipt["paths"],
+  indexStates: DirtyScopeAdoptionIndexState[],
+): StateDigest {
+  return objectDigest({ base_head: baseHead, paths: receiptPaths, index_states: indexStates });
+}
+
+function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
+}
+
 // roleView's public overloads only accept literal roles; the store reaches the
 // implementation signature with the exact role selected by each dedicated getter.
 const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
@@ -555,12 +590,20 @@ export class WorkflowStore {
     eventType: AuditEventType,
     actorRole: ActorRole,
     summary: AuditEnvelope,
+    details: { dirty_scope_adoption?: DirtyScopeAdoptionAudit } = {},
   ): void {
     this.db
       .prepare(
         "INSERT INTO audit_events (workflow_id, version, event_type, actor_role, summary_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       )
-      .run(workflowId, version, eventType, actorRole, JSON.stringify(summary), isoNow());
+      .run(
+        workflowId,
+        version,
+        eventType,
+        actorRole,
+        JSON.stringify({ ...summary, ...details }),
+        isoNow(),
+      );
   }
 
   create(input: unknown): { workflow: ParentView; capability: ParentCapability } {
@@ -639,7 +682,7 @@ export class WorkflowStore {
             "scope expansion requires a working-tree change workflow",
           );
         }
-        const addedPaths = exactPaths(args.added_paths, this.root);
+        const addedPaths = exactPaths(args.adopted_paths ?? args.added_paths, this.root);
         if (addedPaths.some((path) => state.approved_paths.includes(path))) {
           fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
         }
@@ -664,6 +707,82 @@ export class WorkflowStore {
           ) as typeof baseline.paths;
         }
         return expandScope(state, args, baseline, this.root);
+      },
+    );
+  }
+
+  adoptDirtyScope(input: unknown): RoleView {
+    const args = mutationInput(input);
+    let adoptedReceipt: ChangeReceipt | null = null;
+    let adoptedIndexStates: DirtyScopeAdoptionIndexState[] | null = null;
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "DIRTY_SCOPE_ADOPTED",
+      (state) => {
+        if (state.review_target.review_mode !== "working_tree") {
+          fail(
+            "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+            "dirty scope adoption requires a working-tree review",
+          );
+        }
+        const addedPaths = exactPaths(args.adopted_paths ?? args.added_paths, this.root);
+        const pending = this.#pendingDirtyAdoptions(state, { crossRuntime: false });
+        if (
+          pending.some((adoption) =>
+            adoption.adopted_paths.some((path) => addedPaths.includes(path)),
+          )
+        ) {
+          fail("ERROR_INVALID_PATHS", "dirty scope adoption paths were already adopted");
+        }
+        const receipt = createReceipt(this.root, addedPaths, true);
+        adoptedReceipt = receipt;
+        adoptedIndexStates = stagedAdoptionStates(this.root, addedPaths, receipt.base_head);
+        return adoptDirtyScope(
+          state,
+          args,
+          receipt,
+          this.root,
+          adoptedIndexStates
+            .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
+            .map((entry) => entry.path),
+        );
+      },
+      (next) => next.phase,
+      (_before, next) => {
+        if (!adoptedReceipt || !adoptedIndexStates)
+          fail("ERROR_STALE_ADOPTION", "dirty scope adoption receipt is missing");
+        const expansion = next.scope_expansions.find((candidate) =>
+          samePathList(
+            candidate.added_paths,
+            exactPaths(args.adopted_paths ?? args.added_paths, this.root),
+          ),
+        );
+        if (!expansion) fail("ERROR_STALE_ADOPTION", "dirty scope expansion is missing");
+        return {
+          dirty_scope_adoption: {
+            scope_expansion_id: expansion.expansion_id,
+            scope_expansion_version: expansion.resulting_version,
+            adopted_paths: expansion.added_paths,
+            base_head: adoptedReceipt.base_head,
+            current_states: adoptionStates(adoptedReceipt, expansion.added_paths),
+            index_states: adoptedIndexStates,
+            current_state_commitment: adoptionCommitment(
+              adoptedReceipt.base_head,
+              adoptedReceipt.paths,
+              adoptedIndexStates,
+            ),
+            runtime_id: next.runtime_id,
+            runtime_revision: next.runtime_revision,
+            executing_runtime_id: this.runtimeId,
+            executing_runtime_revision: this.runtimeRevision,
+            cross_runtime: false,
+            reason: args.reason as string,
+            user_authorization: args.user_authorization as string,
+          },
+        };
       },
     );
   }
@@ -745,6 +864,11 @@ export class WorkflowStore {
         summary: JSON.parse(event.summary_json) as AuditEnvelope,
         created_at: event.created_at as IsoTimestamp,
       };
+      const rawSummary = JSON.parse(event.summary_json) as AuditEnvelope & {
+        dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+      };
+      if (rawSummary.dirty_scope_adoption)
+        result.dirty_scope_adoption = rawSummary.dirty_scope_adoption;
       if (result.event_type === "SCOPE_EXPANDED") {
         const expansion = state.scope_expansions.find(
           (candidate) => candidate.resulting_version === result.version,
@@ -763,6 +887,384 @@ export class WorkflowStore {
     });
   }
 
+  #pendingDirtyAdoptions(
+    state: WorkflowState,
+    options: { crossRuntime: boolean | "any" },
+  ): DirtyScopeAdoptionAudit[] {
+    const id = state.workflow_id;
+    if (!id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
+    const rows = this.db
+      .prepare(
+        "SELECT version, event_type, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+      )
+      .all(id) as Array<{ version: number; event_type: string; summary_json: string }>;
+    let lastReviewStart = -1;
+    rows.forEach((row, index) => {
+      if (row.event_type === "REVIEW_STARTED") lastReviewStart = index;
+    });
+    const pending = rows
+      .slice(lastReviewStart + 1)
+      .filter((row) => row.event_type === "DIRTY_SCOPE_ADOPTED");
+    const seen = new Set<string>();
+    const result: DirtyScopeAdoptionAudit[] = [];
+    const owner = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    for (const row of pending) {
+      let summary: unknown;
+      try {
+        summary = JSON.parse(row.summary_json);
+      } catch {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is malformed");
+      }
+      const detail =
+        summary && typeof summary === "object" && !Array.isArray(summary)
+          ? (summary as { dirty_scope_adoption?: DirtyScopeAdoptionAudit }).dirty_scope_adoption
+          : undefined;
+      if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is missing");
+      }
+      if (
+        !Array.isArray(detail.adopted_paths) ||
+        detail.adopted_paths.length === 0 ||
+        detail.adopted_paths.some((path) => typeof path !== "string") ||
+        new Set(detail.adopted_paths).size !== detail.adopted_paths.length ||
+        typeof detail.scope_expansion_id !== "string" ||
+        !Number.isSafeInteger(detail.scope_expansion_version) ||
+        typeof detail.base_head !== "string" ||
+        !Array.isArray(detail.current_states) ||
+        !Array.isArray(detail.index_states) ||
+        typeof detail.current_state_commitment !== "string" ||
+        typeof detail.cross_runtime !== "boolean" ||
+        typeof detail.reason !== "string" ||
+        typeof detail.user_authorization !== "string"
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is invalid");
+      }
+      const expansion = state.scope_expansions.find(
+        (candidate) =>
+          candidate.expansion_id === detail.scope_expansion_id &&
+          candidate.resulting_version === detail.scope_expansion_version,
+      );
+      if (!expansion || !samePathList(expansion.added_paths, detail.adopted_paths)) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption expansion evidence is inconsistent");
+      }
+      if (row.version <= expansion.resulting_version || row.version > state.version) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit version is inconsistent");
+      }
+      const baselines = state.approved_path_baselines.filter(
+        (baseline) => baseline.approved_at_version === expansion.resulting_version,
+      );
+      if (
+        !samePathList(
+          baselines.map((baseline) => baseline.path),
+          detail.adopted_paths,
+        )
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption baselines are inconsistent");
+      }
+      if (
+        detail.adopted_paths.some((path) => !state.approved_paths.includes(path) || seen.has(path))
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption paths are duplicated or unapproved");
+      }
+      for (const path of detail.adopted_paths) seen.add(path);
+      if (detail.base_head !== state.base_head) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption base is stale");
+      }
+      if (
+        detail.runtime_id !== owner.runtime_id ||
+        detail.runtime_revision !== owner.runtime_revision
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption runtime evidence is inconsistent");
+      }
+      if (
+        detail.cross_runtime !==
+        (detail.executing_runtime_id !== detail.runtime_id ||
+          detail.executing_runtime_revision !== detail.runtime_revision)
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption runtime evidence is inconsistent");
+      }
+      if (options.crossRuntime !== "any" && options.crossRuntime !== detail.cross_runtime) {
+        fail(
+          "ERROR_STALE_ADOPTION",
+          "dirty scope adoption is not authorized for this runtime path",
+        );
+      }
+      const executingOwner =
+        detail.executing_runtime_id === owner.runtime_id &&
+        detail.executing_runtime_revision === owner.runtime_revision;
+      const executingCurrent =
+        detail.executing_runtime_id === this.runtimeId &&
+        detail.executing_runtime_revision === this.runtimeRevision;
+      const expectedExecutingRuntime =
+        options.crossRuntime === "any" && !detail.cross_runtime ? executingOwner : executingCurrent;
+      if (!expectedExecutingRuntime) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption executing runtime is unavailable");
+      }
+      if (
+        detail.current_states.length !== detail.adopted_paths.length ||
+        detail.current_states.some(
+          (item, index) =>
+            !item ||
+            typeof item !== "object" ||
+            item.path !== detail.adopted_paths[index] ||
+            !["added", "modified", "deleted", "unchanged", "absent"].includes(item.state) ||
+            !["file", "symlink", "missing"].includes(item.kind),
+        )
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption state evidence is invalid");
+      }
+      if (
+        detail.index_states.length !== detail.adopted_paths.length ||
+        detail.index_states.some(
+          (item, index) =>
+            !item ||
+            typeof item !== "object" ||
+            item.path !== detail.adopted_paths[index] ||
+            !["added", "modified", "deleted", "unchanged", "absent"].includes(item.state) ||
+            !["file", "symlink", "missing"].includes(item.kind),
+        )
+      ) {
+        fail("ERROR_STALE_ADOPTION", "dirty scope adoption index evidence is invalid");
+      }
+      result.push(detail);
+    }
+    return result;
+  }
+
+  #verifyPendingDirtyAdoptions(
+    state: WorkflowState,
+    currentReceipt: ChangeReceipt,
+    options: { crossRuntime: boolean },
+  ): void {
+    if (currentReceipt.base_head !== state.base_head) {
+      fail("ERROR_STALE_ADOPTION", "current HEAD changed after dirty scope adoption");
+    }
+    const pending = this.#pendingDirtyAdoptions(state, options);
+    const receiptByPath = new Map(currentReceipt.paths.map((entry) => [entry.path, entry]));
+    for (const adoption of pending) {
+      const paths = adoption.adopted_paths.map((path) => receiptByPath.get(path));
+      if (paths.some((entry) => !entry)) {
+        fail("ERROR_STALE_ADOPTION", "adopted path is outside the current review scope");
+      }
+      const projected = paths as ChangeReceipt["paths"];
+      const states = adoptionStates(currentReceipt, adoption.adopted_paths);
+      const indexStates = stagedAdoptionStates(
+        this.root,
+        adoption.adopted_paths,
+        currentReceipt.base_head,
+      );
+      if (canonicalJson(states) !== canonicalJson(adoption.current_states)) {
+        fail("ERROR_STALE_ADOPTION", "adopted path state changed after authorization");
+      }
+      if (canonicalJson(indexStates) !== canonicalJson(adoption.index_states)) {
+        fail("ERROR_STALE_ADOPTION", "adopted index state changed after authorization");
+      }
+      if (
+        adoptionCommitment(state.base_head, projected, indexStates) !==
+        adoption.current_state_commitment
+      ) {
+        fail("ERROR_STALE_ADOPTION", "adopted path content changed after authorization");
+      }
+    }
+  }
+
+  /** Read-only commitment preflight used by the narrow historical-runtime recovery path. */
+  verifyPendingDirtyScope(workflowIdValue: unknown): void {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    const state = parseState(row);
+    if (state.review_target.review_mode !== "working_tree") {
+      fail("ERROR_STALE_ADOPTION", "dirty scope recovery requires a working-tree review");
+    }
+    const receipt = createReceipt(this.root, state.review_target.approved_paths, true);
+    this.#verifyPendingDirtyAdoptions(state, receipt, { crossRuntime: true });
+  }
+
+  pendingDirtyScope(workflowIdValue: unknown): boolean {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    const state = parseState(row);
+    return this.#pendingDirtyAdoptions(state, { crossRuntime: "any" }).some(
+      (adoption) => adoption.cross_runtime,
+    );
+  }
+
+  /** The only cross-runtime state mutation: finish a dirty adoption when the owner lacks the tool. */
+  adoptDirtyScopeCrossRuntime(input: unknown): RoleView {
+    const args = mutationInput(input);
+    const expectedVersionNumber = expectedVersion(args.expected_version);
+    let adoptedReceipt: ChangeReceipt | null = null;
+    let adoptedIndexStates: DirtyScopeAdoptionIndexState[] | null = null;
+    const result = this.db
+      .transaction(() => {
+        const row = this.#row(args.workflow_id);
+        const id = row.workflow_id as WorkflowId;
+        this.#assertParentAuth(row, args.capability);
+        if (row.version !== expectedVersionNumber)
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const state = parseState(row);
+        const owner = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+        if (
+          owner.runtime_id === null ||
+          owner.runtime_revision === null ||
+          this.runtimeId === null ||
+          this.runtimeRevision === null ||
+          (owner.runtime_id === this.runtimeId && owner.runtime_revision === this.runtimeRevision)
+        ) {
+          fail("ERROR_RUNTIME_ISOLATION", "dirty adoption is not a cross-runtime recovery");
+        }
+        if (state.review_target.review_mode !== "working_tree") {
+          fail(
+            "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+            "dirty scope adoption requires a working-tree review",
+          );
+        }
+        if (this.#pendingDirtyAdoptions(state, { crossRuntime: true }).length > 0) {
+          const current = createReceipt(this.root, state.review_target.approved_paths, true);
+          this.#verifyPendingDirtyAdoptions(state, current, { crossRuntime: true });
+        }
+        const addedPaths = exactPaths(args.adopted_paths ?? args.added_paths, this.root);
+        const pending = this.#pendingDirtyAdoptions(state, { crossRuntime: true });
+        if (
+          pending.some((adoption) =>
+            adoption.adopted_paths.some((path) => addedPaths.includes(path)),
+          )
+        ) {
+          fail("ERROR_INVALID_PATHS", "dirty scope adoption paths were already adopted");
+        }
+        const receipt = createReceipt(this.root, addedPaths, true);
+        adoptedReceipt = receipt;
+        adoptedIndexStates = stagedAdoptionStates(this.root, addedPaths, receipt.base_head);
+        const next = adoptDirtyScope(
+          state,
+          args,
+          receipt,
+          this.root,
+          adoptedIndexStates
+            .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
+            .map((entry) => entry.path),
+        );
+        next.version = (expectedVersionNumber + 1) as WorkflowVersion;
+        assertApprovedPlanUnchanged(state, next);
+        assertWorkItemsUnchanged(state, next);
+        validateWorkflowStateV6(next);
+        const update = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(
+            next.version,
+            JSON.stringify(next),
+            objectDigest(next),
+            isoNow(),
+            id,
+            expectedVersionNumber,
+          );
+        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const expansion = next.scope_expansions.find((candidate) =>
+          samePathList(candidate.added_paths, addedPaths),
+        );
+        if (!expansion || !adoptedReceipt || !adoptedIndexStates)
+          fail("ERROR_STALE_ADOPTION", "dirty adoption evidence is missing");
+        this.#audit(
+          id,
+          next.version,
+          "DIRTY_SCOPE_ADOPTED",
+          "parent",
+          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
+            outcome: next.phase,
+          }),
+          {
+            dirty_scope_adoption: {
+              scope_expansion_id: expansion.expansion_id,
+              scope_expansion_version: expansion.resulting_version,
+              adopted_paths: expansion.added_paths,
+              base_head: adoptedReceipt.base_head,
+              current_states: adoptionStates(adoptedReceipt, expansion.added_paths),
+              index_states: adoptedIndexStates,
+              current_state_commitment: adoptionCommitment(
+                adoptedReceipt.base_head,
+                adoptedReceipt.paths,
+                adoptedIndexStates,
+              ),
+              runtime_id: owner.runtime_id,
+              runtime_revision: owner.runtime_revision as GitCommitSha,
+              executing_runtime_id: this.runtimeId,
+              executing_runtime_revision: this.runtimeRevision,
+              cross_runtime: true,
+              reason: args.reason as string,
+              user_authorization: args.user_authorization as string,
+            },
+          },
+        );
+        return next;
+      })
+      .immediate();
+    return roleViewForRole(result, "parent");
+  }
+
+  /** Establish the review-start receipt in the narrow historical-runtime recovery boundary. */
+  beginReviewCrossRuntime(input: unknown): RoleView {
+    const args = mutationInput(input);
+    exactKeys(args, ["workflow_id", "expected_version"], "review begin");
+    const expectedVersionNumber = expectedVersion(args.expected_version);
+    const result = this.db
+      .transaction(() => {
+        const row = this.#row(args.workflow_id);
+        const id = row.workflow_id as WorkflowId;
+        if (row.version !== expectedVersionNumber)
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const state = parseState(row);
+        const owner = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+        if (
+          owner.runtime_id === null ||
+          owner.runtime_revision === null ||
+          this.runtimeId === null ||
+          this.runtimeRevision === null ||
+          (owner.runtime_id === this.runtimeId && owner.runtime_revision === this.runtimeRevision)
+        ) {
+          fail("ERROR_RUNTIME_ISOLATION", "review snapshot is not a cross-runtime recovery");
+        }
+        if (state.review_target.review_mode !== "working_tree") {
+          fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
+        }
+        if (this.#pendingDirtyAdoptions(state, { crossRuntime: true }).length === 0) {
+          fail("ERROR_STALE_ADOPTION", "no pending dirty scope adoption exists");
+        }
+        const startReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
+        this.#verifyPendingDirtyAdoptions(state, startReceipt, { crossRuntime: true });
+        const next = beginReview(state, args, startReceipt);
+        next.version = (expectedVersionNumber + 1) as WorkflowVersion;
+        assertApprovedPlanUnchanged(state, next);
+        assertWorkItemsUnchanged(state, next);
+        assertScopeUnchanged(state, next);
+        validateWorkflowStateV6(next);
+        const update = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(
+            next.version,
+            JSON.stringify(next),
+            objectDigest(next),
+            isoNow(),
+            id,
+            expectedVersionNumber,
+          );
+        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        this.#audit(
+          id,
+          next.version,
+          "REVIEW_STARTED",
+          "reviewer",
+          auditEnvelope(state, next, row.state_digest as StateDigest | null),
+        );
+        return next;
+      })
+      .immediate();
+    return roleViewForRole(result, "reviewer");
+  }
+
   #mutate(
     workflowIdValue: unknown,
     actorRole: Role,
@@ -771,6 +1273,12 @@ export class WorkflowStore {
     eventType: AuditEventType | ((next: WorkflowState) => AuditEventType),
     action: (state: WorkflowState) => WorkflowState,
     outcome: AuditOutcome | null | ((next: WorkflowState) => AuditOutcome | null) = null,
+    details: (
+      before: WorkflowState,
+      next: WorkflowState,
+    ) => {
+      dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+    } = () => ({}),
   ): RoleView {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
@@ -837,6 +1345,7 @@ export class WorkflowStore {
           auditEnvelope(current, next, row.state_digest as StateDigest | null, {
             outcome: resolvedOutcome,
           }),
+          details(current, next),
         );
         return { next, selectedRole: actorRole };
       })
@@ -887,6 +1396,7 @@ export class WorkflowStore {
         if (startReceipt.base_head !== state.base_head) {
           fail("ERROR_STALE_RECEIPT", "review snapshot base is stale; begin review again");
         }
+        this.#verifyPendingDirtyAdoptions(state, startReceipt, { crossRuntime: false });
         return beginReview(state, args, startReceipt);
       },
     );
@@ -987,7 +1497,12 @@ export class WorkflowStore {
       args.capability,
       args.expected_version,
       "REVIEW_RESUMED",
-      (state) => resumeReview(state, args),
+      (state) => {
+        if (state.review_target.review_mode !== "working_tree") return resumeReview(state, args);
+        const currentReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
+        this.#verifyPendingDirtyAdoptions(state, currentReceipt, { crossRuntime: false });
+        return resumeReview(state, args);
+      },
     );
   }
 

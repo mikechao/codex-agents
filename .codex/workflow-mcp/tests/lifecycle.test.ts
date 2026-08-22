@@ -84,7 +84,7 @@ const ACTIONS = {
     committer: [],
   },
   inconclusive: {
-    parent: ["workflow_resume_review"],
+    parent: ["workflow_adopt_dirty_scope", "workflow_resume_review"],
     implementer: [],
     reviewer: [],
     committer: [],
@@ -1213,3 +1213,214 @@ scenario("commit mismatch stops terminally", [
     snapshots: [snap("parent", "STOPPED_COMMIT_MISMATCH", 5, ACTIONS.none, EVENTS.commitResult)],
   },
 ]);
+
+test("dirty scope adoption is committed and guarded at both review recovery boundaries", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "adoption.sqlite");
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const head = git("rev-parse", "HEAD");
+    const created = store.create({
+      workflow_type: "change",
+      objective: "dirty adoption",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["criterion"],
+      validation_requirements: ["validation"],
+      review_target: {
+        review_mode: "working_tree",
+        base_revision: head,
+        head_revision: null,
+        approved_paths: ["note.txt"],
+        include_staged: true,
+        include_unstaged: true,
+        include_untracked: true,
+      },
+    });
+    const id = created.workflow.workflow_id;
+    const capability = created.capability;
+    store.expandScope({
+      workflow_id: id,
+      capability,
+      expected_version: 0,
+      added_paths: ["dirty.txt"],
+      reason: "planned path",
+      user_authorization: "authorized",
+    });
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 1,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 2 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 3,
+      review_status: "INCONCLUSIVE",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    writeFileSync(join(root, "dirty.txt"), "authorized\n");
+    store.adoptDirtyScope({
+      workflow_id: id,
+      capability,
+      expected_version: 4,
+      adopted_paths: ["dirty.txt"],
+      reason: "recover dirty path",
+      user_authorization: "explicit recovery",
+    });
+    const adoptionAudit = store.audit(id, capability);
+    assert.equal(adoptionAudit.at(-1).event_type, "DIRTY_SCOPE_ADOPTED");
+    assert.ok(adoptionAudit.at(-1).dirty_scope_adoption.current_state_commitment);
+    const beforeResume = store.parentGet(id);
+    writeFileSync(join(root, "dirty.txt"), "changed after adoption\n");
+    assert.throws(
+      () =>
+        store.resumeReview({
+          workflow_id: id,
+          capability,
+          expected_version: beforeResume.version,
+          resume_context: "resume",
+        }),
+      (error: any) => error.category === "ERROR_STALE_ADOPTION",
+    );
+    assert.equal(store.parentGet(id).version, beforeResume.version);
+    assert.equal(store.audit(id, capability).length, adoptionAudit.length);
+
+    writeFileSync(join(root, "dirty.txt"), "authorized\n");
+    store.resumeReview({
+      workflow_id: id,
+      capability,
+      expected_version: beforeResume.version,
+      resume_context: "resume",
+    });
+    const beforeBegin = store.parentGet(id);
+    writeFileSync(join(root, "dirty.txt"), "changed before review start\n");
+    assert.throws(
+      () => store.beginReview({ workflow_id: id, expected_version: beforeBegin.version }),
+      (error: any) => error.category === "ERROR_STALE_ADOPTION",
+    );
+    assert.equal(store.parentGet(id).version, beforeBegin.version);
+    assert.equal(store.audit(id, capability).length, adoptionAudit.length + 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("dirty scope adoption binds staged-only index state", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "staged-adoption.sqlite");
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const head = git("rev-parse", "HEAD");
+    const created = store.create({
+      workflow_type: "change",
+      objective: "staged dirty adoption",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["criterion"],
+      validation_requirements: ["validation"],
+      review_target: {
+        review_mode: "working_tree",
+        base_revision: head,
+        head_revision: null,
+        approved_paths: ["note.txt"],
+        include_staged: true,
+        include_unstaged: true,
+        include_untracked: true,
+      },
+    });
+    const id = created.workflow.workflow_id;
+    const capability = created.capability;
+    store.expandScope({
+      workflow_id: id,
+      capability,
+      expected_version: 0,
+      added_paths: ["staged.txt"],
+      reason: "planned path",
+      user_authorization: "authorized",
+    });
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 1,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 2 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 3,
+      review_status: "INCONCLUSIVE",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+
+    writeFileSync(join(root, "staged.txt"), "indexed\n");
+    git("add", "staged.txt");
+    git("restore", "--worktree", "--source=HEAD", "--", "staged.txt");
+    store.adoptDirtyScope({
+      workflow_id: id,
+      capability,
+      expected_version: 4,
+      adopted_paths: ["staged.txt"],
+      reason: "recover staged path",
+      user_authorization: "explicit recovery",
+    });
+    const adoptionAudit = store.audit(id, capability);
+    assert.equal(adoptionAudit.at(-1).event_type, "DIRTY_SCOPE_ADOPTED");
+    assert.equal(adoptionAudit.at(-1).dirty_scope_adoption.index_states[0].state, "added");
+    const beforeResume = store.parentGet(id);
+
+    writeFileSync(join(root, "staged.txt"), "changed-index\n");
+    git("add", "staged.txt");
+    git("restore", "--worktree", "--source=HEAD", "--", "staged.txt");
+    assert.throws(
+      () =>
+        store.resumeReview({
+          workflow_id: id,
+          capability,
+          expected_version: beforeResume.version,
+          resume_context: "resume",
+        }),
+      (error: any) => error.category === "ERROR_STALE_ADOPTION",
+    );
+    assert.equal(store.parentGet(id).version, beforeResume.version);
+    assert.equal(store.audit(id, capability).length, adoptionAudit.length);
+
+    git("reset", "-q", "HEAD", "--", "staged.txt");
+    writeFileSync(join(root, "staged.txt"), "indexed\n");
+    git("add", "staged.txt");
+    git("restore", "--worktree", "--source=HEAD", "--", "staged.txt");
+    store.resumeReview({
+      workflow_id: id,
+      capability,
+      expected_version: beforeResume.version,
+      resume_context: "resume",
+    });
+    const beforeBegin = store.parentGet(id);
+    writeFileSync(join(root, "staged.txt"), "changed-worktree\n");
+    assert.throws(
+      () => store.beginReview({ workflow_id: id, expected_version: beforeBegin.version }),
+      (error: any) => error.category === "ERROR_STALE_ADOPTION",
+    );
+    assert.equal(store.parentGet(id).version, beforeBegin.version);
+    assert.equal(store.audit(id, capability).length, adoptionAudit.length + 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

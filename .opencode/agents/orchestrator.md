@@ -35,6 +35,7 @@ permission:
   question: deny
   workflow_state_*: deny
   workflow_state_workflow_create: allow
+  workflow_state_workflow_adopt_dirty_scope: allow
   workflow_state_workflow_expand_scope: allow
   workflow_state_workflow_parent_get: allow
   workflow_state_workflow_get_audit: allow

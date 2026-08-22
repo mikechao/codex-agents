@@ -77,6 +77,7 @@ export type CommitMismatchCategory =
 // All Workflow MCP tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
+  | "workflow_adopt_dirty_scope"
   | "workflow_expand_scope"
   | "workflow_parent_get"
   | "workflow_implementer_get"
@@ -148,6 +149,7 @@ export type ErrorCategory =
   | "ERROR_DIRECTORY_PATH"
   | "ERROR_UNSUPPORTED_FILE_TYPE"
   | "ERROR_INVALID_ARGUMENTS"
+  | "ERROR_STALE_ADOPTION"
   | "ERROR_RUNTIME_ISOLATION"
   | "ERROR_RUNTIME_RECOVERY"
   | "ERROR_RUNTIME_ARTIFACT"
@@ -166,6 +168,7 @@ export type AuditEventType =
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"
   | "CONCERNS_ACCEPTED"
+  | "DIRTY_SCOPE_ADOPTED"
   | "REVIEW_STARTED"
   | "REVIEW_SUBMITTED"
   | "REPAIR_AUTHORIZED"
@@ -592,6 +595,7 @@ export interface AuditEnvelope {
   changed_fields: string[]; // sorted top-level keys excluding "version"
   linked_workflow_id: WorkflowId | null;
   outcome: AuditOutcome;
+  dirty_scope_adoption?: DirtyScopeAdoptionAudit;
 }
 
 export interface AuditEvent {
@@ -600,7 +604,43 @@ export interface AuditEvent {
   actor_role: ActorRole;
   summary: AuditEnvelope;
   scope_expansion?: ScopeExpansionAudit;
+  dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   created_at: IsoTimestamp;
+}
+
+export interface DirtyScopeAdoptionState {
+  path: ExactRepoPath;
+  state: "added" | "modified" | "deleted" | "unchanged" | "absent";
+  kind: "file" | "symlink" | "missing";
+  mode?: GitFileMode;
+}
+
+export type DirtyScopeAdoptionIndexState =
+  | { path: ExactRepoPath; state: "absent"; kind: "missing" }
+  | { path: ExactRepoPath; state: "deleted"; kind: "missing"; mode: GitFileMode }
+  | {
+      path: ExactRepoPath;
+      state: "added" | "modified" | "unchanged";
+      kind: "file" | "symlink";
+      mode: GitFileMode;
+      digest: ContentDigest;
+    };
+
+export interface DirtyScopeAdoptionAudit {
+  scope_expansion_id: string;
+  scope_expansion_version: WorkflowVersion;
+  adopted_paths: ExactRepoPath[];
+  base_head: GitCommitSha;
+  current_states: DirtyScopeAdoptionState[];
+  index_states: DirtyScopeAdoptionIndexState[];
+  current_state_commitment: StateDigest;
+  runtime_id: string | null;
+  runtime_revision: GitCommitSha | null;
+  executing_runtime_id: string | null;
+  executing_runtime_revision: GitCommitSha | null;
+  cross_runtime: boolean;
+  reason: string;
+  user_authorization: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const names = tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     "workflow_accept_concerns",
+    "workflow_adopt_dirty_scope",
     "workflow_authorize_commit",
     "workflow_authorize_repair",
     "workflow_begin_review",
@@ -39,8 +40,9 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const review = tools.find((tool) => tool.name === "workflow_submit_review");
   const begin = tools.find((tool) => tool.name === "workflow_begin_review");
   const expansion = tools.find((tool) => tool.name === "workflow_expand_scope");
+  const adoption = tools.find((tool) => tool.name === "workflow_adopt_dirty_scope");
   const create = tools.find((tool) => tool.name === "workflow_create");
-  assert.ok(implementation && review && begin && expansion && create);
+  assert.ok(implementation && review && begin && expansion && adoption && create);
   assert.match(create.description ?? "", /one parent capability/u);
   assert.equal((create.description ?? "").includes("role capabilities"), false);
   assert.equal(protocolInstructions.includes("workflow_get"), false);
@@ -67,6 +69,16 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const expansionSchema = expansion.inputSchema as any;
   assert.deepEqual(Object.keys(expansionSchema.properties).sort(), [
     "added_paths",
+    "capability",
+    "expected_version",
+    "reason",
+    "user_authorization",
+    "workflow_id",
+  ]);
+  const adoptionSchema = adoption.inputSchema as any;
+  assert.deepEqual(Object.keys(adoptionSchema.properties).sort(), [
+    "added_paths",
+    "adopted_paths",
     "capability",
     "expected_version",
     "reason",

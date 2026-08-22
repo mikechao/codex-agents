@@ -84,6 +84,9 @@ authorization-time baselines. The amendment history is parent-only; all role vie
 refreshed effective path list. Expansion preserves the active implementation/repair phase and does
 not consume a repair cycle, but clears stale implementation/review/commit evidence so fresh
 implementation and review are required.
+From `STOPPED_INCONCLUSIVE`, `workflow_adopt_dirty_scope` separately records an authorization-time
+commitment for exact dirty paths originating in an existing scope expansion; that commitment is
+guarded before review resume and review-start snapshot creation.
 
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
 `runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
