@@ -103,8 +103,11 @@ to select Plan for analysis/refinement or Build for deliberate ordinary direct c
 create an implementation workflow; after approving a plan, switch to Orchestrator and say
 `implement the plan`. Orchestrator performs bounded read-only preflight, creates or reuses the
 authoritative workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after
-explicit user commit authorization—`committer`. It preserves the exact `workflow_id`, capability,
-and version through every handoff and cannot edit, stage, or commit itself. Build remains an
+explicit user commit authorization—`committer`. Worker handoffs contain only the `workflow_id`; each
+role reads authoritative state and its `expected_version` through its dedicated getter. The single
+capability remains parent-only for privileged transitions, with separation enforced by role-specific
+tool exposure and Workflow MCP workflow, phase, version, and invariant checks. Orchestrator cannot
+edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
 After an external Git commit succeeds, Workflow MCP itself observes and persists the verified commit
 SHA, without requiring the committer to submit it.
