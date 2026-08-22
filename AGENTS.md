@@ -29,6 +29,27 @@ installation, not through hot reload, and running host sessions must be restarte
 definitions. Model policy is host metadata and is not carried in delegation prompts or Workflow MCP
 state.
 
+## Architectural boundaries
+
+- Self-hosting bootstrap, immutable runtime artifacts, runtime affinity, and reload recovery are
+  self-hosting concerns; do not make them installed-target requirements without an independent
+  target-repository need.
+- Runtime-specific workflow values—including work items, plans, findings, capabilities, versions,
+  and receipts—come from authoritative runtime state and must not be embedded in reusable, static,
+  or generated agent definitions, examples, or fixtures.
+- Workflow MCP is the authoritative durable state boundary. Model handoffs should carry only the
+  necessary routing or semantic context and must not replace an authoritative lookup with
+  conversation memory or duplicate durable state.
+- Worker attempts, retries, process lifecycle, and worktree or execution-loop mechanics are
+  orchestration concerns unless persistence is required for correctness or recovery; they should
+  not create workflow fields or phases by default.
+- Host reload, stale configuration, transport, and similar infrastructure failures belong at their
+  owning boundary; do not model them as workflow-domain phases without genuine durable meaning.
+
+For normative workflow semantics, read `.codex/agents/WORKFLOW.md`; do not duplicate its state
+machine here or add transition details, recovery procedures, operator runbook content, or unfinished
+planner mechanics.
+
 Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
 server. Keep the generated host definitions, workflow documentation, MCP tool schemas and
 transitions, and their tests consistent. When an agent contract changes, regenerate the host
