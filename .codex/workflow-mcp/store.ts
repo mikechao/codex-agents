@@ -3,6 +3,12 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
+import {
+  createDiagnosticRecorder,
+  type DiagnosticRecorder,
+  type DiagnosticRecorderOptions,
+  diagnosticRequestContext,
+} from "./diagnostics.js";
 import { fail, WorkflowError } from "./errors.js";
 import {
   createReceipt,
@@ -82,7 +88,6 @@ import {
   isoNow,
   issueCapability,
   objectDigest,
-  workflowId,
 } from "./validation.js";
 
 export function resolveStatePath(root: string): string {
@@ -103,6 +108,8 @@ export interface WorkflowStoreOptions {
   runtimeAttestationNonce?: string;
   /** Test-only key override for stores instantiated directly from source. */
   runtimeAttestationKey?: string;
+  diagnostics?: DiagnosticRecorder;
+  diagnosticsOptions?: DiagnosticRecorderOptions;
 }
 
 export interface RuntimeAffinity {
@@ -394,6 +401,7 @@ export class WorkflowStore {
   readonly runtimeAttestation: string | null;
   readonly runtimeAttestationNonce: string | null;
   private readonly runtimeAttestationKey: Buffer | null;
+  readonly diagnostics: DiagnosticRecorder;
   private db: Database;
   private closed = false;
 
@@ -429,6 +437,9 @@ export class WorkflowStore {
         : runtimeId !== null && runtimeRevision !== null
           ? immutableRuntimeKey(this.root, runtimeId, runtimeRevision)
           : null;
+    this.diagnostics =
+      options.diagnostics ??
+      createDiagnosticRecorder("runtime-store", this.root, options.diagnosticsOptions);
     if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Bun 1.3.x strict mode validates named parameter bindings (positional `?`
     // counts are not checked in this version); every query here binds positionally.
@@ -498,15 +509,43 @@ export class WorkflowStore {
       fail("ERROR_RUNTIME_ISOLATION", "supervisor launch attestation is invalid");
   }
 
-  #row(workflowId: WorkflowId): WorkflowRow {
-    if (typeof workflowId !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowId)) {
+  #row(workflowIdValue: unknown): WorkflowRow {
+    const context = diagnosticRequestContext();
+    const common = {
+      request_id: context?.request_id,
+      method: context?.method,
+      tool: context?.tool,
+      workflow_id: workflowIdValue,
+      database_path: this.path,
+    };
+    if (typeof workflowIdValue !== "string" || !/^[0-9a-f-]{36}$/u.test(workflowIdValue)) {
+      this.diagnostics.record({ ...common, event: "workflow_lookup", outcome: "malformed_id" });
       fail("ERROR_NOT_FOUND", "workflow is not found");
     }
+    const workflowId = workflowIdValue as WorkflowId;
     const row = this.db.prepare("SELECT * FROM workflows WHERE workflow_id = ?").get(workflowId) as
       | WorkflowRow
       | undefined;
-    if (!row) fail("ERROR_NOT_FOUND", "workflow is not found");
-    parseState(row);
+    if (!row) {
+      this.diagnostics.record({
+        ...common,
+        event: "workflow_lookup",
+        outcome: "missing_row",
+        found: false,
+      });
+      fail("ERROR_NOT_FOUND", "workflow is not found");
+    }
+    const state = parseState(row);
+    this.diagnostics.record({
+      ...common,
+      event: "workflow_lookup",
+      outcome: "found",
+      found: true,
+      version: row.version,
+      phase: state.phase,
+      runtime_id: state.runtime_id,
+      runtime_revision: state.runtime_revision,
+    });
     return row;
   }
 
@@ -561,8 +600,7 @@ export class WorkflowStore {
 
   #get(workflowIdValue: unknown, actorRole: Role): RoleView {
     this.#ensureOpen();
-    const id = workflowId(workflowIdValue);
-    const row = this.#row(id);
+    const row = this.#row(workflowIdValue);
     this.#assertRuntimeOwnership(row);
     return roleViewForRole(parseState(row), actorRole);
   }
@@ -633,21 +671,20 @@ export class WorkflowStore {
   /** Read only the persisted owning runtime; used by the bootstrap supervisor before auth. */
   runtimeAffinity(workflowIdValue: unknown): RuntimeAffinity {
     this.#ensureOpen();
-    const id = workflowId(workflowIdValue);
-    const state = parseState(this.#row(id));
+    const state = parseState(this.#row(workflowIdValue));
     return runtimeAffinityPair(state.runtime_id, state.runtime_revision);
   }
 
   /** Bind an un-affined current-schema row to this host's immutable runtime on first use. */
   adoptRuntime(workflowIdValue: unknown): RuntimeAffinity {
     this.#ensureOpen();
-    const id = workflowId(workflowIdValue);
     if (this.runtimeId === null || this.runtimeRevision === null) {
       fail("ERROR_RUNTIME_RECOVERY", "current immutable runtime is unavailable for adoption");
     }
     return this.db
       .transaction(() => {
-        const row = this.#row(id);
+        const row = this.#row(workflowIdValue);
+        const id = row.workflow_id as WorkflowId;
         const state = parseState(row);
         const current = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
         if (current.runtime_id !== null || current.runtime_revision !== null) return current;
@@ -683,8 +720,8 @@ export class WorkflowStore {
 
   audit(workflowIdValue: unknown, token: unknown): AuditEvent[] {
     this.#ensureOpen();
-    const id = workflowId(workflowIdValue);
-    const row = this.#row(id);
+    const row = this.#row(workflowIdValue);
+    const id = row.workflow_id as WorkflowId;
     this.#assertParentAuth(row, token);
     this.#assertRuntimeOwnership(row);
     const state = parseState(row);
@@ -737,10 +774,10 @@ export class WorkflowStore {
   ): RoleView {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
-    const id = workflowId(workflowIdValue); // brand at boundary; regex also inside #row
     const { next, selectedRole } = this.db
       .transaction(() => {
-        const row = this.#row(id);
+        const row = this.#row(workflowIdValue);
+        const id = row.workflow_id as WorkflowId;
         if (actorRole === "parent") this.#assertParentAuth(row, token);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
@@ -1120,10 +1157,10 @@ export class WorkflowStore {
     this.#ensureOpen();
     const args = mutationInput(input);
     const expectedVersionNumber = expectedVersion(args.expected_version);
-    const id = workflowId(args.workflow_id);
     const result = this.db
       .transaction(() => {
-        const row = this.#row(id);
+        const row = this.#row(args.workflow_id);
+        const id = row.workflow_id as WorkflowId;
         this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)

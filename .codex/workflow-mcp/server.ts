@@ -8,6 +8,7 @@ import type {
 } from "@modelcontextprotocol/server";
 import { Server } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { withDiagnosticRequest } from "./diagnostics.js";
 import { fail, safeError } from "./errors.js";
 import type { WorkflowStore } from "./store.js";
 import { openStore } from "./store.js";
@@ -691,82 +692,115 @@ export function createServer(store: WorkflowStore = openStore()): Server {
     { capabilities: { tools: {} }, instructions: protocolInstructions },
   );
   server.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => ({ tools }));
-  server.setRequestHandler("tools/call", async (request) => {
+  server.setRequestHandler("tools/call", async (request, context) => {
+    const requestId = context.mcpReq.id;
+    const tool = request.params.name;
+    const args = request.params.arguments ?? {};
+    store.diagnostics.record({
+      event: "tool_receipt",
+      request_id: requestId,
+      tool,
+      workflow_id: args.workflow_id,
+      runtime_id: store.runtimeId,
+      runtime_revision: store.runtimeRevision,
+      outcome: "received",
+    });
     try {
-      const args = request.params.arguments ?? {};
       let result: unknown;
-      switch (request.params.name) {
-        case "workflow_expand_scope":
-          result = store.expandScope(args);
-          break;
-        case "workflow_create":
-          result = store.create(args);
-          break;
-        case "workflow_parent_get":
-          result = store.parentGet(args.workflow_id);
-          break;
-        case "workflow_implementer_get":
-          result = store.implementerGet(args.workflow_id);
-          break;
-        case "workflow_reviewer_get":
-          result = store.reviewerGet(args.workflow_id);
-          break;
-        case "workflow_committer_get":
-          result = store.committerGet(args.workflow_id);
-          break;
-        case "workflow_get_audit":
-          result = store.audit(args.workflow_id, args.capability);
-          break;
-        case "workflow_submit_implementation":
-          result = store.submitImplementation(args);
-          break;
-        case "workflow_resume_implementation":
-          result = store.resumeImplementation(args);
-          break;
-        case "workflow_accept_concerns":
-          result = store.acceptConcerns(args);
-          break;
-        case "workflow_begin_review":
-          result = store.beginReview(args);
-          break;
-        case "workflow_submit_review":
-          result = store.submitReview(args);
-          break;
-        case "workflow_authorize_repair":
-          result = store.authorizeRepair(args);
-          break;
-        case "workflow_resume_review":
-          result = store.resumeReview(args);
-          break;
-        case "workflow_finalize_repair_exhausted":
-          result = store.finalizeRepairExhausted(args);
-          break;
-        case "workflow_create_linked_followup":
-          result = store.createLinkedFollowup(args);
-          break;
-        case "workflow_authorize_commit":
-          result = store.authorizeCommit(args);
-          break;
-        case "workflow_prepare_commit":
-          result = store.prepareCommit(args);
-          break;
-        case "workflow_retry_commit_preparation":
-          result = store.retryCommitPreparation(args);
-          break;
-        case "workflow_return_commit_to_review":
-          result = store.returnCommitToReview(args);
-          break;
-        case "workflow_submit_commit_result":
-          result = store.submitCommitResult(args);
-          break;
-        case "workflow_retry_commit":
-          result = store.retryCommit(args);
-          break;
-        default:
-          fail("ERROR_UNKNOWN_TOOL", "tool is not available");
-      }
+      withDiagnosticRequest({ request_id: requestId, method: "tools/call", tool }, () => {
+        switch (request.params.name) {
+          case "workflow_expand_scope":
+            result = store.expandScope(args);
+            break;
+          case "workflow_create":
+            result = store.create(args);
+            break;
+          case "workflow_parent_get":
+            result = store.parentGet(args.workflow_id);
+            break;
+          case "workflow_implementer_get":
+            result = store.implementerGet(args.workflow_id);
+            break;
+          case "workflow_reviewer_get":
+            result = store.reviewerGet(args.workflow_id);
+            break;
+          case "workflow_committer_get":
+            result = store.committerGet(args.workflow_id);
+            break;
+          case "workflow_get_audit":
+            result = store.audit(args.workflow_id, args.capability);
+            break;
+          case "workflow_submit_implementation":
+            result = store.submitImplementation(args);
+            break;
+          case "workflow_resume_implementation":
+            result = store.resumeImplementation(args);
+            break;
+          case "workflow_accept_concerns":
+            result = store.acceptConcerns(args);
+            break;
+          case "workflow_begin_review":
+            result = store.beginReview(args);
+            break;
+          case "workflow_submit_review":
+            result = store.submitReview(args);
+            break;
+          case "workflow_authorize_repair":
+            result = store.authorizeRepair(args);
+            break;
+          case "workflow_resume_review":
+            result = store.resumeReview(args);
+            break;
+          case "workflow_finalize_repair_exhausted":
+            result = store.finalizeRepairExhausted(args);
+            break;
+          case "workflow_create_linked_followup":
+            result = store.createLinkedFollowup(args);
+            break;
+          case "workflow_authorize_commit":
+            result = store.authorizeCommit(args);
+            break;
+          case "workflow_prepare_commit":
+            result = store.prepareCommit(args);
+            break;
+          case "workflow_retry_commit_preparation":
+            result = store.retryCommitPreparation(args);
+            break;
+          case "workflow_return_commit_to_review":
+            result = store.returnCommitToReview(args);
+            break;
+          case "workflow_submit_commit_result":
+            result = store.submitCommitResult(args);
+            break;
+          case "workflow_retry_commit":
+            result = store.retryCommit(args);
+            break;
+          default:
+            fail("ERROR_UNKNOWN_TOOL", "tool is not available");
+        }
+      });
+      store.diagnostics.record({
+        event: "tool_result",
+        request_id: requestId,
+        tool,
+        workflow_id: args.workflow_id,
+        runtime_id: store.runtimeId,
+        runtime_revision: store.runtimeRevision,
+        outcome: "success",
+      });
       return json(result);
     } catch (error) {
+      const safe = safeError(error);
+      store.diagnostics.record({
+        event: "tool_result",
+        request_id: requestId,
+        tool,
+        workflow_id: args.workflow_id,
+        runtime_id: store.runtimeId,
+        runtime_revision: store.runtimeRevision,
+        outcome: "error",
+        error_category: safe.category,
+      });
       return errorResult(error);
     }
   });

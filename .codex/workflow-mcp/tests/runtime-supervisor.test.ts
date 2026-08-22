@@ -75,6 +75,49 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
+  test("keeps exact affinity reads visible across two long-lived WAL connections", () => {
+    const { root } = fixture();
+    const databasePath = join(root, "same-wal.sqlite");
+    const revision = currentHead(root);
+    const runtimeId = "a".repeat(64);
+    let owner: any;
+    let supervisor: any;
+    try {
+      owner = new WorkflowStore({
+        repositoryRoot: root,
+        databasePath,
+        runtimeId,
+        runtimeRevision: revision,
+        ...attestation(runtimeId, revision),
+      });
+      supervisor = new WorkflowStore({
+        repositoryRoot: root,
+        databasePath,
+        runtimeId,
+        runtimeRevision: revision,
+      });
+      const created = create(owner, root, revision, "same WAL owner");
+      for (let index = 0; index < 20; index += 1) {
+        create(owner, root, revision, `same WAL write ${index}`);
+        expect(supervisor.runtimeAffinity(created.workflow.workflow_id)).toEqual({
+          runtime_id: runtimeId,
+          runtime_revision: revision,
+        });
+        expect(owner.parentGet(created.workflow.workflow_id).workflow_id).toBe(
+          created.workflow.workflow_id,
+        );
+      }
+      expect(owner.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
+      const audit = owner.audit(created.workflow.workflow_id, created.capability);
+      expect(audit).toHaveLength(1);
+      expect(audit[0].event_type).toBe("WORKFLOW_CREATED");
+    } finally {
+      owner?.close();
+      supervisor?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed with runtime recovery for incomplete persisted affinity", () => {
     const { root } = fixture();
     const path = join(root, "incomplete.sqlite");

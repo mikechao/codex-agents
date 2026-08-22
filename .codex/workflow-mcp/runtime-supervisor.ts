@@ -2,6 +2,11 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import {
+  createDiagnosticRecorder,
+  type DiagnosticRecorder,
+  withDiagnosticRequest,
+} from "./diagnostics.js";
 import { WorkflowError } from "./errors.js";
 import { currentHead, repositoryRoot } from "./git.js";
 import {
@@ -22,6 +27,8 @@ export interface RuntimeSupervisorOptions extends RuntimeArtifactOptions {
   providerRoot?: string;
   databasePath?: string;
   bunExecutable?: string;
+  diagnostics?: DiagnosticRecorder;
+  diagnosticsDirectory?: string;
 }
 
 export interface ResolvedRuntime extends RuntimeArtifact {
@@ -89,7 +96,7 @@ export function resolveOwningRuntime(
 interface JsonRpcMessage {
   id?: string | number | null;
   method?: string;
-  params?: { arguments?: Record<string, unknown> };
+  params?: { name?: string; arguments?: Record<string, unknown> };
   error?: unknown;
 }
 
@@ -127,6 +134,7 @@ export class RuntimeSupervisor {
   readonly options: RuntimeSupervisorOptions;
   readonly defaultRuntime: ResolvedRuntime;
   private readonly store;
+  private readonly diagnostics: DiagnosticRecorder;
   private readonly children = new Map<string, ChildRuntime>();
   private readonly initializationLines: string[] = [];
   private initialized = false;
@@ -148,12 +156,20 @@ export class RuntimeSupervisor {
       ...options,
       providerRoot: this.providerRoot,
     });
+    this.diagnostics =
+      options.diagnostics ??
+      createDiagnosticRecorder("supervisor", this.root, {
+        directory: options.diagnosticsDirectory,
+      });
     this.store = openStore({
       repositoryRoot: this.root,
       databasePath:
         options.databasePath ?? process.env.WORKFLOW_MCP_DB_PATH ?? resolveStatePath(this.root),
       runtimeId: this.defaultRuntime.runtime_id,
       runtimeRevision: this.defaultRuntime.revision,
+      diagnostics: createDiagnosticRecorder("supervisor-store", this.root, {
+        directory: options.diagnosticsDirectory,
+      }),
     });
   }
 
@@ -405,9 +421,32 @@ export class RuntimeSupervisor {
       process.stdout.write(`${line}\n`);
       return;
     }
+    const workflowId = message.params?.arguments?.workflow_id;
+    this.diagnostics.record({
+      event: "request_receipt",
+      request_id: message.id,
+      method: message.method,
+      tool: message.params?.name,
+      workflow_id: workflowId,
+      outcome: "received",
+    });
     try {
-      const affinity = this.affinityFor(message);
+      const affinity = withDiagnosticRequest(
+        { request_id: message.id, method: message.method, tool: message.params?.name },
+        () => this.affinityFor(message),
+      );
       const artifact = affinity.artifact;
+      this.diagnostics.record({
+        event: "affinity_result",
+        request_id: message.id,
+        method: message.method,
+        tool: message.params?.name,
+        workflow_id: workflowId,
+        adopted: affinity.adopted,
+        selected_runtime: artifact.runtime_id.slice(0, 12),
+        runtime_revision: artifact.revision,
+        outcome: "resolved",
+      });
       const child = this.childFor(artifact);
       const isInitialize = message.method === "initialize";
       if (
@@ -432,10 +471,29 @@ export class RuntimeSupervisor {
         this.initializationLines.push(line);
       }
       childInput(child.process).write(`${this.adoptedRequest(message, affinity.adopted)}\n`);
+      this.diagnostics.record({
+        event: "child_forward",
+        request_id: message.id,
+        method: message.method,
+        tool: message.params?.name,
+        workflow_id: workflowId,
+        selected_runtime: artifact.runtime_id.slice(0, 12),
+        runtime_revision: artifact.revision,
+        outcome: "forwarded",
+      });
     } catch (error) {
       if (message.id === undefined) return;
       const detail = error instanceof WorkflowError ? error.detail : "runtime request failed";
       const category = error instanceof WorkflowError ? error.category : "ERROR_RUNTIME_RECOVERY";
+      this.diagnostics.record({
+        event: "routing_error",
+        request_id: message.id,
+        method: message.method,
+        tool: message.params?.name,
+        workflow_id: workflowId,
+        error_category: category,
+        outcome: "error",
+      });
       process.stdout.write(
         `${JSON.stringify({
           jsonrpc: "2.0",

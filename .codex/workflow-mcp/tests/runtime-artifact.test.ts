@@ -77,6 +77,25 @@ describe("Workflow MCP runtime artifacts", () => {
       );
       expect(manifest.package_metadata).toEqual(["bun.lock", "package.json"]);
 
+      const diagnosticFixture = gitFixture({
+        "package.json": '{"name":"diagnostics-closure","dependencies":{}}\n',
+        "bun.lock": "{}\n",
+        ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+        ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+        ".codex/workflow-mcp/server.ts":
+          'import "./diagnostics.js";\nexport const server = true;\n',
+        ".codex/workflow-mcp/diagnostics.ts": "export const diagnostics = true;\n",
+      });
+      try {
+        expect(
+          trustedRuntimeManifest(diagnosticFixture.root, diagnosticFixture.revision).files.map(
+            (entry) => entry.path,
+          ),
+        ).toContain(".codex/workflow-mcp/diagnostics.ts");
+      } finally {
+        rmSync(diagnosticFixture.root, { recursive: true, force: true });
+      }
+
       const first = materializeRuntimeArtifact(root, revision, { cacheRoot });
       expect(first.reused).toBe(false);
       expect(first.runtime_id).toMatch(/^[0-9a-f]{64}$/u);
