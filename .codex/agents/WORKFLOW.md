@@ -296,6 +296,38 @@ for authorized remediation, then requires a fresh independent combined review ov
 logical-change scope before commit eligibility. The source is superseded atomically so only the
 active linked leaf can eventually authorize and prepare a commit.
 
+### Transition-summary convention
+
+After every terminal subagent handoff, the parent must refresh `workflow_parent_get` before
+summarizing or routing. The summary is a concise user-visible decision record sourced only from that
+refreshed authoritative parent view: report the current phase and result fields (including
+`implementation_status` or review result), `blocking_findings`, `optional_findings`, repair cycle
+and maximum, `stop_context` or `recovery_context`, `commit_result`, and material linked-workflow
+metadata when present. It must not dump receipts, audit events, capabilities, validation logs, or a
+complete worker report. `permitted_next_actions` remains the routing boundary.
+
+The summary must cover the following transitions without changing their existing semantics:
+
+- Implementation completion, concern, context, and block outcomes identify the result and the
+  available review or recovery decision.
+- A `CHANGES_REQUESTED` review surfaces every blocking finding identifier and a bounded human-readable
+  reason before repair authorization or implementer redispatch. Repair authorization communicates the
+  current repair cycle and next role; exhaustion communicates the terminal stop and forbids another
+  cycle.
+- An approval communicates approval and optional findings before requesting explicit commit
+  authorization; optional findings do not automatically dispatch remediation.
+- Inconclusive review, implementation stop, commit-preparation recovery, and commit-failure stops
+  communicate the bounded stop/recovery decision without implying authorization.
+- Commit outcomes communicate the authoritative result and material linked follow-ups communicate
+  their linked metadata and narrow purpose.
+
+After every parent mutation, the parent must refresh `workflow_parent_get` again and issue a fresh
+summary before redispatching a role or requesting the next authorization. This is a presentation and
+routing convention only: it does not change Workflow MCP phases, persisted presentation fields,
+worker-attempt bookkeeping, authorization rules, the state machine, persistence schema, or worker
+isolation. The parent still owns all parent mutations and authorization; workers still receive only
+their exact workflow ID and use their dedicated authoritative getter.
+
 ## Prompt-only degraded mode
 
 Use this mode only when the user explicitly authorizes it for a stopped, non-trivial workflow. The

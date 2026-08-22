@@ -284,6 +284,54 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
 });
 
+test("orchestrator summarizes refreshed authoritative transitions before routing", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+
+  for (const contract of [orchestrator, workflow]) {
+    assert.match(
+      contract,
+      /After every terminal subagent handoff[^.]*refresh[^.]*workflow_parent_get[^.]*before summarizing or routing/u,
+      "terminal handoffs must refresh parent state before summary and routing",
+    );
+    assert.match(contract, /authoritative/u, "summaries must use authoritative parent state");
+    for (const field of [
+      "phase",
+      "implementation_status",
+      "blocking_findings",
+      "optional_findings",
+    ]) {
+      assert.match(contract, new RegExp(field), `summaries must name ${field}`);
+    }
+    assert.match(
+      contract,
+      /must not dump receipts[^.]*audit events[^.]*capabilities[^.]*validation logs/u,
+      "summaries must stay concise rather than dumping internal evidence",
+    );
+    assert.match(
+      contract,
+      /After every parent mutation[^.]*refresh[^.]*workflow_parent_get[^.]*again[^.]*fresh summary[^.]*before redispatch/u,
+      "parent mutations require a second refresh and summary before redispatch",
+    );
+  }
+
+  assert.match(
+    orchestrator,
+    /CHANGES_REQUESTED.*?every blocking finding ID.*?bounded human-readable reason.*?before asking for repair authorization.*?Do not authorize repair or redispatch/u,
+    "blocking findings must be visible before repair routing",
+  );
+  assert.match(
+    orchestrator,
+    /current repair cycle[^.]*next role is the implementer/u,
+    "repair authorization must identify the cycle and next role",
+  );
+  assert.match(
+    orchestrator,
+    /APPROVED[^.]*optional_findings[^.]*request explicit commit authorization/u,
+    "approval must precede commit authorization",
+  );
+});
+
 test("reviewer is read-only with a narrow bash allowlist", () => {
   const content = opencode("code_reviewer.md");
   const frontmatter = content.split("---\n")[1] ?? "";

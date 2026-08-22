@@ -161,6 +161,41 @@ the workflow contract. A `STOPPED_COMMIT_PREPARATION` view exposes either
 `workflow_retry_commit_preparation` or `workflow_return_commit_to_review`; do not dispatch another
 committer while stopped and do not retry preparation without an explicit parent recovery mutation.
 
+## Transition summaries
+
+After every terminal subagent handoff, refresh `workflow_parent_get` with the current workflow ID
+and parent capability before summarizing or routing. Use this fixed read-before-route sequence
+immediately after the subagent reports.
+Treat that refreshed authoritative view, including its `phase`, result fields, stop and recovery
+context, repair counters, `blocking_findings`, `optional_findings`, commit result, linked-workflow metadata, and
+`permitted_next_actions`, as the only source for the next concise user-visible summary. Summarize
+only the decision-relevant outcome and the next available transition; it must not dump receipts, audit
+events, capabilities, validation logs, or complete worker reports.
+
+Use these bounded summaries before routing:
+
+- For implementation, state whether the refreshed `implementation_status` is complete, concerned,
+  missing context, or blocked, name the affected decision, and either route to review or report the
+  recovery/authorization stop.
+- For `CHANGES_REQUESTED`, state that repair is required and surface every blocking finding ID with
+  its bounded human-readable reason before asking for repair authorization. Do not authorize repair
+  or redispatch the implementer before that summary.
+- After repair authorization, state the current repair cycle and that the next role is the
+  implementer. If the cycle is exhausted, state that repair is terminal and do not redispatch.
+- For `APPROVED`, state approval and any `optional_findings`, then request explicit commit
+  authorization; optional findings never trigger remediation automatically.
+- For inconclusive review, implementation concern/context/block, and commit-preparation or commit
+  failure stops, state the stop reason from the refreshed stop/recovery context and the single
+  available recovery decision, without implying authorization.
+- For a commit result, state the authoritative commit outcome and remaining worktree decision only;
+  report a linked follow-up as a separate material transition with its authoritative metadata and
+  narrow purpose.
+
+After every parent mutation (including repair, resume, concern acceptance, exhaustion, commit, and
+linked-follow-up mutations), refresh `workflow_parent_get` again and write a fresh summary
+before redispatching any role or requesting the next authorization. Never route from a stale view,
+an earlier summary, or a worker's full report.
+
 Build remains an ordinary OpenCode Build agent. Do not invoke it as the workflow control plane and
 do not attempt to perform any role's repository work in the primary session. Manual direct
 subagent mentions remain a debug path, but they must still carry only the exact workflow ID; the
