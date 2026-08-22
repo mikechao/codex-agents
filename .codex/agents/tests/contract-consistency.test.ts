@@ -279,6 +279,29 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     assert.match(content, new RegExp(`^    "${role}": allow$`, "m"));
   }
   assert.match(content, /^  workflow_state_\*: deny$/m);
+  for (const parentTool of [
+    "workflow_create",
+    "workflow_adopt_dirty_scope",
+    "workflow_expand_scope",
+    "workflow_parent_get",
+    "workflow_get_audit",
+    "workflow_resume_implementation",
+    "workflow_accept_concerns",
+    "workflow_authorize_repair",
+    "workflow_resume_review",
+    "workflow_finalize_repair_exhausted",
+    "workflow_create_linked_followup",
+    "workflow_authorize_commit",
+    "workflow_retry_commit_preparation",
+    "workflow_return_commit_to_review",
+    "workflow_retry_commit",
+  ]) {
+    assert.match(
+      content,
+      new RegExp(`^  workflow_state_${parentTool}: allow$`, "m"),
+      `orchestrator must expose parent tool ${parentTool}`,
+    );
+  }
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));

@@ -189,8 +189,112 @@ function ensurePhase(state: WorkflowState, ...allowed: WorkflowPhase[]): void {
   if (!allowed.includes(state.phase)) fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
 }
 
+function scopeExpansion(
+  state: WorkflowState,
+  input: unknown,
+  addedReceipt: ChangeReceipt,
+  repositoryRoot: string,
+): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "scope expansion input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    [
+      "workflow_id",
+      "capability",
+      "expected_version",
+      "added_paths",
+      "reason",
+      "user_authorization",
+    ],
+    "scope expansion",
+  );
+  ensurePhase(
+    state,
+    "IMPLEMENTING",
+    "REPAIR_REQUIRED",
+    "REPAIRING",
+    "STOPPED_NEEDS_CONTEXT",
+    "STOPPED_IMPLEMENTATION_BLOCKED",
+  );
+  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
+    fail(
+      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+      "scope expansion requires a working-tree change workflow",
+    );
+  }
+  const addedPaths = exactPaths(args.added_paths, repositoryRoot);
+  if (addedPaths.some((path) => state.approved_paths.includes(path))) {
+    fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
+  }
+  if (state.approved_paths.length + addedPaths.length > MAX_PATHS) {
+    fail("ERROR_INVALID_PATHS", "scope expansion exceeds the path limit");
+  }
+  if (addedReceipt.base_head !== state.base_head) {
+    fail("ERROR_STALE_RECEIPT", "scope expansion baseline is stale");
+  }
+  if (
+    addedReceipt.approved_paths.length !== addedPaths.length ||
+    addedReceipt.approved_paths.some((path, index) => path !== addedPaths[index])
+  ) {
+    fail("ERROR_INVALID_PATHS", "scope expansion baseline scope is invalid");
+  }
+  if (addedReceipt.paths.some((entry) => entry.state !== "unchanged" && entry.state !== "absent")) {
+    fail(
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+      "scope expansion paths must have clean or absent baselines",
+    );
+  }
+  const priorVersion = state.version;
+  const next = clone(state);
+  const resultingPaths = [...state.approved_paths, ...addedPaths].sort();
+  next.approved_paths = resultingPaths;
+  const combinedPaths = next.linked_continuation?.combined_review_paths ?? resultingPaths;
+  if (next.linked_continuation) {
+    next.linked_continuation.combined_review_paths = [
+      ...new Set([...combinedPaths, ...addedPaths]),
+    ].sort();
+  }
+  next.review_target = {
+    ...next.review_target,
+    approved_paths:
+      next.linked_continuation?.review_stage === "combined"
+        ? next.linked_continuation.combined_review_paths
+        : resultingPaths,
+  };
+  next.scope_expansions.push({
+    expansion_id: randomUUID(),
+    added_paths: addedPaths,
+    reason: boundedString(args.reason, "reason", MAX_DETAIL),
+    user_authorization: userAuthorization(args.user_authorization),
+    prior_version: priorVersion,
+    resulting_version: (priorVersion + 1) as WorkflowVersion,
+    authorized_at: isoNow(),
+  });
+  next.approved_path_baselines.push(
+    ...addedReceipt.paths.map((entry) => ({
+      path: entry.path,
+      approved_at_version: (priorVersion + 1) as WorkflowVersion,
+      baseline: clone(entry),
+    })),
+  );
+  next.implementation_receipt = null;
+  next.scope_changed_paths = [];
+  next.review_start_receipt = null;
+  next.review_receipt = null;
+  next.commit_authorization = null;
+  next.commit_preparation = null;
+  next.commit_result = null;
+  return next;
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
 }
 
 const ROLE_VIEW_COMMON: readonly string[] = [
@@ -314,7 +418,7 @@ const ACTION_MATRIX: Partial<
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_expand_scope", "workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_expand_scope", "workflow_resume_implementation"],
-    STOPPED_INCONCLUSIVE: ["workflow_resume_review"],
+    STOPPED_INCONCLUSIVE: ["workflow_adopt_dirty_scope", "workflow_resume_review"],
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
     STOPPED_COMMIT_PREPARATION: [
       "workflow_retry_commit_preparation",
@@ -826,99 +930,62 @@ export function expandScope(
   addedReceipt: ChangeReceipt,
   repositoryRoot: string,
 ): WorkflowState {
+  return scopeExpansion(state, input, addedReceipt, repositoryRoot);
+}
+
+export function adoptDirtyScope(
+  state: WorkflowState,
+  input: unknown,
+  addedReceipt: ChangeReceipt,
+  repositoryRoot: string,
+  indexDirtyPaths: ReadonlyArray<string> = [],
+): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    fail("ERROR_INVALID_SHAPE", "scope expansion input is invalid");
+    fail("ERROR_INVALID_SHAPE", "dirty scope adoption input is invalid");
   }
   const args = exactKeys(
     input,
-    [
-      "workflow_id",
-      "capability",
-      "expected_version",
-      "added_paths",
-      "reason",
-      "user_authorization",
-    ],
-    "scope expansion",
+    ["workflow_id", "capability", "expected_version", "reason", "user_authorization"],
+    "dirty scope adoption",
+    ["added_paths", "adopted_paths"],
   );
-  ensurePhase(
-    state,
-    "IMPLEMENTING",
-    "REPAIR_REQUIRED",
-    "REPAIRING",
-    "STOPPED_NEEDS_CONTEXT",
-    "STOPPED_IMPLEMENTATION_BLOCKED",
-  );
+  ensurePhase(state, "STOPPED_INCONCLUSIVE");
   if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
-    fail(
-      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
-      "scope expansion requires a working-tree change workflow",
-    );
+    fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "dirty scope adoption requires a working-tree review");
   }
-  const addedPaths = exactPaths(args.added_paths, repositoryRoot);
-  if (addedPaths.some((path) => state.approved_paths.includes(path))) {
-    fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
+  if ((args.added_paths === undefined) === (args.adopted_paths === undefined)) {
+    fail("ERROR_INVALID_SHAPE", "dirty scope adoption paths are invalid");
   }
-  if (state.approved_paths.length + addedPaths.length > MAX_PATHS) {
-    fail("ERROR_INVALID_PATHS", "scope expansion exceeds the path limit");
+  const adoptedPaths = exactPaths(args.adopted_paths ?? args.added_paths, repositoryRoot);
+  const expansion = state.scope_expansions.find((candidate) =>
+    samePathList(candidate.added_paths, adoptedPaths),
+  );
+  if (!expansion) {
+    fail("ERROR_INVALID_PATHS", "dirty scope adoption paths are not from a scope expansion");
   }
   if (addedReceipt.base_head !== state.base_head) {
-    fail("ERROR_STALE_RECEIPT", "scope expansion baseline is stale");
+    fail("ERROR_STALE_RECEIPT", "dirty scope adoption baseline is stale");
   }
   if (
-    addedReceipt.approved_paths.length !== addedPaths.length ||
-    addedReceipt.approved_paths.some((path, index) => path !== addedPaths[index])
+    addedReceipt.approved_paths.length !== adoptedPaths.length ||
+    addedReceipt.approved_paths.some((path, index) => path !== adoptedPaths[index])
   ) {
-    fail("ERROR_INVALID_PATHS", "scope expansion baseline scope is invalid");
+    fail("ERROR_INVALID_PATHS", "dirty scope adoption scope is invalid");
   }
-  if (addedReceipt.paths.some((entry) => entry.state !== "unchanged" && entry.state !== "absent")) {
-    fail(
-      "ERROR_SCOPE_EXPANSION_DIRTY",
-      "scope expansion paths must have clean or absent baselines",
-    );
+  const indexDirty = new Set(indexDirtyPaths);
+  if (
+    addedReceipt.paths.some(
+      (entry) =>
+        !["added", "modified", "deleted"].includes(entry.state) && !indexDirty.has(entry.path),
+    )
+  ) {
+    fail("ERROR_SCOPE_EXPANSION_DIRTY", "scope adoption paths must be dirty");
   }
-  const priorVersion = state.version;
   const next = clone(state);
-  const resultingPaths = [...state.approved_paths, ...addedPaths].sort();
-  next.approved_paths = resultingPaths;
-  const combinedPaths = next.linked_continuation?.combined_review_paths ?? resultingPaths;
-  if (next.linked_continuation) {
-    next.linked_continuation.combined_review_paths = [
-      ...new Set([...combinedPaths, ...addedPaths]),
-    ].sort();
-  }
-  next.review_target = {
-    ...next.review_target,
-    approved_paths:
-      next.linked_continuation?.review_stage === "combined"
-        ? next.linked_continuation.combined_review_paths
-        : resultingPaths,
-  };
-  next.scope_expansions.push({
-    expansion_id: randomUUID(),
-    added_paths: addedPaths,
-    reason: boundedString(args.reason, "reason", MAX_DETAIL),
-    user_authorization: userAuthorization(args.user_authorization),
-    prior_version: priorVersion,
-    resulting_version: (priorVersion + 1) as WorkflowVersion,
-    authorized_at: isoNow(),
-  });
-  next.approved_path_baselines.push(
-    ...addedReceipt.paths.map((entry) => ({
-      path: entry.path,
-      approved_at_version: (priorVersion + 1) as WorkflowVersion,
-      baseline: clone(entry),
-    })),
-  );
-  // Any implementation evidence was captured against the old scope and cannot authorize the
-  // expanded result. Findings and repair context remain intact for bounded repair recovery.
-  next.implementation_receipt = null;
-  next.scope_changed_paths = [];
+  // Adoption changes only the authorization/audit version. The existing expansion remains the
+  // immutable provenance for the paths and its historical baseline.
   next.review_start_receipt = null;
   next.review_receipt = null;
-  next.commit_authorization = null;
-  next.commit_preparation = null;
-  next.commit_result = null;
   return next;
 }
 

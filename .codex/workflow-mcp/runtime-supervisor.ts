@@ -98,12 +98,36 @@ interface JsonRpcMessage {
   method?: string;
   params?: { name?: string; arguments?: Record<string, unknown> };
   error?: unknown;
+  result?: unknown;
 }
 
 type RequestId = string | number | null;
 
 interface PendingRequest {
   id: RequestId;
+  message: JsonRpcMessage;
+}
+
+function directToolResult(value: unknown): unknown {
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+function unknownToolResponse(message: JsonRpcMessage): boolean {
+  const error = message.error as { data?: { category?: unknown }; message?: unknown } | undefined;
+  if (error?.data?.category === "ERROR_UNKNOWN_TOOL" || error?.message === "ERROR_UNKNOWN_TOOL")
+    return true;
+  const result = message.result as
+    | { isError?: boolean; content?: Array<{ text?: unknown }> }
+    | undefined;
+  if (!result?.isError || !Array.isArray(result.content)) return false;
+  return result.content.some((item) => {
+    if (typeof item.text !== "string") return false;
+    try {
+      return (JSON.parse(item.text) as { category?: unknown }).category === "ERROR_UNKNOWN_TOOL";
+    } catch {
+      return false;
+    }
+  });
 }
 
 interface ChildRuntime {
@@ -117,6 +141,7 @@ interface ChildRuntime {
   initReject: ((error: unknown) => void) | null;
   initializationRequestId: RequestId | undefined;
   pending: Map<RequestId, PendingRequest>;
+  tools: Set<string> | null;
   dead: boolean;
 }
 
@@ -272,6 +297,7 @@ export class RuntimeSupervisor {
       initReject: null,
       initializationRequestId: undefined,
       pending: new Map(),
+      tools: null,
       dead: false,
     };
     const lines = createInterface({ input: childOutput(child) });
@@ -296,8 +322,51 @@ export class RuntimeSupervisor {
         }
         return;
       }
+      if (
+        message &&
+        message.id !== undefined &&
+        message.result &&
+        typeof message.result === "object" &&
+        !Array.isArray(message.result) &&
+        "tools" in message.result &&
+        Array.isArray((message.result as { tools?: unknown }).tools)
+      ) {
+        runtime.tools = new Set(
+          (message.result as { tools: Array<{ name?: unknown }> }).tools
+            .map((tool) => tool.name)
+            .filter((name): name is string => typeof name === "string"),
+        );
+      }
       if (message && message.id !== undefined) {
+        const pending = runtime.pending.get(message.id);
         runtime.pending.delete(message.id);
+        if (
+          pending &&
+          unknownToolResponse(message) &&
+          pending.message.params?.name === "workflow_adopt_dirty_scope"
+        ) {
+          try {
+            const result = this.store.adoptDirtyScopeCrossRuntime(
+              pending.message.params.arguments ?? {},
+            );
+            process.stdout.write(
+              `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: directToolResult(result) })}\n`,
+            );
+          } catch (error) {
+            const category =
+              error instanceof WorkflowError ? error.category : "ERROR_RUNTIME_RECOVERY";
+            const detail =
+              error instanceof WorkflowError ? error.detail : "dirty adoption fallback failed";
+            process.stdout.write(
+              `${JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                error: { code: -32000, message: category, data: { category, detail } },
+              })}\n`,
+            );
+          }
+          return;
+        }
         if (message.id === runtime.initializationRequestId && message.error === undefined) {
           runtime.initialized = true;
         }
@@ -448,6 +517,38 @@ export class RuntimeSupervisor {
         outcome: "resolved",
       });
       const child = this.childFor(artifact);
+      const historicalOwner = runtimeKey(artifact) !== runtimeKey(this.defaultRuntime);
+      const tool = message.params?.name;
+      if (historicalOwner && tool === "workflow_resume_review") {
+        if (this.store.pendingDirtyScope(workflowId)) {
+          this.store.verifyPendingDirtyScope(workflowId);
+        }
+      }
+      if (historicalOwner && tool === "workflow_begin_review") {
+        if (this.store.pendingDirtyScope(workflowId)) {
+          const result = this.store.beginReviewCrossRuntime(message.params?.arguments ?? {});
+          if (message.id !== undefined) {
+            process.stdout.write(
+              `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: directToolResult(result) })}\n`,
+            );
+          }
+          return;
+        }
+      }
+      if (
+        historicalOwner &&
+        tool === "workflow_adopt_dirty_scope" &&
+        child.tools !== null &&
+        !child.tools.has("workflow_adopt_dirty_scope")
+      ) {
+        const result = this.store.adoptDirtyScopeCrossRuntime(message.params?.arguments ?? {});
+        if (message.id !== undefined) {
+          process.stdout.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: directToolResult(result) })}\n`,
+          );
+        }
+        return;
+      }
       const isInitialize = message.method === "initialize";
       if (
         this.initialized &&
@@ -459,7 +560,7 @@ export class RuntimeSupervisor {
         await this.initializeOwner(child);
       }
       if (message.id !== undefined) {
-        child.pending.set(message.id, { id: message.id });
+        child.pending.set(message.id, { id: message.id, message });
       }
       if (!child.process.stdin || child.dead)
         throw runtimeFailure("ERROR_RUNTIME_RECOVERY", "runtime process is unavailable");

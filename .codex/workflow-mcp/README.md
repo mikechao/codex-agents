@@ -173,6 +173,12 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - An inconclusive review resumes with `workflow_resume_review`. `REPAIR_REQUIRED` advances through
   bounded cycles with `workflow_authorize_repair`; when the final cycle is reached,
   `workflow_finalize_repair_exhausted` stops terminally.
+- A parent may use `workflow_adopt_dirty_scope` from `STOPPED_INCONCLUSIVE` only for exact paths
+  originating in an existing scope expansion. The action records an opaque authorization-time
+  content commitment without changing the workflow phase. Guarded resume and review-start snapshot
+  capture verify every pending adoption against one current full-scope receipt; any mutation rejects
+  the operation without appending audit or changing workflow state. Historical-runtime recovery
+  permits only this adoption, the guarded resume preflight, and the guarded review-start snapshot.
 - `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh cycle-0 linked change workflow
   with `workflow_create_linked_followup`, copying the exact findings and remediation context. The
   child mutation allowlist remains narrow; remediation approval transitions it back to `REVIEWING`

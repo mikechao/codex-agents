@@ -189,6 +189,31 @@ const workItemSchema: JsonSchema = {
 
 export const tools: Tool[] = [
   {
+    name: "workflow_adopt_dirty_scope",
+    description:
+      "Adopt exact already-dirty repository paths from STOPPED_INCONCLUSIVE under fresh parent/user authorization.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        added_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        adopted_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        reason: { type: "string", minLength: 1, maxLength: 2000 },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "reason", "user_authorization"],
+      {
+        oneOf: [{ required: ["added_paths"] }, { required: ["adopted_paths"] }],
+      },
+    ),
+    annotations: {
+      title: "Adopt dirty scope",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_expand_scope",
     description:
       "Append exact clean or absent repository paths to an active working-tree change workflow under fresh parent/user authorization.",
@@ -711,6 +736,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
         switch (request.params.name) {
           case "workflow_expand_scope":
             result = store.expandScope(args);
+            break;
+          case "workflow_adopt_dirty_scope":
+            result = store.adoptDirtyScope(args);
             break;
           case "workflow_create":
             result = store.create(args);

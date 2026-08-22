@@ -571,6 +571,231 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
+  test("forwards ordinary dirty-adoption recovery to the historical owner after promotion", async () => {
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-adoption-cache-"));
+    const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-adoption-db-"));
+    const databasePath = join(databaseRoot, "state.sqlite");
+    const runtimeModule = pathToFileURL(
+      join(process.cwd(), ".codex/workflow-mcp/runtime-supervisor.ts"),
+    ).href;
+    const fakeServer = `
+      import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+          runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
+          runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
+          expected_version: request.params?.arguments?.expected_version,
+          tool: request.params?.name,
+        } }) + "\\n");
+      });
+    `;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
+    const start = () => {
+      const script = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeModule)}; new RuntimeSupervisor(${JSON.stringify(
+        {
+          repositoryRoot: target.root,
+          providerRoot: target.root,
+          databasePath,
+          cacheRoot,
+          installDependencies: false,
+        },
+      )}).run();`;
+      const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const reader = createInterface({ input: child.stdout! });
+      const pending = new Map<string | number, (value: any) => void>();
+      reader.on("line", (line) => {
+        try {
+          const response = JSON.parse(line);
+          const resolve = response.id === undefined ? undefined : pending.get(response.id);
+          if (resolve) {
+            pending.delete(response.id);
+            resolve(response);
+          }
+        } catch {
+          // The fake runtime emits only JSON responses for request assertions.
+        }
+      });
+      const request = (id: number, tool: string, args: any) =>
+        new Promise<any>((resolve, reject) => {
+          pending.set(id, resolve);
+          child.stdin!.write(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              method: "tools/call",
+              params: { name: tool, arguments: args },
+            })}\n`,
+            (error) => error && reject(error),
+          );
+          setTimeout(() => {
+            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
+          }, 10_000);
+        });
+      const initialize = () =>
+        new Promise<any>((resolve, reject) => {
+          pending.set(1, resolve);
+          child.stdin!.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n', (error) => {
+            if (error) reject(error);
+          });
+          setTimeout(() => {
+            if (pending.delete(1)) reject(new Error("initialize timed out"));
+          }, 10_000);
+        });
+      const stop = async () => {
+        reader.close();
+        child.stdin!.end();
+        await once(child, "close");
+      };
+      return { child, initialize, request, stop };
+    };
+    let active: ReturnType<typeof start> | undefined;
+    let owner: any;
+    try {
+      const workflowRoot = join(target.root, ".codex", "workflow-mcp");
+      mkdirSync(workflowRoot, { recursive: true });
+      mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
+      writeFileSync(join(workflowRoot, "server.ts"), fakeServer);
+      cpSync(
+        join(process.cwd(), ".codex/agents/change-receipt.ts"),
+        join(target.root, ".codex/agents/change-receipt.ts"),
+      );
+      cpSync(
+        join(process.cwd(), ".codex/agents/receipt.ts"),
+        join(target.root, ".codex/agents/receipt.ts"),
+      );
+      writeFileSync(
+        join(target.root, "package.json"),
+        '{"name":"runtime-adoption-routing-fixture","type":"module","dependencies":{}}\n',
+      );
+      writeFileSync(join(target.root, "bun.lock"), "{}\n");
+      git("add", ".");
+      git("commit", "-qm", "runtime A");
+      const revisionA = currentHead(target.root);
+      const artifactA = materializeRuntimeArtifact(target.root, revisionA, {
+        cacheRoot,
+        installDependencies: false,
+      });
+
+      writeFileSync(join(target.root, "runtime-b.txt"), "B\n");
+      git("add", "runtime-b.txt");
+      git("commit", "-qm", "runtime B");
+      const revisionB = currentHead(target.root);
+      owner = new WorkflowStore({
+        repositoryRoot: target.root,
+        databasePath,
+        runtimeId: artifactA.runtime_id,
+        runtimeRevision: revisionA,
+        ...attestation(artifactA.runtime_id, revisionA),
+      });
+      const created = owner.create({
+        workflow_type: "change",
+        objective: "historical dirty adoption",
+        approved_plan: null,
+        approved_paths: ["note.txt"],
+        acceptance_criteria: ["criterion"],
+        validation_requirements: ["validation"],
+        review_target: {
+          review_mode: "working_tree",
+          base_revision: revisionB,
+          head_revision: null,
+          approved_paths: ["note.txt"],
+          include_staged: true,
+          include_unstaged: true,
+          include_untracked: true,
+        },
+      });
+      const id = created.workflow.workflow_id;
+      owner.expandScope({
+        workflow_id: id,
+        capability: created.capability,
+        expected_version: 0,
+        added_paths: ["dirty.txt"],
+        reason: "planned path",
+        user_authorization: "authorized",
+      });
+      owner.submitImplementation({
+        workflow_id: id,
+        expected_version: 1,
+        status: "DONE",
+        summary: "implemented",
+        agent_touched_paths: [],
+        acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+        validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+        known_failures: [],
+        finding_resolution_map: {},
+      });
+      owner.beginReview({ workflow_id: id, expected_version: 2 });
+      owner.submitReview({
+        workflow_id: id,
+        expected_version: 3,
+        review_status: "INCONCLUSIVE",
+        blocking_findings: [],
+        optional_findings: [],
+        prior_finding_classifications: {},
+      });
+      writeFileSync(join(target.root, "dirty.txt"), "authorized\n");
+      owner.adoptDirtyScope({
+        workflow_id: id,
+        capability: created.capability,
+        expected_version: 4,
+        adopted_paths: ["dirty.txt"],
+        reason: "recover dirty path",
+        user_authorization: "explicit recovery",
+      });
+      owner.close();
+      owner = undefined;
+
+      active = start();
+      assert.equal((await active.initialize()).result.runtime_revision, revisionB);
+      active.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const forwardedResume = await active.request(2, "workflow_resume_review", {
+        workflow_id: id,
+        capability: created.capability,
+        expected_version: 5,
+        resume_context: "resume",
+      });
+      assert.equal(forwardedResume.result.runtime_revision, revisionA);
+      assert.equal(forwardedResume.result.tool, "workflow_resume_review");
+      const forwardedBegin = await active.request(3, "workflow_begin_review", {
+        workflow_id: id,
+        expected_version: 5,
+      });
+      assert.equal(forwardedBegin.result.runtime_revision, revisionA);
+      assert.equal(forwardedBegin.result.tool, "workflow_begin_review");
+
+      owner = new WorkflowStore({
+        repositoryRoot: target.root,
+        databasePath,
+        runtimeId: artifactA.runtime_id,
+        runtimeRevision: revisionA,
+        ...attestation(artifactA.runtime_id, revisionA),
+      });
+      owner.resumeReview({
+        workflow_id: id,
+        capability: created.capability,
+        expected_version: 5,
+        resume_context: "resume",
+      });
+      owner.beginReview({ workflow_id: id, expected_version: 6 });
+      assert.deepEqual(owner.runtimeAffinity(id), {
+        runtime_id: artifactA.runtime_id,
+        runtime_revision: revisionA,
+      });
+    } finally {
+      await active?.stop().catch(() => {});
+      owner?.close();
+      rmSync(target.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(databaseRoot, { recursive: true, force: true });
+    }
+  });
+
   test("bootstrap executes committed supervisor source despite dirty checkout launchers", async () => {
     const target = fixture();
     const provider = target.root;
