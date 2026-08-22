@@ -255,11 +255,13 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
       /^  workflow_state_\*: deny$/m,
       `${name} must gate MCP tools behind the role allowlist`,
     );
-    assert.match(
-      content,
-      /^  workflow_state_workflow_get: allow$/m,
-      `${name} must keep the authoritative workflow_get tool`,
-    );
+    const getter =
+      role === "implementer"
+        ? "workflow_implementer_get"
+        : role === "code_reviewer"
+          ? "workflow_reviewer_get"
+          : "workflow_committer_get";
+    assert.match(content, new RegExp(`^  workflow_state_${getter}: allow$`, "m"));
   }
 });
 
@@ -499,9 +501,17 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
     );
     bodies.set(role, tomlBody);
   }
-  for (const role of ["implementer", "code_reviewer", "committer"]) {
+  for (const role of ["implementer", "code_reviewer", "committer"] as const) {
     assert.ok(
-      bodies.get(role)!.includes("workflow_get"),
+      bodies
+        .get(role)!
+        .includes(
+          role === "implementer"
+            ? "workflow_implementer_get"
+            : role === "code_reviewer"
+              ? "workflow_reviewer_get"
+              : "workflow_committer_get",
+        ),
       `${role} must use the authoritative view`,
     );
   }

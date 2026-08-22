@@ -10,8 +10,8 @@ Workflow MCP state. Restart host sessions after changing policy.
 
 ## Implementer
 
-- Authoritative view dispatch: the prompt carries only `workflow_id`, the implementer capability,
-  `expected_version`, and the instruction to read the view; the implementer reads `workflow_get` and
+- Authoritative view dispatch: the prompt carries only `workflow_id`; the implementer first calls
+  `workflow_implementer_get` and
   uses the view's objective, contracts, initial receipt, dirty baseline, remediation context, and
   permitted actions without requiring prompt-carried copies.
 - Valid approved plan: implements only the owned scope, reviews the final diff, passes required
@@ -33,8 +33,8 @@ Workflow MCP state. Restart host sessions after changing policy.
 
 ## Committer
 
-- Authoritative view dispatch: the prompt carries only `workflow_id`, the committer capability,
-  `expected_version`, and the instruction to read the view; the committer reads `workflow_get` and
+- Authoritative view dispatch: the prompt carries only `workflow_id`; the committer first calls
+  `workflow_committer_get` and
   refuses to stage or commit without a `commit_authorization` and a working-tree review receipt.
 - Approved scope with unrelated unstaged changes: commits only the allowlisted scope and reports the
   unrelated files as uncommitted.
@@ -61,8 +61,8 @@ Workflow MCP state. Restart host sessions after changing policy.
 
 ## Code reviewer
 
-- Authoritative view dispatch: the prompt carries only `workflow_id`, the reviewer capability,
-  `expected_version`, and the instruction to read the view; the reviewer reads `workflow_get` and
+- Authoritative view dispatch: the prompt carries only `workflow_id`; the reviewer first calls
+  `workflow_reviewer_get` and
   reviews the view's target, evidence, and prior findings without requiring prompt-carried copies.
 - Review-only dispatch: a `review_only` workflow is dispatched directly to the reviewer with no
   implementer step, and the reviewer reviews the working tree or declared commit range directly.
@@ -181,8 +181,8 @@ Workflow MCP state. Restart host sessions after changing policy.
 
 - Version conflict: a mutation with a stale `expected_version` returns a closed conflict and does
   not change state or append an audit event.
-- Role capability denial: a valid capability used with another role is rejected, and capabilities
-  never appear in `workflow_get` or `workflow_get_audit` responses.
+- Parent authorization: parent-capability control-plane mutations and audit reject invalid tokens;
+  dedicated role getters and worker mutations are capability-free and never expose bearer tokens.
 - Receipt staleness: approved review and commit authorization reject changed content, base HEAD, or
   exact-path scope after the receipt was produced.
 - Blocking cycle limit: repair authorization accepts only existing P0-P2 IDs and cannot exceed the
@@ -230,13 +230,13 @@ registration) after changing the orchestrator, installer, generator, or a canoni
   such as `Implement <issue>`. Confirm it performs only bounded read-only preflight, does not create
   source-level implementation TODOs or mutate repository files, creates or reuses the authoritative
   workflow, captures the exact `workflow_id`, and automatically delegates to `implementer` in the
-  same turn with its capability and current `expected_version`; confirm the implementer's first
-  authoritative action is `workflow_get` and that implementation occurs inside `implementer`.
+  same turn with only the exact workflow ID; confirm the implementer's first authoritative action is
+  `workflow_implementer_get` and that implementation occurs inside `implementer`.
 - Plan -> Orchestrator execution: run `/plan <non-trivial issue>` in Plan, allow it to finish a
   detailed plan without creating an implementation workflow, switch to Orchestrator, and say
   `implement the plan`. Confirm Orchestrator does not perform a second planning pass or mutate files,
   creates or reuses the workflow, and automatically delegates the approved plan as execution context
-  to `implementer` with the exact `workflow_id`, capability, and current `expected_version`.
+  to `implementer` with only the exact `workflow_id`.
 - Build independence: switch to the built-in Build agent and confirm it no longer receives project
   instructions claiming it is the workflow orchestrator; Build remains available for deliberate
   ordinary direct coding.
@@ -248,11 +248,12 @@ registration) after changing the orchestrator, installer, generator, or a canoni
   `@implementer` invocation.
 - MCP startup: OpenCode starts the `workflow_state` local server from the project config itself
   (no manual launch), and its tools are discoverable in a session.
-- Shared state: a workflow created in Codex is readable by the OpenCode roles via `workflow_get`,
+- Shared state: a workflow created in Codex is readable by the OpenCode roles via their dedicated
+  getters,
   and both hosts produce equivalent statuses/handoffs for the same scenarios.
 - Implementer permissions: may edit and run validation, the host denies git add/commit/push/
   reset/rebase/checkout/switch/restore/revert/cherry-pick/rm/mv/clean/stash, and only its own
-  workflow tools (`workflow_get`, `workflow_submit_implementation`) are exposed.
+  workflow tools (`workflow_implementer_get`, `workflow_submit_implementation`) are exposed.
 - Reviewer read-only: `edit: deny` holds, the bash allowlist covers `git status`/`diff`/`log`/
   `show`/`rev-parse` and `change-receipt.ts`, and mutation attempts (git add/commit, file writes)
   are blocked by the host or by the server's capability check; the review target is still fully

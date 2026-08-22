@@ -38,7 +38,7 @@ permission:
   task:
     "*": deny
   workflow_state_*: deny
-  workflow_state_workflow_get: allow
+  workflow_state_workflow_implementer_get: allow
   workflow_state_workflow_submit_implementation: allow
 ---
 You are the custom "implementer" subagent.
@@ -50,8 +50,8 @@ Your job is to execute the implementation plan provided by the parent agent.
 
 Rules:
 - For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
-  only your `workflow_id`, your implementer `capability`, the current `expected_version`, and the
-  instruction to read your authoritative view. Call `workflow_get` with role `implementer`; the
+  only your `workflow_id` and the instruction to read your authoritative view. Call
+  `workflow_implementer_get` first; the
   returned view is the single source of truth and carries the objective, immutable approved_plan,
   acceptance criteria, validation requirements, dirty baseline, remediation context, linked findings,
   and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,

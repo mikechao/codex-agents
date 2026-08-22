@@ -236,7 +236,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
       },
     });
     assert.equal(created.workflow.schema_version, 6);
-    const events = store.audit(created.workflow.workflow_id, "parent", created.capabilities.parent);
+    const events = store.audit(created.workflow.workflow_id, created.capability);
     assert.deepEqual(
       events.map((event) => event.event_type),
       ["WORKFLOW_CREATED"],

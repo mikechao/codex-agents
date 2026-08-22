@@ -77,7 +77,8 @@ host restart the new default artifact is promoted for new workflows while affini
 workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
 with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability or receipt errors.
 
-The store is the runtime-ownership enforcement boundary. After role capability authentication, an
+The store is the runtime-ownership enforcement boundary. After parent capability authentication for
+control-plane operations, an
 affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
 and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner and which has a valid ephemeral
 `WORKFLOW_MCP_RUNTIME_ATTESTATION`/nonce pair signed with the private key stored in the immutable
@@ -111,14 +112,14 @@ they invoke the provider server directly and do not persist runtime affinity.
 
 ## Authoritative role views
 
-The parent creates a workflow and passes each role only its one-time capability together with the
-`workflow_id`, the current `expected_version`, and the instruction to read its own view with
-`workflow_get`. The returned view is the authoritative least-authority projection for that role and
-carries the role's full handoff and its sorted `permitted_next_actions`; prompts carry no duplicated
-objective, criteria, evidence, finding, receipt, or repair state. Capabilities are stored only as
-SHA-256 hashes and are defense-in-depth orchestration controls, not a security boundary against
-another process with equivalent filesystem access. If the server is unavailable for non-trivial work,
-the parent must ask the user before using the documented prompt-only degraded mode.
+The parent creates a workflow and receives one parent capability. Delegation passes workers only the
+exact `workflow_id`; each worker first calls its dedicated capability-free getter
+(`workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`). The returned view
+is the authoritative least-authority projection for that role and carries the role's full handoff and
+its sorted `permitted_next_actions`; prompts carry no duplicated objective, criteria, evidence, finding,
+receipt, or repair state. Only the parent capability is stored as a SHA-256 hash. If the server is
+unavailable for non-trivial work, the parent must ask the user before using the documented prompt-only
+degraded mode.
 
 The reviewer view includes the authoritative sanitized `review_target` for inspection. Managed
 reviewers submit only semantic findings and prior classifications to `workflow_submit_review`; the
@@ -188,7 +189,7 @@ review and fresh commit authorization. No committer action is permitted while st
 
 ## Persistence schema
 
-Workflow MCP supports one current persisted schema (v5, including linked-continuation provenance).
+Workflow MCP supports one current persisted schema (v6, including linked-continuation provenance).
 Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use
@@ -209,7 +210,8 @@ This installation uses the previously authorized prompt/receipt bootstrap. After
 project configuration, commit the config and restart/reload the host (Codex and/or OpenCode).
 Manually starting the STDIO process does not inject tools into an already-running host. Before
 treating MCP state as authoritative, use a safe read-only check: reload the project, list
-available MCP tools, verify that `workflow_state` exposes `workflow_get`, `workflow_get_audit`,
+available MCP tools, verify that `workflow_state` exposes the dedicated role getters and
+`workflow_get_audit`,
 and the mutation tools, and inspect the server initialization instructions. Do not send
 capabilities or mutate state during this smoke test.
 
@@ -217,5 +219,5 @@ Before reload, fail closed for non-trivial work and ask whether the user wants p
 degraded mode. After reload, the parent may use MCP as authoritative only when the tools and
 instructions are visible. `default_tools_approval_mode = "prompt"` keeps workflow tool calls
 approval-sensitive in Codex; OpenCode agents instead gate the same tools per role through
-permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces role capabilities
+permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces the parent capability
 and versions for both hosts.

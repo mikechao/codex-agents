@@ -55,16 +55,15 @@ import type {
   AuditEvent,
   AuditEventType,
   AuditOutcome,
-  CapabilityHash,
   ChangeReceipt,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
   GitCommitSha,
   IsoTimestamp,
+  ParentCapability,
   ParentView,
   ReviewStatus,
   Role,
-  RoleCapabilities,
   RoleView,
   ScopeExpansionAudit,
   StateDigest,
@@ -83,7 +82,6 @@ import {
   isoNow,
   issueCapability,
   objectDigest,
-  role,
   workflowId,
 } from "./validation.js";
 
@@ -259,9 +257,6 @@ function createCurrentSchema(db: Database): void {
       state_json TEXT NOT NULL,
       state_digest TEXT,
       parent_capability_hash TEXT NOT NULL,
-      implementer_capability_hash TEXT NOT NULL,
-      reviewer_capability_hash TEXT NOT NULL,
-      committer_capability_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -373,7 +368,7 @@ function validatePersistedRows(db: Database): void {
 }
 
 // roleView's public overloads only accept literal roles; the store reaches the
-// implementation signature (which validates via `role`) with the Role from #assertAuth.
+// implementation signature with the exact role selected by each dedicated getter.
 const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
 
 function supportedPreparationFailure(
@@ -461,22 +456,10 @@ export class WorkflowStore {
     if (this.closed) fail("ERROR_STORE_CLOSED", "workflow store is closed");
   }
 
-  #capabilityHashes(capabilities: RoleCapabilities): Record<Role, CapabilityHash> {
-    return {
-      parent: hashCapability(capabilities.parent),
-      implementer: hashCapability(capabilities.implementer),
-      reviewer: hashCapability(capabilities.reviewer),
-      committer: hashCapability(capabilities.committer),
-    };
-  }
-
-  #assertAuth(row: WorkflowRow, actorRole: unknown, token: unknown): Role {
-    const selectedRole = role(actorRole);
-    const hash = row[`${selectedRole}_capability_hash`];
-    if (typeof hash !== "string" || !compareCapability(hash, token)) {
-      fail("ERROR_CAPABILITY_DENIED", "capability is not valid for role");
+  #assertParentAuth(row: WorkflowRow, token: unknown): void {
+    if (!compareCapability(row.parent_capability_hash, token)) {
+      fail("ERROR_CAPABILITY_DENIED", "parent capability is not valid");
     }
-    return selectedRole;
   }
 
   #assertRuntimeOwnership(row: WorkflowRow): void {
@@ -541,7 +524,7 @@ export class WorkflowStore {
       .run(workflowId, version, eventType, actorRole, JSON.stringify(summary), isoNow());
   }
 
-  create(input: unknown): { workflow: ParentView; capabilities: RoleCapabilities } {
+  create(input: unknown): { workflow: ParentView; capability: ParentCapability } {
     this.#ensureOpen();
     const head = currentHead(this.root);
     const workflowId = randomUUID() as WorkflowId;
@@ -559,45 +542,45 @@ export class WorkflowStore {
       state.dirty_baseline_paths = rangeDirtyBaselinePaths(range);
     }
     state.workflow_id = workflowId;
-    const capabilities: RoleCapabilities = {
-      parent: issueCapability(),
-      implementer: issueCapability(),
-      reviewer: issueCapability(),
-      committer: issueCapability(),
-    };
-    const hashes = this.#capabilityHashes(capabilities);
+    const capability = issueCapability();
+    const capabilityHash = hashCapability(capability);
     const now = isoNow();
     const created = this.db
       .transaction(() => {
         this.db
           .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
           )
-          .run(
-            workflowId,
-            JSON.stringify(state),
-            objectDigest(state),
-            hashes.parent,
-            hashes.implementer,
-            hashes.reviewer,
-            hashes.committer,
-            now,
-            now,
-          );
+          .run(workflowId, JSON.stringify(state), objectDigest(state), capabilityHash, now, now);
         this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
         return state;
       })
       .immediate();
-    return { workflow: roleView(created, "parent"), capabilities };
+    return { workflow: roleView(created, "parent"), capability };
   }
 
-  get(workflowIdValue: unknown, actorRole: unknown, token: unknown): RoleView {
+  #get(workflowIdValue: unknown, actorRole: Role): RoleView {
     this.#ensureOpen();
     const id = workflowId(workflowIdValue);
     const row = this.#row(id);
-    const selectedRole = this.#assertAuth(row, actorRole, token);
     this.#assertRuntimeOwnership(row);
-    return roleViewForRole(parseState(row), selectedRole);
+    return roleViewForRole(parseState(row), actorRole);
+  }
+
+  parentGet(workflowIdValue: unknown): ParentView {
+    return this.#get(workflowIdValue, "parent") as ParentView;
+  }
+
+  implementerGet(workflowIdValue: unknown): RoleView {
+    return this.#get(workflowIdValue, "implementer");
+  }
+
+  reviewerGet(workflowIdValue: unknown): RoleView {
+    return this.#get(workflowIdValue, "reviewer");
+  }
+
+  committerGet(workflowIdValue: unknown): RoleView {
+    return this.#get(workflowIdValue, "committer");
   }
 
   expandScope(input: unknown): RoleView {
@@ -698,11 +681,11 @@ export class WorkflowStore {
       .immediate();
   }
 
-  audit(workflowIdValue: unknown, actorRole: unknown, token: unknown): AuditEvent[] {
+  audit(workflowIdValue: unknown, token: unknown): AuditEvent[] {
     this.#ensureOpen();
     const id = workflowId(workflowIdValue);
     const row = this.#row(id);
-    const selectedRole = this.#assertAuth(row, actorRole, token);
+    this.#assertParentAuth(row, token);
     this.#assertRuntimeOwnership(row);
     const state = parseState(row);
     return (
@@ -725,7 +708,7 @@ export class WorkflowStore {
         summary: JSON.parse(event.summary_json) as AuditEnvelope,
         created_at: event.created_at as IsoTimestamp,
       };
-      if (selectedRole === "parent" && result.event_type === "SCOPE_EXPANDED") {
+      if (result.event_type === "SCOPE_EXPANDED") {
         const expansion = state.scope_expansions.find(
           (candidate) => candidate.resulting_version === result.version,
         );
@@ -758,7 +741,7 @@ export class WorkflowStore {
     const { next, selectedRole } = this.db
       .transaction(() => {
         const row = this.#row(id);
-        const selectedRole = this.#assertAuth(row, actorRole, token);
+        if (actorRole === "parent") this.#assertParentAuth(row, token);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -813,12 +796,12 @@ export class WorkflowStore {
           id,
           nextVersion,
           resolvedEventType,
-          selectedRole,
+          actorRole,
           auditEnvelope(current, next, row.state_digest as StateDigest | null, {
             outcome: resolvedOutcome,
           }),
         );
-        return { next, selectedRole };
+        return { next, selectedRole: actorRole };
       })
       .immediate();
     return roleViewForRole(next, selectedRole);
@@ -1013,7 +996,7 @@ export class WorkflowStore {
 
   prepareCommit(input: unknown): RoleView {
     const args = mutationInput(input);
-    exactKeys(args, ["workflow_id", "capability", "expected_version"], "commit preparation");
+    exactKeys(args, ["workflow_id", "expected_version"], "commit preparation");
     return this.#mutate(
       args.workflow_id,
       "committer",
@@ -1093,7 +1076,7 @@ export class WorkflowStore {
     const args = mutationInput(input);
     exactKeys(
       args,
-      ["workflow_id", "capability", "expected_version", "attempt_id", "outcome", "failure_summary"],
+      ["workflow_id", "expected_version", "attempt_id", "outcome", "failure_summary"],
       "commit result",
     );
     return this.#mutate(
@@ -1132,7 +1115,7 @@ export class WorkflowStore {
 
   createLinkedFollowup(input: unknown): {
     workflow: ParentView;
-    capabilities: RoleCapabilities;
+    capability: ParentCapability;
   } {
     this.#ensureOpen();
     const args = mutationInput(input);
@@ -1141,7 +1124,7 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(id);
-        this.#assertAuth(row, "parent", args.capability);
+        this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -1159,29 +1142,14 @@ export class WorkflowStore {
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
         validateWorkflowStateV6(childState);
-        const childCapabilities: RoleCapabilities = {
-          parent: issueCapability(),
-          implementer: issueCapability(),
-          reviewer: issueCapability(),
-          committer: issueCapability(),
-        };
-        const childHashes = this.#capabilityHashes(childCapabilities);
+        const childCapability = issueCapability();
+        const childHash = hashCapability(childCapability);
         const now = isoNow();
         this.db
           .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, implementer_capability_hash, reviewer_capability_hash, committer_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
           )
-          .run(
-            childId,
-            JSON.stringify(childState),
-            objectDigest(childState),
-            childHashes.parent,
-            childHashes.implementer,
-            childHashes.reviewer,
-            childHashes.committer,
-            now,
-            now,
-          );
+          .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
         this.#audit(
           childId,
           0,
@@ -1220,12 +1188,12 @@ export class WorkflowStore {
         );
         if (this.faultAfterLinkedChildInsert)
           fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-        return { childState, childCapabilities };
+        return { childState, childCapability };
       })
       .immediate();
     return {
       workflow: roleView(result.childState, "parent"),
-      capabilities: result.childCapabilities,
+      capability: result.childCapability,
     };
   }
 }

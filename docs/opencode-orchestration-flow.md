@@ -44,11 +44,12 @@ API calls and no `Fixes`/`Closes`/`Resolves` completion semantics.
 
 ## Identity and handoffs
 
-The authoritative server is the source of truth. Every worker handoff carries exactly these values:
+The authoritative server is the source of truth. Every worker handoff carries exactly the workflow ID;
+workers obtain their role view and current version from a dedicated getter:
 
 - `workflow_id`: the exact workflow identifier created or reused by Orchestrator;
-- `capability`: that worker's one-time role capability; and
-- `expected_version`: the current optimistic-concurrency version from the parent view.
+- workers call `workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`;
+- only parent control-plane mutations carry the single parent capability.
 
 For this repository's self-host registration, the MCP command first materializes the bootstrap
 supervisor from the provider repository's committed `HEAD`, rather than executing the mutable
@@ -64,10 +65,10 @@ provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does
 bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-affinity
 lifecycle; its direct server uses the target repository's Git and durable state.
 
-The capability is role-specific and is never guessed, regenerated, or replaced. Before dispatching
+The parent capability is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the parent view and uses its returned version and permitted
-actions. Each worker's first authoritative action is its own `workflow_get` using those handoff
-values. The returned role view supplies that worker's objective, scope, criteria, evidence, receipts,
+actions. Each worker's first authoritative action is its dedicated capability-free getter. The
+returned role view supplies that worker's objective, scope, criteria, evidence, receipts,
 repair context, and next actions; receipt data and digests remain internal to Workflow MCP, and the
 prompt does not duplicate them.
 
@@ -148,30 +149,30 @@ sequenceDiagram
     end
     Orchestrator->>GitWorkingTree: Read-only preflight: status and HEAD
     Orchestrator->>workflow_state: Create or reuse workflow
-    workflow_state-->>Orchestrator: Exact workflow_id, implementer capability, expected_version
-    Orchestrator->>implementer: Exact workflow_id + capability + expected_version
-    implementer->>workflow_state: Initial workflow_get
+    workflow_state-->>Orchestrator: Exact workflow_id + one parent capability
+    Orchestrator->>implementer: Exact workflow_id
+    implementer->>workflow_state: Initial workflow_implementer_get
     workflow_state-->>implementer: Authoritative implementer view
     implementer->>GitWorkingTree: Implement approved scope and validate
     implementer->>workflow_state: Terminal implementation submission
     implementer-->>Orchestrator: Final textual implementation report
-    Orchestrator->>workflow_state: Parent workflow_get refresh
+    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
     workflow_state-->>Orchestrator: REVIEWING + exact reviewer handoff identity
-    Orchestrator->>code_reviewer: Exact workflow_id + capability + expected_version
-    code_reviewer->>workflow_state: Initial workflow_get
+    Orchestrator->>code_reviewer: Exact workflow_id
+    code_reviewer->>workflow_state: Initial workflow_reviewer_get
     workflow_state-->>code_reviewer: Authoritative reviewer view
     code_reviewer->>workflow_state: workflow_begin_review (working tree)
     code_reviewer->>GitWorkingTree: Independent read-only review
     code_reviewer->>workflow_state: Terminal review submission
     code_reviewer-->>Orchestrator: Final textual review report
-    Orchestrator->>workflow_state: Parent workflow_get refresh
+    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
     workflow_state-->>Orchestrator: STOPPED_APPROVED + sanitized approval view
     User->>Orchestrator: Explicit commit authorization
     Orchestrator->>workflow_state: Authorize commit
-    Orchestrator->>workflow_state: Parent workflow_get refresh
+    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
     workflow_state-->>Orchestrator: COMMIT_AUTHORIZED + exact committer handoff identity
-    Orchestrator->>committer: Exact workflow_id + capability + expected_version
-    committer->>workflow_state: Initial workflow_get
+    Orchestrator->>committer: Exact workflow_id
+    committer->>workflow_state: Initial workflow_committer_get
     workflow_state-->>committer: Authoritative committer view
     committer->>GitWorkingTree: Stage exact approved paths
     committer->>workflow_state: workflow_prepare_commit
@@ -179,7 +180,7 @@ sequenceDiagram
     committer->>GitWorkingTree: External git commit
     committer->>workflow_state: Terminal commit-result submission
     committer-->>Orchestrator: Final textual commit report
-    Orchestrator->>workflow_state: Final parent workflow_get refresh
+    Orchestrator->>workflow_state: Final parent workflow_parent_get refresh
     workflow_state-->>Orchestrator: COMMITTED (or documented stop)
 ```
 

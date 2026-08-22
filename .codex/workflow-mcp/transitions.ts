@@ -724,7 +724,6 @@ export function submitImplementation(
     input,
     [
       "workflow_id",
-      "capability",
       "expected_version",
       "status",
       "summary",
@@ -976,7 +975,7 @@ export function beginReview(
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_REVIEW", "review begin input is invalid");
   }
-  exactKeys(input, ["workflow_id", "capability", "expected_version"], "review begin");
+  exactKeys(input, ["workflow_id", "expected_version"], "review begin");
   ensurePhase(state, "REVIEWING");
   if (state.review_target.review_mode !== "working_tree") {
     fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
@@ -1011,7 +1010,6 @@ export function submitReview(
     input,
     [
       "workflow_id",
-      "capability",
       "expected_version",
       "review_status",
       "blocking_findings",
@@ -1246,7 +1244,7 @@ export function prepareCommit(
   input: unknown,
   evidence: CommitPreparationEvidence,
 ): WorkflowState {
-  exactKeys(input, ["workflow_id", "capability", "expected_version"], "commit preparation");
+  exactKeys(input, ["workflow_id", "expected_version"], "commit preparation");
   ensurePhase(state, "COMMIT_AUTHORIZED");
   const next = clone(state);
   next.commit_preparation = {
@@ -1326,7 +1324,7 @@ function commitResultInput(state: WorkflowState, input: unknown): Record<string,
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "attempt_id", "outcome", "failure_summary"],
+    ["workflow_id", "expected_version", "attempt_id", "outcome", "failure_summary"],
     "commit result",
   );
   ensurePhase(state, "COMMIT_PREPARED");

@@ -51,7 +51,7 @@ permission:
   task:
     "*": deny
   workflow_state_*: deny
-  workflow_state_workflow_get: allow
+  workflow_state_workflow_committer_get: allow
   workflow_state_workflow_prepare_commit: allow
   workflow_state_workflow_submit_commit_result: allow
 ---
@@ -65,8 +65,8 @@ generate an accurate commit message, stage the changes, and create the commit.
 
 Rules:
 - For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
-  only your `workflow_id`, your committer `capability`, the current `expected_version`, and the
-  instruction to read your authoritative view. Call `workflow_get` with role `committer`; the
+  only your `workflow_id` and the instruction to read your authoritative view. Call
+  `workflow_committer_get` first; the
   returned view is the single source of truth and carries the approved scope, derived paths,
   sanitized commit preparation, commit authorization, and your permitted next actions. Prompts carry no
   duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,

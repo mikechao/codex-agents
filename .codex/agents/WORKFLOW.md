@@ -1,8 +1,8 @@
 # Custom subagent workflow
 
 This file defines the authoritative MCP-based workflow and routing. The workflow-state server's role
-views carry all handoff state; agent prompts carry only the workflow ID, the role capability, the
-expected version, and the instruction to read the role's own view. Detailed role behavior remains in
+views carry all handoff state; worker prompts carry only the workflow ID, while parent control-plane
+prompts carry the parent capability and expected version. Detailed role behavior remains in
 the role contracts beside this file. All paths are repository-relative exact file paths; directories
 and globs are not valid. The parent agent owns scope, review decisions, repair-loop counting, commit
 authorization, and linked follow-up creation.
@@ -26,9 +26,9 @@ Host permission syntax differs and must not be treated as equivalent:
 - The target Codex CLI version is `0.148.0`. Its standalone custom-agent TOML layers support an
   `[mcp_servers.<id>]` table, including `enabled_tools` as a fail-closed allowlist of MCP tool
   names. The generated worker layers therefore allow only the role's Workflow MCP tools:
-  implementer (`workflow_get`, `workflow_submit_implementation`), code reviewer
-  (`workflow_get`, `workflow_begin_review`, `workflow_submit_review`), and committer
-  (`workflow_get`, `workflow_prepare_commit`, `workflow_submit_commit_result`). The parent
+    implementer (`workflow_implementer_get`, `workflow_submit_implementation`), code reviewer
+    (`workflow_reviewer_get`, `workflow_begin_review`, `workflow_submit_review`), and committer
+    (`workflow_committer_get`, `workflow_prepare_commit`, `workflow_submit_commit_result`). The parent
   registration remains unrestricted; this repository's own `.codex/config.toml` keeps its agent
   and Workflow MCP registrations disabled. Automated checks verify the serialized configuration,
   not Codex runtime enforcement.
@@ -42,7 +42,7 @@ Host permission syntax differs and must not be treated as equivalent:
   pushing, resetting, rebasing, checking out, switching, and the other mutating Git/history
   commands. Every OpenCode agent only exposes its own role's `workflow_state` tools
   (`workflow_state_*` deny plus role-specific allows). These are host-level defense in depth for
-  context size and isolation; the server-side role capability, `expected_version`, and transition
+context size and isolation; the server-side parent capability, `expected_version`, and transition
   checks remain authoritative and are unchanged between hosts.
 - Model/reasoning identity is host metadata, not contract prose: each generated definition
   announces its own identity line (resolved model plus reasoning effort in both hosts), injected by
@@ -61,13 +61,14 @@ Host permission syntax differs and must not be treated as equivalent:
 ## Authoritative MCP state
 
 For non-trivial work, the project-scoped `workflow_state` MCP server is authoritative. The parent
-creates one workflow before dispatch and passes each role only its one-time capability together with
-the `workflow_id`, the current `expected_version`, and the instruction to call `workflow_get` for its
-  own view. The returned role view is authoritative and complete: it carries that role's objective,
-  contracts, semantic evidence, findings, repair state, and sorted `permitted_next_actions`, so
-prompts never duplicate objective, criteria, evidence, finding, receipt, or repair state. Mutations
-pass the common `workflow_id`, `capability`, and `expected_version` fields, and the returned view
-supplies the next `expected_version`.
+creates one workflow and receives one parent capability. Delegation passes workers only the exact
+`workflow_id`; each worker calls its dedicated capability-free getter
+(`workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`) before mutation.
+The returned role view is authoritative and complete: it carries that role's objective, contracts,
+semantic evidence, findings, repair state, and sorted `permitted_next_actions`, so prompts never
+duplicate objective, criteria, evidence, finding, receipt, or repair state. Worker mutations pass
+`workflow_id` and `expected_version`; parent control-plane mutations and audit pass the parent
+capability and `expected_version`.
 
 Each role must not call tools owned by another role, and capabilities must not be included in
 inherited conversation history. Capabilities are defense-in-depth orchestration controls, not a
@@ -225,7 +226,7 @@ Git state; the committer owns staging and the commit.
 
 This installation uses the previously authorized prompt/receipt bootstrap. Commit `.codex/config.toml`,
 restart/reload Codex, then perform a safe read-only smoke test by listing the `workflow_state` tools
-and inspecting initialization instructions. Confirm `workflow_get`, `workflow_get_audit`, and the
+and inspecting initialization instructions. Confirm the dedicated role getters, `workflow_get_audit`, and the
 expected mutation tools are visible before creating a workflow. Manually starting the STDIO child
 does not inject tools into an already-running host. Before reload, fail closed and ask the user
 whether prompt-only degraded mode is authorized; after reload, MCP is authoritative only when the

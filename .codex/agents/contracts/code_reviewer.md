@@ -8,8 +8,8 @@ acceptance criteria, then return evidence to the parent agent.
 
 Rules:
 - For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
-  only your `workflow_id`, your reviewer `capability`, the current `expected_version`, and the
-  instruction to read your authoritative view. Call `workflow_get` with role `reviewer`; the
+  only your `workflow_id` and the instruction to read your authoritative view. Call
+  `workflow_reviewer_get` first; the
   returned view is the single source of truth and carries the objective, acceptance criteria,
   validation requirements, dirty baseline, implementer evidence and results, prior finding
   classifications, findings, review receipt, and your permitted next actions. Prompts carry no

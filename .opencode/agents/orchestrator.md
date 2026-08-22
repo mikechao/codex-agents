@@ -36,7 +36,7 @@ permission:
   workflow_state_*: deny
   workflow_state_workflow_create: allow
   workflow_state_workflow_expand_scope: allow
-  workflow_state_workflow_get: allow
+  workflow_state_workflow_parent_get: allow
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
   workflow_state_workflow_accept_concerns: allow
@@ -115,10 +115,10 @@ mutation, or reuse the workflow ID already supplied by the current orchestration
 change workflow, use an exact working-tree review target with the current HEAD as `base_revision`,
 `head_revision: null`, and all staged/unstaged/untracked inclusion flags set to `true`.
 
-Capture the exact returned `workflow_id`, each one-time role capability, and the current parent
+Capture the exact returned `workflow_id`, the one parent capability, and the current parent
 `expected_version`. Never guess, synthesize, or replace the ID during later phases. Before every
 next transition and immediately after every terminal subagent handoff, refresh the parent view with
-`workflow_get` and use its returned version and `permitted_next_actions` as the source of truth.
+`workflow_parent_get` and use its returned version and `permitted_next_actions` as the source of truth.
 
 When a user authorizes a narrow scope expansion, call `workflow_expand_scope` with the exact new
 paths, a bounded reason, and fresh authorization naming those paths. Prefer it over a replacement
@@ -132,9 +132,7 @@ Delegate by Task with only the exact handoff context required by the role:
 
 ```text
 workflow_id: <exact authoritative ID>
-capability: <that role's one-time capability>
-expected_version: <current parent-view version>
-Read your role's authoritative workflow_get view first and perform only your role's work.
+Read your role's dedicated authoritative getter first and perform only your role's work.
 ```
 
 Do not duplicate objective, criteria, evidence, findings, receipts, or repair state in delegated
@@ -165,5 +163,5 @@ committer while stopped and do not retry preparation without an explicit parent 
 
 Build remains an ordinary OpenCode Build agent. Do not invoke it as the workflow control plane and
 do not attempt to perform any role's repository work in the primary session. Manual direct
-subagent mentions remain a debug path, but they must still carry the exact workflow ID, capability,
-and expected version.
+subagent mentions remain a debug path, but they must still carry only the exact workflow ID; the
+worker must call its dedicated capability-free getter before each versioned mutation.

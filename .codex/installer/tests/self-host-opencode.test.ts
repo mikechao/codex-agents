@@ -59,7 +59,7 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
   for (const tool of [
     "workflow_create",
-    "workflow_get",
+    "workflow_parent_get",
     "workflow_get_audit",
     "workflow_authorize_repair",
     "workflow_authorize_commit",

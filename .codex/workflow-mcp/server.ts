@@ -14,8 +14,13 @@ import { openStore } from "./store.js";
 
 type JsonSchema = Record<string, JSONValue>;
 
-const instructions =
+/* Legacy instructions were intentionally removed; protocolInstructions below is authoritative. */
+const _instructions =
+  "Authoritative local workflow state. The parent receives one parent capability; workers receive only workflow_id and use dedicated capability-free getters."; /*
   "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent, while approved_paths is an append-only narrow mutation scope: only the parent may expand it with fresh user authorization naming exact paths in permitted active states. Linked follow-ups retain that narrow remediation scope and require a fresh independent combined review over inherited logical-change paths before approval or commit. Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; only combined APPROVED stops a linked logical change; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
+*/
+export const protocolInstructions =
+  "Authoritative local workflow state. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication.";
 
 const common: {
   type: "object";
@@ -46,6 +51,21 @@ function schema(
     ...extra,
   };
 }
+
+const workerCommon: {
+  type: "object";
+  properties: Record<string, JSONValue>;
+  required: string[];
+  additionalProperties: false;
+} = {
+  type: "object",
+  properties: {
+    workflow_id: { type: "string" },
+    expected_version: { type: "integer", minimum: 0 },
+  },
+  required: ["workflow_id", "expected_version"],
+  additionalProperties: false,
+};
 
 const resolutionMapSchema: JsonSchema = {
   type: "object",
@@ -191,7 +211,7 @@ export const tools: Tool[] = [
   {
     name: "workflow_create",
     description:
-      "Create a change or review-only workflow and return the parent view plus one-time role capabilities.",
+      "Create a change or review-only workflow and return the parent view plus one parent capability.",
     inputSchema: schema(
       {
         workflow_type: { type: "string", enum: ["change", "review_only"] },
@@ -235,17 +255,9 @@ export const tools: Tool[] = [
     },
   },
   {
-    name: "workflow_get",
-    description:
-      "Read the authenticated role's least-authority workflow view with its permitted next actions; capabilities are never returned.",
-    inputSchema: schema(
-      {
-        workflow_id: { type: "string" },
-        capability: { type: "string" },
-        role: { type: "string", enum: ["parent", "implementer", "reviewer", "committer"] },
-      },
-      ["workflow_id", "capability", "role"],
-    ),
+    name: "workflow_parent_get",
+    description: "Read the parent workflow view by exact workflow_id.",
+    inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
     annotations: {
       title: "Get workflow",
       readOnlyHint: true,
@@ -255,15 +267,50 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_implementer_get",
+    description: "Read the implementer workflow view by exact workflow_id.",
+    inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
+    annotations: {
+      title: "Get implementer workflow",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_reviewer_get",
+    description: "Read the reviewer workflow view by exact workflow_id.",
+    inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
+    annotations: {
+      title: "Get reviewer workflow",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_committer_get",
+    description: "Read the committer workflow view by exact workflow_id.",
+    inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
+    annotations: {
+      title: "Get committer workflow",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_get_audit",
-    description: "Read append-only workflow audit events.",
+    description: "Read append-only workflow audit events with the parent capability.",
     inputSchema: schema(
       {
         workflow_id: { type: "string" },
         capability: { type: "string" },
-        role: { type: "string", enum: ["parent", "implementer", "reviewer", "committer"] },
       },
-      ["workflow_id", "capability", "role"],
+      ["workflow_id", "capability"],
     ),
     annotations: {
       title: "Get workflow audit",
@@ -279,7 +326,7 @@ export const tools: Tool[] = [
       "Submit complete ID-addressed implementation evidence; DONE advances IMPLEMENTING or REPAIRING to REVIEWING.",
     inputSchema: schema(
       {
-        ...common.properties,
+        ...workerCommon.properties,
         status: {
           type: "string",
           enum: ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"],
@@ -325,7 +372,7 @@ export const tools: Tool[] = [
         finding_resolution_map: resolutionMapSchema,
       },
       [
-        ...common.required,
+        ...workerCommon.required,
         "status",
         "summary",
         "agent_touched_paths",
@@ -384,7 +431,7 @@ export const tools: Tool[] = [
     name: "workflow_begin_review",
     description:
       "Capture the authoritative working-tree review start snapshot; the snapshot remains internal and binds the subsequent review submission.",
-    inputSchema: schema(common.properties, common.required),
+    inputSchema: workerCommon,
     annotations: {
       title: "Begin review",
       readOnlyHint: false,
@@ -399,14 +446,14 @@ export const tools: Tool[] = [
       "Submit semantic reviewer findings; approved working-tree reviews are compared with the internal review-start snapshot.",
     inputSchema: schema(
       {
-        ...common.properties,
+        ...workerCommon.properties,
         review_status: { type: "string", enum: ["APPROVED", "CHANGES_REQUESTED", "INCONCLUSIVE"] },
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
         prior_finding_classifications: resolutionMapSchema,
       },
       [
-        ...common.required,
+        ...workerCommon.required,
         "review_status",
         "blocking_findings",
         "optional_findings",
@@ -538,7 +585,7 @@ export const tools: Tool[] = [
     name: "workflow_prepare_commit",
     description:
       "Verify the fully staged index against the internal authorized review receipt and prepare a commit binding the exact HEAD, tree, and paths.",
-    inputSchema: schema(common.properties, common.required),
+    inputSchema: workerCommon,
     annotations: {
       title: "Prepare commit",
       readOnlyHint: false,
@@ -591,14 +638,14 @@ export const tools: Tool[] = [
       "Submit the outcome of an external commit attempt; a verified commit enters COMMITTED, an unchanged-HEAD failure enters a retryable stop, and any verification mismatch enters a terminal stop.",
     inputSchema: schema(
       {
-        ...common.properties,
+        ...workerCommon.properties,
         attempt_id: { type: "string", pattern: "^[0-9a-f-]{36}$" },
         outcome: { type: "string", enum: ["committed", "not_committed"] },
         failure_summary: {
           oneOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }],
         },
       },
-      [...common.required, "attempt_id", "outcome", "failure_summary"],
+      [...workerCommon.required, "attempt_id", "outcome", "failure_summary"],
     ),
     annotations: {
       title: "Submit commit result",
@@ -641,7 +688,7 @@ function errorResult(error: unknown): CallToolResult {
 export function createServer(store: WorkflowStore = openStore()): Server {
   const server = new Server(
     { name: "workflow-state", version: "1.0.0" },
-    { capabilities: { tools: {} }, instructions },
+    { capabilities: { tools: {} }, instructions: protocolInstructions },
   );
   server.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => ({ tools }));
   server.setRequestHandler("tools/call", async (request) => {
@@ -655,11 +702,20 @@ export function createServer(store: WorkflowStore = openStore()): Server {
         case "workflow_create":
           result = store.create(args);
           break;
-        case "workflow_get":
-          result = store.get(args.workflow_id, args.role, args.capability);
+        case "workflow_parent_get":
+          result = store.parentGet(args.workflow_id);
+          break;
+        case "workflow_implementer_get":
+          result = store.implementerGet(args.workflow_id);
+          break;
+        case "workflow_reviewer_get":
+          result = store.reviewerGet(args.workflow_id);
+          break;
+        case "workflow_committer_get":
+          result = store.committerGet(args.workflow_id);
           break;
         case "workflow_get_audit":
-          result = store.audit(args.workflow_id, args.role, args.capability);
+          result = store.audit(args.workflow_id, args.capability);
           break;
         case "workflow_submit_implementation":
           result = store.submitImplementation(args);

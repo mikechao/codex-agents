@@ -74,11 +74,14 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All 19 tool names (from `server.ts` `tools`).
+// All Workflow MCP tool names (from `server.ts` `tools`).
 export type WorkflowAction =
   | "workflow_create"
   | "workflow_expand_scope"
-  | "workflow_get"
+  | "workflow_parent_get"
+  | "workflow_implementer_get"
+  | "workflow_reviewer_get"
+  | "workflow_committer_get"
   | "workflow_get_audit"
   | "workflow_submit_implementation"
   | "workflow_resume_implementation"
@@ -550,7 +553,7 @@ export interface CommitterView extends RoleViewCommon {
 }
 
 export type RoleView = ParentView | ImplementerView | ReviewerView | CommitterView;
-export type RoleCapabilities = Record<Role, CapabilityToken>;
+export type ParentCapability = CapabilityToken;
 
 // ---------------------------------------------------------------------------
 // 10. Persistence rows (distinct from parsed domain types)
@@ -562,9 +565,6 @@ export interface WorkflowRow {
   state_json: string;
   state_digest: string | null;
   parent_capability_hash: string;
-  implementer_capability_hash: string;
-  reviewer_capability_hash: string;
-  committer_capability_hash: string;
   created_at: string;
   updated_at: string;
 }

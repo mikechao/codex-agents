@@ -79,9 +79,9 @@ interface RoleSpec {
 // in model-policy.yaml, which is intentionally limited to model assignments
 // and reasoning effort.
 export const CODEX_WORKFLOW_MCP_ENABLED_TOOLS = {
-  implementer: ["workflow_get", "workflow_submit_implementation"],
-  code_reviewer: ["workflow_get", "workflow_begin_review", "workflow_submit_review"],
-  committer: ["workflow_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
+  implementer: ["workflow_implementer_get", "workflow_submit_implementation"],
+  code_reviewer: ["workflow_reviewer_get", "workflow_begin_review", "workflow_submit_review"],
+  committer: ["workflow_committer_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
 } as const satisfies Record<RoleName, readonly string[]>;
 
 // A standalone Codex custom-agent file is parsed as a complete ConfigToml
@@ -159,7 +159,7 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_get: allow",
+        "  workflow_state_workflow_implementer_get: allow",
         "  workflow_state_workflow_submit_implementation: allow",
       ],
       terminalTool: "workflow_submit_implementation",
@@ -194,7 +194,7 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_get: allow",
+        "  workflow_state_workflow_reviewer_get: allow",
         "  workflow_state_workflow_begin_review: allow",
         "  workflow_state_workflow_submit_review: allow",
       ],
@@ -261,7 +261,7 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_get: allow",
+        "  workflow_state_workflow_committer_get: allow",
         "  workflow_state_workflow_prepare_commit: allow",
         "  workflow_state_workflow_submit_commit_result: allow",
       ],

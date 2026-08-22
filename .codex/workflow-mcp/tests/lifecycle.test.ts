@@ -308,16 +308,14 @@ function optionalFinding(id: string) {
 }
 
 function doCreate(ctx: any, options: any = {}) {
-  ctx.reviewVersionOffset = 0;
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
 }
 
-function doImplementation(ctx: any, version: number, options: any = {}) {
-  const { workflow, capabilities } = ctx.created;
+function doImplementation(ctx: any, _version: number, options: any = {}) {
+  const { workflow } = ctx.created;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.implementer,
-    expected_version: version + ctx.reviewVersionOffset,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     status: options.status ?? "DONE",
     summary: options.summary ?? "implemented",
     agent_touched_paths: options.touched ?? [],
@@ -336,23 +334,19 @@ function doImplementation(ctx: any, version: number, options: any = {}) {
   });
 }
 
-function doReview(ctx: any, version: number, options: any = {}) {
-  const { workflow, capabilities } = ctx.created;
+function doReview(ctx: any, _version: number, options: any = {}) {
+  const { workflow } = ctx.created;
   const status = options.status ?? "APPROVED";
-  const expectedVersion = version + ctx.reviewVersionOffset;
+  const expectedVersion = ctx.store.parentGet(workflow.workflow_id).version;
   if (workflow.review_target?.review_mode !== "commit_range") {
     ctx.store.beginReview({
       workflow_id: workflow.workflow_id,
-      capability: capabilities.reviewer,
       expected_version: expectedVersion,
     });
-    ctx.reviewVersionOffset += 1;
   }
   ctx.store.submitReview({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.reviewer,
-    expected_version:
-      expectedVersion + (workflow.review_target?.review_mode === "commit_range" ? 0 : 1),
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     review_status: status,
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
@@ -360,102 +354,100 @@ function doReview(ctx: any, version: number, options: any = {}) {
   });
 }
 
-function doAuthorizeRepair(ctx: any, version: number, ids: string[]) {
-  const { workflow, capabilities } = ctx.created;
+function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
+  const { workflow, capability } = ctx.created;
   ctx.store.authorizeRepair({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     finding_ids: ids,
   });
 }
 
-function doResumeImplementation(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doResumeImplementation(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.resumeImplementation({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     resume_context: "resumed",
   });
 }
 
-function doResumeReview(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doResumeReview(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.resumeReview({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     resume_context: "resumed",
   });
 }
 
-function doAcceptConcerns(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doAcceptConcerns(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.acceptConcerns({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     user_authorization: "user accepted concerns",
   });
 }
 
-function doAuthorizeCommit(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doAuthorizeCommit(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.authorizeCommit({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     user_authorization: "user authorized commit",
   });
 }
 
-function doPrepareCommit(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doPrepareCommit(ctx: any, _version: number) {
+  const { workflow } = ctx.created;
   ctx.prepared = ctx.store.prepareCommit({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.committer,
-    expected_version: version + ctx.reviewVersionOffset,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
   });
 }
 
-function doSubmitCommitResult(ctx: any, version: number, options: any) {
-  const { workflow, capabilities } = ctx.created;
+function doSubmitCommitResult(ctx: any, _version: number, options: any) {
+  const { workflow } = ctx.created;
   ctx.store.submitCommitResult({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.committer,
-    expected_version: version + ctx.reviewVersionOffset,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     attempt_id: options.attemptId ?? ctx.prepared.commit_preparation.attempt_id,
     outcome: options.outcome,
     failure_summary: options.failure_summary ?? null,
   });
 }
 
-function doRetryCommit(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doRetryCommit(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.retryCommit({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     retry_context: "retrying",
   });
 }
 
-function doFinalize(ctx: any, version: number) {
-  const { workflow, capabilities } = ctx.created;
+function doFinalize(ctx: any, _version: number) {
+  const { workflow, capability } = ctx.created;
   ctx.store.finalizeRepairExhausted({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
   });
 }
 
-function doLinkedFollowup(ctx: any, version: number, findingIds: string[]) {
-  const { workflow, capabilities } = ctx.created;
+function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
+  const { workflow, capability } = ctx.created;
   ctx.child = ctx.store.createLinkedFollowup({
     workflow_id: workflow.workflow_id,
-    capability: capabilities.parent,
-    expected_version: version + ctx.reviewVersionOffset,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     objective: "linked child",
     approved_plan: null,
     approved_paths: ["note.txt"],
@@ -481,15 +473,18 @@ function snap(wf: string, phase: string, version: number, actions: any, events: 
 function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   const entry = snap.wf === "child" ? ctx.child : ctx.created;
   assert.ok(entry, `${label}: workflow exists`);
-  const { workflow, capabilities } = entry;
+  const { workflow, capability } = entry;
   const id = workflow.workflow_id;
-  const expectedVersion =
-    snap.version +
-    (entry === ctx.created && workflow.review_target?.review_mode === "working_tree"
-      ? ctx.reviewVersionOffset
-      : 0);
+  const expectedVersion = store.parentGet(id).version;
   for (const role of ROLES) {
-    const view = store.get(id, role, capabilities[role]);
+    const view =
+      role === "parent"
+        ? store.parentGet(id)
+        : role === "implementer"
+          ? store.implementerGet(id)
+          : role === "reviewer"
+            ? store.reviewerGet(id)
+            : store.committerGet(id);
     assert.equal(view.phase, snap.phase, `${label}: ${role} phase`);
     assert.equal(view.version, expectedVersion, `${label}: ${role} version`);
     assert.deepEqual(
@@ -507,14 +502,11 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   assert.equal(parsed.version, expectedVersion, `${label}: persisted state version`);
   assert.equal(parsed.phase, snap.phase, `${label}: persisted state phase`);
   assert.equal(row.state_digest, objectDigest(parsed), `${label}: stored digest matches state`);
-  const audit = store.audit(id, "parent", capabilities.parent);
+  const audit = store.audit(id, capability);
   assert.deepEqual(
     audit.map((event: any) => event.event_type),
     snap.events.flatMap((event: string) =>
-      event === "REVIEW_SUBMITTED" &&
-      entry === ctx.created &&
-      workflow.review_target?.review_mode === "working_tree" &&
-      ctx.reviewVersionOffset > 0
+      event === "REVIEW_SUBMITTED" && workflow.review_target?.review_mode === "working_tree"
         ? ["REVIEW_STARTED", event]
         : [event],
     ),
@@ -556,7 +548,6 @@ function scenario(name: string, steps: any[], options: any = {}) {
       created: null,
       child: null,
       prepared: null,
-      reviewVersionOffset: 0,
       ...base,
     };
     try {
