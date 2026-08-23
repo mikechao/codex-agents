@@ -521,6 +521,43 @@ export class WorkflowStore {
     }
   }
 
+  #isCrossRuntimeCommitReconciled(row: WorkflowRow, state: WorkflowState): boolean {
+    const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    if (
+      affinity.runtime_id === null ||
+      affinity.runtime_revision === null ||
+      (affinity.runtime_id === this.runtimeId &&
+        affinity.runtime_revision === this.runtimeRevision) ||
+      (state.phase !== "COMMITTED" && state.phase !== "STOPPED_COMMIT_MISMATCH")
+    ) {
+      return false;
+    }
+
+    const event = this.db
+      .prepare(
+        "SELECT actor_role, summary_json FROM audit_events WHERE workflow_id = ? AND version = ? AND event_type = 'COMMIT_RESULT_SUBMITTED'",
+      )
+      .all(row.workflow_id, row.version) as Array<{
+      actor_role: string;
+      summary_json: string;
+    }>;
+    if (event.length !== 1 || event[0].actor_role !== "parent") return false;
+
+    let summary: unknown;
+    try {
+      summary = JSON.parse(event[0].summary_json);
+    } catch {
+      return false;
+    }
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+    const envelope = summary as Partial<AuditEnvelope>;
+    return (
+      envelope.phase_before === "COMMIT_PREPARED" &&
+      envelope.phase_after === state.phase &&
+      envelope.state_digest_after === row.state_digest
+    );
+  }
+
   #assertRuntimeAttestation(): void {
     if (this.runtimeId === null || this.runtimeRevision === null) {
       fail(
@@ -666,8 +703,11 @@ export class WorkflowStore {
   #get(workflowIdValue: unknown, actorRole: Role): RoleView {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
-    this.#assertRuntimeOwnership(row);
     const state = parseState(row);
+    const reconciledParentRead =
+      actorRole === "parent" && this.#isCrossRuntimeCommitReconciled(row, state);
+    if (reconciledParentRead) this.#assertRuntimeAttestation();
+    else this.#assertRuntimeOwnership(row);
     const view = roleViewForRole(state, actorRole);
     const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
     if (
@@ -686,6 +726,12 @@ export class WorkflowStore {
 
   parentGet(workflowIdValue: unknown): ParentView {
     return this.#get(workflowIdValue, "parent") as ParentView;
+  }
+
+  isCrossRuntimeCommitReconciled(workflowIdValue: unknown): boolean {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    return this.#isCrossRuntimeCommitReconciled(row, parseState(row));
   }
 
   implementerGet(workflowIdValue: unknown): RoleView {

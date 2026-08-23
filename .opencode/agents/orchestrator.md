@@ -38,6 +38,7 @@ permission:
   workflow_state_workflow_adopt_dirty_scope: allow
   workflow_state_workflow_expand_scope: allow
   workflow_state_workflow_parent_get: allow
+  workflow_state_workflow_reconcile_commit_result: allow
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
   workflow_state_workflow_accept_concerns: allow

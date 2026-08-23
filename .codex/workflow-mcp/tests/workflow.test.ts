@@ -364,6 +364,18 @@ test("reconciles an existing commit from a different owning runtime without a se
       runtimeRevision: current,
       ...runtimeAttestation(newRuntimeId, current, newKey),
     });
+    const preReconciliationReader: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: newRuntimeId,
+      runtimeRevision: current,
+      ...runtimeAttestation(newRuntimeId, current, newKey),
+    });
+    assert.equal(
+      category(() => preReconciliationReader.parentGet(created.workflow.workflow_id)),
+      "ERROR_RUNTIME_ISOLATION",
+    );
+    preReconciliationReader.close();
     const reconciled = currentStore.reconcileCommitResult({
       workflow_id: created.workflow.workflow_id,
       capability: created.capability,
@@ -371,6 +383,15 @@ test("reconciles an existing commit from a different owning runtime without a se
       attempt_id: prepared.commit_preparation.attempt_id,
     });
     assert.equal(reconciled.phase, "COMMITTED");
+    assert.equal(currentStore.parentGet(created.workflow.workflow_id).phase, "COMMITTED");
+    assert.equal(
+      category(() => currentStore.implementerGet(created.workflow.workflow_id)),
+      "ERROR_RUNTIME_ISOLATION",
+    );
+    assert.equal(
+      category(() => currentStore.audit(created.workflow.workflow_id, created.capability)),
+      "ERROR_RUNTIME_ISOLATION",
+    );
     assert.equal(git("rev-list", "--count", "HEAD"), "2");
     const oldReader: any = new WorkflowStore({
       repositoryRoot: root,

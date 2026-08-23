@@ -527,6 +527,13 @@ export class RuntimeSupervisor {
     if (isCommitReconciliation(message)) return { artifact: this.defaultRuntime, adopted: false };
     const workflowId = message.params?.arguments?.workflow_id;
     if (typeof workflowId !== "string") return { artifact: this.defaultRuntime, adopted: false };
+    if (
+      message.method === "tools/call" &&
+      message.params?.name === "workflow_parent_get" &&
+      this.store.isCrossRuntimeCommitReconciled(workflowId)
+    ) {
+      return { artifact: this.defaultRuntime, adopted: false };
+    }
     let affinity = this.store.runtimeAffinity(workflowId);
     let adopted = false;
     if (affinity.runtime_id === null && affinity.runtime_revision === null) {

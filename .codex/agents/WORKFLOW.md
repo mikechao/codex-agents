@@ -229,7 +229,12 @@ If commit-result bookkeeping fails after Git has already created the commit, nev
 commit. Prefer ordinary `workflow_submit_commit_result` when the owning corrected runtime is
 available; the parent-only `workflow_reconcile_commit_result` operation exists only to route this
 bounded verification to the current runtime for workflows stranded on an older immutable runtime.
-It leaves runtime affinity unchanged and never creates, amends, or duplicates a commit.
+It leaves runtime affinity unchanged and never creates, amends, or duplicates a commit. After a
+successful reconciliation, only an attested current non-owner runtime may serve the terminal
+`workflow_parent_get` view when the current persisted version has the parent reconciliation audit
+transition from `COMMIT_PREPARED` to `COMMITTED` or `STOPPED_COMMIT_MISMATCH` with a matching state
+digest. Ordinary parent, worker, and audit reads remain routed to the persisted owner, and the
+exception does not apply to same-owner reconciliation or any mutation.
 
 ## Bootstrap and reload checklist
 

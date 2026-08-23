@@ -284,6 +284,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_adopt_dirty_scope",
     "workflow_expand_scope",
     "workflow_parent_get",
+    "workflow_reconcile_commit_result",
     "workflow_get_audit",
     "workflow_resume_implementation",
     "workflow_accept_concerns",
@@ -300,6 +301,12 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
       content,
       new RegExp(`^  workflow_state_${parentTool}: allow$`, "m"),
       `orchestrator must expose parent tool ${parentTool}`,
+    );
+  }
+  for (const role of ["implementer", "code_reviewer", "committer"]) {
+    assert.ok(
+      !opencode(`${role}.md`).includes("workflow_state_workflow_reconcile_commit_result"),
+      `${role} must not expose the parent-only reconciliation tool`,
     );
   }
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
