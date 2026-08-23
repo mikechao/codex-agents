@@ -67,9 +67,10 @@ Rules:
   `summary`, exact `agent_touched_paths`, acceptance and validation evidence arrays,
   `known_failures`, and a complete `finding_resolution_map`. Workflow MCP generates and persists
   the authoritative implementation receipt from the approved scope; never submit receipt JSON.
-  Pass your current `expected_version` on every mutation. `DONE` is the only status that advances
-  to review; concerns, missing context, or blocked work must remain stopped with their explicit
-  status.
+  Pass your current `expected_version` on every mutation. `DONE` is the only normal status that
+  advances directly to review. `INCOMPLETE` keeps the workflow in its current `IMPLEMENTING` or
+  `REPAIRING` phase for another bounded implementer dispatch. Concerns, missing context, or blocked
+  work remain stopped with their explicit status.
 - Read every applicable AGENTS.md file and any architecture or domain documentation it requires before editing.
 - Inspect the working tree before editing, respect assigned file or responsibility ownership, and preserve unrelated changes made by the user or other agents.
 - Treat the view's objective, approved scope, and contracts as the source of truth.
@@ -112,9 +113,17 @@ Rules:
 
 Begin the final report with exactly one status:
 - DONE — the implementation, acceptance criteria, and required validation are complete.
-- DONE_WITH_CONCERNS — implementation is complete, but a documented risk or validation exception remains.
+- DONE_WITH_CONCERNS — approved implementation work is otherwise complete, but a documented
+  residual risk or validation exception eligible for explicit user acceptance remains.
+- INCOMPLETE — approved-plan work remains, but no material decision, new authorization, or external
+  change prevents another bounded implementation pass.
 - NEEDS_CONTEXT — required information was not available.
 - BLOCKED — completion requires a material decision or external change.
+
+Use `INCOMPLETE` when planned code or tests remain unfinished, known validation failures are caused
+by unfinished approved work, or the current invocation ends before an otherwise executable approved
+plan is complete. Do not use `DONE_WITH_CONCERNS` merely because tests are red or planned work
+remains.
 
 Then report:
 1. Outcome and what you changed.

@@ -180,6 +180,147 @@ test("fresh store API persists singular parent capability and role-specific view
   }
 });
 
+test("incomplete implementation attempts stay active and preserve repair authorization", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git, { max_repair_cycles: 1 }));
+    const id = created.workflow.workflow_id;
+    const submit = (options: {
+      status: string;
+      criterion?: "satisfied" | "not_satisfied";
+      validation?: "passed" | "failed" | "not_run";
+      resolution?: Record<string, string>;
+    }) =>
+      store.submitImplementation({
+        workflow_id: id,
+        expected_version: store.parentGet(id).version,
+        status: options.status,
+        summary: `${options.status.toLowerCase()} attempt`,
+        agent_touched_paths: [],
+        acceptance_results: created.workflow.acceptance_criteria.map(
+          ({ criterion_id }: { criterion_id: string }) => ({
+            criterion_id,
+            status: options.criterion ?? "satisfied",
+            evidence: "acceptance evidence",
+          }),
+        ),
+        validation_results: created.workflow.validation_requirements.map(
+          ({ validation_id }: { validation_id: string }) => ({
+            validation_id,
+            status: options.validation ?? "passed",
+            evidence: "validation evidence",
+          }),
+        ),
+        known_failures: options.status === "DONE" ? [] : ["remaining approved work"],
+        finding_resolution_map: options.resolution ?? {},
+      });
+
+    const incomplete = submit({
+      status: "INCOMPLETE",
+      criterion: "not_satisfied",
+      validation: "failed",
+    });
+    assert.equal(incomplete.phase, "IMPLEMENTING");
+    assert.equal(incomplete.version, 1);
+    assert.equal(incomplete.stop_context, null);
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, ["workflow_expand_scope"]);
+    assert.deepEqual(store.implementerGet(id).permitted_next_actions, [
+      "workflow_submit_implementation",
+    ]);
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+    assert.deepEqual(
+      store.audit(id, created.capability).map((event: any) => event.event_type),
+      ["WORKFLOW_CREATED", "IMPLEMENTATION_INCOMPLETE"],
+    );
+    assert.equal(store.audit(id, created.capability).at(-1).summary.outcome, "IMPLEMENTING");
+    const persisted = rawState(store, id);
+    assert.equal(persisted.phase, "IMPLEMENTING");
+    assert.equal(persisted.stop_context, null);
+    assert.equal("continuation_count" in persisted, false);
+
+    writeFileSync(join(root, "note.txt"), "implemented\n");
+    assert.equal(submit({ status: "DONE" }).phase, "REVIEWING");
+    const blocker = finding("REPAIR-1");
+    assert.equal(
+      review(store, created, undefined, "CHANGES_REQUESTED", [blocker]).phase,
+      "REPAIR_REQUIRED",
+    );
+    store.authorizeRepair({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: store.parentGet(id).version,
+      finding_ids: ["REPAIR-1"],
+    });
+    const repairBefore = store.parentGet(id);
+    const repairing = submit({
+      status: "INCOMPLETE",
+      criterion: "not_satisfied",
+      validation: "not_run",
+      resolution: { "REPAIR-1": "still_present" },
+    });
+    assert.equal(repairing.phase, "REPAIRING");
+    assert.equal(repairing.repair_cycle, repairBefore.repair_cycle);
+    assert.deepEqual(repairing.repair_authorized_ids, ["REPAIR-1"]);
+    assert.equal(repairing.stop_context, null);
+    assert.deepEqual(store.implementerGet(id).permitted_next_actions, [
+      "workflow_submit_implementation",
+    ]);
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+    assert.equal(
+      submit({ status: "DONE", resolution: { "REPAIR-1": "resolved" } }).phase,
+      "REVIEWING",
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("complete implementation statuses require satisfied acceptance criteria", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git));
+    const id = created.workflow.workflow_id;
+    const concern = (criterion: "satisfied" | "not_satisfied") =>
+      store.submitImplementation({
+        workflow_id: id,
+        expected_version: store.parentGet(id).version,
+        status: "DONE_WITH_CONCERNS",
+        summary: "approved work complete with external validation exception",
+        agent_touched_paths: [],
+        acceptance_results: created.workflow.acceptance_criteria.map(
+          ({ criterion_id }: { criterion_id: string }) => ({
+            criterion_id,
+            status: criterion,
+            evidence: "acceptance evidence",
+          }),
+        ),
+        validation_results: created.workflow.validation_requirements.map(
+          ({ validation_id }: { validation_id: string }) => ({
+            validation_id,
+            status: "not_run",
+            evidence: "external validation unavailable",
+          }),
+        ),
+        known_failures: ["manual environment validation remains"],
+        finding_resolution_map: {},
+      });
+
+    assert.equal(
+      category(() => concern("not_satisfied")),
+      "ERROR_INVALID_IMPLEMENTATION",
+    );
+    assert.equal(store.parentGet(id).version, 0);
+    assert.equal(concern("satisfied").phase, "STOPPED_CONCERNS");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, ["workflow_accept_concerns"]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("worker mutations are capability-free and retain optimistic version checks", () => {
   const { root, git } = fixture();
   try {

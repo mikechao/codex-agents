@@ -125,6 +125,12 @@ const ACTIONS = {
 
 const EVENTS = {
   created: ["WORKFLOW_CREATED"],
+  incomplete: ["WORKFLOW_CREATED", "IMPLEMENTATION_INCOMPLETE"],
+  incompleteSubmitted: [
+    "WORKFLOW_CREATED",
+    "IMPLEMENTATION_INCOMPLETE",
+    "IMPLEMENTATION_SUBMITTED",
+  ],
   submitted: ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED"],
   reviewSubmitted: ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_SUBMITTED"],
   reviewOnlyReview: ["WORKFLOW_CREATED", "REVIEW_SUBMITTED"],
@@ -814,6 +820,31 @@ scenario("concern acceptance enters review and approves", [
     name: "review approved",
     run: (ctx: any) => doReview(ctx, 2),
     snapshots: [snap("parent", "STOPPED_APPROVED", 3, ACTIONS.approved, EVENTS.concernsReview)],
+  },
+]);
+
+scenario("unfinished approved test migration continues before independent review", [
+  {
+    name: "create workflow with implementation and migration work",
+    run: doCreate,
+    snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
+  },
+  {
+    name: "core protocol complete but planned tests remain",
+    run: (ctx: any) =>
+      doImplementation(ctx, 0, {
+        status: "INCOMPLETE",
+        summary: "core protocol complete; approved test migration remains",
+        criterionStatus: "not_satisfied",
+        validationStatus: "failed",
+        knownFailures: ["legacy tests still encode the old protocol"],
+      }),
+    snapshots: [snap("parent", "IMPLEMENTING", 1, ACTIONS.implementing, EVENTS.incomplete)],
+  },
+  {
+    name: "continued implementation completes migration",
+    run: (ctx: any) => doImplementation(ctx, 1),
+    snapshots: [snap("parent", "REVIEWING", 2, ACTIONS.reviewing, EVENTS.incompleteSubmitted)],
   },
 ]);
 

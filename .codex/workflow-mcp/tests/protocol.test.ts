@@ -105,6 +105,17 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
       (await call("workflow_implementer_get", { workflow_id: id })).phase,
       "IMPLEMENTING",
     );
+    const incomplete = await call(
+      "workflow_submit_implementation",
+      implementation(id, await version(id), "INCOMPLETE"),
+    );
+    assert.equal(incomplete.phase, "IMPLEMENTING");
+    assert.equal(incomplete.stop_context, null);
+    assert.deepEqual(incomplete.permitted_next_actions, ["workflow_submit_implementation"]);
+    assert.deepEqual(
+      (await call("workflow_reviewer_get", { workflow_id: id })).permitted_next_actions,
+      [],
+    );
     assert.equal(
       (await call("workflow_submit_implementation", implementation(id, await version(id)))).phase,
       "REVIEWING",
@@ -169,6 +180,7 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
       audit.map((event: any) => event.event_type),
       [
         "WORKFLOW_CREATED",
+        "IMPLEMENTATION_INCOMPLETE",
         "IMPLEMENTATION_SUBMITTED",
         "REVIEW_STARTED",
         "REVIEW_SUBMITTED",

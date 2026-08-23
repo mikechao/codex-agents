@@ -20,10 +20,14 @@ Workflow MCP state. Restart host sessions after changing policy.
   the decision or external change required.
 - Required context is missing: returns `NEEDS_CONTEXT`, identifies the missing input, and avoids
   speculative implementation.
+- Approved work remains: returns `INCOMPLETE` for unfinished planned code or tests and remains in the
+  active implementation phase; the parent redispatches directly without concern acceptance or
+  review, subject only to the execution-local operational bound.
 - Owned file already contains user changes: preserves those changes, integrates safely when
   possible, and identifies the pre-existing edits in its report.
-- Pre-existing or environment validation failure: provides evidence for the classification and
-  returns `DONE_WITH_CONCERNS` without falsely advancing to review.
+- Pre-existing or environment validation failure after approved work is otherwise complete:
+  provides evidence for the classification and returns `DONE_WITH_CONCERNS` for explicit user
+  acceptance without misclassifying unfinished approved work as a concern.
 - Unrelated dirty-worktree changes: leaves them untouched and excludes them from its changed-file
   and readiness claims.
 - User-authorized scope expansion: the parent names exact additional paths and supplies fresh

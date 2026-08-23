@@ -1440,13 +1440,19 @@ export class WorkflowStore {
   submitImplementation(input: unknown): RoleView {
     const args = mutationInput(input);
     const eventType =
-      args.status === "DONE" ? "IMPLEMENTATION_SUBMITTED" : "IMPLEMENTATION_STOPPED";
+      args.status === "DONE"
+        ? "IMPLEMENTATION_SUBMITTED"
+        : args.status === "INCOMPLETE"
+          ? "IMPLEMENTATION_INCOMPLETE"
+          : "IMPLEMENTATION_STOPPED";
     const outcome: AuditOutcome | null =
       args.status === "DONE"
         ? null
-        : IMPLEMENTATION_STOP_PHASES[
-            args.status as "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED"
-          ];
+        : args.status === "INCOMPLETE"
+          ? null
+          : IMPLEMENTATION_STOP_PHASES[
+              args.status as "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED"
+            ];
     return this.#mutate(
       args.workflow_id,
       "implementer",
@@ -1460,7 +1466,7 @@ export class WorkflowStore {
         }
         return submitImplementation(state, args, this.root, currentReceipt);
       },
-      outcome,
+      args.status === "INCOMPLETE" ? (next) => next.phase : outcome,
     );
   }
 

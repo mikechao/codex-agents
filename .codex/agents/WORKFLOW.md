@@ -121,6 +121,8 @@ The main flow and its recoverable/terminal branches:
 
 ```text
 IMPLEMENTING -> REVIEWING -> REPAIR_REQUIRED -> REPAIRING -> REVIEWING
+IMPLEMENTING -- INCOMPLETE --> IMPLEMENTING
+REPAIRING   -- INCOMPLETE --> REPAIRING
    |  |            |   \                  |
    |  |            |    `-> STOPPED_INCONCLUSIVE -> (resume) REVIEWING
    |  |            |                 |                    |
@@ -149,6 +151,12 @@ recoverable with `workflow_resume_review`. Implementation context/block stops ar
 `workflow_resume_implementation`. `STOPPED_CONCERNS` enters review via `workflow_accept_concerns`
 under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED`,
 `STOPPED_COMMIT_MISMATCH`, and `COMMITTED`.
+
+`INCOMPLETE` is an implementation-attempt outcome, not a phase or stop. It increments the workflow
+version, appends an audit event, and preserves `IMPLEMENTING` or `REPAIRING` with the implementer
+action still available. It creates no stop/recovery context and cannot expose concern acceptance or
+review. The latest attempt evidence occupies the existing implementation fields and is replaced by
+a later attempt; phase gating prevents interim evidence from becoming a reviewable receipt.
 
 ### Role views and dispatch
 
@@ -302,6 +310,15 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
 - `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this
   enters review without rewriting the failed evidence and never implies commit authorization.
 
+For `INCOMPLETE`, the parent refreshes authoritative state and may redispatch the implementer
+directly. OpenCode allows at most two consecutive automatic redispatches after the initial attempt;
+the third incomplete continuation stops unattended dispatch for explicit intervention while the
+workflow remains active. This counter is execution-local operational bookkeeping, not durable
+workflow semantics or an authorization boundary. Losing or resetting it cannot broaden authority:
+every attempt remains constrained by the same approved plan, scope, phase, runtime affinity, and
+optimistic version check. Do not add a workflow phase, SQLite field, or persisted counter for this
+guard.
+
 An `APPROVED` review is therefore the automatic stopping point. The repair-cycle allowance is a
 safety limit, not permission to pursue every possible improvement.
 
@@ -322,8 +339,9 @@ complete worker report. `permitted_next_actions` remains the routing boundary.
 
 The summary must cover the following transitions without changing their existing semantics:
 
-- Implementation completion, concern, context, and block outcomes identify the result and the
-  available review or recovery decision.
+- Implementation completion, incomplete continuation, concern, context, and block outcomes identify
+  the result and the available review, continuation, or recovery decision. Incomplete work never
+  routes through concern acceptance or review.
 - A `CHANGES_REQUESTED` review surfaces every blocking finding identifier and a bounded human-readable
   reason before repair authorization or implementer redispatch. Repair authorization communicates the
   current repair cycle and next role; exhaustion communicates the terminal stop and forbids another
@@ -385,7 +403,7 @@ matching authorization, optional or P3 remediation returns `NEEDS_CONTEXT` and m
 ### Implementer -> parent
 
 ```yaml
-status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | INCOMPLETE | NEEDS_CONTEXT | BLOCKED
 objective: <implemented objective>
 owned_files: [<materially changed exact paths>]
 acceptance_criteria: <satisfied and outstanding criteria>

@@ -59,7 +59,13 @@ export type WorkflowPhase =
   | "COMMITTED";
 
 export type WorkflowType = "change" | "review_only";
-export type ImplementationStatus = "DONE" | "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED";
+export type ImplementationStatus =
+  | "DONE"
+  | "DONE_WITH_CONCERNS"
+  | "INCOMPLETE"
+  | "NEEDS_CONTEXT"
+  | "BLOCKED";
+export type StoppingImplementationStatus = Exclude<ImplementationStatus, "DONE" | "INCOMPLETE">;
 export type ReviewStatus = "APPROVED" | "CHANGES_REQUESTED" | "INCONCLUSIVE";
 export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
 export type FindingResolution = "resolved" | "still_present" | "superseded";
@@ -166,6 +172,7 @@ export type AuditEventType =
   | "SCOPE_EXPANDED"
   | "WORKFLOW_RUNTIME_ADOPTED"
   | "IMPLEMENTATION_SUBMITTED"
+  | "IMPLEMENTATION_INCOMPLETE"
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"
   | "CONCERNS_ACCEPTED"
@@ -384,7 +391,11 @@ export interface LinkedContinuation {
 }
 
 export type StopContext =
-  | { status: ImplementationStatus; summary: string; stopped_from: "IMPLEMENTING" | "REPAIRING" }
+  | {
+      status: StoppingImplementationStatus;
+      summary: string;
+      stopped_from: "IMPLEMENTING" | "REPAIRING";
+    }
   | { status: "INCONCLUSIVE"; summary: string; stopped_from: "REVIEWING" }
   | {
       status: "COMMIT_PREPARATION_FAILED";

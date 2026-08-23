@@ -360,6 +360,36 @@ test("orchestrator summarizes refreshed authoritative transitions before routing
     /APPROVED[^.]*optional_findings[^.]*request explicit commit authorization/u,
     "approval must precede commit authorization",
   );
+  assert.match(
+    orchestrator,
+    /INCOMPLETE.*?execution-local.*?up to two times.*?do not accept concerns or dispatch a reviewer/u,
+    "incomplete work must use bounded direct implementer continuation",
+  );
+  assert.match(
+    orchestrator,
+    /operational guard[^.]*not a workflow correctness or authorization invariant/u,
+    "continuation bound must remain operational rather than durable workflow semantics",
+  );
+  assert.match(
+    orchestrator,
+    /must not be persisted in Workflow MCP/u,
+    "orchestrator must not persist the continuation counter",
+  );
+});
+
+test("implementer reserves concerns for otherwise complete work", () => {
+  for (const host of [
+    readFileSync(resolve(agentsDir, "implementer.toml"), "utf8"),
+    opencode("implementer.md"),
+  ]) {
+    const content = host.replace(/\s+/gu, " ");
+    assert.match(content, /INCOMPLETE[^.]*approved-plan work remains/u);
+    assert.match(content, /Do not use `DONE_WITH_CONCERNS` merely because tests are red/u);
+    assert.match(
+      content,
+      /DONE_WITH_CONCERNS[^.]*approved implementation work is otherwise complete/u,
+    );
+  }
 });
 
 test("reviewer is read-only with a narrow bash allowlist", () => {

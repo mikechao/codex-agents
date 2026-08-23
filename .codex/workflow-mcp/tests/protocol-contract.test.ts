@@ -53,6 +53,14 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const reviewSchema = review.inputSchema as any;
   const beginSchema = begin.inputSchema as any;
   assert.equal("implementation_receipt" in implementationSchema.properties, false);
+  assert.deepEqual(implementationSchema.properties.status.enum, [
+    "DONE",
+    "DONE_WITH_CONCERNS",
+    "INCOMPLETE",
+    "NEEDS_CONTEXT",
+    "BLOCKED",
+  ]);
+  assert.match(implementation.description ?? "", /INCOMPLETE preserves IMPLEMENTING or REPAIRING/u);
   assert.equal("capability" in implementationSchema.properties, false);
   assert.equal("review_receipt" in reviewSchema.properties, false);
   assert.equal("capability" in reviewSchema.properties, false);

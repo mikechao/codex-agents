@@ -25,6 +25,7 @@ import type {
   ReviewTarget,
   Role,
   RoleView,
+  StoppingImplementationStatus,
   WorkflowAction,
   WorkflowId,
   WorkflowPhase,
@@ -66,10 +67,7 @@ import {
 
 export const SCHEMA_VERSION = CURRENT_STATE_SCHEMA_VERSION;
 
-export const IMPLEMENTATION_STOP_PHASES: Record<
-  "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED",
-  WorkflowPhase
-> = {
+export const IMPLEMENTATION_STOP_PHASES: Record<StoppingImplementationStatus, WorkflowPhase> = {
   DONE_WITH_CONCERNS: "STOPPED_CONCERNS",
   NEEDS_CONTEXT: "STOPPED_NEEDS_CONTEXT",
   BLOCKED: "STOPPED_IMPLEMENTATION_BLOCKED",
@@ -843,6 +841,7 @@ export function submitImplementation(
   if (
     args.status !== "DONE" &&
     args.status !== "DONE_WITH_CONCERNS" &&
+    args.status !== "INCOMPLETE" &&
     args.status !== "NEEDS_CONTEXT" &&
     args.status !== "BLOCKED"
   ) {
@@ -899,10 +898,12 @@ export function submitImplementation(
     state.approved_path_baselines,
     next.implementation_receipt,
   );
-  if (args.status === "DONE") {
+  if (args.status === "DONE" || args.status === "DONE_WITH_CONCERNS") {
     if (acceptanceResults.some((item) => item.status !== "satisfied")) {
-      fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires satisfied criteria");
+      fail("ERROR_INVALID_IMPLEMENTATION", "complete implementation requires satisfied criteria");
     }
+  }
+  if (args.status === "DONE") {
     if (validationResults.some((item) => item.status !== "passed")) {
       fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires passed validations");
     }
@@ -911,7 +912,7 @@ export function submitImplementation(
     }
     next.phase = "REVIEWING";
   }
-  if (args.status !== "DONE") {
+  if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
     next.stop_context = {
       status: args.status,
       summary: boundedString(args.summary, "summary", 4000),
@@ -920,7 +921,9 @@ export function submitImplementation(
     };
     next.repair_authorized_ids = [];
   }
-  if (args.status !== "DONE") next.phase = IMPLEMENTATION_STOP_PHASES[args.status];
+  if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
+    next.phase = IMPLEMENTATION_STOP_PHASES[args.status];
+  }
   return next;
 }
 
@@ -1687,6 +1690,12 @@ const GIT_MODES: ReadonlySet<unknown> = new Set(["100644", "100755", "120000"]);
 const IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set([
   "DONE",
   "DONE_WITH_CONCERNS",
+  "INCOMPLETE",
+  "NEEDS_CONTEXT",
+  "BLOCKED",
+]);
+const STOPPING_IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set([
+  "DONE_WITH_CONCERNS",
   "NEEDS_CONTEXT",
   "BLOCKED",
 ]);
@@ -2073,7 +2082,7 @@ function stopContextShape(value: unknown): void {
   if (value.status === "INCONCLUSIVE") {
     if (value.stopped_from !== "REVIEWING") corrupt();
   } else {
-    if (!IMPLEMENTATION_STATUSES.has(value.status)) corrupt();
+    if (!STOPPING_IMPLEMENTATION_STATUSES.has(value.status)) corrupt();
     if (value.stopped_from !== "IMPLEMENTING" && value.stopped_from !== "REPAIRING") {
       corrupt();
     }

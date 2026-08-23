@@ -349,13 +349,13 @@ export const tools: Tool[] = [
   {
     name: "workflow_submit_implementation",
     description:
-      "Submit complete ID-addressed implementation evidence; DONE advances IMPLEMENTING or REPAIRING to REVIEWING.",
+      "Submit ID-addressed implementation-attempt evidence; DONE advances to REVIEWING, INCOMPLETE preserves IMPLEMENTING or REPAIRING, and other outcomes stop for their documented recovery path.",
     inputSchema: schema(
       {
         ...workerCommon.properties,
         status: {
           type: "string",
-          enum: ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"],
+          enum: ["DONE", "DONE_WITH_CONCERNS", "INCOMPLETE", "NEEDS_CONTEXT", "BLOCKED"],
         },
         summary: { type: "string", minLength: 1, maxLength: 4000 },
         agent_touched_paths: {

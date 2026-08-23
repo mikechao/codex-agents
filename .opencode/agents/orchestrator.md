@@ -141,8 +141,12 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
 prompts; those belong in the authoritative role view. Delegate the normal lifecycle as follows:
 
 1. Send a change workflow to `implementer`.
-2. Refresh the parent view after the implementer reports, then send the resulting review target to
-   `code_reviewer` for an independent review.
+2. Refresh the parent view after the implementer reports. On `INCOMPLETE`, keep an execution-local
+   count and redispatch the implementer with the same workflow ID up to two times; do not accept
+   concerns or dispatch a reviewer. On the third consecutive incomplete result, leave the workflow
+   in its active phase and stop for explicit user intervention. Reset the count when the workflow
+   leaves `IMPLEMENTING`/`REPAIRING` or explicit user intervention starts a fresh continuation
+   sequence. Only send a genuinely reviewable result to `code_reviewer` for independent review.
 3. If review has blocking findings, authorize repair using exactly the returned blocking finding
    IDs, send `implementer` back for that bounded repair cycle, refresh the parent view, and
    re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize the exhausted
@@ -163,6 +167,12 @@ the workflow contract. A `STOPPED_COMMIT_PREPARATION` view exposes either
 `workflow_retry_commit_preparation` or `workflow_return_commit_to_review`; do not dispatch another
 committer while stopped and do not retry preparation without an explicit parent recovery mutation.
 
+The two-redispatch limit is an operational guard on unattended automation, not a workflow
+correctness or authorization invariant. It is not durable state, does not revoke or expand the
+approved plan or scope, and must not be persisted in Workflow MCP. Exhaustion only pauses automatic
+dispatch; explicit user intervention may begin a fresh execution-local continuation sequence under
+the same authoritative workflow constraints.
+
 ## Transition summaries
 
 After every terminal subagent handoff, refresh `workflow_parent_get` with the current workflow ID
@@ -176,9 +186,10 @@ events, capabilities, validation logs, or complete worker reports.
 
 Use these bounded summaries before routing:
 
-- For implementation, state whether the refreshed `implementation_status` is complete, concerned,
-  missing context, or blocked, name the affected decision, and either route to review or report the
-  recovery/authorization stop.
+- For implementation, state whether the refreshed `implementation_status` is complete, incomplete,
+  concerned, missing context, or blocked. For `INCOMPLETE`, state the operational continuation
+  attempt and either redispatch under the bound or report that explicit intervention is required;
+  never route it through concern acceptance or review.
 - For `CHANGES_REQUESTED`, state that repair is required and surface every blocking finding ID with
   its bounded human-readable reason before asking for repair authorization. Do not authorize repair
   or redispatch the implementer before that summary.
