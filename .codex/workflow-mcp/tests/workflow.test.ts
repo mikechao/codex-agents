@@ -384,6 +384,44 @@ test("reconciles an existing commit from a different owning runtime without a se
     });
     assert.equal(reconciled.phase, "COMMITTED");
     assert.equal(currentStore.parentGet(created.workflow.workflow_id).phase, "COMMITTED");
+    const stateBeforeAuditCorruption = rawState(currentStore, created.workflow.workflow_id);
+    const stateRowBeforeAuditCorruption = currentStore.db
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(created.workflow.workflow_id);
+    const reconciliationAudit = currentStore.db
+      .prepare(
+        "SELECT summary_json FROM audit_events WHERE workflow_id = ? AND version = ? AND event_type = 'COMMIT_RESULT_SUBMITTED'",
+      )
+      .get(created.workflow.workflow_id, reconciled.version) as
+      | { summary_json: string }
+      | undefined;
+    assert.ok(reconciliationAudit);
+    const corruptedSummary = {
+      ...JSON.parse(reconciliationAudit.summary_json),
+      state_digest_after: objectDigest({ corrupted: "reconciliation evidence" }),
+    };
+    assert.notEqual(
+      corruptedSummary.state_digest_after,
+      stateRowBeforeAuditCorruption.state_digest,
+    );
+    const corruption = currentStore.db
+      .prepare(
+        "UPDATE audit_events SET summary_json = ? WHERE workflow_id = ? AND version = ? AND event_type = 'COMMIT_RESULT_SUBMITTED'",
+      )
+      .run(JSON.stringify(corruptedSummary), created.workflow.workflow_id, reconciled.version);
+    assert.equal(corruption.changes, 1);
+    assert.equal(
+      category(() => currentStore.parentGet(created.workflow.workflow_id)),
+      "ERROR_RUNTIME_ISOLATION",
+    );
+    const stateRowAfterAuditCorruption = currentStore.db
+      .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(created.workflow.workflow_id);
+    assert.deepEqual(
+      rawState(currentStore, created.workflow.workflow_id),
+      stateBeforeAuditCorruption,
+    );
+    assert.deepEqual(stateRowAfterAuditCorruption, stateRowBeforeAuditCorruption);
     assert.equal(
       category(() => currentStore.implementerGet(created.workflow.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",

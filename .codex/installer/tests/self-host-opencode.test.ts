@@ -62,6 +62,7 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "workflow_adopt_dirty_scope",
     "workflow_expand_scope",
     "workflow_parent_get",
+    "workflow_reconcile_commit_result",
     "workflow_get_audit",
     "workflow_resume_implementation",
     "workflow_accept_concerns",
