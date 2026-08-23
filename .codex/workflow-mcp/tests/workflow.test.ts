@@ -310,6 +310,165 @@ test("linked follow-up inherits findings and gets its own singular parent capabi
   }
 });
 
+test("reconciles an existing commit from a different owning runtime without a second commit", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "reconcile.sqlite");
+  const base = git("rev-parse", "HEAD");
+  const oldRuntimeId = "a".repeat(64);
+  const oldKey = "1".repeat(64);
+  const newRuntimeId = "b".repeat(64);
+  const newKey = "2".repeat(64);
+  try {
+    const oldStore: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: oldRuntimeId,
+      runtimeRevision: base,
+      ...runtimeAttestation(oldRuntimeId, base, oldKey),
+    });
+    const created = oldStore.create(input(git));
+    implementation(oldStore, created);
+    writeFileSync(join(root, "note.txt"), "committed once\n");
+    review(oldStore, created);
+    oldStore.authorizeCommit({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capability,
+      expected_version: oldStore.parentGet(created.workflow.workflow_id).version,
+      user_authorization: "authorize",
+    });
+    git("add", "note.txt");
+    const prepared = oldStore.prepareCommit({
+      workflow_id: created.workflow.workflow_id,
+      expected_version: oldStore.parentGet(created.workflow.workflow_id).version,
+    });
+    assert.deepEqual(oldStore.parentGet(created.workflow.workflow_id).permitted_next_actions, []);
+    assert.equal(
+      category(() =>
+        oldStore.reconcileCommitResult({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capability,
+          expected_version: prepared.version,
+          attempt_id: prepared.commit_preparation.attempt_id,
+        }),
+      ),
+      "ERROR_COMMIT_NOT_ALLOWED",
+    );
+    git("commit", "-qm", "existing commit");
+    const current = git("rev-parse", "HEAD");
+    oldStore.close();
+
+    const currentStore: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: newRuntimeId,
+      runtimeRevision: current,
+      ...runtimeAttestation(newRuntimeId, current, newKey),
+    });
+    const reconciled = currentStore.reconcileCommitResult({
+      workflow_id: created.workflow.workflow_id,
+      capability: created.capability,
+      expected_version: prepared.version,
+      attempt_id: prepared.commit_preparation.attempt_id,
+    });
+    assert.equal(reconciled.phase, "COMMITTED");
+    assert.equal(git("rev-list", "--count", "HEAD"), "2");
+    const oldReader: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: oldRuntimeId,
+      runtimeRevision: base,
+      ...runtimeAttestation(oldRuntimeId, base, oldKey),
+    });
+    assert.deepEqual(
+      oldReader
+        .audit(created.workflow.workflow_id, created.capability)
+        .map((event: any) => event.event_type),
+      [
+        "WORKFLOW_CREATED",
+        "IMPLEMENTATION_SUBMITTED",
+        "REVIEW_STARTED",
+        "REVIEW_SUBMITTED",
+        "COMMIT_AUTHORIZED",
+        "COMMIT_PREPARED",
+        "COMMIT_RESULT_SUBMITTED",
+      ],
+    );
+    assert.equal(
+      category(() =>
+        currentStore.reconcileCommitResult({
+          workflow_id: created.workflow.workflow_id,
+          capability: created.capability,
+          expected_version: reconciled.version,
+          attempt_id: prepared.commit_preparation.attempt_id,
+        }),
+      ),
+      "ERROR_INVALID_TRANSITION",
+    );
+    assert.equal(oldReader.audit(created.workflow.workflow_id, created.capability).length, 7);
+    oldReader.close();
+    currentStore.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linked remediation and combined review retain receipts through a committed result", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const source = store.create(input(git));
+    implementation(store, source);
+    writeFileSync(join(root, "note.txt"), "source change\n");
+    review(store, source, undefined, "APPROVED", [], [finding("LINKED-OPTIONAL", "P3", false)]);
+    const child = store.createLinkedFollowup({
+      workflow_id: source.workflow.workflow_id,
+      capability: source.capability,
+      expected_version: store.parentGet(source.workflow.workflow_id).version,
+      objective: "linked remediation",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["child criterion"],
+      validation_requirements: ["child validation"],
+      finding_ids: ["LINKED-OPTIONAL"],
+      user_authorization: "authorized linked remediation",
+    });
+    implementation(store, child, undefined, "DONE", { "LINKED-OPTIONAL": "resolved" });
+    writeFileSync(join(root, "note.txt"), "remediation change\n");
+    assert.equal(
+      review(store, child, undefined, "APPROVED", [], [], { "LINKED-OPTIONAL": "resolved" }).phase,
+      "REVIEWING",
+    );
+    assert.equal(review(store, child, undefined, "APPROVED", [], [], {}).phase, "STOPPED_APPROVED");
+    const id = child.workflow.workflow_id;
+    store.authorizeCommit({
+      workflow_id: id,
+      capability: child.capability,
+      expected_version: store.parentGet(id).version,
+      user_authorization: "authorize linked commit",
+    });
+    git("add", "note.txt");
+    const prepared = store.prepareCommit({
+      workflow_id: id,
+      expected_version: store.parentGet(id).version,
+    });
+    git("commit", "-qm", "linked commit");
+    const committed = store.submitCommitResult({
+      workflow_id: id,
+      expected_version: store.parentGet(id).version,
+      attempt_id: prepared.commit_preparation.attempt_id,
+      outcome: "committed",
+      failure_summary: null,
+    });
+    assert.equal(committed.phase, "COMMITTED");
+    assert.equal(rawState(store, id).linked_continuation.remediation_review_receipt !== null, true);
+    assert.equal(rawState(store, id).review_receipt !== null, true);
+    assert.equal(store.audit(id, child.capability).at(-1).event_type, "COMMIT_RESULT_SUBMITTED");
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("scope expansion and audit integrity remain append-only", () => {
   const { root, git } = fixture();
   const databasePath = join(root, "scope.sqlite");
@@ -1195,9 +1354,8 @@ test("commit preparation binds exact modify, add, delete, and mode paths", () =>
   }
 });
 
-function runtimeAttestation(runtimeId: string, revision: string) {
+function runtimeAttestation(runtimeId: string, revision: string, key = "2".repeat(64)) {
   const nonce = "1".repeat(64);
-  const key = "2".repeat(64);
   return {
     runtimeAttestation: createRuntimeAttestation(runtimeId, revision, nonce, key),
     runtimeAttestationNonce: nonce,

@@ -225,6 +225,12 @@ recovery class. Retryable scope/content failures expose only
 fresh authorization. The committer has no permitted action while stopped. The server never changes
 Git state; the committer owns staging and the commit.
 
+If commit-result bookkeeping fails after Git has already created the commit, never retry the Git
+commit. Prefer ordinary `workflow_submit_commit_result` when the owning corrected runtime is
+available; the parent-only `workflow_reconcile_commit_result` operation exists only to route this
+bounded verification to the current runtime for workflows stranded on an older immutable runtime.
+It leaves runtime affinity unchanged and never creates, amends, or duplicates a commit.
+
 ## Bootstrap and reload checklist
 
 This installation uses the previously authorized prompt/receipt bootstrap. Commit `.codex/config.toml`,

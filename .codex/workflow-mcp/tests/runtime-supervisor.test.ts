@@ -390,25 +390,39 @@ describe("Workflow MCP runtime supervision", () => {
     ).href;
     const fakeServer = `
        import { createInterface } from "node:readline";
+       const runtimeLabel = "current";
        createInterface({ input: process.stdin }).on("line", (line) => {
          const request = JSON.parse(line);
          if (request.id === undefined) return;
+         const parentView = request.params?.name === "workflow_parent_get" ? {
+           content: [{ type: "text", text: JSON.stringify({
+             workflow_id: request.params?.arguments?.workflow_id,
+             phase: "COMMIT_PREPARED",
+             permitted_next_actions: [],
+             runtime_label: runtimeLabel,
+           }) }],
+         } : {};
          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
            runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
            runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
            expected_version: request.params?.arguments?.expected_version,
            method: request.method,
            tool: request.params?.name,
+           ...parentView,
          } }) + "\\n");
        });
      `;
+    const historicalServer = fakeServer.replace(
+      'const runtimeLabel = "current";',
+      'const runtimeLabel = "historical";',
+    );
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
     const writeProvider = () => {
       const workflowRoot = join(target.root, ".codex", "workflow-mcp");
       mkdirSync(workflowRoot, { recursive: true });
       mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
-      writeFileSync(join(workflowRoot, "server.ts"), fakeServer);
+      writeFileSync(join(workflowRoot, "server.ts"), historicalServer);
       cpSync(
         join(process.cwd(), ".codex/agents/change-receipt.ts"),
         join(target.root, ".codex/agents/change-receipt.ts"),
@@ -506,6 +520,36 @@ describe("Workflow MCP runtime supervision", () => {
         ...attestation(artifactA.runtime_id, revisionA),
       });
       const workflowA = create(firstStore, target.root, revisionA, "runtime A");
+      const workflowIdA = workflowA.workflow.workflow_id;
+      writeFileSync(join(target.root, "note.txt"), "prepared on historical runtime\n");
+      firstStore.submitImplementation({
+        workflow_id: workflowIdA,
+        expected_version: 0,
+        status: "DONE",
+        summary: "implemented",
+        agent_touched_paths: ["note.txt"],
+        acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+        validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+        known_failures: [],
+        finding_resolution_map: {},
+      });
+      firstStore.beginReview({ workflow_id: workflowIdA, expected_version: 1 });
+      firstStore.submitReview({
+        workflow_id: workflowIdA,
+        expected_version: 2,
+        review_status: "APPROVED",
+        blocking_findings: [],
+        optional_findings: [],
+        prior_finding_classifications: {},
+      });
+      firstStore.authorizeCommit({
+        workflow_id: workflowIdA,
+        capability: workflowA.capability,
+        expected_version: 3,
+        user_authorization: "authorize historical preparation",
+      });
+      git("add", "note.txt");
+      firstStore.prepareCommit({ workflow_id: workflowIdA, expected_version: 4 });
       firstStore.close();
       active = start();
       assert.equal((await active.request(1, "initialize")).result.runtime_revision, revisionA);
@@ -519,9 +563,10 @@ describe("Workflow MCP runtime supervision", () => {
       );
       assert.equal(routedA.result.runtime_revision, revisionA);
       assert.equal(routedA.result.tool, "workflow_parent_get");
+      writeFileSync(join(target.root, ".codex", "workflow-mcp", "server.ts"), fakeServer);
       writeFileSync(join(target.root, "runtime-b.txt"), "B\n");
-      git("add", ".");
-      git("commit", "-qm", "runtime B");
+      git("add", "runtime-b.txt", ".codex/workflow-mcp/server.ts");
+      git("commit", "-qm", "runtime B", "--", "runtime-b.txt", ".codex/workflow-mcp/server.ts");
       await active.stop();
       active = undefined;
       const revisionB = currentHead(target.root);
@@ -529,9 +574,8 @@ describe("Workflow MCP runtime supervision", () => {
         cacheRoot,
         installDependencies: false,
       });
-      assert.equal(artifactB.runtime_id, artifactA.runtime_id);
-      assert.equal(artifactB.cachePath, artifactA.cachePath);
-      assert.equal(artifactB.reused, true);
+      assert.notEqual(artifactB.runtime_id, artifactA.runtime_id);
+      assert.notEqual(artifactB.revision, artifactA.revision);
       const secondStore: any = new WorkflowStore({
         repositoryRoot: target.root,
         databasePath,
@@ -562,6 +606,18 @@ describe("Workflow MCP runtime supervision", () => {
       );
       assert.equal(routedAAfterRestart.result.runtime_revision, revisionA);
       assert.equal(routedAAfterRestart.result.tool, "workflow_parent_get");
+      const historicalView = JSON.parse(routedAAfterRestart.result.content[0].text);
+      assert.equal(historicalView.runtime_label, "historical");
+      assert.deepEqual(historicalView.permitted_next_actions, ["workflow_reconcile_commit_result"]);
+      const routedRecovery = await restarted.request(
+        6,
+        "tools/call",
+        workflowA.workflow.workflow_id,
+        {},
+        "workflow_reconcile_commit_result",
+      );
+      assert.equal(routedRecovery.result.runtime_revision, revisionB);
+      assert.equal(routedRecovery.result.tool, "workflow_reconcile_commit_result");
     } finally {
       await active?.stop().catch(() => {});
       await restarted?.stop().catch(() => {});

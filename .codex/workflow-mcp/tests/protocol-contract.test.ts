@@ -19,6 +19,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_implementer_get",
     "workflow_parent_get",
     "workflow_prepare_commit",
+    "workflow_reconcile_commit_result",
     "workflow_resume_implementation",
     "workflow_resume_review",
     "workflow_retry_commit",
@@ -41,6 +42,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const begin = tools.find((tool) => tool.name === "workflow_begin_review");
   const expansion = tools.find((tool) => tool.name === "workflow_expand_scope");
   const adoption = tools.find((tool) => tool.name === "workflow_adopt_dirty_scope");
+  const reconciliation = tools.find((tool) => tool.name === "workflow_reconcile_commit_result");
   const create = tools.find((tool) => tool.name === "workflow_create");
   assert.ok(implementation && review && begin && expansion && adoption && create);
   assert.match(create.description ?? "", /one parent capability/u);
@@ -83,6 +85,14 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "expected_version",
     "reason",
     "user_authorization",
+    "workflow_id",
+  ]);
+  assert.ok(reconciliation);
+  const reconciliationSchema = reconciliation.inputSchema as any;
+  assert.deepEqual(Object.keys(reconciliationSchema.properties).sort(), [
+    "attempt_id",
+    "capability",
+    "expected_version",
     "workflow_id",
   ]);
 });

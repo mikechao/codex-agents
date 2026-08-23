@@ -682,6 +682,25 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_reconcile_commit_result",
+    description:
+      "Reconcile a commit that already exists after commit-result bookkeeping failed on an old immutable runtime; this parent-only recovery never creates or changes Git history.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        attempt_id: { type: "string", pattern: "^[0-9a-f-]{36}$" },
+      },
+      [...common.required, "attempt_id"],
+    ),
+    annotations: {
+      title: "Reconcile commit result",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_retry_commit",
     description:
       "Authorize a retry after an unchanged-HEAD commit failure; clears the attempt and result and returns to commit authorization.",
@@ -799,6 +818,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
             break;
           case "workflow_submit_commit_result":
             result = store.submitCommitResult(args);
+            break;
+          case "workflow_reconcile_commit_result":
+            result = store.reconcileCommitResult(args);
             break;
           case "workflow_retry_commit":
             result = store.retryCommit(args);

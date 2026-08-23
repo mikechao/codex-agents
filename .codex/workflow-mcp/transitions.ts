@@ -2306,7 +2306,9 @@ export function validateWorkflowStateV6(value: unknown): WorkflowState {
       value.phase !== "COMMIT_AUTHORIZED" &&
       value.phase !== "COMMIT_PREPARED" &&
       value.phase !== "STOPPED_COMMIT_PREPARATION" &&
-      value.phase !== "STOPPED_NOT_COMMITTED"
+      value.phase !== "STOPPED_NOT_COMMITTED" &&
+      value.phase !== "STOPPED_COMMIT_MISMATCH" &&
+      value.phase !== "COMMITTED"
     )
       corrupt();
   }

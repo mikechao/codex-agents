@@ -96,6 +96,7 @@ export type WorkflowAction =
   | "workflow_authorize_commit"
   | "workflow_prepare_commit"
   | "workflow_submit_commit_result"
+  | "workflow_reconcile_commit_result"
   | "workflow_retry_commit_preparation"
   | "workflow_return_commit_to_review"
   | "workflow_retry_commit";
