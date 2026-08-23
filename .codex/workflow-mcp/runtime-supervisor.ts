@@ -101,6 +101,12 @@ interface JsonRpcMessage {
   result?: unknown;
 }
 
+function isCommitReconciliation(message: JsonRpcMessage): boolean {
+  return (
+    message.method === "tools/call" && message.params?.name === "workflow_reconcile_commit_result"
+  );
+}
+
 type RequestId = string | number | null;
 
 interface PendingRequest {
@@ -110,6 +116,55 @@ interface PendingRequest {
 
 function directToolResult(value: unknown): unknown {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+function augmentHistoricalParentRecovery(
+  request: JsonRpcMessage,
+  response: JsonRpcMessage,
+  historicalOwner: boolean,
+): JsonRpcMessage {
+  if (!historicalOwner || request.params?.name !== "workflow_parent_get") return response;
+  const result = response.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return response;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length !== 1) return response;
+  const item = content[0];
+  if (!item || typeof item !== "object" || Array.isArray(item)) return response;
+  const text = (item as { text?: unknown }).text;
+  if (typeof text !== "string") return response;
+  let view: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return response;
+    view = parsed as Record<string, unknown>;
+  } catch {
+    return response;
+  }
+  if (
+    view.workflow_id !== request.params?.arguments?.workflow_id ||
+    view.phase !== "COMMIT_PREPARED" ||
+    !Array.isArray(view.permitted_next_actions) ||
+    view.permitted_next_actions.some((action) => typeof action !== "string")
+  )
+    return response;
+  const action = "workflow_reconcile_commit_result";
+  if ((view.permitted_next_actions as string[]).includes(action)) return response;
+  const augmented = {
+    ...response,
+    result: {
+      ...(result as Record<string, unknown>),
+      content: [
+        {
+          ...(item as Record<string, unknown>),
+          text: JSON.stringify({
+            ...view,
+            permitted_next_actions: [...(view.permitted_next_actions as string[]), action].sort(),
+          }),
+        },
+      ],
+    },
+  };
+  return augmented;
 }
 
 function unknownToolResponse(message: JsonRpcMessage): boolean {
@@ -337,8 +392,8 @@ export class RuntimeSupervisor {
             .filter((name): name is string => typeof name === "string"),
         );
       }
+      const pending = message?.id === undefined ? undefined : runtime.pending.get(message.id);
       if (message && message.id !== undefined) {
-        const pending = runtime.pending.get(message.id);
         runtime.pending.delete(message.id);
         if (
           pending &&
@@ -373,7 +428,18 @@ export class RuntimeSupervisor {
         if (message.id === runtime.initializationRequestId)
           runtime.initializationRequestId = undefined;
       }
-      process.stdout.write(`${line}\n`);
+      if (!message) {
+        process.stdout.write(`${line}\n`);
+      } else {
+        const output = pending
+          ? augmentHistoricalParentRecovery(
+              pending.message,
+              message,
+              runtimeKey(runtime.artifact) !== runtimeKey(this.defaultRuntime),
+            )
+          : message;
+        process.stdout.write(`${output === message ? line : JSON.stringify(output)}\n`);
+      }
     });
     child.on("error", (error) => {
       this.failChild(
@@ -458,6 +524,7 @@ export class RuntimeSupervisor {
   }
 
   private affinityFor(message: JsonRpcMessage): { artifact: ResolvedRuntime; adopted: boolean } {
+    if (isCommitReconciliation(message)) return { artifact: this.defaultRuntime, adopted: false };
     const workflowId = message.params?.arguments?.workflow_id;
     if (typeof workflowId !== "string") return { artifact: this.defaultRuntime, adopted: false };
     let affinity = this.store.runtimeAffinity(workflowId);

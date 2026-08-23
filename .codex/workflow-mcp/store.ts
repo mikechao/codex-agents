@@ -512,17 +512,21 @@ export class WorkflowStore {
     const state = parseState(row);
     const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
     if (affinity.runtime_id === null && affinity.runtime_revision === null) return;
-    if (this.runtimeId === null || this.runtimeRevision === null) {
-      fail(
-        "ERROR_RUNTIME_ISOLATION",
-        "current runtime identity is unavailable for this affined workflow",
-      );
-    }
+    this.#assertRuntimeAttestation();
     if (
       affinity.runtime_id !== this.runtimeId ||
       affinity.runtime_revision !== this.runtimeRevision
     ) {
       fail("ERROR_RUNTIME_ISOLATION", "workflow is owned by a different runtime");
+    }
+  }
+
+  #assertRuntimeAttestation(): void {
+    if (this.runtimeId === null || this.runtimeRevision === null) {
+      fail(
+        "ERROR_RUNTIME_ISOLATION",
+        "current runtime identity is unavailable for this affined workflow",
+      );
     }
     if (
       this.runtimeAttestation === null ||
@@ -542,6 +546,24 @@ export class WorkflowStore {
     const actual = Buffer.from(this.runtimeAttestation, "hex");
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
       fail("ERROR_RUNTIME_ISOLATION", "supervisor launch attestation is invalid");
+  }
+
+  #assertReconciliationRuntime(row: WorkflowRow): void {
+    const state = parseState(row);
+    const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    if (affinity.runtime_id === null || affinity.runtime_revision === null) {
+      fail("ERROR_COMMIT_NOT_ALLOWED", "commit reconciliation requires an owning old runtime");
+    }
+    if (
+      affinity.runtime_id === this.runtimeId &&
+      affinity.runtime_revision === this.runtimeRevision
+    ) {
+      fail(
+        "ERROR_COMMIT_NOT_ALLOWED",
+        "ordinary commit-result submission is available on the owning runtime",
+      );
+    }
+    this.#assertRuntimeAttestation();
   }
 
   #row(workflowIdValue: unknown): WorkflowRow {
@@ -645,7 +667,21 @@ export class WorkflowStore {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
     this.#assertRuntimeOwnership(row);
-    return roleViewForRole(parseState(row), actorRole);
+    const state = parseState(row);
+    const view = roleViewForRole(state, actorRole);
+    const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    if (
+      actorRole === "parent" &&
+      state.phase === "COMMIT_PREPARED" &&
+      affinity.runtime_id !== null &&
+      (affinity.runtime_id !== this.runtimeId || affinity.runtime_revision !== this.runtimeRevision)
+    ) {
+      view.permitted_next_actions = [
+        ...view.permitted_next_actions,
+        "workflow_reconcile_commit_result",
+      ];
+    }
+    return view;
   }
 
   parentGet(workflowIdValue: unknown): ParentView {
@@ -1279,6 +1315,7 @@ export class WorkflowStore {
     ) => {
       dirty_scope_adoption?: DirtyScopeAdoptionAudit;
     } = () => ({}),
+    ownership: "normal" | "reconciliation" = "normal",
   ): RoleView {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
@@ -1287,7 +1324,8 @@ export class WorkflowStore {
         const row = this.#row(workflowIdValue);
         const id = row.workflow_id as WorkflowId;
         if (actorRole === "parent") this.#assertParentAuth(row, token);
-        this.#assertRuntimeOwnership(row);
+        if (ownership === "reconciliation") this.#assertReconciliationRuntime(row);
+        else this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         }
@@ -1644,6 +1682,38 @@ export class WorkflowStore {
         return submitCommitResult(state, args, verification.commit_hash);
       },
       (next) => next.commit_result!.outcome,
+    );
+  }
+
+  reconcileCommitResult(input: unknown): RoleView {
+    const args = mutationInput(input);
+    exactKeys(
+      args,
+      ["workflow_id", "capability", "expected_version", "attempt_id"],
+      "commit reconciliation",
+    );
+    const result = {
+      workflow_id: args.workflow_id,
+      expected_version: args.expected_version,
+      attempt_id: args.attempt_id,
+      outcome: "committed",
+      failure_summary: null,
+    };
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "COMMIT_RESULT_SUBMITTED",
+      (state) => {
+        validateCommitResult(state, result);
+        const verification = verifyCommitResult(this.root, state, result);
+        if (verification.category) return commitMismatch(state, verification.category);
+        return submitCommitResult(state, result, verification.commit_hash);
+      },
+      (next) => next.commit_result!.outcome,
+      undefined,
+      "reconciliation",
     );
   }
 
