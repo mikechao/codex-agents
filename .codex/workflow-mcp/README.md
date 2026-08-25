@@ -3,11 +3,12 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
-Workflow state schema v6 optionally persists generic immutable `work_items` provenance. Each
+Workflow state schema v7 optionally persists generic immutable `work_items` provenance and append-only
+finding adjudications. Each
 provider-neutral record has `provider`, `id`, exact `display_ref`, and nullable absolute HTTP(S) `url`.
 The field survives restart and is inherited by linked follow-ups; parent and committer views expose it,
 while implementer and reviewer views omit it. It cannot broaden scope, criteria, remediation, receipts,
-review, or commit authorization. Schema v5 state requires a clean reset rather than implicit migration.
+review, or commit authorization. Schema v6 state requires a clean reset rather than implicit migration.
 
 Managed commits use only authoritative committer-view provenance: one neutral `Refs <display_ref>`
 line per distinct display reference, preserving exact text and first occurrence. Empty provenance emits
@@ -171,7 +172,12 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
 - An inconclusive review resumes with `workflow_resume_review`. `REPAIR_REQUIRED` advances through
-  bounded cycles with `workflow_authorize_repair`; when the final cycle is reached,
+  bounded cycles with `workflow_authorize_repair`. A parent may instead use
+  `workflow_adjudicate_findings` for exact blocking findings only after explicit user authorization
+  and a bounded reason identifying a contract inconsistency or approved-scope mismatch. The
+  original finding snapshot remains in append-only state and audit history. Adjudication skips
+  implementation only when no effective blockers remain, then requires a fresh independent review;
+  it never produces approval directly. When the final repair cycle is reached,
   `workflow_finalize_repair_exhausted` stops terminally.
 - A parent may use `workflow_adopt_dirty_scope` from `STOPPED_INCONCLUSIVE` only for exact paths
   originating in an existing scope expansion. The action records an opaque authorization-time
@@ -213,7 +219,7 @@ review and fresh commit authorization. No committer action is permitted while st
 
 ## Persistence schema
 
-Workflow MCP supports one current persisted schema (v6, including linked-continuation provenance).
+Workflow MCP supports one current persisted schema (v7, including linked-continuation provenance).
 Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use

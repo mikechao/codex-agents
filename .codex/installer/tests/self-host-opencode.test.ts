@@ -67,6 +67,7 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "workflow_resume_implementation",
     "workflow_accept_concerns",
     "workflow_authorize_repair",
+    "workflow_adjudicate_findings",
     "workflow_resume_review",
     "workflow_finalize_repair_exhausted",
     "workflow_create_linked_followup",

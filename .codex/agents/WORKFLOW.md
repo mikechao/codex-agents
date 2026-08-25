@@ -143,7 +143,11 @@ STOPPED_APPROVED -> COMMIT_AUTHORIZED -> COMMIT_PREPARED -> COMMITTED   (termina
                         `-> STOPPED_REPAIR_EXHAUSTED (terminal, when cycles exhausted)
 ```
 
-`REPAIR_REQUIRED` enters `REPAIRING` via `workflow_authorize_repair` and becomes terminal
+`REPAIR_REQUIRED` may record an explicit parent/user finding adjudication with
+`workflow_adjudicate_findings` when a blocking finding is inconsistent with the approved contract
+or outside approved scope. Adjudication preserves the finding snapshot and requires a fresh review;
+it never dispatches an implementer and never approves the workflow. Remaining effective blockers
+enter `REPAIRING` via `workflow_authorize_repair` and become terminal
 `STOPPED_REPAIR_EXHAUSTED` via `workflow_finalize_repair_exhausted` only when the repair cycle equals
 the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0
 workflow with `workflow_create_linked_followup`. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
@@ -199,14 +203,20 @@ passed manually. A missing or malformed policy is a stop condition rather than a
 ### Generic work-item provenance
 
 Workflow creation may include optional `work_items` records with provider-neutral `provider`, `id`,
-exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v6 state,
+exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v7 state,
 survives restart, is visible only to parent and committer views, and is inherited by linked follow-ups
 without caller retranscription. It is separate from scope, criteria, remediation, receipts, review,
-and commit authorization. Schema v5 databases require a clean reset rather than backfill.
+and commit authorization. Schema v6 databases require a clean reset rather than backfill.
 
 The committer renders only authoritative items as one neutral `Refs <display_ref>` line per distinct
 display reference, preserving first occurrence and exact text. Empty provenance emits no lines; no
 tracker API is called and no completion keyword is inferred.
+
+Finding adjudications are append-only schema v7 records. A parent may disposition an exact current
+blocking finding only with explicit user authorization and a bounded reason identifying a contract
+inconsistency or approved-scope mismatch. The original finding snapshot is retained in state and
+parent audit projection; effective blockers are calculated from the latest review result, and a
+fresh independent review is required after the last effective blocker is adjudicated.
 
 ### Commit flow
 

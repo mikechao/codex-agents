@@ -6,6 +6,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const names = tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     "workflow_accept_concerns",
+    "workflow_adjudicate_findings",
     "workflow_adopt_dirty_scope",
     "workflow_authorize_commit",
     "workflow_authorize_repair",
@@ -43,12 +44,25 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const expansion = tools.find((tool) => tool.name === "workflow_expand_scope");
   const adoption = tools.find((tool) => tool.name === "workflow_adopt_dirty_scope");
   const reconciliation = tools.find((tool) => tool.name === "workflow_reconcile_commit_result");
+  const adjudication = tools.find((tool) => tool.name === "workflow_adjudicate_findings");
   const create = tools.find((tool) => tool.name === "workflow_create");
-  assert.ok(implementation && review && begin && expansion && adoption && create);
+  assert.ok(implementation && review && begin && expansion && adoption && create && adjudication);
   assert.match(create.description ?? "", /one parent capability/u);
   assert.equal((create.description ?? "").includes("role capabilities"), false);
   assert.equal(protocolInstructions.includes("workflow_get"), false);
   assert.equal(protocolInstructions.includes("role capability"), false);
+  const adjudicationSchema = adjudication.inputSchema as any;
+  assert.deepEqual(Object.keys(adjudicationSchema.properties).sort(), [
+    "capability",
+    "expected_version",
+    "findings",
+    "user_authorization",
+    "workflow_id",
+  ]);
+  assert.deepEqual(adjudicationSchema.properties.findings.items.properties.disposition.enum, [
+    "CONTRACT_INCONSISTENT",
+    "OUTSIDE_APPROVED_SCOPE",
+  ]);
   const implementationSchema = implementation.inputSchema as any;
   const reviewSchema = review.inputSchema as any;
   const beginSchema = begin.inputSchema as any;

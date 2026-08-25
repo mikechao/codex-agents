@@ -57,6 +57,7 @@ const ACTIONS = {
   },
   repairRequired: {
     parent: [
+      "workflow_adjudicate_findings",
       "workflow_authorize_repair",
       "workflow_expand_scope",
       "workflow_finalize_repair_exhausted",

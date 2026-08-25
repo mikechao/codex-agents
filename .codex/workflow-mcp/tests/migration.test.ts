@@ -3,8 +3,9 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { WorkflowError } from "../errors.js";
+import { CURRENT_STATE_SCHEMA_VERSION } from "../migration.js";
 import { WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
@@ -154,7 +155,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
       state_digest: string;
     };
     const state = JSON.parse(row.state_json) as Record<string, unknown>;
-    state.schema_version = 3;
+    state.schema_version = 6;
     const stateJson = JSON.stringify(state);
     db.prepare("UPDATE workflows SET state_json = ?, state_digest = ?").run(
       stateJson,
@@ -172,7 +173,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
     const after = afterDb.prepare("SELECT version, state_json, state_digest FROM workflows").all();
     afterDb.close();
     assert.deepEqual(after, before);
-    assert.equal(created.workflow.schema_version, 6);
+    assert.equal(created.workflow.schema_version, 7);
   } finally {
     rmSync(root.root, { recursive: true, force: true });
   }
@@ -235,7 +236,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
         include_untracked: true,
       },
     });
-    assert.equal(created.workflow.schema_version, 6);
+    assert.equal(created.workflow.schema_version, 7);
     const events = store.audit(created.workflow.workflow_id, created.capability);
     assert.deepEqual(
       events.map((event) => event.event_type),
@@ -245,4 +246,14 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
   } finally {
     rmSync(root.root, { recursive: true, force: true });
   }
+});
+
+test("documents the current persisted schema version", () => {
+  const readme = readFileSync(resolve(import.meta.dir, "../README.md"), "utf8");
+  assert.match(
+    readme,
+    new RegExp(
+      `Workflow MCP supports one current persisted schema \\(v${CURRENT_STATE_SCHEMA_VERSION},`,
+    ),
+  );
 });

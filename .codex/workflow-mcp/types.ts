@@ -69,6 +69,7 @@ export type StoppingImplementationStatus = Exclude<ImplementationStatus, "DONE" 
 export type ReviewStatus = "APPROVED" | "CHANGES_REQUESTED" | "INCONCLUSIVE";
 export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
 export type FindingResolution = "resolved" | "still_present" | "superseded";
+export type FindingAdjudicationDisposition = "CONTRACT_INCONSISTENT" | "OUTSIDE_APPROVED_SCOPE";
 export type AcceptanceStatus = "satisfied" | "not_satisfied";
 export type ValidationStatus = "passed" | "failed" | "not_run";
 export type RangePathKind = "added" | "modified" | "deleted" | "unchanged";
@@ -96,6 +97,7 @@ export type WorkflowAction =
   | "workflow_begin_review"
   | "workflow_submit_review"
   | "workflow_authorize_repair"
+  | "workflow_adjudicate_findings"
   | "workflow_resume_review"
   | "workflow_finalize_repair_exhausted"
   | "workflow_create_linked_followup"
@@ -180,6 +182,7 @@ export type AuditEventType =
   | "REVIEW_STARTED"
   | "REVIEW_SUBMITTED"
   | "REPAIR_AUTHORIZED"
+  | "FINDINGS_ADJUDICATED"
   | "REVIEW_RESUMED"
   | "REPAIR_EXHAUSTED"
   | "COMMIT_AUTHORIZED"
@@ -242,6 +245,17 @@ export type BlockingFinding = Finding & { severity: "P0" | "P1" | "P2"; blocking
 export type OptionalFinding = Finding & { severity: "P3"; blocking: false };
 export type ReviewFinding = BlockingFinding | OptionalFinding;
 export type FindingResolutionMap = Record<FindingId, FindingResolution>;
+
+export interface FindingAdjudication {
+  finding_id: FindingId;
+  finding_snapshot: BlockingFinding;
+  source_review_version: WorkflowVersion;
+  disposition: FindingAdjudicationDisposition;
+  reason: string;
+  user_authorization: string;
+  adjudicated_at: IsoTimestamp;
+  resulting_workflow_version: WorkflowVersion;
+}
 
 export interface RemediationContext {
   policy: "explicitly_authorized"; // only value the runtime produces
@@ -327,7 +341,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 6;
+  schema_version: 7;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -368,6 +382,8 @@ export interface WorkflowState {
   prior_finding_classifications: FindingResolutionMap;
   blocking_findings: BlockingFinding[];
   optional_findings: OptionalFinding[];
+  finding_adjudications: FindingAdjudication[];
+  review_result_version: WorkflowVersion | null;
   review_receipt: ChangeReceipt | null;
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;
@@ -423,7 +439,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 6;
+  schema_version: 7;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -536,6 +552,8 @@ export interface ReviewerViewBase extends RoleViewCommon {
   blocking_findings: BlockingFinding[];
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;
+  finding_adjudications: FindingAdjudication[];
+  review_result_version: WorkflowVersion | null;
   concern_acceptance: ConcernAcceptance | null;
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;
@@ -617,6 +635,7 @@ export interface AuditEvent {
   summary: AuditEnvelope;
   scope_expansion?: ScopeExpansionAudit;
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+  finding_adjudications?: FindingAdjudication[];
   created_at: IsoTimestamp;
 }
 

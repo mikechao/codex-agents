@@ -130,6 +130,9 @@ Rules:
 - Re-reviews receive prior findings and implementer resolution claims. Classify every prior finding
   as `resolved`, `still_present`, or `superseded` before reporting new findings. Do not silently
   drop an unresolved prior finding.
+- A prior finding with an authoritative parent adjudication is already dispositioned outside the
+  repair loop. Classify it as `superseded` and do not re-emit the same finding ID; materially new
+  evidence must use a new stable finding ID.
 
 Use exactly one terminal status:
 - APPROVED — no blocking findings remain within the approved scope; optional P3 notes may remain.

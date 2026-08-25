@@ -513,6 +513,43 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_adjudicate_findings",
+    description:
+      "Record an explicit parent/user disposition for exact blocking findings that are inconsistent with the approved contract or outside approved scope.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        findings: {
+          type: "array",
+          minItems: 1,
+          maxItems: 200,
+          items: {
+            type: "object",
+            properties: {
+              finding_id: { type: "string", minLength: 1, maxLength: 80 },
+              disposition: {
+                type: "string",
+                enum: ["CONTRACT_INCONSISTENT", "OUTSIDE_APPROVED_SCOPE"],
+              },
+              reason: { type: "string", minLength: 1, maxLength: 2000 },
+            },
+            required: ["finding_id", "disposition", "reason"],
+            additionalProperties: false,
+          },
+        },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "findings", "user_authorization"],
+    ),
+    annotations: {
+      title: "Adjudicate findings",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_resume_review",
     description: "Resume an inconclusive review stop to REVIEWING.",
     inputSchema: schema(
@@ -794,6 +831,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
             break;
           case "workflow_authorize_repair":
             result = store.authorizeRepair(args);
+            break;
+          case "workflow_adjudicate_findings":
+            result = store.adjudicateFindings(args);
             break;
           case "workflow_resume_review":
             result = store.resumeReview(args);

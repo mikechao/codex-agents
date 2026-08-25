@@ -4,6 +4,7 @@ import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
 import type {
   ApprovedPathBaseline,
   ApprovedPathBaselineView,
+  BlockingFinding,
   ChangeReceipt,
   CommitAttemptId,
   CommitMismatchCategory,
@@ -11,6 +12,8 @@ import type {
   CommitPreparationFailureCategory,
   CommitterView,
   ExactRepoPath,
+  FindingAdjudication,
+  FindingAdjudicationDisposition,
   FindingId,
   FindingResolution,
   FindingSeverity,
@@ -132,7 +135,7 @@ export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set(
   "PATH_MISMATCH",
 ]);
 
-const V6_STATE_KEYS: readonly string[] = [
+const V7_STATE_KEYS: readonly string[] = [
   "schema_version",
   "version",
   "workflow_id",
@@ -173,6 +176,8 @@ const V6_STATE_KEYS: readonly string[] = [
   "prior_finding_classifications",
   "blocking_findings",
   "optional_findings",
+  "finding_adjudications",
+  "review_result_version",
   "review_receipt",
   "stop_context",
   "recovery_context",
@@ -362,6 +367,8 @@ const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly
     "blocking_findings",
     "optional_findings",
     "prior_finding_classifications",
+    "finding_adjudications",
+    "review_result_version",
     "concern_acceptance",
     "review_receipt",
     "stop_context",
@@ -407,6 +414,7 @@ const ACTION_MATRIX: Partial<
     IMPLEMENTING: ["workflow_expand_scope"],
     REPAIR_REQUIRED: [
       "workflow_authorize_repair",
+      "workflow_adjudicate_findings",
       "workflow_expand_scope",
       "workflow_finalize_repair_exhausted",
     ],
@@ -447,6 +455,11 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
       actions = ["workflow_submit_review"];
     } else {
       actions = ["workflow_begin_review"];
+    }
+  }
+  if (actorRole === "parent" && state.phase === "REPAIR_REQUIRED") {
+    if (effectiveBlockingFindings(state).length === 0) {
+      actions = [];
     }
   }
   if (
@@ -628,6 +641,8 @@ function baseState({
     prior_finding_classifications: {},
     blocking_findings: [],
     optional_findings: [],
+    finding_adjudications: [],
+    review_result_version: null,
     review_receipt: null,
     stop_context: null,
     recovery_context: null,
@@ -868,12 +883,16 @@ export function submitImplementation(
   );
   const knownFailures = stringList(args.known_failures, "known_failures");
   const priorIds = (
-    state.linked_continuation?.review_stage === "remediation"
+    state.phase === "REPAIRING"
       ? [
-          ...state.linked_findings.map((finding) => finding.finding_id),
-          ...state.blocking_findings.map((finding) => finding.finding_id),
+          ...(state.linked_continuation?.review_stage === "remediation"
+            ? state.linked_findings.map((finding) => finding.finding_id)
+            : []),
+          ...state.repair_authorized_ids,
         ]
-      : state.blocking_findings.map((finding) => finding.finding_id)
+      : state.linked_continuation?.review_stage === "remediation"
+        ? state.linked_findings.map((finding) => finding.finding_id)
+        : []
   ).filter((id, index, ids) => ids.indexOf(id) === index);
   const resolution = resolutionMap(args.finding_resolution_map, priorIds, "finding_resolution_map");
   if (
@@ -910,6 +929,7 @@ export function submitImplementation(
     if (knownFailures.length > 0) {
       fail("ERROR_INVALID_IMPLEMENTATION", "done implementation has known failures");
     }
+    next.repair_authorized_ids = [];
     next.phase = "REVIEWING";
   }
   if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
@@ -919,7 +939,7 @@ export function submitImplementation(
       // Safe producer-side narrowing: ensurePhase guarantees the phase at runtime.
       stopped_from: state.phase as "IMPLEMENTING" | "REPAIRING",
     };
-    next.repair_authorized_ids = [];
+    if (state.phase === "IMPLEMENTING") next.repair_authorized_ids = [];
   }
   if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
     next.phase = IMPLEMENTATION_STOP_PHASES[args.status];
@@ -1115,6 +1135,20 @@ export function submitReview(
     priorIds,
     "prior_finding_classifications",
   );
+  const adjudicatedIds = new Set(state.finding_adjudications.map((item) => item.finding_id));
+  for (const finding of [...blockingFindings, ...optionalFindings]) {
+    if (adjudicatedIds.has(finding.finding_id)) {
+      fail("ERROR_INVALID_FINDING", "an adjudicated finding cannot be re-emitted");
+    }
+  }
+  for (const finding of state.blocking_findings) {
+    if (
+      adjudicatedIds.has(finding.finding_id) &&
+      classifications[finding.finding_id] !== "superseded"
+    ) {
+      fail("ERROR_INVALID_FINDING", "adjudicated findings must be classified superseded");
+    }
+  }
   for (const [id, status] of Object.entries(classifications)) {
     if (status === "still_present") {
       const prior =
@@ -1155,6 +1189,7 @@ export function submitReview(
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;
   next.prior_finding_classifications = classifications;
+  next.review_result_version = (state.version + 1) as WorkflowVersion;
   next.review_receipt = finalReceipt ? clone(finalReceipt) : null;
   next.review_start_receipt = null;
   if (args.review_status === "APPROVED") {
@@ -1197,6 +1232,83 @@ export function submitReview(
   return next;
 }
 
+export function effectiveBlockingFindings(state: WorkflowState): BlockingFinding[] {
+  const adjudicated = new Set(
+    state.finding_adjudications
+      .filter((item) => item.source_review_version === state.review_result_version)
+      .map((item) => item.finding_id),
+  );
+  return state.blocking_findings.filter((finding) => !adjudicated.has(finding.finding_id));
+}
+
+export function adjudicateFindings(state: WorkflowState, input: unknown): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_REPAIR", "finding adjudication input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "findings", "user_authorization"],
+    "finding adjudication",
+  );
+  ensurePhase(state, "REPAIR_REQUIRED");
+  const authorization = userAuthorization(args.user_authorization);
+  if (state.review_result_version === null) {
+    fail("ERROR_INVALID_FINDING", "latest review result is missing");
+  }
+  const current = effectiveBlockingFindings(state);
+  if (current.length === 0) fail("ERROR_INVALID_FINDING", "no effective blockers remain");
+  if (
+    !Array.isArray(args.findings) ||
+    args.findings.length === 0 ||
+    args.findings.length > current.length
+  ) {
+    fail("ERROR_INVALID_FINDING", "finding adjudications are invalid");
+  }
+  const currentById = new Map(current.map((finding) => [finding.finding_id, finding]));
+  const historical = new Set(state.finding_adjudications.map((item) => item.finding_id));
+  const records: FindingAdjudication[] = [];
+  const seen = new Set<string>();
+  for (const raw of args.findings) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      fail("ERROR_INVALID_FINDING", "finding adjudication is invalid");
+    }
+    const item = exactKeys(raw, ["finding_id", "disposition", "reason"], "finding adjudication");
+    const id = item.finding_id as FindingId;
+    if (
+      typeof item.finding_id !== "string" ||
+      seen.has(id) ||
+      historical.has(id) ||
+      !currentById.has(id)
+    ) {
+      fail("ERROR_INVALID_FINDING", "finding ID is stale, reused, or not an effective blocker");
+    }
+    if (
+      item.disposition !== "CONTRACT_INCONSISTENT" &&
+      item.disposition !== "OUTSIDE_APPROVED_SCOPE"
+    ) {
+      fail("ERROR_INVALID_FINDING", "finding disposition is invalid");
+    }
+    seen.add(id);
+    records.push({
+      finding_id: id as FindingId,
+      finding_snapshot: clone(currentById.get(id as FindingId) as BlockingFinding),
+      source_review_version: state.review_result_version,
+      disposition: item.disposition as FindingAdjudicationDisposition,
+      reason: boundedString(item.reason, "reason", MAX_DETAIL),
+      user_authorization: authorization,
+      adjudicated_at: isoNow(),
+      resulting_workflow_version: (state.version + 1) as WorkflowVersion,
+    });
+  }
+  const next = clone(state);
+  next.finding_adjudications.push(...records);
+  if (effectiveBlockingFindings(next).length === 0) {
+    next.phase = "REVIEWING";
+    next.repair_authorized_ids = [];
+  }
+  return next;
+}
+
 export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_REPAIR", "repair input is invalid");
@@ -1208,10 +1320,11 @@ export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowS
   );
   ensurePhase(state, "REPAIR_REQUIRED");
   const ids = findingIdList(args.finding_ids, "finding_ids", "ERROR_INVALID_REPAIR");
-  if (ids.length > state.blocking_findings.length) {
+  const effective = effectiveBlockingFindings(state);
+  if (ids.length > effective.length) {
     fail("ERROR_INVALID_REPAIR", "finding IDs are invalid");
   }
-  const existing = new Set(state.blocking_findings.map((item) => item.finding_id));
+  const existing = new Set(effective.map((item) => item.finding_id));
   if (ids.some((id) => !existing.has(id)))
     fail("ERROR_INVALID_REPAIR", "finding ID is not a blocker");
   if (state.repair_cycle >= state.max_repair_cycles) {
@@ -1248,6 +1361,8 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
 export function finalizeRepairExhausted(state: WorkflowState, input: unknown): WorkflowState {
   exactKeys(input, ["workflow_id", "capability", "expected_version"], "repair exhaustion");
   ensurePhase(state, "REPAIR_REQUIRED");
+  if (effectiveBlockingFindings(state).length === 0)
+    fail("ERROR_INVALID_REPAIR", "no effective blockers remain");
   if (state.repair_cycle < state.max_repair_cycles)
     fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
   const next = clone(state);
@@ -1521,14 +1636,14 @@ export function linkedFollowupInput(
     fail("ERROR_INVALID_FOLLOWUP", "workflow already has an active linked successor");
   }
   const ids = findingIdList(args.finding_ids, "finding_ids", "ERROR_INVALID_FOLLOWUP");
-  const blocking = new Set(state.blocking_findings.map((finding) => finding.finding_id));
+  const blocking = new Set(effectiveBlockingFindings(state).map((finding) => finding.finding_id));
   const optional = new Set(state.optional_findings.map((finding) => finding.finding_id));
   const fromBlocking = ids.every((id) => blocking.has(id));
   const fromOptional = ids.every((id) => optional.has(id));
   if (fromBlocking === fromOptional) {
     fail("ERROR_INVALID_FOLLOWUP", "finding IDs must come from one bucket");
   }
-  const linkedFindings = [...state.blocking_findings, ...state.optional_findings].filter(
+  const linkedFindings = [...effectiveBlockingFindings(state), ...state.optional_findings].filter(
     (finding) => ids.includes(finding.finding_id),
   );
   const remediationPaths = exactPaths(args.approved_paths, repositoryRoot);
@@ -1840,6 +1955,54 @@ function findingsShape(value: unknown, expectedBlocking?: boolean): void {
     }
     ids.add(item.finding_id);
     findingShape(item, expectedBlocking);
+  }
+}
+
+function findingAdjudicationsShape(value: unknown): void {
+  if (!Array.isArray(value) || value.length > MAX_FINDINGS * 10) corrupt();
+  let previousResultingVersion = -1;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isObject(item)) corrupt();
+    checkKeys(item, [
+      "finding_id",
+      "finding_snapshot",
+      "source_review_version",
+      "disposition",
+      "reason",
+      "user_authorization",
+      "adjudicated_at",
+      "resulting_workflow_version",
+    ]);
+    if (
+      typeof item.finding_id !== "string" ||
+      item.finding_id.length === 0 ||
+      item.finding_id.length > 80 ||
+      ids.has(item.finding_id)
+    )
+      corrupt();
+    ids.add(item.finding_id);
+    findingShape(item.finding_snapshot, true);
+    if (
+      !Number.isSafeInteger(item.source_review_version) ||
+      (item.source_review_version as number) < 0 ||
+      (item.source_review_version as number) > (item.resulting_workflow_version as number) ||
+      !Number.isSafeInteger(item.resulting_workflow_version) ||
+      (item.resulting_workflow_version as number) < 1 ||
+      (item.resulting_workflow_version as number) < previousResultingVersion
+    )
+      corrupt();
+    if ((item.finding_snapshot as { finding_id?: unknown }).finding_id !== item.finding_id)
+      corrupt();
+    if (
+      item.disposition !== "CONTRACT_INCONSISTENT" &&
+      item.disposition !== "OUTSIDE_APPROVED_SCOPE"
+    )
+      corrupt();
+    bounded(item.reason, MAX_DETAIL);
+    bounded(item.user_authorization, MAX_DETAIL);
+    bounded(item.adjudicated_at, 64);
+    previousResultingVersion = item.resulting_workflow_version as number;
   }
 }
 
@@ -2155,12 +2318,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v6 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v7 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV6(value: unknown): WorkflowState {
+export function validateWorkflowStateV7(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V6_STATE_KEYS].sort();
+  const required = [...V7_STATE_KEYS].sort();
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -2373,6 +2536,20 @@ export function validateWorkflowStateV6(value: unknown): WorkflowState {
   resolutionMapShape(value.prior_finding_classifications);
   findingsShape(value.blocking_findings, true);
   findingsShape(value.optional_findings, false);
+  findingAdjudicationsShape(value.finding_adjudications);
+  if (
+    (value.finding_adjudications as Array<{ resulting_workflow_version: number }>).some(
+      (item) => item.resulting_workflow_version > (value.version as number),
+    )
+  )
+    corrupt();
+  if (
+    value.review_result_version !== null &&
+    (!Number.isSafeInteger(value.review_result_version) ||
+      (value.review_result_version as number) < 1 ||
+      (value.review_result_version as number) > (value.version as number))
+  )
+    corrupt();
   nullableReceipt(value.review_receipt);
   if (
     linked &&
@@ -2391,11 +2568,12 @@ export function validateWorkflowStateV6(value: unknown): WorkflowState {
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
 
-/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
-export const validateWorkflowStateV5 = validateWorkflowStateV6;
+/** @deprecated retained for source compatibility; persisted state is schema v7 only. */
+export const validateWorkflowStateV6 = validateWorkflowStateV7;
 
-/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
-export const validateWorkflowStateV4 = validateWorkflowStateV6;
+/** @deprecated retained for source compatibility; persisted state is schema v7 only. */
+export const validateWorkflowStateV5 = validateWorkflowStateV7;
 
-/** @deprecated retained for source compatibility; persisted state is schema v6 only. */
-export const validateWorkflowStateV3 = validateWorkflowStateV4;
+/** @deprecated retained for source compatibility; persisted state is schema v7 only. */
+export const validateWorkflowStateV4 = validateWorkflowStateV7;
+export const validateWorkflowStateV3 = validateWorkflowStateV7;

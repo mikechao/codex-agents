@@ -415,6 +415,158 @@ test("repair and re-review use authoritative expected versions", () => {
   }
 });
 
+test("parent adjudication removes only the dismissed blocker and avoids a no-op repair", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git, { max_repair_cycles: 1 }));
+    const id = created.workflow.workflow_id;
+    implementation(store, created);
+    writeFileSync(join(root, "note.txt"), "reviewed\n");
+    const repaired = finding("REPAIR-1");
+    const inconsistent = finding("PLAN-1");
+    assert.equal(
+      review(store, created, undefined, "CHANGES_REQUESTED", [repaired, inconsistent]).phase,
+      "REPAIR_REQUIRED",
+    );
+    const adjudicated = store.adjudicateFindings({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: store.parentGet(id).version,
+      findings: [
+        {
+          finding_id: "PLAN-1",
+          disposition: "CONTRACT_INCONSISTENT",
+          reason: "the finding conflicts with the approved plan",
+        },
+      ],
+      user_authorization: "User explicitly rejected PLAN-1 as inconsistent with the plan",
+    });
+    assert.equal(adjudicated.phase, "REPAIR_REQUIRED");
+    assert.deepEqual(adjudicated.repair_authorized_ids, []);
+    assert.deepEqual(
+      adjudicated.finding_adjudications.map((item: any) => item.finding_id),
+      ["PLAN-1"],
+    );
+    assert.equal(adjudicated.finding_adjudications[0].finding_snapshot.finding_id, "PLAN-1");
+    assert.equal(adjudicated.finding_adjudications[0].source_review_version, 3);
+    assert.deepEqual(adjudicated.permitted_next_actions, [
+      "workflow_adjudicate_findings",
+      "workflow_authorize_repair",
+      "workflow_expand_scope",
+      "workflow_finalize_repair_exhausted",
+    ]);
+    store.authorizeRepair({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: store.parentGet(id).version,
+      finding_ids: ["REPAIR-1"],
+    });
+    assert.equal(
+      implementation(store, created, undefined, "DONE", { "REPAIR-1": "resolved" }).phase,
+      "REVIEWING",
+    );
+    writeFileSync(join(root, "note.txt"), "repaired\n");
+    assert.equal(
+      review(store, created, undefined, "APPROVED", [], [], {
+        "REPAIR-1": "resolved",
+        "PLAN-1": "superseded",
+      }).phase,
+      "STOPPED_APPROVED",
+    );
+    const audit = store.audit(id, created.capability);
+    const event = audit.find((item: any) => item.event_type === "FINDINGS_ADJUDICATED");
+    assert.ok(event);
+    assert.equal(
+      event.finding_adjudications[0].reason,
+      "the finding conflicts with the approved plan",
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("all blockers can be adjudicated directly into a fresh review", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git));
+    const id = created.workflow.workflow_id;
+    implementation(store, created);
+    writeFileSync(join(root, "note.txt"), "reviewed\n");
+    const blocker = finding("PLAN-ONLY");
+    review(store, created, undefined, "CHANGES_REQUESTED", [blocker]);
+    assert.equal(
+      store.adjudicateFindings({
+        workflow_id: id,
+        capability: created.capability,
+        expected_version: store.parentGet(id).version,
+        findings: [
+          {
+            finding_id: "PLAN-ONLY",
+            disposition: "OUTSIDE_APPROVED_SCOPE",
+            reason: "the requested work is outside the approved scope",
+          },
+        ],
+        user_authorization: "User explicitly authorized this disposition",
+      }).phase,
+      "REVIEWING",
+    );
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, []);
+    writeFileSync(join(root, "note.txt"), "reviewed\n");
+    assert.equal(
+      review(store, created, undefined, "APPROVED", [], [], { "PLAN-ONLY": "superseded" }).phase,
+      "STOPPED_APPROVED",
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("mixed or reused adjudication IDs fail atomically", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git));
+    const id = created.workflow.workflow_id;
+    implementation(store, created);
+    writeFileSync(join(root, "note.txt"), "reviewed\n");
+    review(store, created, undefined, "CHANGES_REQUESTED", [finding("VALID"), finding("OTHER")]);
+    const version = store.parentGet(id).version;
+    const events = store.audit(id, created.capability).length;
+    assert.equal(
+      category(() =>
+        store.adjudicateFindings({
+          workflow_id: id,
+          capability: created.capability,
+          expected_version: version,
+          findings: [
+            {
+              finding_id: "VALID",
+              disposition: "CONTRACT_INCONSISTENT",
+              reason: "valid reason",
+            },
+            {
+              finding_id: "OPTIONAL",
+              disposition: "OUTSIDE_APPROVED_SCOPE",
+              reason: "not a current blocker",
+            },
+          ],
+          user_authorization: "explicit authorization",
+        }),
+      ),
+      "ERROR_INVALID_FINDING",
+    );
+    assert.equal(store.parentGet(id).version, version);
+    assert.equal(store.audit(id, created.capability).length, events);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("linked follow-up inherits findings and gets its own singular parent capability", () => {
   const { root, git } = fixture();
   try {

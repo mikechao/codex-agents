@@ -29,6 +29,7 @@ import {
 } from "./runtime-artifact.js";
 import {
   acceptConcerns,
+  adjudicateFindings,
   adoptDirtyScope,
   approvedPathBaselineView,
   authorizeCommit,
@@ -55,7 +56,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV6,
+  validateWorkflowStateV7,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -69,6 +70,7 @@ import type {
   DirtyScopeAdoptionAudit,
   DirtyScopeAdoptionIndexState,
   DirtyScopeAdoptionState,
+  FindingAdjudication,
   GitCommitSha,
   IsoTimestamp,
   ParentCapability,
@@ -232,6 +234,24 @@ function assertScopeUnchanged(before: WorkflowState, after: WorkflowState): void
   }
 }
 
+function assertFindingAdjudicationsAppendOnly(
+  before: WorkflowState,
+  after: WorkflowState,
+  eventType: AuditEventType,
+): void {
+  const prior = before.finding_adjudications;
+  const current = after.finding_adjudications;
+  const appendOnly =
+    current.length >= prior.length &&
+    canonicalJson(current.slice(0, prior.length)) === canonicalJson(prior);
+  if (!appendOnly || (eventType !== "FINDINGS_ADJUDICATED" && current.length !== prior.length)) {
+    fail("ERROR_INVALID_TRANSITION", "finding adjudication history is not append-only");
+  }
+  if (eventType === "FINDINGS_ADJUDICATED" && current.length === prior.length) {
+    fail("ERROR_INVALID_TRANSITION", "finding adjudication history was not appended");
+  }
+}
+
 function isLinkedReviewStageTransition(before: WorkflowState, after: WorkflowState): boolean {
   const continuation = after.linked_continuation;
   return (
@@ -371,7 +391,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV6(parsed);
+  return validateWorkflowStateV7(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -649,7 +669,10 @@ export class WorkflowStore {
     eventType: AuditEventType,
     actorRole: ActorRole,
     summary: AuditEnvelope,
-    details: { dirty_scope_adoption?: DirtyScopeAdoptionAudit } = {},
+    details: {
+      dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+      finding_adjudications?: FindingAdjudication[];
+    } = {},
   ): void {
     this.db
       .prepare(
@@ -898,7 +921,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV6(next);
+        validateWorkflowStateV7(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -948,6 +971,7 @@ export class WorkflowStore {
       };
       const rawSummary = JSON.parse(event.summary_json) as AuditEnvelope & {
         dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+        finding_adjudications?: FindingAdjudication[];
       };
       if (rawSummary.dirty_scope_adoption)
         result.dirty_scope_adoption = rawSummary.dirty_scope_adoption;
@@ -964,6 +988,9 @@ export class WorkflowStore {
           };
           result.scope_expansion = auditProjection;
         }
+      }
+      if (result.event_type === "FINDINGS_ADJUDICATED") {
+        result.finding_adjudications = rawSummary.finding_adjudications;
       }
       return result;
     });
@@ -1229,7 +1256,7 @@ export class WorkflowStore {
         next.version = (expectedVersionNumber + 1) as WorkflowVersion;
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV6(next);
+        validateWorkflowStateV7(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1320,7 +1347,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV6(next);
+        validateWorkflowStateV7(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1360,6 +1387,7 @@ export class WorkflowStore {
       next: WorkflowState,
     ) => {
       dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+      finding_adjudications?: FindingAdjudication[];
     } = () => ({}),
     ownership: "normal" | "reconciliation" = "normal",
   ): RoleView {
@@ -1380,6 +1408,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(current, next);
         assertWorkItemsUnchanged(current, next);
         const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
+        assertFindingAdjudicationsAppendOnly(current, next, resolvedEventType);
         if (resolvedEventType === "SCOPE_EXPANDED") {
           if (
             next.scope_expansions.length !== current.scope_expansions.length + 1 ||
@@ -1405,7 +1434,7 @@ export class WorkflowStore {
         }
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
-        validateWorkflowStateV6(next);
+        validateWorkflowStateV7(next);
         const now = isoNow();
         const result = this.db
           .prepare(
@@ -1576,6 +1605,24 @@ export class WorkflowStore {
       args.expected_version,
       "REPAIR_AUTHORIZED",
       (state) => authorizeRepair(state, args),
+    );
+  }
+
+  adjudicateFindings(input: unknown): RoleView {
+    const args = mutationInput(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "FINDINGS_ADJUDICATED",
+      (state) => adjudicateFindings(state, args),
+      (next) => next.phase,
+      (_before, next) => ({
+        finding_adjudications: next.finding_adjudications.filter(
+          (item) => item.resulting_workflow_version === next.version,
+        ),
+      }),
     );
   }
 
@@ -1815,7 +1862,7 @@ export class WorkflowStore {
           fail("ERROR_STALE_BASE", "scope base is stale");
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV6(childState);
+        validateWorkflowStateV7(childState);
         const childCapability = issueCapability();
         const childHash = hashCapability(childCapability);
         const now = isoNow();
@@ -1837,7 +1884,7 @@ export class WorkflowStore {
           version: (expectedVersionNumber + 1) as WorkflowVersion,
         };
         assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV6(next);
+        validateWorkflowStateV7(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",

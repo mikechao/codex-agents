@@ -289,6 +289,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_resume_implementation",
     "workflow_accept_concerns",
     "workflow_authorize_repair",
+    "workflow_adjudicate_findings",
     "workflow_resume_review",
     "workflow_finalize_repair_exhausted",
     "workflow_create_linked_followup",
@@ -437,6 +438,7 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   }
   assert.match(content, /^  workflow_state_workflow_submit_review: allow$/m);
   assert.match(content, /^  workflow_state_workflow_begin_review: allow$/m);
+  assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
 });
@@ -535,6 +537,7 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
   assert.match(content, /^  workflow_state_workflow_submit_commit_result: allow$/m);
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
+  assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
 });
 
 test("committer references are authoritative, neutral, and non-closing", () => {
@@ -586,6 +589,7 @@ test("implementer may edit but never stages, commits, or rewrites history", () =
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
+  assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
 });
 
 test("Codex and OpenCode contracts carry equivalent role behavior", () => {

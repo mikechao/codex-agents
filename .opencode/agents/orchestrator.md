@@ -43,6 +43,7 @@ permission:
   workflow_state_workflow_resume_implementation: allow
   workflow_state_workflow_accept_concerns: allow
   workflow_state_workflow_authorize_repair: allow
+  workflow_state_workflow_adjudicate_findings: allow
   workflow_state_workflow_resume_review: allow
   workflow_state_workflow_finalize_repair_exhausted: allow
   workflow_state_workflow_create_linked_followup: allow
@@ -147,10 +148,15 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
    in its active phase and stop for explicit user intervention. Reset the count when the workflow
    leaves `IMPLEMENTING`/`REPAIRING` or explicit user intervention starts a fresh continuation
    sequence. Only send a genuinely reviewable result to `code_reviewer` for independent review.
-3. If review has blocking findings, authorize repair using exactly the returned blocking finding
-   IDs, send `implementer` back for that bounded repair cycle, refresh the parent view, and
-   re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize the exhausted
-    stop and do not commit. Linked follow-ups are deliberately two-stage: dispatch the child
+3. If review has blocking findings, surface every exact finding ID and bounded reason. The parent
+   may either authorize repair using exactly the returned blocking finding IDs, or, only after
+   explicit user authorization naming the exact IDs and disposition, call
+   `workflow_state_workflow_adjudicate_findings` for findings that conflict with the approved
+   contract or are outside approved scope. Never adjudicate silently. Refresh the parent view;
+   if no effective blockers remain, route directly to a fresh independent review without an
+   implementer pass. Otherwise send `implementer` back for that bounded repair cycle, refresh the
+   parent view, and re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize
+   the exhausted stop and do not commit. Linked follow-ups are deliberately two-stage: dispatch the child
     implementer only for its narrow remediation paths, then dispatch a fresh reviewer for the
     inherited combined target after carried findings are resolved. Remediation approval is never
     final approval.
