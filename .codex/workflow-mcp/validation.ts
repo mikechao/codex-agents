@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { fail } from "./errors.js";
+import { fail, WorkflowError } from "./errors.js";
 import type {
   AcceptanceCriterion,
   AcceptanceResult,
@@ -18,6 +18,10 @@ import type {
   GitCommitSha,
   IsoTimestamp,
   OptionalFinding,
+  PlanApproval,
+  PlanId,
+  PlanRevision,
+  PlanRevisionArtifact,
   ReviewFinding,
   Role,
   StateDigest,
@@ -35,6 +39,7 @@ export const MAX_CONTRACTS = 999;
 export const MAX_TEXT = 4000;
 export const MAX_DETAIL = 2000;
 export const MAX_APPROVED_PLAN = 1024 * 1024;
+export const MAX_EXECUTION_BRIEF = 32 * 1024;
 
 const FINDING_SEVERITIES: ReadonlySet<FindingSeverity> = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_KEYS = [
@@ -158,6 +163,170 @@ export function optionalText(value: unknown, name: string, max = MAX_DETAIL): st
 export function approvedPlan(value: unknown, name = "approved_plan"): string | null {
   if (value === null) return null;
   return boundedString(value, name, MAX_APPROVED_PLAN);
+}
+
+const PLAN_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function planId(value: unknown): PlanId {
+  if (typeof value !== "string" || !PLAN_ID_PATTERN.test(value)) {
+    fail("ERROR_PLAN_INVALID", "plan ID is invalid");
+  }
+  return value as PlanId;
+}
+
+export function planRevision(value: unknown, name = "revision"): PlanRevision {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    fail("ERROR_PLAN_INVALID", `${name} is invalid`);
+  }
+  return value as PlanRevision;
+}
+
+export function executionBrief(value: unknown): string {
+  return boundedString(value, "execution_brief", MAX_EXECUTION_BRIEF);
+}
+
+export function planRevisionInput(
+  value: unknown,
+  repositoryRoot: string,
+): Omit<PlanRevisionArtifact, "plan_id" | "revision" | "created_at"> {
+  const args = exactKeys(
+    value,
+    [
+      "full_plan",
+      "execution_brief",
+      "objective",
+      "approved_paths",
+      "acceptance_criteria",
+      "validation_requirements",
+    ],
+    "plan revision",
+  );
+  const objective = boundedString(args.objective, "objective");
+  const fullPlan = boundedString(args.full_plan, "full_plan", MAX_APPROVED_PLAN);
+  const brief = executionBrief(args.execution_brief);
+  const approvedPaths = exactPaths(args.approved_paths, repositoryRoot);
+  const acceptanceCriteria = contractList(
+    args.acceptance_criteria,
+    "acceptance_criteria",
+    "AC",
+    "criterion_id",
+  );
+  const validationRequirements = contractList(
+    args.validation_requirements,
+    "validation_requirements",
+    "VAL",
+    "validation_id",
+  );
+  return {
+    plan_schema_version: 1,
+    full_plan: fullPlan,
+    execution_brief: brief,
+    objective,
+    approved_paths: approvedPaths,
+    acceptance_criteria: acceptanceCriteria,
+    validation_requirements: validationRequirements,
+  };
+}
+
+export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisionArtifact {
+  try {
+    const record = safeObject(value, "plan artifact", 10);
+    exactKeys(
+      record,
+      [
+        "plan_schema_version",
+        "plan_id",
+        "revision",
+        "full_plan",
+        "execution_brief",
+        "objective",
+        "approved_paths",
+        "acceptance_criteria",
+        "validation_requirements",
+        "created_at",
+      ],
+      "plan artifact",
+    );
+    if (record.plan_schema_version !== 1)
+      fail("ERROR_STATE_CORRUPT", "plan schema version is invalid");
+    const acceptanceCriteria = persistedPlanRecords(
+      record.acceptance_criteria,
+      "acceptance criteria",
+      ["criterion_id", "description"],
+    );
+    const validationRequirements = persistedPlanRecords(
+      record.validation_requirements,
+      "validation requirements",
+      ["description", "argv", "validation_id"],
+    );
+    const normalized = planRevisionInput(
+      {
+        full_plan: record.full_plan,
+        execution_brief: record.execution_brief,
+        objective: record.objective,
+        approved_paths: record.approved_paths,
+        acceptance_criteria: acceptanceCriteria.map((item) => item.description),
+        validation_requirements: validationRequirements.map((item) => ({
+          description: item.description,
+          argv: item.argv,
+        })),
+      },
+      repositoryRoot,
+    );
+    planId(record.plan_id);
+    planRevision(record.revision);
+    if (typeof record.created_at !== "string" || Number.isNaN(Date.parse(record.created_at)))
+      fail("ERROR_STATE_CORRUPT", "plan artifact timestamp is invalid");
+    if (canonicalJson(normalized.approved_paths) !== canonicalJson(record.approved_paths))
+      fail("ERROR_STATE_CORRUPT", "plan artifact paths are not normalized");
+    if (canonicalJson(normalized.acceptance_criteria) !== canonicalJson(record.acceptance_criteria))
+      fail("ERROR_STATE_CORRUPT", "plan artifact acceptance criteria are not normalized");
+    if (
+      canonicalJson(normalized.validation_requirements) !==
+      canonicalJson(record.validation_requirements)
+    )
+      fail("ERROR_STATE_CORRUPT", "plan artifact validation requirements are not normalized");
+    return record as unknown as PlanRevisionArtifact;
+  } catch (error) {
+    if (error instanceof WorkflowError && error.category === "ERROR_STATE_CORRUPT") throw error;
+    fail("ERROR_STATE_CORRUPT", "plan artifact is invalid");
+  }
+}
+
+function persistedPlanRecords(
+  value: unknown,
+  name: string,
+  keys: readonly string[],
+): Record<string, unknown>[] {
+  if (!Array.isArray(value)) fail("ERROR_STATE_CORRUPT", `${name} are invalid`);
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      fail("ERROR_STATE_CORRUPT", `${name} entry is invalid`);
+    const record = item as Record<string, unknown>;
+    const actual = Object.keys(record).sort();
+    const expected = [...keys].sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
+      fail("ERROR_STATE_CORRUPT", `${name} entry fields are invalid`);
+    return record;
+  });
+}
+
+export function planApproval(value: unknown): PlanApproval {
+  const record = safeObject(value, "plan approval", 5);
+  exactKeys(
+    record,
+    ["plan_id", "revision", "artifact_digest", "user_authorization", "approved_at"],
+    "plan approval",
+  );
+  planId(record.plan_id);
+  planRevision(record.revision);
+  if (typeof record.artifact_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record.artifact_digest))
+    fail("ERROR_STATE_CORRUPT", "plan approval digest is invalid");
+  userAuthorization(record.user_authorization);
+  if (typeof record.approved_at !== "string" || Number.isNaN(Date.parse(record.approved_at)))
+    fail("ERROR_STATE_CORRUPT", "plan approval timestamp is invalid");
+  return record as unknown as PlanApproval;
 }
 
 export function userAuthorization(value: unknown): string {

@@ -1,10 +1,20 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { protocolInstructions, tools } from "../server.js";
+import {
+  PARENT_PLANNING_OPERATIONS,
+  PLANNER_PLANNING_OPERATIONS,
+  protocolInstructions,
+  tools,
+} from "../server.js";
 
 test("protocol tool contract exposes the workflow actions with stable annotations", () => {
   const names = tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
+    "plan_approve",
+    "plan_create",
+    "plan_get",
+    "plan_parent_get",
+    "plan_revise",
     "workflow_accept_concerns",
     "workflow_adjudicate_findings",
     "workflow_adopt_dirty_scope",
@@ -13,6 +23,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_begin_review",
     "workflow_committer_get",
     "workflow_create",
+    "workflow_create_from_plan",
     "workflow_create_linked_followup",
     "workflow_expand_scope",
     "workflow_finalize_repair_exhausted",
@@ -110,6 +121,16 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_id",
   ]);
   assert.ok(reconciliation);
+  assert.deepEqual(PLANNER_PLANNING_OPERATIONS, ["plan_create", "plan_get", "plan_revise"]);
+  assert.deepEqual(PARENT_PLANNING_OPERATIONS, [
+    "plan_parent_get",
+    "plan_approve",
+    "workflow_create_from_plan",
+  ]);
+  assert.equal(
+    new Set([...PLANNER_PLANNING_OPERATIONS, ...PARENT_PLANNING_OPERATIONS]).size,
+    PLANNER_PLANNING_OPERATIONS.length + PARENT_PLANNING_OPERATIONS.length,
+  );
   const reconciliationSchema = reconciliation.inputSchema as any;
   assert.deepEqual(Object.keys(reconciliationSchema.properties).sort(), [
     "attempt_id",

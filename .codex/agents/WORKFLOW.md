@@ -203,16 +203,17 @@ passed manually. A missing or malformed policy is a stop condition rather than a
 ### Generic work-item provenance
 
 Workflow creation may include optional `work_items` records with provider-neutral `provider`, `id`,
-exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v7 state,
+exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v8 state,
 survives restart, is visible only to parent and committer views, and is inherited by linked follow-ups
 without caller retranscription. It is separate from scope, criteria, remediation, receipts, review,
-and commit authorization. Schema v6 databases require a clean reset rather than backfill.
+and commit authorization. Schema v8 is a clean break from schema v7 and earlier; incompatible
+databases require a clean reset rather than backfill.
 
 The committer renders only authoritative items as one neutral `Refs <display_ref>` line per distinct
 display reference, preserving first occurrence and exact text. Empty provenance emits no lines; no
 tracker API is called and no completion keyword is inferred.
 
-Finding adjudications are append-only schema v7 records. A parent may disposition an exact current
+Finding adjudications are append-only schema v8 records. A parent may disposition an exact current
 blocking finding only with explicit user authorization and a bounded reason identifying a contract
 inconsistency or approved-scope mismatch. The original finding snapshot is retained in state and
 parent audit projection; effective blockers are calculated from the latest review result, and a
@@ -523,6 +524,14 @@ known_failures: <none or concise list>
 
 ## Persistence schema
 
+Planning is a separate pre-workflow domain. Complete PlanArtifact revisions are insert-only and
+read/revise operations require exact optimistic revision numbers. Parent approval is a separate
+exact-revision operation; planner-facing writes cannot self-approve. Historical approved revisions
+remain readable but only the current approved revision can seed a workflow. `workflow_create_from_plan`
+constructs a working-tree change workflow server-side and snapshots the authoritative full plan,
+bounded execution brief, normalized contracts, and digest provenance. Plans are not runtime-affined,
+and planning adds no WorkflowPhase or worker-attempt state. Direct `workflow_create` remains supported.
+
 Persisted Workflow MCP state has one current schema. `approved_plan` is stored as exact text in the
 state JSON, is required at creation (`null` for direct/non-plan workflows), and cannot be changed by
 ordinary mutations or runtime adoption. Linked follow-ups receive an explicit plan input rather than
@@ -530,6 +539,9 @@ silently copying the source plan. Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
 `workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.
+The current schema is v8, including planning tables and schema-v7 finding-adjudication fields;
+schema-v7 and earlier databases require a clean durable-state reset, so unfinished historical
+workflows cannot cross this schema break.
 
 ## Observed end-to-end run
 

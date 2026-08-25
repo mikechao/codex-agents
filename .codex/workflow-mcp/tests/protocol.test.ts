@@ -196,6 +196,60 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
   }
 });
 
+test("STDIO planning operations preserve exact revisions and bind only the approved current revision", async () => {
+  const targetFixture = fixture();
+  const { root } = targetFixture;
+  const { transport, client, call } = await start(root);
+  try {
+    const draft = await call("plan_create", {
+      full_plan: "full plan text",
+      execution_brief: "bounded execution brief",
+      objective: "stdio planning",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["plan survives"],
+      validation_requirements: [{ description: "manual check", argv: null }],
+    });
+    assert.equal(draft.metadata.status, "draft");
+    assert.deepEqual(draft.validation_requirements, [
+      { validation_id: "VAL-001", description: "manual check", argv: null },
+    ]);
+    const revised = await call("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: 1,
+      full_plan: "replacement full plan",
+      execution_brief: "replacement brief",
+      objective: "stdio planning revised",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["replacement survives"],
+      validation_requirements: ["manual replacement"],
+    });
+    assert.equal(revised.revision, 2);
+    assert.equal(
+      (await call("plan_get", { plan_id: draft.plan_id, revision: 1 })).full_plan,
+      "full plan text",
+    );
+    const approved = await call("plan_approve", {
+      plan_id: draft.plan_id,
+      revision: 2,
+      user_authorization: "approve current exact revision",
+    });
+    assert.equal(approved.metadata.status, "approved");
+    const created = await call("workflow_create_from_plan", {
+      plan_id: draft.plan_id,
+      revision: 2,
+      work_items: [],
+    });
+    assert.equal(created.workflow.approved_plan, "replacement full plan");
+    assert.equal(created.workflow.execution_brief, "replacement brief");
+    assert.equal(created.workflow.objective, "stdio planning revised");
+    assert.equal(created.workflow.plan_provenance.revision, 2);
+  } finally {
+    await client.close();
+    await transport.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("STDIO role routing is exact and parent authorization remains protected", async () => {
   const { root, git } = fixture();
   const { client, transport, call } = await start(root);

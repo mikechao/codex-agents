@@ -21,7 +21,7 @@ const _instructions =
   "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent, while approved_paths is an append-only narrow mutation scope: only the parent may expand it with fresh user authorization naming exact paths in permitted active states. Linked follow-ups retain that narrow remediation scope and require a fresh independent combined review over inherited logical-change paths before approval or commit. Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; only combined APPROVED stops a linked logical change; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 */
 export const protocolInstructions =
-  "Authoritative local workflow state. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication.";
 
 const common: {
   type: "object";
@@ -187,7 +187,136 @@ const workItemSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+const planRevisionProperties: Record<string, JSONValue> = {
+  full_plan: { type: "string", minLength: 1, maxLength: 1048576 },
+  execution_brief: { type: "string", minLength: 1, maxLength: 32768 },
+  objective: { type: "string", minLength: 1, maxLength: 4000 },
+  approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+  acceptance_criteria: {
+    type: "array",
+    items: { type: "string", minLength: 1, maxLength: 4000 },
+    minItems: 1,
+    maxItems: 999,
+  },
+  validation_requirements: {
+    type: "array",
+    items: validationRequirementSchema,
+    minItems: 1,
+    maxItems: 999,
+  },
+};
+
+const planIdentityProperties: Record<string, JSONValue> = {
+  plan_id: {
+    type: "string",
+    pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  },
+  revision: { type: "integer", minimum: 1 },
+};
+
+/** Planning operations are split by authority; keep these sets mechanically testable. */
+export const PLANNER_PLANNING_OPERATIONS = ["plan_create", "plan_get", "plan_revise"] as const;
+export const PARENT_PLANNING_OPERATIONS = [
+  "plan_parent_get",
+  "plan_approve",
+  "workflow_create_from_plan",
+] as const;
+
 export const tools: Tool[] = [
+  {
+    name: "plan_create",
+    description: "Create a complete immutable draft plan revision.",
+    inputSchema: schema(planRevisionProperties, Object.keys(planRevisionProperties)),
+    annotations: {
+      title: "Create plan",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "plan_get",
+    description: "Read one exact plan revision without workflow binding.",
+    inputSchema: schema(planIdentityProperties, ["plan_id", "revision"]),
+    annotations: {
+      title: "Get plan",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "plan_revise",
+    description:
+      "Create a complete replacement plan revision using optimistic base revision semantics.",
+    inputSchema: schema(
+      {
+        plan_id: planIdentityProperties.plan_id,
+        base_revision: { type: "integer", minimum: 1 },
+        ...planRevisionProperties,
+      },
+      ["plan_id", "base_revision", ...Object.keys(planRevisionProperties)],
+    ),
+    annotations: {
+      title: "Revise plan",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "plan_parent_get",
+    description: "Parent-facing exact plan revision read including approval evidence.",
+    inputSchema: schema(planIdentityProperties, ["plan_id", "revision"]),
+    annotations: {
+      title: "Get plan for parent",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "plan_approve",
+    description: "Parent-only explicit approval of the current exact plan revision.",
+    inputSchema: schema(
+      {
+        ...planIdentityProperties,
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      ["plan_id", "revision", "user_authorization"],
+    ),
+    annotations: {
+      title: "Approve plan",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_create_from_plan",
+    description:
+      "Create a working-tree change workflow from one current, explicitly approved plan revision.",
+    inputSchema: schema(
+      {
+        ...planIdentityProperties,
+        max_repair_cycles: { type: "integer", minimum: 0, maximum: 2 },
+        work_items: { type: "array", items: workItemSchema, minItems: 0, maxItems: 50 },
+      },
+      ["plan_id", "revision"],
+    ),
+    annotations: {
+      title: "Create workflow from plan",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
   {
     name: "workflow_adopt_dirty_scope",
     description:
@@ -790,6 +919,24 @@ export function createServer(store: WorkflowStore = openStore()): Server {
       let result: unknown;
       withDiagnosticRequest({ request_id: requestId, method: "tools/call", tool }, () => {
         switch (request.params.name) {
+          case "plan_create":
+            result = store.planCreate(args);
+            break;
+          case "plan_get":
+            result = store.planGet(args);
+            break;
+          case "plan_revise":
+            result = store.planRevise(args);
+            break;
+          case "plan_parent_get":
+            result = store.planParentGet(args);
+            break;
+          case "plan_approve":
+            result = store.planApprove(args);
+            break;
+          case "workflow_create_from_plan":
+            result = store.createFromPlan(args);
+            break;
           case "workflow_expand_scope":
             result = store.expandScope(args);
             break;

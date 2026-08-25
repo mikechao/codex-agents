@@ -6,6 +6,7 @@ import {
   hasOpenCodeWorkflowStateRegistration,
   trustedBootstrapCommand,
 } from "../../../install-into.js";
+import { tools } from "../../workflow-mcp/server.js";
 
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
@@ -58,6 +59,9 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   }
   assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
   for (const tool of [
+    "plan_parent_get",
+    "plan_approve",
+    "workflow_create_from_plan",
     "workflow_create",
     "workflow_adopt_dirty_scope",
     "workflow_expand_scope",
@@ -101,6 +105,23 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
   }
   assert.ok(!existsSync(resolve(repoRoot, ".opencode/ORCHESTRATION.md")));
+});
+
+test("the orchestrator exposes the complete parent planning tool surface", () => {
+  const orchestrator = readFileSync(resolve(repoRoot, orchestratorPath), "utf8");
+  const allowed = new Set(
+    [...orchestrator.matchAll(/^  workflow_state_([a-z0-9_]+): allow$/gmu)].map(
+      (match) => match[1],
+    ),
+  );
+  const serverTools = new Set(tools.map((tool) => tool.name));
+  for (const name of ["plan_parent_get", "plan_approve", "workflow_create_from_plan"]) {
+    assert.ok(allowed.has(name), `orchestrator must allow ${name}`);
+    assert.ok(serverTools.has(name), `server must expose ${name}`);
+  }
+  for (const name of ["plan_create", "plan_get", "plan_revise"]) {
+    assert.equal(allowed.has(name), false, `orchestrator must not allow planner operation ${name}`);
+  }
 });
 
 test("the orchestrator preflights the exact reviewer validation policy", () => {

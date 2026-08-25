@@ -26,6 +26,8 @@ export type CapabilityToken = Brand<string, "CapabilityToken">;
 export type CapabilityHash = Brand<string, "CapabilityHash">;
 export type IsoTimestamp = Brand<string, "IsoTimestamp">;
 export type CommitAttemptId = Brand<string, "CommitAttemptId">;
+export type PlanId = Brand<string, "PlanId">;
+export type PlanRevision = Brand<number, "PlanRevision">;
 
 export interface WorkItemReference {
   provider: string;
@@ -81,7 +83,7 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
-// All Workflow MCP tool names (from `server.ts` `tools`).
+// Phase-driven workflow action names. Planning tool names remain a separate domain.
 export type WorkflowAction =
   | "workflow_create"
   | "workflow_adopt_dirty_scope"
@@ -108,6 +110,46 @@ export type WorkflowAction =
   | "workflow_retry_commit_preparation"
   | "workflow_return_commit_to_review"
   | "workflow_retry_commit";
+
+export interface PlanRevisionArtifact {
+  plan_schema_version: 1;
+  plan_id: PlanId;
+  revision: PlanRevision;
+  full_plan: string;
+  execution_brief: string;
+  objective: string;
+  approved_paths: ExactRepoPath[];
+  acceptance_criteria: AcceptanceCriterion[];
+  validation_requirements: ValidationRequirement[];
+  created_at: IsoTimestamp;
+}
+
+export interface PlanApproval {
+  plan_id: PlanId;
+  revision: PlanRevision;
+  artifact_digest: ContentDigest;
+  user_authorization: string;
+  approved_at: IsoTimestamp;
+}
+
+export interface PlanReadMetadata {
+  current_revision: PlanRevision;
+  status: "draft" | "approved";
+  is_current: boolean;
+  approval: PlanApproval | null;
+}
+
+export type PlanRead = PlanRevisionArtifact & {
+  artifact_digest: ContentDigest;
+  metadata: PlanReadMetadata;
+};
+
+export interface PlanProvenance {
+  plan_id: PlanId;
+  revision: PlanRevision;
+  artifact_digest: ContentDigest;
+  approved_at: IsoTimestamp;
+}
 
 // Every `ERROR_*` literal used by `fail(...)` in the server plus the child change-receipt CLI
 // categories that `git.createReceipt` can re-throw (`/^ERROR_[A-Z_]+$/` from child stderr). The
@@ -162,7 +204,12 @@ export type ErrorCategory =
   | "ERROR_RUNTIME_ISOLATION"
   | "ERROR_RUNTIME_RECOVERY"
   | "ERROR_RUNTIME_ARTIFACT"
-  | "ERROR_SCOPE_EXPANSION_DIRTY";
+  | "ERROR_SCOPE_EXPANSION_DIRTY"
+  | "ERROR_PLAN_NOT_FOUND"
+  | "ERROR_PLAN_STALE"
+  | "ERROR_PLAN_UNAPPROVED"
+  | "ERROR_PLAN_INVALID"
+  | "ERROR_PLAN_APPROVAL_EXISTS";
 
 export type CommitPreparationFailureCategory =
   | "ERROR_STAGED_SCOPE"
@@ -341,7 +388,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 7;
+  schema_version: 8;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -351,6 +398,8 @@ export interface WorkflowState {
   phase: WorkflowPhase;
   objective: string;
   approved_plan: string | null;
+  execution_brief: string | null;
+  plan_provenance: PlanProvenance | null;
   work_items: WorkItemReference[];
   base_head: GitCommitSha;
   approved_paths: ExactRepoPath[];
@@ -439,7 +488,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 7;
+  schema_version: 8;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -513,6 +562,7 @@ export type ParentView = RoleViewCommon &
 
 export interface ImplementerView extends RoleViewCommon {
   approved_plan: string | null;
+  execution_brief: string | null;
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   dirty_baseline_paths: ExactRepoPath[];

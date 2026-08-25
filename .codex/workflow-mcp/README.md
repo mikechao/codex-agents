@@ -3,12 +3,22 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
-Workflow state schema v7 optionally persists generic immutable `work_items` provenance and append-only
+Workflow state schema v8 optionally persists generic immutable `work_items` provenance and append-only
 finding adjudications. Each
 provider-neutral record has `provider`, `id`, exact `display_ref`, and nullable absolute HTTP(S) `url`.
 The field survives restart and is inherited by linked follow-ups; parent and committer views expose it,
 while implementer and reviewer views omit it. It cannot broaden scope, criteria, remediation, receipts,
-review, or commit authorization. Schema v6 state requires a clean reset rather than implicit migration.
+review, or commit authorization. Schema v7 and earlier state requires a clean reset rather than
+implicit migration.
+
+Planning is a separate pre-workflow domain. `plan_create` and `plan_revise` persist complete,
+insert-only PlanArtifact revisions; reads and revisions require exact optimistic revision numbers.
+`plan_approve` is a separate parent-only tool surface, so planner writes cannot self-approve. Only
+the current approved revision can seed `workflow_create_from_plan`; historical approved revisions
+remain readable but are stale for execution. The server snapshots the full plan, bounded execution
+brief, normalized objective/scope/contracts, and digest provenance into a working-tree change
+workflow. Plans have no runtime affinity and introduce no workflow phase. Direct `workflow_create`
+continues to be supported.
 
 Managed commits use only authoritative committer-view provenance: one neutral `Refs <display_ref>`
 line per distinct display reference, preserving exact text and first occurrence. Empty provenance emits
@@ -219,7 +229,8 @@ review and fresh commit authorization. No committer action is permitted while st
 
 ## Persistence schema
 
-Workflow MCP supports one current persisted schema (v7, including linked-continuation provenance).
+Workflow MCP supports one current persisted schema (v8, including planning tables,
+finding-adjudication state, and linked-continuation provenance).
 Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use
@@ -229,10 +240,12 @@ The current state stores `approved_plan` exactly in the JSON state: Plan-mode ex
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
 execution intent exposed only to parent and implementer views. Structured objective, paths, criteria,
 validations, and remediation/findings remain enforceable contracts. Linked follow-ups receive their
-own explicit plan input and never reconstruct or silently inherit the source plan. The current v4
-state also stores append-only parent-only scope amendments and authorization-time baselines; v3
-state is incompatible and requires resetting the database. State schema changes are clean breaks
-and require resetting incompatible databases.
+own explicit plan input and never reconstruct or silently inherit the source plan. The current state
+also stores append-only parent-only scope amendments, authorization-time baselines, and schema-v7
+finding-adjudication state. State schema changes are clean breaks and require resetting incompatible
+databases. Planning tables are part of the v8 clean break as well: unfinished v7 and earlier
+workflows cannot cross this boundary, and startup never upgrades or rewrites existing rows. Reset
+durable state before starting the new self-hosting runtime.
 
 ## Bootstrap and reload
 

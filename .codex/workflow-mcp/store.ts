@@ -38,6 +38,7 @@ import {
   commitMismatch,
   commitPreparationFailed,
   createState,
+  createStateFromPlan,
   dirtyBaselinePaths,
   expandScope,
   finalizeRepairExhausted,
@@ -56,7 +57,7 @@ import {
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV7,
+  validateWorkflowStateV8,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -75,6 +76,12 @@ import type {
   IsoTimestamp,
   ParentCapability,
   ParentView,
+  PlanApproval,
+  PlanId,
+  PlanProvenance,
+  PlanRead,
+  PlanRevision,
+  PlanRevisionArtifact,
   ReviewStatus,
   Role,
   RoleView,
@@ -95,6 +102,14 @@ import {
   isoNow,
   issueCapability,
   objectDigest,
+  planApproval,
+  planArtifact,
+  planId,
+  planRevision,
+  planRevisionInput,
+  repairCycle,
+  userAuthorization,
+  workItems,
 } from "./validation.js";
 
 export function resolveStatePath(root: string): string {
@@ -211,8 +226,15 @@ function changedFields(before: WorkflowState | null, after: WorkflowState): stri
 }
 
 function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState): void {
-  if (before.approved_plan !== after.approved_plan) {
-    fail("ERROR_INVALID_TRANSITION", "approved plan is immutable");
+  if (
+    before.objective !== after.objective ||
+    before.approved_plan !== after.approved_plan ||
+    before.execution_brief !== after.execution_brief ||
+    canonicalJson(before.plan_provenance) !== canonicalJson(after.plan_provenance) ||
+    canonicalJson(before.acceptance_criteria) !== canonicalJson(after.acceptance_criteria) ||
+    canonicalJson(before.validation_requirements) !== canonicalJson(after.validation_requirements)
+  ) {
+    fail("ERROR_INVALID_TRANSITION", "approved plan and execution contract are immutable");
   }
 }
 
@@ -303,6 +325,30 @@ function createCurrentSchema(db: Database): void {
       FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
     );
     CREATE INDEX audit_events_workflow ON audit_events(workflow_id, event_id);
+    CREATE TABLE plans (
+      plan_id TEXT PRIMARY KEY,
+      current_revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE plan_revisions (
+      plan_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      artifact_json TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (plan_id, revision),
+      FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+    );
+    CREATE TABLE plan_approvals (
+      plan_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      user_authorization TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      PRIMARY KEY (plan_id, revision),
+      FOREIGN KEY (plan_id, revision) REFERENCES plan_revisions(plan_id, revision)
+    );
   `);
 }
 
@@ -391,12 +437,133 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV7(parsed);
+  return validateWorkflowStateV8(parsed);
 }
 
-function validatePersistedRows(db: Database): void {
+interface PlanRow {
+  plan_id: string;
+  current_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+interface PlanRevisionRow {
+  plan_id: string;
+  revision: number;
+  artifact_json: string;
+  artifact_digest: string;
+  created_at: string;
+}
+interface PlanApprovalRow {
+  plan_id: string;
+  revision: number;
+  artifact_digest: string;
+  user_authorization: string;
+  approved_at: string;
+}
+
+function persistedTimestamp(value: unknown, name: string): void {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    fail("ERROR_STATE_CORRUPT", `${name} is invalid`);
+  }
+}
+
+function parsePlanRow(row: PlanRow): PlanRow {
+  try {
+    planId(row.plan_id);
+    planRevision(row.current_revision, "current_revision");
+    persistedTimestamp(row.created_at, "plan created_at");
+    persistedTimestamp(row.updated_at, "plan updated_at");
+  } catch {
+    fail("ERROR_STATE_CORRUPT", "plan aggregate is invalid");
+  }
+  return row;
+}
+
+function parsePlanRevisionRow(row: PlanRevisionRow, root: string): PlanRevisionArtifact {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.artifact_json);
+  } catch {
+    fail("ERROR_STATE_CORRUPT", "plan revision JSON is invalid");
+  }
+  const artifact = planArtifact(parsed, root);
+  if (artifact.plan_id !== row.plan_id || artifact.revision !== row.revision) {
+    fail("ERROR_STATE_CORRUPT", "plan revision identity is inconsistent");
+  }
+  if (row.artifact_digest !== objectDigest(artifact)) {
+    fail("ERROR_STATE_CORRUPT", "plan revision digest is corrupted");
+  }
+  persistedTimestamp(row.created_at, "plan revision created_at");
+  if (artifact.created_at !== row.created_at) {
+    fail("ERROR_STATE_CORRUPT", "plan revision timestamp is inconsistent");
+  }
+  return artifact;
+}
+
+function parsePlanApprovalRow(row: PlanApprovalRow): PlanApproval {
+  try {
+    return planApproval({
+      plan_id: row.plan_id,
+      revision: row.revision,
+      artifact_digest: row.artifact_digest,
+      user_authorization: row.user_authorization,
+      approved_at: row.approved_at,
+    });
+  } catch {
+    fail("ERROR_STATE_CORRUPT", "plan approval is invalid");
+  }
+}
+
+function validatePersistedRows(db: Database, root: string): void {
   const rows = db.prepare("SELECT * FROM workflows").all() as WorkflowRow[];
   for (const row of rows) parseState(row);
+  const plans = db.prepare("SELECT * FROM plans").all() as PlanRow[];
+  const planIds = new Set<string>();
+  for (const plan of plans) {
+    parsePlanRow(plan);
+    if (
+      planIds.has(plan.plan_id) ||
+      !Number.isSafeInteger(plan.current_revision) ||
+      plan.current_revision < 1
+    )
+      fail("ERROR_STATE_CORRUPT", "plan aggregate is invalid");
+    planIds.add(plan.plan_id);
+    const revisions = db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? ORDER BY revision")
+      .all(plan.plan_id) as PlanRevisionRow[];
+    if (
+      revisions.length === 0 ||
+      revisions[0].revision !== 1 ||
+      revisions.at(-1)?.revision !== plan.current_revision
+    )
+      fail("ERROR_STATE_CORRUPT", "plan revisions are not contiguous");
+    revisions.forEach((row, index) => {
+      if (row.revision !== index + 1)
+        fail("ERROR_STATE_CORRUPT", "plan revisions are not contiguous");
+      parsePlanRevisionRow(row, root);
+    });
+    const approvals = db
+      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ?")
+      .all(plan.plan_id) as PlanApprovalRow[];
+    for (const approvalRow of approvals) {
+      const approval = parsePlanApprovalRow(approvalRow);
+      const revisionRow = revisions.find((revision) => revision.revision === approval.revision);
+      if (!revisionRow || approval.artifact_digest !== revisionRow.artifact_digest)
+        fail("ERROR_STATE_CORRUPT", "plan approval relationship is invalid");
+    }
+  }
+  const orphan = db
+    .prepare(
+      "SELECT plan_id FROM plan_revisions WHERE plan_id NOT IN (SELECT plan_id FROM plans) LIMIT 1",
+    )
+    .get();
+  if (orphan) fail("ERROR_STATE_CORRUPT", "plan revision aggregate is missing");
+  const orphanApproval = db
+    .prepare(
+      "SELECT plan_id FROM plan_approvals WHERE plan_id NOT IN (SELECT plan_id FROM plans) OR (plan_id, revision) NOT IN (SELECT plan_id, revision FROM plan_revisions) LIMIT 1",
+    )
+    .get();
+  if (orphanApproval) fail("ERROR_STATE_CORRUPT", "plan approval relationship is missing");
 }
 
 function adoptionStates(
@@ -501,7 +668,7 @@ export class WorkflowStore {
     this.db = new Database(this.path, { strict: true });
     try {
       requireCurrentSchema(this.db);
-      validatePersistedRows(this.db);
+      validatePersistedRows(this.db, this.root);
       if (this.path !== ":memory:")
         this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
       else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
@@ -747,6 +914,274 @@ export class WorkflowStore {
     return view;
   }
 
+  #planRevision(
+    planValue: unknown,
+    revisionValue: unknown,
+  ): {
+    plan: PlanRow;
+    revision: PlanRevisionRow;
+    artifact: PlanRevisionArtifact;
+    approval: PlanApproval | null;
+  } {
+    const id = planId(planValue);
+    const revision = planRevision(revisionValue);
+    const planRow = this.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
+      | PlanRow
+      | undefined;
+    if (!planRow) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
+    const plan = parsePlanRow(planRow);
+    const row = this.db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?")
+      .get(id, revision) as PlanRevisionRow | undefined;
+    if (!row) fail("ERROR_PLAN_NOT_FOUND", "plan revision is not found");
+    const artifact = parsePlanRevisionRow(row, this.root);
+    const approvalRow = this.db
+      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? AND revision = ?")
+      .get(id, revision) as PlanApprovalRow | undefined;
+    const approval = approvalRow ? parsePlanApprovalRow(approvalRow) : null;
+    if (approval && approval.artifact_digest !== row.artifact_digest)
+      fail("ERROR_STATE_CORRUPT", "plan approval digest is corrupted");
+    return { plan, revision: row, artifact, approval };
+  }
+
+  #planRead(planValue: unknown, revisionValue: unknown, includeApproval: boolean): PlanRead {
+    this.#ensureOpen();
+    const resolved = this.#planRevision(planValue, revisionValue);
+    const current = resolved.plan.current_revision === resolved.revision.revision;
+    return {
+      ...resolved.artifact,
+      artifact_digest: resolved.revision.artifact_digest as PlanRead["artifact_digest"],
+      metadata: {
+        current_revision: resolved.plan.current_revision as PlanRevision,
+        status: resolved.approval ? "approved" : "draft",
+        is_current: current,
+        approval: includeApproval ? resolved.approval : null,
+      },
+    };
+  }
+
+  planCreate(input: unknown): PlanRead {
+    this.#ensureOpen();
+    const args = mutationInput(input);
+    exactKeys(
+      args,
+      [
+        "full_plan",
+        "execution_brief",
+        "objective",
+        "approved_paths",
+        "acceptance_criteria",
+        "validation_requirements",
+      ],
+      "plan create",
+    );
+    const normalized = planRevisionInput(
+      {
+        full_plan: args.full_plan,
+        execution_brief: args.execution_brief,
+        objective: args.objective,
+        approved_paths: args.approved_paths,
+        acceptance_criteria: args.acceptance_criteria,
+        validation_requirements: args.validation_requirements,
+      },
+      this.root,
+    );
+    const id = randomUUID() as PlanId;
+    const revision = 1 as PlanRevision;
+    const artifact: PlanRevisionArtifact = {
+      ...normalized,
+      plan_id: id,
+      revision,
+      created_at: isoNow(),
+    };
+    const digest = objectDigest(artifact);
+    const now = isoNow();
+    this.db
+      .transaction(() => {
+        this.db
+          .prepare(
+            "INSERT INTO plans (plan_id, current_revision, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(id, revision, now, now);
+        this.db
+          .prepare(
+            "INSERT INTO plan_revisions (plan_id, revision, artifact_json, artifact_digest, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(id, revision, JSON.stringify(artifact), digest, artifact.created_at);
+      })
+      .immediate();
+    return this.#planRead(id, revision, false);
+  }
+
+  planGet(input: unknown): PlanRead {
+    const args = mutationInput(input);
+    exactKeys(args, ["plan_id", "revision"], "plan get");
+    return this.#planRead(args.plan_id, args.revision, false);
+  }
+
+  planParentGet(input: unknown): PlanRead {
+    const args = mutationInput(input);
+    exactKeys(args, ["plan_id", "revision"], "plan parent get");
+    return this.#planRead(args.plan_id, args.revision, true);
+  }
+
+  planRevise(input: unknown): PlanRead {
+    this.#ensureOpen();
+    const args = mutationInput(input);
+    exactKeys(
+      args,
+      [
+        "plan_id",
+        "base_revision",
+        "full_plan",
+        "execution_brief",
+        "objective",
+        "approved_paths",
+        "acceptance_criteria",
+        "validation_requirements",
+      ],
+      "plan revise",
+    );
+    const base = planRevision(args.base_revision, "base_revision");
+    const id = planId(args.plan_id);
+    const normalized = planRevisionInput(
+      {
+        full_plan: args.full_plan,
+        execution_brief: args.execution_brief,
+        objective: args.objective,
+        approved_paths: args.approved_paths,
+        acceptance_criteria: args.acceptance_criteria,
+        validation_requirements: args.validation_requirements,
+      },
+      this.root,
+    );
+    return this.db
+      .transaction(() => {
+        const plan = this.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
+          | PlanRow
+          | undefined;
+        if (!plan) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
+        if (plan.current_revision !== base)
+          fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
+        const nextRevision = (base + 1) as PlanRevision;
+        const artifact: PlanRevisionArtifact = {
+          ...normalized,
+          plan_id: id,
+          revision: nextRevision,
+          created_at: isoNow(),
+        };
+        const digest = objectDigest(artifact);
+        this.db
+          .prepare(
+            "INSERT INTO plan_revisions (plan_id, revision, artifact_json, artifact_digest, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(id, nextRevision, JSON.stringify(artifact), digest, artifact.created_at);
+        const update = this.db
+          .prepare(
+            "UPDATE plans SET current_revision = ?, updated_at = ? WHERE plan_id = ? AND current_revision = ?",
+          )
+          .run(nextRevision, isoNow(), id, base);
+        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
+        return this.#planRead(id, nextRevision, false);
+      })
+      .immediate();
+  }
+
+  planApprove(input: unknown): PlanRead {
+    this.#ensureOpen();
+    const args = mutationInput(input);
+    exactKeys(args, ["plan_id", "revision", "user_authorization"], "plan approval");
+    const id = planId(args.plan_id);
+    const requested = planRevision(args.revision);
+    const authorization = args.user_authorization;
+    return this.db
+      .transaction(() => {
+        const resolved = this.#planRevision(id, requested);
+        if (resolved.plan.current_revision !== requested)
+          fail("ERROR_PLAN_STALE", "only the current plan revision may be approved");
+        if (resolved.approval)
+          fail("ERROR_PLAN_APPROVAL_EXISTS", "plan revision is already approved");
+        const approvedAt = isoNow();
+        // userAuthorization is intentionally validated by the parent-only operation, not by planner writes.
+        const normalizedAuth = userAuthorization(authorization);
+        this.db
+          .prepare(
+            "INSERT INTO plan_approvals (plan_id, revision, artifact_digest, user_authorization, approved_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(id, requested, resolved.revision.artifact_digest, normalizedAuth, approvedAt);
+        return this.#planRead(id, requested, true);
+      })
+      .immediate();
+  }
+
+  createFromPlan(input: unknown): { workflow: ParentView; capability: ParentCapability } {
+    this.#ensureOpen();
+    const args = mutationInput(input);
+    exactKeys(args, ["plan_id", "revision"], "workflow create from plan", [
+      "max_repair_cycles",
+      "work_items",
+    ]);
+    const id = planId(args.plan_id);
+    const requested = planRevision(args.revision);
+    const maxRepairCycles = repairCycle(args.max_repair_cycles ?? 2);
+    const inheritedItems = workItems(args.work_items ?? []);
+    return this.db
+      .transaction(() => {
+        const resolved = this.#planRevision(id, requested);
+        if (resolved.plan.current_revision !== requested)
+          fail("ERROR_PLAN_STALE", "plan revision is stale");
+        if (
+          !resolved.approval ||
+          resolved.approval.artifact_digest !== resolved.revision.artifact_digest
+        )
+          fail("ERROR_PLAN_UNAPPROVED", "plan revision is not approved");
+        const head = currentHead(this.root);
+        const state = createStateFromPlan(
+          resolved.artifact,
+          {
+            plan_id: id,
+            revision: requested,
+            artifact_digest: resolved.revision.artifact_digest as PlanProvenance["artifact_digest"],
+            approved_at: resolved.approval.approved_at,
+          },
+          head,
+          maxRepairCycles,
+          inheritedItems,
+        );
+        state.runtime_id = this.runtimeId;
+        state.runtime_revision = this.runtimeRevision;
+        state.workflow_id = randomUUID() as WorkflowId;
+        const receipt = createReceipt(this.root, state.approved_paths, true);
+        if (receipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
+        state.initial_receipt = receipt;
+        state.dirty_baseline_paths = dirtyBaselinePaths(receipt);
+        validateWorkflowStateV8(state);
+        const capability = issueCapability();
+        const now = isoNow();
+        this.db
+          .prepare(
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            state.workflow_id,
+            JSON.stringify(state),
+            objectDigest(state),
+            hashCapability(capability),
+            now,
+            now,
+          );
+        this.#audit(
+          state.workflow_id,
+          0,
+          "WORKFLOW_CREATED",
+          "parent",
+          auditEnvelope(null, state, null),
+        );
+        return { workflow: roleView(state, "parent"), capability };
+      })
+      .immediate();
+  }
+
   parentGet(workflowIdValue: unknown): ParentView {
     return this.#get(workflowIdValue, "parent") as ParentView;
   }
@@ -921,7 +1356,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV7(next);
+        validateWorkflowStateV8(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1256,7 +1691,7 @@ export class WorkflowStore {
         next.version = (expectedVersionNumber + 1) as WorkflowVersion;
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV7(next);
+        validateWorkflowStateV8(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1347,7 +1782,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV7(next);
+        validateWorkflowStateV8(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1434,7 +1869,7 @@ export class WorkflowStore {
         }
         const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
         next.version = nextVersion;
-        validateWorkflowStateV7(next);
+        validateWorkflowStateV8(next);
         const now = isoNow();
         const result = this.db
           .prepare(
@@ -1862,7 +2297,7 @@ export class WorkflowStore {
           fail("ERROR_STALE_BASE", "scope base is stale");
         childState.initial_receipt = childReceipt;
         childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV7(childState);
+        validateWorkflowStateV8(childState);
         const childCapability = issueCapability();
         const childHash = hashCapability(childCapability);
         const now = isoNow();
@@ -1884,7 +2319,7 @@ export class WorkflowStore {
           version: (expectedVersionNumber + 1) as WorkflowVersion,
         };
         assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV7(next);
+        validateWorkflowStateV8(next);
         const update = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
