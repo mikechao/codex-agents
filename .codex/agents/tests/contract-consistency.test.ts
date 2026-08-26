@@ -465,6 +465,165 @@ test("orchestrator summarizes refreshed authoritative transitions before routing
   );
 });
 
+test("orchestration contracts classify intent and reconcile the final tree explicitly", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+
+  for (const contract of [orchestrator, workflow, guide]) {
+    assert.match(contract, /unchanged (?:objective|approved intent)/iu);
+    assert.match(contract, /ordinary repair/u);
+    assert.match(contract, /exact (?:blocking finding IDs|blocking IDs)/u);
+    assert.match(contract, /fresh independent (?:review|re-review)/u);
+    assert.match(contract, /changed intent/u);
+    assert.match(contract, /new bounded `change` workflow/u);
+    assert.match(contract, /repair, (?:finding )?adjudication, `workflow_expand_scope`/iu);
+    assert.match(contract, /generic linked follow-up/u);
+    assert.match(contract, /`workflow_type: review_only`|`review_only` workflow/u);
+    assert.match(contract, /`review_mode: working_tree`/u);
+    assert.match(contract, /current HEAD as `base_revision`/u);
+    assert.match(contract, /`head_revision: null`/u);
+    assert.match(contract, /include_(?:staged|unstaged|untracked)/u);
+    assert.match(contract, /exact complete/u);
+    assert.match(contract, /unrelated and ignored/u);
+    assert.match(contract, /code_reviewer` directly/u);
+    assert.match(contract, /never (?:dispatch )?`?implementer`? first/u);
+    assert.match(contract, /fresh (?:reconciliation )?review reports blocking findings/u);
+    assert.match(contract, /ordinary exact-ID repair authorization/u);
+    assert.match(contract, /optional findings never (?:trigger )?remediation/iu);
+    assert.match(contract, /separate[^.]*commit authorization/u);
+    assert.match(contract, /one coherent commit/u);
+    assert.match(contract, /supported (?:active )?source/u);
+    assert.match(contract, /exact current finding IDs/u);
+    assert.match(contract, /narrow remediation (?:context and )?scope/u);
+    assert.match(contract, /fresh combined review/u);
+  }
+
+  const terminalRefresh = orchestrator.indexOf("After every terminal subagent handoff");
+  const conciseSummary = orchestrator.indexOf("before summarizing or routing", terminalRefresh);
+  const route = orchestrator.indexOf("permitted_next_actions", conciseSummary);
+  assert.ok(terminalRefresh >= 0 && terminalRefresh < conciseSummary);
+  assert.ok(conciseSummary < route, "terminal handoff must summarize before routing");
+
+  const mutation = orchestrator.indexOf("After every parent mutation");
+  const secondRefresh = orchestrator.indexOf("refresh `workflow_parent_get` again", mutation);
+  const freshSummary = orchestrator.indexOf("fresh summary", mutation);
+  const redispatch = orchestrator.indexOf("before redispatching", mutation);
+  assert.ok(mutation >= 0 && mutation < secondRefresh);
+  assert.ok(secondRefresh < freshSummary && freshSummary < redispatch);
+
+  assert.match(
+    orchestrator,
+    /refreshed `permitted_next_actions`|returned version and `permitted_next_actions`/u,
+    "fresh permitted actions must remain authoritative",
+  );
+  assert.match(
+    workflow,
+    /routes from refreshed\s+`permitted_next_actions`/u,
+    "workflow contract must route from refreshed permitted actions",
+  );
+
+  const routeSections = [
+    [
+      orchestrator,
+      "For final-tree reconciliation",
+      "Before `workflow_create`, extract",
+      "orchestrator",
+    ],
+    [
+      workflow,
+      "Final-tree reconciliation is a separate explicit-authorization path",
+      "After every terminal worker handoff",
+      "workflow",
+    ],
+    [guide, "3. **Final-tree reconciliation:**", "```mermaid", "guide"],
+  ] as const;
+
+  for (const [contract, startMarker, endMarker, label] of routeSections) {
+    const start = contract.indexOf(startMarker);
+    const end = contract.indexOf(endMarker, start + startMarker.length);
+    assert.ok(start >= 0 && end > start, `${label} must isolate its reconciliation route`);
+    const route = contract.slice(start, end);
+
+    const targetFields = [
+      ["workflow_type: review_only", "`review_only` workflow"],
+      ["review_mode: working_tree"],
+      ["current HEAD as `base_revision`"],
+      ["`head_revision: null"],
+      ["include_staged"],
+      ["include_unstaged"],
+      ["include_untracked"],
+    ];
+    let previousField = -1;
+    for (const alternatives of targetFields) {
+      const fieldIndices = alternatives
+        .map((field) => route.indexOf(field))
+        .filter((index) => index >= 0);
+      assert.ok(fieldIndices.length > 0, `${label} must declare every review target field`);
+      const fieldIndex = Math.min(...fieldIndices);
+      assert.ok(fieldIndex > previousField, `${label} must preserve the review target tuple`);
+      previousField = fieldIndex;
+    }
+    assert.ok(
+      (route.includes("include_staged: true") &&
+        route.includes("include_unstaged: true") &&
+        route.includes("include_untracked: true")) ||
+        route.includes("include_staged`, `include_unstaged`, and `include_untracked` all `true`"),
+      `${label} must enable all staged, unstaged, and untracked inclusion flags`,
+    );
+    assert.match(
+      route,
+      /exact complete.*approved-untracked.*exclud(?:e|ing) unrelated and ignored/u,
+      `${label} must scope the complete logical change and exclude unrelated or ignored state`,
+    );
+
+    const reviewerDispatch = route.indexOf("Dispatch `code_reviewer` directly");
+    const blockingReview = Math.max(
+      route.indexOf("fresh reconciliation review reports blocking findings"),
+      route.indexOf("fresh review reports blocking findings"),
+    );
+    const repairAuthorization = route.indexOf("ordinary exact-ID repair authorization");
+    const implementerGate = Math.max(
+      route.indexOf("before permitting implementer"),
+      route.indexOf("before dispatching an implementer"),
+    );
+    assert.match(
+      route,
+      /Dispatch `code_reviewer` directly(?:,| and) (?:never )?(?:dispatch )?(?:an )?`?implementer`? first/u,
+      `${label} must not start reconciliation with implementer`,
+    );
+    if (route.includes("Implementer is allowed in this route only after")) {
+      assert.match(
+        route,
+        /Implementer is allowed in this route only after a fresh review reports blocking findings and ordinary exact-ID repair authorization is obtained/u,
+        `${label} must co-locate the implementer gate with its blocking-finding authorization`,
+      );
+    } else {
+      assert.ok(
+        implementerGate > repairAuthorization,
+        `${label} must place implementer dispatch after ordinary repair authorization`,
+      );
+    }
+    assert.ok(
+      reviewerDispatch >= 0 &&
+        reviewerDispatch < blockingReview &&
+        blockingReview < repairAuthorization,
+      `${label} must order reviewer dispatch, blocking findings, and repair authorization`,
+    );
+
+    const approval = route.indexOf("Approval");
+    const commitAuthorization = route.indexOf("commit authorization");
+    const coherentCommit = route.indexOf("one coherent commit");
+    assert.ok(
+      approval >= 0 && approval < commitAuthorization && commitAuthorization < coherentCommit,
+      `${label} must keep approval, commit authorization, and coherent commit in order`,
+    );
+  }
+});
+
 test("implementer reserves concerns for otherwise complete work", () => {
   for (const host of [
     readFileSync(resolve(agentsDir, "implementer.toml"), "utf8"),

@@ -125,6 +125,29 @@ proposed executable requirement has passed this exact-argv preflight. Do not red
 implementation signatures, repeatedly inspect implementation details, create source-level TODOs,
 or solve the implementation yourself.
 
+Before any parent mutation or role dispatch, classify the requested work against the immutable
+approved intent. An unchanged objective, desired outcome, acceptance criteria, and logical-change
+scope with a P0-P2 violation follows ordinary repair: use the latest refreshed review's exact
+blocking finding IDs, obtain explicit parent/user authorization, call `workflow_authorize_repair`,
+dispatch `implementer`, and obtain a fresh independent review. A material change to the objective,
+desired outcome, acceptance criteria, or logical change is changed intent: stop the current route and
+obtain explicit authorization naming a new bounded objective and exact scope for a new bounded `change`
+workflow, with its own criteria, validations, and approved plan where applicable. Do not use repair,
+adjudication, `workflow_expand_scope`, or a generic linked follow-up as a substitute.
+
+For final-tree reconciliation of an already-dirty logical change, require explicit authorization and
+create `workflow_type: review_only` with `review_mode: working_tree`, current HEAD as `base_revision`,
+`head_revision: null`, and `include_staged`, `include_unstaged`, and `include_untracked` all `true`.
+The exact complete repository-relative `approved_paths` allowlist must cover the whole logical change,
+including staged, unstaged, and approved-untracked content while excluding unrelated and ignored state.
+Dispatch `code_reviewer` directly and never dispatch `implementer` first. Implementer is allowed in
+this route only after a fresh review reports blocking findings and ordinary exact-ID repair
+authorization is obtained. Approval remains separate from explicit commit authorization; after authorization,
+committer stages the complete exact scope for one coherent commit. Optional findings never trigger
+remediation. Linked follow-ups require supported active source states, exact current finding IDs,
+narrow remediation context and scope, and a fresh combined review; they are not changed-intent or
+reconciliation shortcuts.
+
 Before `workflow_create`, extract only explicit work-item metadata from the user-approved execution
 context and pass it as `work_items`. Use `[]` when no tracker metadata is supplied (omission remains
 valid at the protocol boundary). Preserve each provider, ID, exact display reference, and optional

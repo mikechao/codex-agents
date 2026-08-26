@@ -147,6 +147,36 @@ Workflow MCP owns receipt capture and comparison. The committer stages complete 
 and submits the commit result whether Git succeeds or fails. Orchestrator performs the final parent
 refresh after that terminal handoff.
 
+### Intent classification and final-tree reconciliation
+
+Before mutation or dispatch, classify the request into one of three routes:
+
+1. **Unchanged approved intent:** a P0-P2 defect is ordinary repair. Use the latest refreshed review's
+   exact blocking IDs, explicit authorization, `workflow_authorize_repair`, implementer, and a fresh
+   independent review.
+2. **Changed intent:** a material change to the objective, desired outcome, acceptance criteria, or
+   logical change stops the current route. It requires explicit authorization naming a new bounded
+   objective and exact scope, then a new bounded `change` workflow with its own criteria, validations, and
+   approved plan where applicable. Repair, adjudication, `workflow_expand_scope`, and generic linked
+   follow-ups are not substitutes.
+3. **Final-tree reconciliation:** an already-dirty logical change requires explicit authorization for
+   a `review_only` workflow with `review_mode: working_tree`, current HEAD as `base_revision`,
+   `head_revision: null`, and `include_staged`, `include_unstaged`, and `include_untracked` all
+   `true`. Its exact complete
+   repository-relative path allowlist covers the whole logical change, including approved-untracked
+   content, while excluding unrelated and ignored state. Dispatch `code_reviewer` directly, never
+   implementer first. Only a fresh reconciliation review reports blocking findings; ordinary exact-ID
+   repair authorization is then required before permitting implementer. Optional findings never
+   trigger remediation.
+
+Approval is separate from commit authorization. Once freshly approved and explicitly authorized,
+the committer stages the complete exact logical-change scope and makes one coherent commit. Supported
+finding-linked follow-ups remain narrow: a supported active source, exact current finding IDs,
+narrow remediation context and scope, and a fresh combined review. They cannot serve as changed intent
+or reconciliation shortcuts. After every terminal worker handoff and parent mutation, refresh the
+authoritative parent view, summarize only its decision-relevant result, and route from its fresh
+`permitted_next_actions`; stale prose and dirty-path inference grant no authority.
+
 ```mermaid
 sequenceDiagram
     actor User
@@ -209,6 +239,12 @@ When review identifies blocking findings, the parent authorizes a bounded repair
 finding IDs, then sends the implementer back to `REPAIRING` and re-runs independent review. The
 complete repair-cycle limit and transition semantics are defined in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md); this guide does not duplicate them.
+
+For reconciliation, the reviewer-only start is mandatory even when implementation files are already
+dirty. A blocking result can enter ordinary exact-ID repair only after explicit authorization, then
+requires combined fresh review; an approval stops for separate commit authorization. Optional findings
+stop without remediation. A changed-intent request instead starts a newly authorized bounded change
+workflow, not a repair or follow-up.
 
 The workflow also stops rather than guessing when it encounters concerns (`STOPPED_CONCERNS`), an
 inconclusive review (`STOPPED_INCONCLUSIVE`), missing implementation context or an implementation

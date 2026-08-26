@@ -149,6 +149,26 @@ Workflow MCP state. Restart host sessions after changing policy.
 
 ## Workflow loop
 
+- Intent routing, unchanged approved intent: seed a P1/P2 defect without changing the objective,
+  desired outcome, acceptance criteria, or logical change; confirm the parent uses the latest exact
+  blocking IDs, explicit `workflow_authorize_repair`, implementer, and fresh independent re-review.
+- Intent routing, changed intent: request a material objective, desired-outcome, acceptance-criteria,
+  or logical-change alteration; confirm the parent refuses repair, adjudication, scope expansion, and
+  generic linked follow-up, and requires explicit authorization for a new bounded `change` workflow.
+- Final-tree reconciliation: synthesize staged, unstaged, and approved-untracked files for one logical
+  change alongside unrelated dirty and ignored files; confirm explicit `review_only` working-tree
+  creation with current-HEAD/null-head and all three inclusion flags, an exact complete dirty scope
+  excluding unrelated/ignored state, direct reviewer-only dispatch, separate approval and commit
+  authorization, and one coherent exact-scope commit.
+- Reconciliation blocking repair: after a fresh reconciliation review reports blocking findings,
+  confirm implementer dispatch is conditional on ordinary exact-ID repair authorization; optional
+  findings never trigger remediation.
+- Supported finding-linked remediation: with an active supported source, exact current finding IDs,
+  narrow remediation context and scope, confirm the child remediation is followed by a fresh combined
+  review and cannot be used for changed intent or reconciliation.
+- Refresh-before-route: after every terminal worker handoff and every parent mutation, confirm the
+  parent refreshes `workflow_parent_get`, summarizes only the refreshed authoritative view, and routes
+  from refreshed `permitted_next_actions`, never stale prose or dirty-path inference.
 - Two-cycle stopping: after an initial review, the parent performs at most two implementer-to-
   reviewer repair cycles, passes prior findings and resolution claims each time, and stops without
   commit when blocking findings remain after the second cycle.

@@ -109,9 +109,71 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "delegate only to `planner`",
     "zero to four disposable, read-only explorers",
     "bounded `PlannerHandoff`",
+    "classify the requested work against the immutable approved intent",
+    "unchanged objective, desired outcome, acceptance criteria, and logical-change",
+    "ordinary repair",
+    "exact blocking finding IDs",
+    "changed intent",
+    "new bounded objective and exact scope",
+    "Do not use repair, adjudication, `workflow_expand_scope`, or a generic linked follow-up",
+    "workflow_type: review_only",
+    "review_mode: working_tree",
+    "current HEAD as `base_revision`",
+    "`head_revision: null`",
+    "`include_staged`, `include_unstaged`, and `include_untracked`",
+    "exact complete repository-relative `approved_paths`",
+    "Dispatch `code_reviewer` directly and never dispatch `implementer` first",
+    "fresh review reports blocking findings",
+    "ordinary exact-ID repair authorization is obtained",
+    "Approval remains separate from explicit commit authorization",
+    "Optional findings never trigger remediation",
+    "supported active source states",
+    "exact current finding IDs",
+    "fresh combined review",
   ]) {
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
   }
+
+  const routeStart = normalized.indexOf("For final-tree reconciliation");
+  const routeEnd = normalized.indexOf("Before `workflow_create`, extract", routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "missing isolated reconciliation route");
+  const reconciliation = normalized.slice(routeStart, routeEnd);
+  assert.match(
+    reconciliation,
+    /`workflow_type: review_only` with `review_mode: working_tree`, current HEAD as `base_revision`, `head_revision: null`, and `include_staged`, `include_unstaged`, and `include_untracked` all `true`/u,
+    "reconciliation must use the complete working-tree review target",
+  );
+  assert.match(
+    reconciliation,
+    /exact complete repository-relative `approved_paths` allowlist.*including staged, unstaged, and approved-untracked content while excluding unrelated and ignored state/u,
+    "reconciliation must isolate the complete logical-change scope",
+  );
+  const reviewerDispatch = reconciliation.indexOf("Dispatch `code_reviewer` directly");
+  const blockingReview = reconciliation.indexOf("fresh review reports blocking findings");
+  const repairAuthorization = reconciliation.indexOf("ordinary exact-ID repair authorization");
+  assert.match(
+    reconciliation,
+    /Dispatch `code_reviewer` directly and never dispatch `implementer` first\./u,
+    "reconciliation must dispatch reviewer before any implementer",
+  );
+  assert.match(
+    reconciliation,
+    /Implementer is allowed in this route only after a fresh review reports blocking findings and ordinary exact-ID repair authorization is obtained/u,
+    "reconciliation must co-locate the implementer gate with its blocking-finding authorization",
+  );
+  assert.ok(
+    reviewerDispatch >= 0 &&
+      reviewerDispatch < blockingReview &&
+      blockingReview < repairAuthorization,
+    "reconciliation must order reviewer dispatch, blocking findings, and exact repair authorization",
+  );
+  const approval = reconciliation.indexOf("Approval remains separate");
+  const commitAuthorization = reconciliation.indexOf("commit authorization");
+  const coherentCommit = reconciliation.indexOf("one coherent commit");
+  assert.ok(
+    approval >= 0 && approval < commitAuthorization && commitAuthorization < coherentCommit,
+    "reconciliation must separate approval from commit authorization",
+  );
   assert.ok(!existsSync(resolve(repoRoot, ".opencode/ORCHESTRATION.md")));
 });
 

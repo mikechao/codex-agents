@@ -109,6 +109,41 @@ From `STOPPED_INCONCLUSIVE`, `workflow_adopt_dirty_scope` separately records an 
 commitment for exact dirty paths originating in an existing scope expansion; that commitment is
 guarded before review resume and review-start snapshot creation.
 
+### Intent routing and final-tree reconciliation
+
+Before mutating state or dispatching a role, the parent classifies the request against the immutable
+approved intent. An unchanged objective, desired outcome, acceptance criteria, and logical-change
+scope with a P0-P2 violation is ordinary repair: use the latest refreshed review's exact blocking
+finding IDs, obtain explicit parent/user authorization, call `workflow_authorize_repair`, dispatch
+the implementer, and obtain a fresh independent review. Repair is limited to those exact IDs and does
+not alter the approved intent.
+
+A material alteration to the objective, desired outcome, acceptance criteria, or logical change is
+changed intent. Stop the current route. Do not use repair, finding adjudication, `workflow_expand_scope`,
+or a generic linked follow-up as a substitute. Obtain explicit authorization for a new bounded
+`change` workflow with its own exact objective, paths, criteria, validations, and approved plan where
+applicable. The new workflow is a separate authority boundary; earlier approval or dirty-path
+inference does not authorize it.
+
+Final-tree reconciliation is a separate explicit-authorization path for an already-dirty logical
+change. Create `workflow_type: review_only` with `review_mode: working_tree`, the current HEAD as
+`base_revision`, `head_revision: null`, `include_staged: true`, `include_unstaged: true`, and
+`include_untracked: true`. Its `approved_paths` must be the exact complete repository-relative
+allowlist for the whole logical change, including staged, unstaged, and approved-untracked content;
+exclude unrelated and ignored state. Dispatch `code_reviewer` directly, never implementer first.
+Approval still requires separate explicit commit authorization; after it, the committer stages the
+complete exact scope for one coherent commit. Only a fresh reconciliation review reports blocking
+findings; ordinary exact-ID repair authorization is then required before dispatching an implementer. Optional
+findings never trigger remediation. Finding-linked follow-ups remain limited to supported active
+source states, exact current finding IDs, narrow remediation context and scope, and a fresh combined
+review; they are not changed-intent or reconciliation shortcuts.
+
+After every terminal worker handoff and every parent mutation, the parent refreshes
+`workflow_parent_get`, summarizes only the refreshed authoritative view, and routes from refreshed
+`permitted_next_actions`. Worker prose, earlier summaries, dirty-path inference, and stale state
+never grant authority. This routing distinction adds no Workflow MCP phase, schema, persistence, or
+authority change.
+
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
 `runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
 supervisor launch attestation signed with the private key belonging to the immutable child artifact
