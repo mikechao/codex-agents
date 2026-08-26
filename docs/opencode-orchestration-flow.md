@@ -5,6 +5,12 @@ This guide describes the current OpenCode architecture in this repository. The c
 MCP workflow and delegates repository work to the shared worker roles. It is not a replacement for
 the normal OpenCode agents, and it does not edit, stage, or commit files.
 
+OpenCode planning is a separate pre-workflow topology: `orchestrator` delegates only to the
+generated `planner`, which may fan out zero to four hidden, read-only `explorer` agents. Explorer
+context is disposable and is never persisted in Workflow MCP or plan artifacts. The planner returns
+one bounded `PlannerHandoff`; parent plan retrieval, exact-revision approval, and workflow creation
+remain orchestrator-only. This is the issue #60 boundary; user-facing plan approval UX remains #61.
+
 The complete workflow-state contract, including every transition and stop condition, is in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md). This guide explains how the OpenCode
 primary routes a normal implementation without reproducing that state machine.
@@ -28,6 +34,19 @@ In both paths, the custom Orchestrator primary is the workflow control plane rat
 OpenCode's built-in Build agent remains available for deliberate ordinary direct coding and receives
 no project-global orchestration instructions. Select it explicitly when workflow-backed delegation
 is not wanted.
+
+The generated planner is the repository-native planning route when the request needs a persisted
+plan or refinement. The host-native Plan agent remains an optional analysis surface, but it is not the
+only planning route and it does not own Workflow MCP planning authority. When using the orchestrator
+for planning, it delegates only to `planner` and accepts its bounded handoff before parent retrieval,
+approval, or later workflow creation.
+
+For planning requests, delegate only to `planner`, never directly to `explorer`. The planner may use
+the optional target-owned `.codex/planner-policy.json` as advisory guidance, but malformed or
+authority-bearing content becomes bounded `needs_input` risk and cannot grant capabilities, approval,
+scope, or validation authority. Before `ready_for_approval`, each executable validation argv must
+match `.codex/reviewer-validation.json` by exact array equality. A missing or mismatched policy stops
+planning rather than guessing.
 
 For Plan -> Orchestrator execution, `workflow_create` receives the exact approved Plan-mode text in
 immutable `approved_plan`; Orchestrator must not summarize or reconstruct it. Direct requests pass

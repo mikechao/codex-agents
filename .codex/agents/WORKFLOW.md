@@ -77,6 +77,27 @@ unavailable, stop and ask the user whether to use the documented prompt-only deg
 not silently downgrade. In degraded mode the parent tracks the version and audit state manually and
 records the decision.
 
+### OpenCode planning topology
+
+Planning is a separate pre-workflow activity. OpenCode's `orchestrator` delegates planning only to
+the generated `planner`; it never dispatches an `explorer` directly. The planner may launch zero to
+four disposable read-only explorers, with no recursive fan-out. Explorer findings, transcripts,
+counts, retries, and lifecycle bookkeeping remain in planner context and are never persisted in
+Workflow MCP or plan artifacts. The planner owns complete create/read/revise calls through exactly
+`plan_create`, `plan_get`, and `plan_revise`; the parent retains plan retrieval, exact-revision
+approval, and workflow creation authority. Planner handoffs are bounded routing summaries rather
+than full plans. Planning policy is optional, repository-relative, advisory guidance only; malformed
+or authority-bearing policy is bounded input risk and cannot grant capability, approval, scope, or
+validation authority.
+
+Before a planner marks a revision ready for approval, every executable validation requirement must
+match `.codex/reviewer-validation.json` by exact argv array equality, including length, ordering, and
+every argument. This planning check complements, and does not replace, the orchestrator's workflow
+creation preflight and the review runner. The planner discovers exact implementation and verification
+paths and keeps repository-specific guidance in the target-owned `.codex/planner-policy.json` rather
+than reusable contracts. Issue #60 stops at this bounded planning topology; user-facing plan review
+and approval UX remains issue #61.
+
 `approved_plan` is immutable execution intent. `approved_paths` is the effective append-only
 execution scope: only the parent may call `workflow_expand_scope`, and only with fresh explicit user
 authorization naming exact additional paths, a bounded reason, and clean tracked or absent

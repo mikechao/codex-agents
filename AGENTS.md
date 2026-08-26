@@ -12,6 +12,7 @@ configuration in `.codex/config.toml` registers the local workflow-state server 
 root `opencode.json` registers the same server for direct OpenCode use of this repository, and
 `install-into.ts` registers it for OpenCode in target repositories. The generated
 `implementer`, `code_reviewer`, and `committer` files are the shared cross-host worker adapters;
+.opencode also receives OpenCode-only generated `planner` and hidden read-only `explorer` adapters;
 `.opencode/agents/orchestrator.md` is intentionally an OpenCode-only `mode: primary` agent outside
 the shared generator and must not be added to the host-neutral contracts or overwritten by
 generation. The root `opencode.json` selects that primary with `default_agent: "orchestrator"` and
@@ -43,6 +44,9 @@ state.
 - Worker attempts, retries, process lifecycle, and worktree or execution-loop mechanics are
   orchestration concerns unless persistence is required for correctness or recovery; they should
   not create workflow fields or phases by default.
+- Planner-to-explorer fan-out is disposable OpenCode context: keep explorer findings, transcripts,
+  counts, and retries out of Workflow MCP and plan artifacts. Repository-specific planning guidance
+  belongs in the optional target-owned `.codex/planner-policy.json`, not reusable contracts.
 - Host reload, stale configuration, transport, and similar infrastructure failures belong at their
   owning boundary; do not model them as workflow-domain phases without genuine durable meaning.
 

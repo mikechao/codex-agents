@@ -118,8 +118,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `${definition.host}/${definition.role} must be materialized from current policy`,
       );
     }
-    for (const definition of installedManifest.filter((candidate) => candidate.host === "codex")) {
-      const role = definition.role;
+    for (const definition of installedManifest.filter(
+      (candidate) =>
+        candidate.host === "codex" && candidate.role in CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
+    )) {
+      const role = definition.role as keyof typeof CODEX_WORKFLOW_MCP_ENABLED_TOOLS;
       const parsedDefinition = TOML.parse(definition.content) as {
         mcp_servers: {
           workflow_state: {
@@ -158,7 +161,14 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ) as { commands: Array<Record<string, unknown>> };
     assert.ok(reviewerPolicy.commands.length > 0);
     assert.ok(reviewerPolicy.commands.every((command) => !Object.hasOwn(command, "validation_id")));
-    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
+    for (const file of [
+      "implementer.md",
+      "code_reviewer.md",
+      "committer.md",
+      "planner.md",
+      "explorer.md",
+      "orchestrator.md",
+    ]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
         `missing .opencode/agents/${file}`,
@@ -174,8 +184,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     }
     const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
+      subagent_depth: number;
     };
     assert.equal(opencodeConfig.default_agent, "orchestrator");
+    assert.equal(opencodeConfig.subagent_depth, 2);
+    assert.ok(!existsSync(join(root, ".codex/planner-policy.json")));
     const config = readFileSync(join(root, ".codex/config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.workflow_state\]/);
     const parsed = TOML.parse(config) as {
@@ -229,11 +242,31 @@ test("install-into.ts preserves an existing OpenCode default_agent preference", 
     assert.equal(result.status, 0, result.stderr);
     const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
+      subagent_depth: number;
       mcp: Record<string, unknown>;
     };
     assert.equal(config.default_agent, "plan");
+    assert.equal(config.subagent_depth, 2);
     assert.ok(config.mcp.workflow_state);
     assert.ok(existsSync(join(root, ".opencode/agents/orchestrator.md")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts preserves an explicit OpenCode subagent_depth", () => {
+  const { root, write } = fixture();
+  try {
+    write(
+      "opencode.json",
+      '{\n  "$schema": "https://opencode.ai/config.json",\n  "subagent_depth": 5\n}\n',
+    );
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
+      subagent_depth: number;
+    };
+    assert.equal(config.subagent_depth, 5);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

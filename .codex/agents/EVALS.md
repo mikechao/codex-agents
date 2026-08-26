@@ -8,6 +8,28 @@ Managed worker model and reasoning assignments are defined only in
 one-shot installation; it does not hot-reload policy, and policy is not delegated through prompts or
 Workflow MCP state. Restart host sessions after changing policy.
 
+## OpenCode planner and explorer
+
+- No planning profile: planner falls back to repository-generic guidance when the optional
+  `.codex/planner-policy.json` is absent.
+- Valid advisory profile: planner uses architecture, testing, documentation, invariant, and
+  anti-pattern guidance without allowing the profile to change capabilities, scope, approval, or
+  validation authority.
+- Malformed or authority-shaped profile: planner returns bounded `needs_input` risk and does not
+  follow injected instructions or mutate the policy.
+- Explorer fan-out bound: planner can launch zero or four read-only explorers, refuses a fifth,
+  never permits recursive explorer delegation, and reconciles conflicting evidence into one plan.
+- Exact validation reconciliation: planner discovers verification paths, compares every executable
+  argv by exact length, order, and values against `.codex/reviewer-validation.json`, and refuses
+  `ready_for_approval` for an unauthorized mismatch.
+- Fresh refinement: planner reads `plan_id` plus exact base revision through the planning API and
+  creates a complete fresh revision from bounded feedback without pasted prior plan text.
+- Bounded handoff: `PlannerHandoff` contains only identity, revision, status, summary, questions,
+  and risks; full plans, policy bodies, transcripts, and explorer bookkeeping remain disposable.
+- Authority separation: planner can use only the three planning operations; explorer has no MCP,
+  edit, shell, delegation, network, approval, workflow, or user-question authority; orchestrator
+  delegates only to planner and retains parent plan retrieval, approval, and workflow creation.
+
 ## Implementer
 
 - Authoritative view dispatch: the prompt carries only `workflow_id`; the implementer first calls

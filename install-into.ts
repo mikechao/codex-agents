@@ -31,6 +31,8 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/contracts/code_reviewer.md",
   ".codex/agents/contracts/committer.md",
   ".codex/agents/contracts/implementer.md",
+  ".codex/agents/contracts/planner.md",
+  ".codex/agents/contracts/explorer.md",
   ".codex/agents/WORKFLOW.md",
   ".opencode/agents/orchestrator.md",
 ];
@@ -47,6 +49,7 @@ const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 const OPENCODE_DEFAULT_AGENT = "orchestrator";
+const OPENCODE_SUBAGENT_DEPTH = 2;
 
 export function materializeAgentDefinitions(
   sourceRoot: string,
@@ -460,6 +463,7 @@ export function createOpenCodeConfig(serverPath: string): string {
     {
       $schema: OPENCODE_CONFIG_SCHEMA,
       default_agent: OPENCODE_DEFAULT_AGENT,
+      subagent_depth: OPENCODE_SUBAGENT_DEPTH,
       mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
     },
     null,
@@ -490,6 +494,12 @@ export function stageOpenCodeConfig(
       modify(staged, ["default_agent"], OPENCODE_DEFAULT_AGENT, formattingOptions),
     );
   }
+  if (!Object.hasOwn(parsedExisting, "subagent_depth")) {
+    staged = applyEdits(
+      staged,
+      modify(staged, ["subagent_depth"], OPENCODE_SUBAGENT_DEPTH, formattingOptions),
+    );
+  }
   staged = applyEdits(
     staged,
     modify(
@@ -503,8 +513,8 @@ export function stageOpenCodeConfig(
   const stagedRecord = parsedStaged ?? {};
   if (
     !deepEqual(
-      withoutKeys(parsedExisting, ["mcp", "default_agent"]),
-      withoutKeys(stagedRecord, ["mcp", "default_agent"]),
+      withoutKeys(parsedExisting, ["mcp", "default_agent", "subagent_depth"]),
+      withoutKeys(stagedRecord, ["mcp", "default_agent", "subagent_depth"]),
     )
   ) {
     error(
@@ -534,6 +544,14 @@ export function stageOpenCodeConfig(
   if (!deepEqual(stagedRecord.default_agent, expectedDefaultAgent)) {
     error(
       `Staged OpenCode default_agent would alter the existing preference; refusing to install: ${configPath}`,
+    );
+  }
+  const expectedSubagentDepth = Object.hasOwn(parsedExisting, "subagent_depth")
+    ? parsedExisting.subagent_depth
+    : OPENCODE_SUBAGENT_DEPTH;
+  if (!deepEqual(stagedRecord.subagent_depth, expectedSubagentDepth)) {
+    error(
+      `Staged OpenCode subagent_depth would alter the existing preference; refusing to install: ${configPath}`,
     );
   }
   if (configPath.endsWith(".json")) {

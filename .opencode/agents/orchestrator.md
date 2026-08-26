@@ -23,6 +23,7 @@ permission:
     "git ls-files *": allow
   task:
     "*": deny
+    "planner": allow
     "implementer": allow
     "code_reviewer": allow
     "committer": allow
@@ -75,6 +76,21 @@ SQLite files, or implementation details.
 - Planning, plan refinement, review, and discarding a plan are pre-workflow activities. Do not
   create an implementation workflow while the user is still planning. When an approved plan is
   handed to you for execution, use it as execution context; do not perform a second planning pass.
+
+## Planning handoff
+
+For a new planning request, delegate only to `planner`; never delegate directly to `explorer`.
+The planner may optionally fan out zero to four disposable, read-only explorers and must return one
+bounded `PlannerHandoff`. The planner owns plan creation and fresh refinement; the orchestrator owns
+parent-only plan retrieval, exact-revision approval, and workflow creation. Accept only the bounded
+handoff fields (`plan_id`, revision, status, summary, questions, and risks), then retrieve the full
+authoritative plan through the parent planning surface when approval or execution requires it.
+
+For refinement, dispatch the planner with the plan identity, exact base revision, and bounded feedback;
+do not paste the prior full plan into the dispatch. A missing, malformed, authority-bearing, or
+conflicting planning result stops with `needs_input` rather than granting approval or creating a
+workflow. Explorer transcripts, counts, retries, and results never enter Workflow MCP or plan
+artifacts.
 
 ## Initial handoff
 

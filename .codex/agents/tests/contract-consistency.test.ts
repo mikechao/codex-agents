@@ -151,6 +151,15 @@ test("the default model policy preserves the effective host assignments", () => 
     model: "openai/gpt-5.6-luna",
     reasoning: "high",
   });
+  assert.deepEqual(resolveModelPolicy(policy, "planner", "opencode"), {
+    model: "openai/gpt-5.6-luna",
+    reasoning: "high",
+  });
+  assert.deepEqual(resolveModelPolicy(policy, "explorer", "opencode"), {
+    model: "openai/gpt-5.6-sol",
+    reasoning: "low",
+  });
+  assert.throws(() => resolveModelPolicy(policy, "planner", "codex"), /No model policy assignment/);
 });
 
 test("model aliases and host-specific reasoning resolve independently", () => {
@@ -263,6 +272,84 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
           : "workflow_committer_get";
     assert.match(content, new RegExp(`^  workflow_state_${getter}: allow$`, "m"));
   }
+});
+
+test("planning definitions are OpenCode-only and least-authority isolated", () => {
+  const generated = Object.keys(generateDefinitions());
+  assert.ok(generated.some((path) => path.endsWith("/.opencode/agents/planner.md")));
+  assert.ok(generated.some((path) => path.endsWith("/.opencode/agents/explorer.md")));
+  assert.ok(!generated.some((path) => path.endsWith("/.codex/agents/planner.toml")));
+  assert.ok(!generated.some((path) => path.endsWith("/.codex/agents/explorer.toml")));
+
+  const planner = opencode("planner.md");
+  assert.match(planner, /^mode: subagent$/m);
+  assert.match(planner, /^  task:\n    "\*": deny\n    "explorer": allow$/m);
+  for (const tool of ["plan_create", "plan_get", "plan_revise"]) {
+    assert.match(planner, new RegExp(`^  workflow_state_${tool}: allow$`, "m"));
+  }
+  for (const forbidden of [
+    "workflow_state_plan_parent_get",
+    "workflow_state_plan_approve",
+    "workflow_state_workflow_create",
+    "workflow_state_workflow_create_from_plan",
+    "workflow_state_workflow_submit_implementation",
+  ]) {
+    assert.ok(!planner.includes(forbidden), `planner must not expose ${forbidden}`);
+  }
+  for (const denied of [
+    "external_directory",
+    "lsp",
+    "skill",
+    "todowrite",
+    "todoread",
+    "doom_loop",
+    "question",
+  ]) {
+    assert.match(planner, new RegExp(`^  ${denied}: deny$`, "m"));
+  }
+  for (const allowed of ["webfetch", "websearch"]) {
+    assert.match(planner, new RegExp(`^  ${allowed}: allow$`, "m"));
+    assert.ok(!planner.includes(`  ${allowed}: deny`), `planner must allow ${allowed}`);
+  }
+
+  const explorer = opencode("explorer.md");
+  assert.match(explorer, /^hidden: true$/m);
+  assert.match(explorer, /^  edit: deny$/m);
+  assert.match(explorer, /^  bash: deny$/m);
+  assert.match(explorer, /^  task: deny$/m);
+  assert.match(explorer, /^  workflow_state_\*: deny$/m);
+  assert.ok(!explorer.includes("workflow_state_plan_create"));
+});
+
+test("planning contracts enforce bounded synthesis and disposable context", () => {
+  const contractsDir = resolve(import.meta.dir, "../contracts");
+  const planner = readFileSync(resolve(contractsDir, "planner.md"), "utf8");
+  const explorer = readFileSync(resolve(contractsDir, "explorer.md"), "utf8");
+  for (const phrase of [
+    "zero through four",
+    "A fifth explorer is forbidden",
+    "PlannerHandoff",
+    "plan_get",
+    "exact argv array",
+    "same length, ordering, and every value",
+    "needs_input",
+    "transcripts",
+    "Do not implement, edit, review, stage, commit, approve",
+  ]) {
+    assert.ok(planner.includes(phrase), `planner contract must include: ${phrase}`);
+  }
+  for (const phrase of [
+    "at most 20 findings",
+    "at most 50 relevant exact repository-relative paths",
+    "at most 10 risks",
+    "most 10 questions",
+    "Recursive fan-out is forbidden",
+    "Workflow MCP tools",
+  ]) {
+    assert.ok(explorer.includes(phrase), `explorer contract must include: ${phrase}`);
+  }
+  assert.ok(!planner.includes("gpt-5.6"));
+  assert.ok(!explorer.includes("gpt-5.6"));
 });
 
 test("the OpenCode orchestrator is a host-specific primary outside shared generation", () => {

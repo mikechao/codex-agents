@@ -14,16 +14,19 @@ const OPENCODE_AGENTS_DIR = resolve(ROOT, "../../.opencode/agents");
 export const MODEL_POLICY_PATH = resolve(ROOT, "model-policy.yaml");
 
 export type HostName = "codex" | "opencode";
-export type RoleName = "implementer" | "code_reviewer" | "committer";
+export type RoleName = "implementer" | "code_reviewer" | "committer" | "planner" | "explorer";
 export type ReasoningEffort = "low" | "medium" | "high";
 
-const ROLE_NAMES: readonly RoleName[] = ["implementer", "code_reviewer", "committer"];
+const EXECUTION_ROLE_NAMES = ["implementer", "code_reviewer", "committer"] as const;
+const ROLE_NAMES: readonly RoleName[] = [...EXECUTION_ROLE_NAMES, "planner", "explorer"];
 const HOST_NAMES: readonly HostName[] = ["codex", "opencode"];
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high"];
 
 export interface ModelPolicy {
   models: Record<string, { codex: string; opencode: string }>;
-  agents: Record<RoleName, Record<HostName, { model: string; reasoning: ReasoningEffort }>>;
+  agents: Partial<
+    Record<RoleName, Partial<Record<HostName, { model: string; reasoning: ReasoningEffort }>>>
+  >;
 }
 
 export interface GenerateOptions {
@@ -63,14 +66,15 @@ interface CodexMetadata {
 interface OpenCodeMetadata {
   description: string;
   permission: string[];
-  terminalTool: string;
-  finalReportLabel: string;
+  terminalTool?: string;
+  finalReportLabel?: string;
+  hidden?: boolean;
 }
 
 interface RoleSpec {
   name: RoleName;
   description: string;
-  codex: CodexMetadata;
+  codex?: CodexMetadata;
   opencode: OpenCodeMetadata;
 }
 
@@ -82,7 +86,7 @@ export const CODEX_WORKFLOW_MCP_ENABLED_TOOLS = {
   implementer: ["workflow_implementer_get", "workflow_submit_implementation"],
   code_reviewer: ["workflow_reviewer_get", "workflow_begin_review", "workflow_submit_review"],
   committer: ["workflow_committer_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
-} as const satisfies Record<RoleName, readonly string[]>;
+} as const satisfies Record<(typeof EXECUTION_ROLE_NAMES)[number], readonly string[]>;
 
 // A standalone Codex custom-agent file is parsed as a complete ConfigToml
 // before it is layered onto the parent configuration. Keep a complete,
@@ -269,6 +273,77 @@ const ROLES: readonly RoleSpec[] = [
       finalReportLabel: "final commit report",
     },
   },
+  {
+    name: "planner",
+    description: "Creates and refines repository-generic workflow-native implementation plans.",
+    opencode: {
+      description: "Creates and refines repository-generic workflow-native implementation plans.",
+      permission: [
+        "  edit: deny",
+        "  read: allow",
+        "  glob: allow",
+        "  grep: allow",
+        "  list: allow",
+        "  bash:",
+        '    "*": deny',
+        '    "git status": allow',
+        '    "git status *": allow',
+        '    "git diff": allow',
+        '    "git diff *": allow',
+        '    "git log": allow',
+        '    "git log *": allow',
+        '    "git show": allow',
+        '    "git show *": allow',
+        '    "git rev-parse": allow',
+        '    "git rev-parse *": allow',
+        '    "git ls-files": allow',
+        '    "git ls-files *": allow',
+        '    "git grep": allow',
+        '    "git grep *": allow',
+        "  external_directory: deny",
+        "  webfetch: allow",
+        "  websearch: allow",
+        "  lsp: deny",
+        "  skill: deny",
+        "  todowrite: deny",
+        "  todoread: deny",
+        "  doom_loop: deny",
+        "  question: deny",
+        "  task:",
+        '    "*": deny',
+        '    "explorer": allow',
+        "  workflow_state_*: deny",
+        "  workflow_state_plan_create: allow",
+        "  workflow_state_plan_get: allow",
+        "  workflow_state_plan_revise: allow",
+      ],
+    },
+  },
+  {
+    name: "explorer",
+    description: "Gathers bounded, read-only repository evidence for the planner.",
+    opencode: {
+      description: "Gathers bounded, read-only repository evidence for the planner.",
+      permission: [
+        "  edit: deny",
+        "  read: allow",
+        "  glob: allow",
+        "  grep: allow",
+        "  list: allow",
+        "  bash: deny",
+        "  task: deny",
+        "  external_directory: deny",
+        "  webfetch: deny",
+        "  websearch: deny",
+        "  lsp: deny",
+        "  skill: deny",
+        "  todowrite: deny",
+        "  question: deny",
+        "  workflow_state_*: deny",
+      ],
+      hidden: true,
+    },
+  },
 ];
 
 function fail(context: string, detail: string): never {
@@ -363,13 +438,29 @@ export function parseModelPolicy(text: string, source = "model-policy.yaml"): Mo
   if (Object.keys(models).length === 0) fail("at models", "at least one model alias is required");
 
   const agentsRecord = record(root.agents, "agents");
-  exactKeys(agentsRecord, ROLE_NAMES, "agents");
-  const agents = {} as ModelPolicy["agents"];
+  const actualRoles = Object.keys(agentsRecord);
+  const unexpectedRoles = actualRoles.filter((role) => !ROLE_NAMES.includes(role as RoleName));
+  if (
+    unexpectedRoles.length > 0 ||
+    EXECUTION_ROLE_NAMES.some((role) => !actualRoles.includes(role))
+  ) {
+    fail(
+      "at agents",
+      `expected execution roles and optional planning roles: ${ROLE_NAMES.join(", ")}`,
+    );
+  }
+  const agents: ModelPolicy["agents"] = {};
   for (const role of ROLE_NAMES) {
+    if (!Object.hasOwn(agentsRecord, role)) continue;
     const roleRecord = record(agentsRecord[role], `agents.${role}`);
-    exactKeys(roleRecord, HOST_NAMES, `agents.${role}`);
-    const hostAssignments = {} as Record<HostName, { model: string; reasoning: ReasoningEffort }>;
-    for (const host of HOST_NAMES) {
+    const allowedHosts = EXECUTION_ROLE_NAMES.some((candidate) => candidate === role)
+      ? HOST_NAMES
+      : (["opencode"] as const);
+    exactKeys(roleRecord, allowedHosts, `agents.${role}`);
+    const hostAssignments = {} as Partial<
+      Record<HostName, { model: string; reasoning: ReasoningEffort }>
+    >;
+    for (const host of allowedHosts) {
       const assignment = record(roleRecord[host], `agents.${role}.${host}`);
       exactKeys(assignment, ["model", "reasoning"], `agents.${role}.${host}`);
       if (typeof assignment.model !== "string" || !Object.hasOwn(models, assignment.model)) {
@@ -430,6 +521,7 @@ function codexToml(
   body: string,
   transport: CodexWorkflowMcpTransport,
 ): string {
+  if (spec.codex === undefined) throw new Error(`Role ${spec.name} is not available for Codex`);
   const header = [
     `name = "${spec.name}"`,
     `description = "${spec.description}"`,
@@ -463,16 +555,20 @@ function opencodeMarkdown(
     "mode: subagent",
     `model: ${assignment.model}`,
     `reasoningEffort: ${assignment.reasoning}`,
+    ...(spec.opencode.hidden === true ? ["hidden: true"] : []),
     "permission:",
     ...spec.opencode.permission,
     "---",
   ].join("\n");
   const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
-  return `${frontmatter}\n${injectHostIdentity(body, identity, spec.name)}${opencodeTerminalHandoff(spec)}\n`;
+  return `${frontmatter}\n${injectHostIdentity(body, identity, spec.name)}${
+    spec.opencode.terminalTool === undefined ? "" : opencodeTerminalHandoff(spec)
+  }\n`;
 }
 
 function opencodeTerminalHandoff(spec: RoleSpec): string {
   const { terminalTool, finalReportLabel } = spec.opencode;
+  if (terminalTool === undefined || finalReportLabel === undefined) return "";
   const failureClause =
     spec.name === "committer"
       ? " The report is required whether the commit succeeded or failed."
@@ -505,7 +601,9 @@ export function generateDefinitionManifest(
   const manifest: GeneratedAgentDefinition[] = [];
   for (const spec of ROLES) {
     const body = readFileSync(resolve(contractsDir, `${spec.name}.md`), "utf8").trimEnd();
-    for (const host of HOST_NAMES) {
+    const availableHosts: readonly HostName[] =
+      spec.codex === undefined ? ["opencode"] : HOST_NAMES;
+    for (const host of availableHosts) {
       const assignment = resolveModelPolicy(policy, spec.name, host);
       manifest.push({
         role: spec.name,

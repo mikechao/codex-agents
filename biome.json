@@ -6,6 +6,7 @@
       "install-into.ts",
       "package.json",
       "opencode.json",
+      ".codex/planner-policy.json",
       "tsconfig*.json",
       "biome.json"
     ],

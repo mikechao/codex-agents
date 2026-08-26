@@ -31,3 +31,13 @@ agents:
     opencode:
       model: luna
       reasoning: high
+
+  planner:
+    opencode:
+      model: luna
+      reasoning: high
+
+  explorer:
+    opencode:
+      model: sol
+      reasoning: low

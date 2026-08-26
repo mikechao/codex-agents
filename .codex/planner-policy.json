@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "architecture_principles": [
+    "Prefer existing repository boundaries and the smallest coherent change.",
+    "Keep durable workflow state separate from disposable orchestration context."
+  ],
+  "testing_guidance": [
+    "Add focused coverage for changed behavior and preserve repository-required validation."
+  ],
+  "documentation_guidance": [
+    "Update repository documentation when topology, authority, or operator behavior changes."
+  ],
+  "invariants": [
+    "Do not broaden approved scope without explicit authorization.",
+    "Do not weaken exact validation-policy reconciliation."
+  ],
+  "anti_patterns": [
+    "Do not persist explorer transcripts, retries, or fan-out bookkeeping in workflow state.",
+    "Do not duplicate repository policy guidance in reusable agent contracts."
+  ]
+}

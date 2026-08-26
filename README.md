@@ -2,9 +2,10 @@
 
 Reusable `implementer`, `code_reviewer`, and `committer` agent definitions with a local durable
 workflow-state MCP server, shared between Codex and OpenCode. OpenCode also includes a dedicated
-`orchestrator` primary agent for coordinating those roles.
+`orchestrator` primary plus generated `planner` and hidden read-only `explorer` subagents.
 
-The three role contracts live as host-neutral prose in `.codex/agents/contracts/`. Codex TOML
+The execution role contracts live as host-neutral prose in `.codex/agents/contracts/`; planner and
+explorer contracts are OpenCode-only. Codex TOML
 definitions (`.codex/agents/*.toml`) and OpenCode Markdown definitions (`.opencode/agents/*.md`)
 are generated from those fragments by `bun run generate:agents`, so the two hosts cannot silently
 drift apart; `bun run test:agents` fails when the checked-in definitions diverge from the
@@ -93,7 +94,7 @@ continue to be validated through `Bun.TOML.parse` and the existing semantic asse
 
 Opening `codex-agents` itself in Codex loads the three shared agents from `.codex/agents/` and registers
 the local `workflow_state` bootstrap supervisor via `.codex/config.toml`. Opening it in OpenCode loads the
-same three subagents plus the `orchestrator` primary agent from `.opencode/agents/` and registers the same server as a local MCP
+the execution subagents plus generated `planner`/`explorer` and the `orchestrator` primary agent from `.opencode/agents/` and registers the same server as a local MCP
 (`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
   (a temporary copy materialized from `git show HEAD:.codex/workflow-mcp/bootstrap.ts`) and the same `enabled`/`timeout` semantics as
 installer-generated registrations. The self-host OpenCode registration is checked into the
@@ -102,8 +103,9 @@ repository and a test keeps it from silently diverging from the installer's regi
 OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
 `default_agent`. See the [OpenCode orchestration flow](docs/opencode-orchestration-flow.md) for the
 current architecture and handoff sequence. Use the normal primary-agent switcher (Tab by default)
-to select Plan for analysis/refinement or Build for deliberate ordinary direct coding. Plan does not
-create an implementation workflow; after approving a plan, switch to Orchestrator and say
+to select Plan for optional analysis/refinement or Build for deliberate ordinary direct coding. The
+generated `planner` is the repository-native planning route and does not create an implementation
+workflow; after approving a plan, switch to Orchestrator and say
 `implement the plan`. Orchestrator performs bounded read-only preflight, creates or reuses the
 authoritative workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after
 explicit user commit authorization—`committer`. Worker handoffs contain only the `workflow_id`; each
@@ -112,6 +114,15 @@ capability remains parent-only for privileged transitions, with separation enfor
 tool exposure and Workflow MCP workflow, phase, version, and invariant checks. Orchestrator cannot
 edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
+
+Planning is a separate pre-workflow path: the orchestrator delegates only to `planner`, which may
+launch zero through four disposable read-only explorers. Explorer context is bounded and never
+persisted in Workflow MCP or plan artifacts. The planner uses only the three planning operations,
+reconciles every executable validation argv against the target's exact reviewer policy, and returns a
+bounded `PlannerHandoff`; parent retrieval, approval, and workflow creation remain orchestrator-only.
+The optional target-owned `.codex/planner-policy.json` supplies advisory repository guidance and is
+not copied by the installer. This planner topology is issue #60; user-facing plan approval UX is
+issue #61.
 After an external Git commit succeeds, Workflow MCP itself observes and persists the verified commit
 SHA, without requiring the committer to submit it.
 
@@ -128,7 +139,7 @@ one all-or-nothing step:
 
 - Codex: materializes fresh policy-resolved agent definitions into `.codex/agents/` and registers
   this project's committed `.codex/workflow-mcp/server.ts` by absolute path in `.codex/config.toml`.
-- OpenCode: materializes fresh policy-resolved agent definitions into `.opencode/agents/` and registers that same absolute
+- OpenCode: materializes fresh policy-resolved agent definitions (including planner and explorer) into `.opencode/agents/` and registers that same absolute
   provider server directly as a local MCP (`mcp.workflow_state`) in the project's
   `opencode.json` (or extends an existing `opencode.json`/`opencode.jsonc` without touching
   unrelated settings).
@@ -146,12 +157,13 @@ sources. Their direct provider-server registration has no runtime-artifact affin
 server uses the target repository's Git and durable state normally.
 
 For OpenCode, a new config or an existing config without `default_agent` defaults to
-`orchestrator`. An existing explicit `default_agent` is preserved; the orchestrator is still
+`orchestrator`, and a new or depth-absent config gets `subagent_depth: 2`. Existing explicit
+`default_agent` and `subagent_depth` values are preserved; the orchestrator is still
 installed and can be selected with the primary-agent switcher. This prevents installation from
 overwriting a target project's deliberate default.
 
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
-`code_reviewer.md`, `committer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated
+`code_reviewer.md`, `committer.md`, `planner.md`, `explorer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated
 existing OpenCode agents; it refuses existing `workflow_state` registrations in either host,
 refuses malformed existing configuration, and rolls the whole installation back if any commit
 step fails, so a failed run never leaves only one host installed. If the automatic rollback

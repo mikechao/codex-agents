@@ -18,11 +18,13 @@ test("the repository's own opencode.json registers the supervised self-host serv
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     $schema: string;
     default_agent: string;
+    subagent_depth: number;
     mcp: { workflow_state: Record<string, unknown> };
   };
   const expected = {
     $schema: "https://opencode.ai/config.json",
     default_agent: "orchestrator",
+    subagent_depth: 2,
     mcp: {
       workflow_state: {
         type: "local",
@@ -34,6 +36,7 @@ test("the repository's own opencode.json registers the supervised self-host serv
   };
   assert.equal(parsed.$schema, expected.$schema);
   assert.equal(parsed.default_agent, expected.default_agent);
+  assert.equal(parsed.subagent_depth, expected.subagent_depth);
   assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
   assert.equal(parsed.default_agent, "orchestrator");
@@ -54,6 +57,8 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.match(orchestrator, /^mode: primary$/m);
   assert.match(orchestrator, /^  edit: deny$/m);
   assert.match(orchestrator, /^  task:\n    "\*": deny$/m);
+  assert.match(orchestrator, /^    "planner": allow$/m);
+  assert.ok(!orchestrator.match(/^    "explorer": allow$/m));
   for (const agent of ["implementer", "code_reviewer", "committer"]) {
     assert.match(orchestrator, new RegExp(`^    "${agent}": allow$`, "m"));
   }
@@ -101,6 +106,9 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "work_items",
     "do not discover identifiers externally",
     "retranscribe them when creating linked follow-ups",
+    "delegate only to `planner`",
+    "zero to four disposable, read-only explorers",
+    "bounded `PlannerHandoff`",
   ]) {
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
   }

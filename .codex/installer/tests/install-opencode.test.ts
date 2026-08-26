@@ -79,7 +79,14 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed Codex agents/);
     assert.match(result.stdout, /Installed OpenCode agents/);
-    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
+    for (const file of [
+      "implementer.md",
+      "code_reviewer.md",
+      "committer.md",
+      "planner.md",
+      "explorer.md",
+      "orchestrator.md",
+    ]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
         `missing .opencode/agents/${file}`,
@@ -90,12 +97,14 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     const parsed = JSON.parse(content) as {
       $schema: string;
       default_agent: string;
+      subagent_depth: number;
       mcp: {
         workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number };
       };
     };
     assert.equal(parsed.$schema, "https://opencode.ai/config.json");
     assert.equal(parsed.default_agent, "orchestrator");
+    assert.equal(parsed.subagent_depth, 2);
     const registration = parsed.mcp.workflow_state;
     assert.equal(registration.type, "local");
     assert.equal(registration.enabled, true);
@@ -143,6 +152,7 @@ test("install-into.ts preserves unrelated existing opencode.json configuration",
       "default_agent",
       "mcp",
       "model",
+      "subagent_depth",
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -275,7 +285,14 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
       "unrelated nested content\n",
       "unrelated nested content must be preserved",
     );
-    for (const file of ["implementer.md", "code_reviewer.md", "committer.md", "orchestrator.md"]) {
+    for (const file of [
+      "implementer.md",
+      "code_reviewer.md",
+      "committer.md",
+      "planner.md",
+      "explorer.md",
+      "orchestrator.md",
+    ]) {
       assert.ok(
         existsSync(join(root, ".opencode/agents", file)),
         `missing .opencode/agents/${file}`,
@@ -292,6 +309,8 @@ test("install-into.ts preserves unrelated existing OpenCode agents and installs 
 test("install-into.ts refuses a managed OpenCode agent name collision", () => {
   for (const [name, description] of [
     ["implementer.md", "existing implementer"],
+    ["planner.md", "existing planner"],
+    ["explorer.md", "existing explorer"],
     ["orchestrator.md", "existing orchestrator"],
   ] as const) {
     const { root, write } = fixture();
