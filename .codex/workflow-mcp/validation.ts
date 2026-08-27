@@ -31,6 +31,9 @@ import type {
   WorkflowId,
   WorkflowVersion,
   WorkItemReference,
+  WorktreePlan,
+  WorktreeValidationIssue,
+  WorktreeValidationResult,
 } from "./types.js";
 
 export const MAX_PATHS = 200;
@@ -40,6 +43,9 @@ export const MAX_TEXT = 4000;
 export const MAX_DETAIL = 2000;
 export const MAX_APPROVED_PLAN = 1024 * 1024;
 export const MAX_EXECUTION_BRIEF = 32 * 1024;
+
+const WORKTREE_NAME_SEPARATOR = /[\\/]+/gu;
+const WORKTREE_NAME_INVALID = /[^a-zA-Z0-9._-]+/gu;
 
 const FINDING_SEVERITIES: ReadonlySet<FindingSeverity> = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_KEYS = [
@@ -458,6 +464,121 @@ export function exactPaths(
     fail("ERROR_INVALID_PATHS", "duplicate path");
   }
   return normalized.sort();
+}
+
+/** Validate a user supplied name before it is joined to a managed worktree root. */
+export function validateWorktreePathName(value: unknown): WorktreeValidationResult {
+  const issues: WorktreeValidationIssue[] = [];
+  if (typeof value !== "string" || value.length === 0) {
+    issues.push({ category: "invalid_path", field: "path", detail: "path is empty" });
+    return { valid: false, issues };
+  }
+  if (
+    value.includes("\0") ||
+    isAbsolute(value) ||
+    value.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/u.test(value)
+  ) {
+    issues.push({ category: "invalid_path", field: "path", detail: "path must be relative" });
+  }
+  const segments = value.replaceAll("\\", "/").split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    issues.push({
+      category: "invalid_path",
+      field: "path",
+      detail: "path contains an unsafe segment",
+    });
+  }
+  const normalized = segments.join("/");
+  if (normalized === "") {
+    issues.push({ category: "invalid_path", field: "path", detail: "path is empty" });
+  }
+  return { valid: issues.length === 0, issues };
+}
+
+export function assertWorktreePathName(value: unknown): string {
+  const result = validateWorktreePathName(value);
+  if (!result.valid) fail("ERROR_UNSAFE_PATH", result.issues[0]?.detail ?? "path is unsafe");
+  return String(value).replaceAll("\\", "/");
+}
+
+export function deriveWorktreeDirectoryName(workspaceName: string): string {
+  if (typeof workspaceName !== "string") fail("ERROR_UNSAFE_PATH", "worktree name is invalid");
+  const name = workspaceName
+    .trim()
+    .replace(WORKTREE_NAME_SEPARATOR, "-")
+    .replace(WORKTREE_NAME_INVALID, "-");
+  const normalized = name.replace(/-+/gu, "-").replace(/^[-.]+|[-.]+$/gu, "");
+  if (!normalized || normalized === "." || normalized === "..") {
+    fail("ERROR_UNSAFE_PATH", "worktree directory name is invalid");
+  }
+  return normalized;
+}
+
+export function deriveWorktreeBranch(
+  workspaceName: string,
+  prefix = "worktree",
+  separator = "/",
+): string {
+  if (
+    typeof prefix !== "string" ||
+    typeof separator !== "string" ||
+    !prefix ||
+    !separator ||
+    prefix.includes("\0") ||
+    separator.includes("\0")
+  ) {
+    fail("ERROR_INVALID_ARGUMENTS", "worktree branch policy is invalid");
+  }
+  const branch = `${prefix}${separator}${deriveWorktreeDirectoryName(workspaceName)}`;
+  if (!branch || branch.startsWith("/") || branch.endsWith("/"))
+    fail("ERROR_INVALID_ARGUMENTS", "worktree branch is invalid");
+  return branch;
+}
+
+export function worktreeValidationResult(
+  issues: WorktreeValidationIssue[],
+): WorktreeValidationResult {
+  const normalized = [...issues].sort(
+    (a, b) =>
+      (a.category < b.category ? -1 : a.category > b.category ? 1 : 0) ||
+      (a.field < b.field ? -1 : a.field > b.field ? 1 : 0) ||
+      (a.detail < b.detail ? -1 : a.detail > b.detail ? 1 : 0),
+  );
+  return { valid: normalized.length === 0, issues: normalized };
+}
+
+export function worktreePlan(
+  input: {
+    path: string;
+    workspaceName: string;
+    branch?: string;
+    startRef: string;
+    createBranch?: boolean;
+  },
+  externalRoot: string,
+): WorktreePlan {
+  if (!input || typeof input !== "object")
+    fail("ERROR_INVALID_ARGUMENTS", "worktree plan is invalid");
+  const pathName = assertWorktreePathName(input.path);
+  const directoryName = deriveWorktreeDirectoryName(input.workspaceName);
+  const branch = input.branch ?? deriveWorktreeBranch(input.workspaceName);
+  if (typeof branch !== "string" || !branch || branch.includes("\0"))
+    fail("ERROR_INVALID_ARGUMENTS", "worktree branch is invalid");
+  if (typeof input.startRef !== "string" || !input.startRef || input.startRef.includes("\0"))
+    fail("ERROR_INVALID_ARGUMENTS", "start ref is invalid");
+  const path = resolve(externalRoot, pathName);
+  const root = resolve(externalRoot);
+  const escaped = relative(root, path);
+  if (!escaped || escaped === ".." || escaped.startsWith(`..${sep}`) || isAbsolute(escaped))
+    fail("ERROR_UNSAFE_PATH", "worktree path escapes external root");
+  return {
+    path,
+    directory_name: directoryName,
+    branch,
+    start_ref: input.startRef,
+    create_branch: input.createBranch ?? true,
+  };
 }
 
 export function exactKeys(

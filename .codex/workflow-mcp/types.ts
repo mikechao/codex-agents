@@ -83,6 +83,59 @@ export type CommitMismatchCategory =
   | "TREE_MISMATCH"
   | "PATH_MISMATCH";
 
+// Normalized, read-only worktree data. These types deliberately do not expose the
+// dependency used by the Git adapter (or Git's porcelain result objects).
+export interface WorktreeEntry {
+  path: string;
+  head: GitCommitSha | null;
+  branch: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+export type NormalizedWorktree = WorktreeEntry;
+
+export interface WorktreeLookup {
+  found: boolean;
+  worktree: WorktreeEntry | null;
+}
+
+export type WorktreeQueryResult = WorktreeLookup;
+
+export type WorktreeValidationCategory =
+  | "invalid_path"
+  | "invalid_name"
+  | "invalid_branch"
+  | "branch_unavailable"
+  | "invalid_ref"
+  | "path_unavailable"
+  | "main_worktree"
+  | "current_worktree"
+  | "ambiguous_path";
+
+export interface WorktreeValidationIssue {
+  category: WorktreeValidationCategory;
+  field: string;
+  detail: string;
+}
+
+export interface WorktreeValidationResult {
+  valid: boolean;
+  issues: WorktreeValidationIssue[];
+}
+
+export interface WorktreePlan {
+  path: string;
+  directory_name: string;
+  branch: string;
+  start_ref: string;
+  create_branch: boolean;
+}
+
+export type WorktreePlanResult = WorktreePlan;
+
 // Phase-driven workflow action names. Planning tool names remain a separate domain.
 export type WorkflowAction =
   | "workflow_create"

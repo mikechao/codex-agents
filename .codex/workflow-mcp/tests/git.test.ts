@@ -2,28 +2,48 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { WorkflowError } from "../errors.js";
 import {
   approvedResidue,
+  branchAvailable,
+  branchExists,
+  findCurrentWorktree,
+  findWorktreeByBranch,
+  findWorktreeByPath,
+  getMainWorktree,
+  listWorktrees,
+  parseWorktreePorcelain,
+  planWorktree,
   prepareCommitReceipt,
+  refExists,
   repositoryRoot,
   reviewRange,
+  reviewRangeAsync,
   stagedEntries,
+  stagedEntriesAsync,
   stagedPaths,
+  stagedPathsAsync,
+  verifyBranchName,
   verifyPreparedCommit,
   verifyRange,
+  verifyRangeAsync,
   verifyRevision,
+  worktreePathExists,
   writeTree,
+  writeTreeAsync,
 } from "../git.js";
 import type {
   CommitRangeReviewTarget,
@@ -59,6 +79,107 @@ function target(base: string, head: string, paths: string[]): CommitRangeReviewT
     head_revision: head,
     approved_paths: paths,
   } as CommitRangeReviewTarget;
+}
+
+interface GitShim {
+  directory: string;
+  state: string;
+  realGit: string;
+  cleanup: () => void;
+}
+
+function gitShim(): GitShim {
+  const directory = mkdtempSync(join(tmpdir(), "workflow-git-shim-"));
+  const state = join(directory, "state");
+  mkdirSync(state);
+  writeFileSync(join(state, "active"), "0\n");
+  writeFileSync(join(state, "max"), "0\n");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const shim = join(directory, "git");
+  writeFileSync(
+    shim,
+    `#!/bin/sh
+set -u
+state=$WORKFLOW_GIT_SHIM_STATE
+real_git=$WORKFLOW_GIT_REAL
+is_ls_tree=0
+for argument in "$@"; do
+  if [ "$argument" = "ls-tree" ]; then is_ls_tree=1; fi
+done
+if [ "$is_ls_tree" -eq 0 ]; then exec "$real_git" "$@"; fi
+if [ "\${WORKFLOW_GIT_SHIM_LARGE:-0}" = "1" ]; then
+  exec dd if=/dev/zero bs=4194305 count=1 2>/dev/null
+fi
+lock=$state/lock
+while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
+active=$(cat "$state/active")
+active=$((active + 1))
+printf '%s\n' "$active" >"$state/active"
+maximum=$(cat "$state/max")
+if [ "$active" -gt "$maximum" ]; then printf '%s\n' "$active" >"$state/max"; fi
+rmdir "$lock"
+decrement() {
+  while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
+  active=$(cat "$state/active")
+  active=$((active - 1))
+  printf '%s\n' "$active" >"$state/active"
+  rmdir "$lock"
+}
+trap 'decrement' EXIT
+sleep 0.02
+  "$real_git" "$@"
+status=$?
+trap - EXIT
+while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
+active=$(cat "$state/active")
+active=$((active - 1))
+printf '%s\n' "$active" >"$state/active"
+rmdir "$lock"
+exit "$status"
+`,
+  );
+  chmodSync(shim, 0o755);
+  return {
+    directory,
+    state,
+    realGit,
+    cleanup: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+function runAsyncReviewChild(
+  root: string,
+  reviewTarget: CommitRangeReviewTarget,
+  shim: GitShim,
+  largeOutput = false,
+): any {
+  const source = `(async () => {
+  const { reviewRangeAsync } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), ".codex/workflow-mcp/git.ts")).href)});
+  const result = await reviewRangeAsync(${JSON.stringify(root)}, ${JSON.stringify(reviewTarget)});
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => {
+  process.stderr.write(JSON.stringify({ category: error?.category ?? null, code: error?.code ?? null }));
+  process.exitCode = 1;
+});`;
+  return JSON.parse(
+    execFileSync(process.execPath, ["--no-warnings", "--eval", source], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${shim.directory}${delimiter}${process.env.PATH ?? ""}`,
+        WORKFLOW_GIT_REAL: shim.realGit,
+        WORKFLOW_GIT_SHIM_STATE: shim.state,
+        WORKFLOW_GIT_SHIM_LARGE: largeOutput ? "1" : "0",
+      },
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+function shimCounter(shim: GitShim, name: "active" | "max"): number {
+  return Number(readFileSync(join(shim.state, name), "utf8").trim());
 }
 
 test("verifyRevision accepts commits and rejects invalid, unknown, and non-commit revisions", () => {
@@ -524,6 +645,294 @@ test("prepareCommitReceipt verifies receipt, staged scope, residue, and staged c
     assert.equal(
       errorCategory(() => prepareCommitReceipt(root, { ...state, commit_authorization: null })),
       "ERROR_STALE_RECEIPT",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("worktree porcelain is normalized, sorted, and rejects ambiguous records", () => {
+  const parsed = parseWorktreePorcelain(
+    `worktree /tmp/worktree-z\nHEAD ${"a".repeat(40)}\nbranch refs/heads/topic/z\nlocked by test\n\nworktree /tmp/worktree-a\nHEAD ${"b".repeat(40)}\ndetached\nprunable missing\n`,
+  );
+  assert.deepEqual(
+    parsed.map((entry) => entry.path),
+    ["/private/tmp/worktree-a", "/private/tmp/worktree-z"],
+  );
+  assert.equal(parsed[0].head, "b".repeat(40));
+  assert.equal(parsed[0].detached, true);
+  assert.equal(parsed[1].branch, "topic/z");
+  assert.equal(parsed[1].locked, true);
+  const acceptedBranches = [
+    ["/tmp/worktree-nbsp", "topic/\u00a0name"],
+    ["/tmp/worktree-emspace", "topic/\u2003name"],
+    ["/tmp/worktree-bracket", "topic]name"],
+  ];
+  for (const [path, branch] of acceptedBranches) {
+    const accepted = parseWorktreePorcelain(
+      `worktree ${path}\nHEAD ${"a".repeat(40)}\nbranch refs/heads/${branch}\n`,
+    );
+    assert.equal(accepted[0]?.branch, branch);
+  }
+  for (const character of [
+    " ",
+    "\t",
+    "\u0001",
+    "\u0000",
+    "\u007f",
+    "~",
+    "^",
+    ":",
+    "?",
+    "*",
+    "[",
+    "\\",
+  ]) {
+    assert.equal(
+      errorCategory(() =>
+        parseWorktreePorcelain(
+          `worktree /tmp/rejected-${character.charCodeAt(0)}\nHEAD ${"a".repeat(40)}\nbranch refs/heads/topic${character}name\n`,
+        ),
+      ),
+      "ERROR_GIT",
+    );
+  }
+  assert.equal(
+    errorCategory(() =>
+      parseWorktreePorcelain(`worktree /tmp/a\nHEAD ${"a".repeat(40)}\nHEAD ${"b".repeat(40)}\n`),
+    ),
+    "ERROR_GIT",
+  );
+  assert.equal(
+    errorCategory(() =>
+      parseWorktreePorcelain(`worktree /tmp/a\nHEAD ${"a".repeat(40)}\nbranch main\n`),
+    ),
+    "ERROR_GIT",
+  );
+  assert.equal(
+    errorCategory(() => parseWorktreePorcelain(`worktree /tmp/a\nHEAD ${"a".repeat(40)}\n`)),
+    "ERROR_GIT",
+  );
+  assert.equal(
+    errorCategory(() =>
+      parseWorktreePorcelain(
+        `worktree /tmp/a\nHEAD ${"a".repeat(40)}\nbranch refs/heads/topic@{upstream}\n`,
+      ),
+    ),
+    "ERROR_GIT",
+  );
+  assert.equal(
+    errorCategory(() =>
+      parseWorktreePorcelain(
+        `worktree /tmp/a\nHEAD ${"a".repeat(40)}\nbranch refs/heads/topic\u0001bad\n`,
+      ),
+    ),
+    "ERROR_GIT",
+  );
+  const bare = parseWorktreePorcelain("worktree /tmp/bare\nbare\n");
+  assert.equal(bare[0]?.bare, true);
+});
+
+test("worktree queries and planning use canonical project-owned values", async () => {
+  const { root, git } = fixture();
+  const linked = mkdtempSync(join(tmpdir(), "workflow-linked-parent-"));
+  const linkedPath = join(linked, "child");
+  try {
+    git("worktree", "add", "-q", "-b", "topic/linked", linkedPath, "HEAD");
+    const entries = await listWorktrees(root);
+    assert.equal(entries.length, 2);
+    assert.equal((await findWorktreeByBranch(root, "topic/linked")).found, true);
+    assert.equal((await findWorktreeByPath(root, linkedPath)).found, true);
+    assert.equal((await getMainWorktree(root)).path, realpathSync(root));
+    assert.equal((await findCurrentWorktree(root))?.path, realpathSync(root));
+    assert.equal((await verifyBranchName(root, "bad..branch")).valid, false);
+    assert.equal(await branchExists(root, "topic/linked"), true);
+    assert.equal(await branchAvailable(root, "topic/new"), true);
+    assert.equal(await branchExists(root, "topic/linked^{commit}"), false);
+    assert.equal(await branchAvailable(root, "topic/linked^{commit}"), false);
+    const unicodeWhitespaceBranch = "topic/\u00a0name\u2003part";
+    git("branch", unicodeWhitespaceBranch);
+    assert.equal(await branchExists(root, unicodeWhitespaceBranch), true);
+    assert.equal(await branchAvailable(root, unicodeWhitespaceBranch), false);
+    assert.equal(await refExists(root, "HEAD"), true);
+    const planned = await planWorktree(
+      root,
+      { path: "planned", workspaceName: "Issue 19", startRef: "HEAD" },
+      linked,
+    );
+    assert.equal(planned.validation.valid, true);
+    assert.equal(planned.plan?.directory_name, "Issue-19");
+    assert.equal(planned.plan?.branch, "worktree/Issue-19");
+    const unsafe = await planWorktree(
+      root,
+      { path: "../escape", workspaceName: "x", startRef: "HEAD" },
+      linked,
+    );
+    assert.equal(unsafe.plan, null);
+    assert.equal(unsafe.validation.valid, false);
+
+    symlinkSync(join(linked, "not-created"), join(linked, "dangling"));
+    const occupiedByDanglingSymlink = await planWorktree(
+      root,
+      { path: "dangling", workspaceName: "x", startRef: "HEAD" },
+      linked,
+    );
+    assert.equal(occupiedByDanglingSymlink.validation.valid, false);
+    assert.equal(
+      occupiedByDanglingSymlink.validation.issues.some(
+        (issue) => issue.category === "path_unavailable",
+      ),
+      true,
+    );
+
+    symlinkSync("loop", join(linked, "loop"));
+    assert.equal(
+      errorCategory(() => worktreePathExists(join(linked, "loop", "nested"))),
+      "ERROR_PATH_ACCESS",
+    );
+    const unavailableThroughLoop = await planWorktree(
+      root,
+      { path: "loop/nested", workspaceName: "x", startRef: "HEAD" },
+      linked,
+    );
+    assert.equal(unavailableThroughLoop.validation.valid, false);
+    assert.equal(
+      unavailableThroughLoop.validation.issues.some(
+        (issue) => issue.category === "path_unavailable",
+      ),
+      true,
+    );
+
+    const outside = mkdtempSync(join(tmpdir(), "workflow-outside-root-"));
+    try {
+      symlinkSync(join(outside, "not-created"), join(linked, "outside-dangling"));
+      const unavailableThroughDanglingAncestor = await planWorktree(
+        root,
+        { path: "outside-dangling/nested", workspaceName: "x", startRef: "HEAD" },
+        linked,
+      );
+      assert.equal(unavailableThroughDanglingAncestor.validation.valid, false);
+      assert.equal(unavailableThroughDanglingAncestor.plan, null);
+      assert.equal(
+        unavailableThroughDanglingAncestor.validation.issues.some(
+          (issue) => issue.category === "path_unavailable",
+        ),
+        true,
+      );
+
+      mkdirSync(join(outside, "target"));
+      symlinkSync(join(outside, "target"), join(linked, "outside-link"));
+      const escapedThroughSymlink = await planWorktree(
+        root,
+        { path: "outside-link/nested", workspaceName: "x", startRef: "HEAD" },
+        linked,
+      );
+      assert.equal(escapedThroughSymlink.validation.valid, false);
+      assert.equal(escapedThroughSymlink.plan, null);
+      assert.equal(
+        escapedThroughSymlink.validation.issues.some((issue) => issue.category === "invalid_path"),
+        true,
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(linked, { recursive: true, force: true });
+  }
+});
+
+test("reviewRangeAsync bounds aggregate Git concurrency and preserves path order", () => {
+  const { root, git, write } = fixture();
+  const shim = gitShim();
+  try {
+    const paths = Array.from(
+      { length: 200 },
+      (_, index) => `file-${String(index).padStart(3, "0")}.txt`,
+    );
+    for (const path of paths) write(path, `${path}\n`);
+    git("add", "-A");
+    git("commit", "-qm", "async concurrency base");
+    const base = git("rev-parse", "HEAD");
+    git("commit", "--allow-empty", "-qm", "async concurrency head");
+    const head = git("rev-parse", "HEAD");
+
+    const representativePaths = [paths[19], paths[0], paths[7]] as string[];
+    const representative = runAsyncReviewChild(root, target(base, head, representativePaths), shim);
+    assert.deepEqual(
+      representative.paths.map((entry: { path: string }) => entry.path),
+      [...representativePaths].sort(),
+    );
+    assert.equal(shimCounter(shim, "active"), 0);
+
+    const maximum = runAsyncReviewChild(root, target(base, head, paths), shim);
+    assert.deepEqual(
+      maximum.paths.map((entry: { path: string }) => entry.path),
+      paths,
+    );
+    assert.equal(shimCounter(shim, "max"), 4);
+    assert.equal(shimCounter(shim, "active"), 0);
+  } finally {
+    shim.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("async raw Git rejects oversized textual output at collection time", () => {
+  const { root, git, write } = fixture();
+  const shim = gitShim();
+  try {
+    write("note.txt", "before\n");
+    git("add", "note.txt");
+    git("commit", "-qm", "async size base");
+    const base = git("rev-parse", "HEAD");
+    git("commit", "--allow-empty", "-qm", "async size head");
+    const head = git("rev-parse", "HEAD");
+    let failure: { stderr?: string } | undefined;
+    try {
+      runAsyncReviewChild(root, target(base, head, ["note.txt"]), shim, true);
+    } catch (error) {
+      failure = error as { stderr?: string };
+    }
+    assert.ok(failure);
+    assert.match(failure.stderr ?? "", /ERROR_GIT_SIZE/u);
+
+    const normal = runAsyncReviewChild(root, target(base, head, ["note.txt"]), shim);
+    assert.equal(normal.paths[0].path, "note.txt");
+  } finally {
+    shim.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("async raw Git compatibility preserves exact ranges, NUL paths, and index trees", async () => {
+  const { root, git, write } = fixture();
+  try {
+    write("async.txt", "one\n");
+    git("add", "async.txt");
+    git("commit", "-qm", "async base");
+    const base = git("rev-parse", "HEAD") as GitCommitSha;
+    write("async.txt", "two\n");
+    write("async-add.txt", "add\n");
+    git("add", "-A");
+    const staged = await stagedPathsAsync(root);
+    assert.deepEqual(staged, ["async-add.txt", "async.txt"]);
+    assert.equal((await stagedEntriesAsync(root)).has("async-add.txt" as ExactRepoPath), true);
+    const tree = await writeTreeAsync(root);
+    assert.match(tree, /^[0-9a-f]{40}$/u);
+    git("commit", "-qm", "async head");
+    const head = git("rev-parse", "HEAD") as GitCommitSha;
+    assert.deepEqual(await verifyRangeAsync(root, base, head), {
+      base_revision: base,
+      head_revision: head,
+    });
+    const range = await reviewRangeAsync(root, target(base, head, ["async.txt", "async-add.txt"]));
+    assert.deepEqual(
+      range.paths.map((entry) => [entry.path, entry.kind]),
+      [
+        ["async-add.txt", "added"],
+        ["async.txt", "modified"],
+      ],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
