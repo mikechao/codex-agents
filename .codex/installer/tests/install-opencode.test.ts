@@ -17,7 +17,9 @@ import { dirname, join, resolve } from "node:path";
 import {
   cleanupOpenCodeAgentsBackup,
   commitBothHosts,
+  createOpenCodeConfig,
   hasOpenCodeWorkflowStateRegistration,
+  openCodePlanAgent,
   providerServerCommand,
 } from "../../../install-into.js";
 
@@ -148,15 +150,33 @@ test("install-into.ts preserves unrelated existing opencode.json configuration",
     assert.equal(parsed.mcp.workflow_state.type, "local");
     assert.deepEqual(Object.keys(parsed).sort(), [
       "$schema",
+      "agent",
       "autoupdate",
       "default_agent",
       "mcp",
       "model",
       "subagent_depth",
     ]);
+    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("fresh OpenCode config exposes only the canonical native Plan override", () => {
+  const parsed = JSON.parse(createOpenCodeConfig("/provider/server.ts")) as Record<string, unknown>;
+  assert.deepEqual(parsed.agent, { plan: openCodePlanAgent() });
+  const plan = (parsed.agent as Record<string, unknown>).plan as Record<string, unknown>;
+  assert.equal(plan.prompt, openCodePlanAgent().prompt);
+  assert.deepEqual(plan.permission, {
+    edit: "deny",
+    bash: "deny",
+    task: { "*": "deny", planner: "allow" },
+    "workflow_state_*": "deny",
+    workflow_state_plan_parent_get: "allow",
+    workflow_state_plan_approve: "allow",
+  });
+  assert.equal(parsed.instructions, undefined);
 });
 
 test("install-into.ts preserves comments and trailing commas in an existing opencode.jsonc", () => {
@@ -168,6 +188,9 @@ test("install-into.ts preserves comments and trailing commas in an existing open
         "{",
         "  // project model override",
         '  "model": "some-provider/some-model",',
+        '  "agent": {',
+        '    "build": { "prompt": "keep build", },',
+        "  },",
         '  "mcp": {',
         "    // existing server, keep me",
         '    "other_server": {',
@@ -192,8 +215,80 @@ test("install-into.ts preserves comments and trailing commas in an existing open
     const parsed = JSON.parse(content.replace(/\/\/.*$/gm, "").replace(/,\s*([}\]])/g, "$1"));
     assert.equal(parsed.mcp.other_server.type, "local");
     assert.equal(parsed.mcp.workflow_state.type, "local");
+    assert.equal(parsed.agent.build.prompt, "keep build");
+    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts inserts Plan into an existing agent object without changing other agents", () => {
+  const { root, write } = fixture();
+  try {
+    write(
+      "opencode.json",
+      JSON.stringify(
+        {
+          agent: { build: { prompt: "keep build", permission: { edit: "allow" } } },
+          default_agent: "build",
+        },
+        null,
+        2,
+      ),
+    );
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8"));
+    assert.deepEqual(parsed.agent.build, { prompt: "keep build", permission: { edit: "allow" } });
+    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
+    assert.equal(parsed.default_agent, "build");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts preserves an explicit custom agent.plan object", () => {
+  const { root, write } = fixture();
+  try {
+    const custom = {
+      prompt: "project-owned Plan prompt",
+      permission: { edit: "allow", "workflow_state_*": "deny" },
+      model: "project/model",
+      nested: { keep: true },
+    };
+    write("opencode.json", JSON.stringify({ agent: { plan: custom } }, null, 2));
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8"));
+    assert.deepEqual(parsed.agent.plan, custom);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts refuses malformed agent and agent.plan shapes before installation", () => {
+  const cases = [
+    { agent: null },
+    { agent: [] },
+    { agent: "invalid" },
+    { agent: { plan: null } },
+    { agent: { plan: [] } },
+    { agent: { plan: "invalid" } },
+  ];
+  for (const value of cases) {
+    const { root, write } = fixture();
+    try {
+      const original = `${JSON.stringify(value)}\n`;
+      write("opencode.json", original);
+      const result = runInstaller(root);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /agent(?:\.plan)? must be an object/);
+      assert.equal(readFileSync(join(root, "opencode.json"), "utf8"), original);
+      assert.ok(!existsSync(join(root, ".opencode/agents")));
+      assert.ok(!existsSync(join(root, ".codex/agents")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

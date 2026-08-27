@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   hasOpenCodeWorkflowStateRegistration,
+  openCodePlanAgent,
   trustedBootstrapCommand,
 } from "../../../install-into.js";
 import { tools } from "../../workflow-mcp/server.js";
@@ -19,12 +20,14 @@ test("the repository's own opencode.json registers the supervised self-host serv
     $schema: string;
     default_agent: string;
     subagent_depth: number;
+    agent: { plan: Record<string, unknown> };
     mcp: { workflow_state: Record<string, unknown> };
   };
   const expected = {
     $schema: "https://opencode.ai/config.json",
     default_agent: "orchestrator",
     subagent_depth: 2,
+    agent: { plan: openCodePlanAgent() },
     mcp: {
       workflow_state: {
         type: "local",
@@ -37,6 +40,7 @@ test("the repository's own opencode.json registers the supervised self-host serv
   assert.equal(parsed.$schema, expected.$schema);
   assert.equal(parsed.default_agent, expected.default_agent);
   assert.equal(parsed.subagent_depth, expected.subagent_depth);
+  assert.deepEqual(parsed.agent, expected.agent);
   assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
   assert.equal(parsed.default_agent, "orchestrator");
@@ -57,7 +61,7 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.match(orchestrator, /^mode: primary$/m);
   assert.match(orchestrator, /^  edit: deny$/m);
   assert.match(orchestrator, /^  task:\n    "\*": deny$/m);
-  assert.match(orchestrator, /^    "planner": allow$/m);
+  assert.ok(!orchestrator.match(/^    "planner": allow$/m));
   assert.ok(!orchestrator.match(/^    "explorer": allow$/m));
   for (const agent of ["implementer", "code_reviewer", "committer"]) {
     assert.match(orchestrator, new RegExp(`^    "${agent}": allow$`, "m"));
@@ -65,7 +69,6 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
   for (const tool of [
     "plan_parent_get",
-    "plan_approve",
     "workflow_create_from_plan",
     "workflow_create",
     "workflow_adopt_dirty_scope",
@@ -106,9 +109,11 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "work_items",
     "do not discover identifiers externally",
     "retranscribe them when creating linked follow-ups",
-    "delegate only to `planner`",
-    "zero to four disposable, read-only explorers",
-    "bounded `PlannerHandoff`",
+    "Built-in Plan is the user-facing planning mediator",
+    "exact `plan_id` and revision",
+    "workflow_create_from_plan",
+    "Verify that it is the current",
+    "do not pass pasted plan text",
     "classify the requested work against the immutable approved intent",
     "unchanged objective, desired outcome, acceptance criteria, and logical-change",
     "ordinary repair",
@@ -135,7 +140,10 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   }
 
   const routeStart = normalized.indexOf("For final-tree reconciliation");
-  const routeEnd = normalized.indexOf("Before `workflow_create`, extract", routeStart);
+  const routeEnd = normalized.indexOf(
+    "Before `workflow_create` or `workflow_create_from_plan`, extract",
+    routeStart,
+  );
   assert.ok(routeStart >= 0 && routeEnd > routeStart, "missing isolated reconciliation route");
   const reconciliation = normalized.slice(routeStart, routeEnd);
   assert.match(
@@ -185,11 +193,11 @@ test("the orchestrator exposes the complete parent planning tool surface", () =>
     ),
   );
   const serverTools = new Set(tools.map((tool) => tool.name));
-  for (const name of ["plan_parent_get", "plan_approve", "workflow_create_from_plan"]) {
+  for (const name of ["plan_parent_get", "workflow_create_from_plan"]) {
     assert.ok(allowed.has(name), `orchestrator must allow ${name}`);
     assert.ok(serverTools.has(name), `server must expose ${name}`);
   }
-  for (const name of ["plan_create", "plan_get", "plan_revise"]) {
+  for (const name of ["plan_create", "plan_get", "plan_revise", "plan_approve"]) {
     assert.equal(allowed.has(name), false, `orchestrator must not allow planner operation ${name}`);
   }
 });
@@ -199,7 +207,7 @@ test("the orchestrator preflights the exact reviewer validation policy", () => {
   const orchestrator = readFileSync(orchestratorFile, "utf8");
   const normalized = orchestrator.replace(/\s+/gu, " ");
   for (const phrase of [
-    "Before calling `workflow_create`, read the repository's `.codex/reviewer-validation.json` policy",
+    "Before calling `workflow_create` or `workflow_create_from_plan`, read the repository's `.codex/reviewer-validation.json` policy",
     "exact array equality",
     "argument ordering, and every individual argument",
     "Validation IDs, descriptions, prefixes, and approximate or partial matches never authorize execution",

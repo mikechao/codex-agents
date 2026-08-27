@@ -2,7 +2,8 @@
 
 Reusable `implementer`, `code_reviewer`, and `committer` agent definitions with a local durable
 workflow-state MCP server, shared between Codex and OpenCode. OpenCode also includes a dedicated
-`orchestrator` primary plus generated `planner` and hidden read-only `explorer` subagents.
+`orchestrator` primary, the native built-in Plan mediator override, and generated `planner` and
+hidden read-only `explorer` subagents.
 
 The execution role contracts live as host-neutral prose in `.codex/agents/contracts/`; planner and
 explorer contracts are OpenCode-only. Codex TOML
@@ -38,10 +39,11 @@ directly in either host loads the local agent definitions and auto-starts the
 `workflow_state` MCP server from the project config itself — no manual server launch is required.
 Runtime SQLite state is stored outside the repository under the user's Codex state directory.
 
-Workflow creation records the exact approved Plan-mode text as immutable `approved_plan` state. Direct
-or non-plan workflows explicitly pass `null`; structured objective, paths, acceptance criteria, and
-validation requirements remain the enforceable workflow contract. The plan is visible to the parent
-and implementer only, and linked follow-ups provide an explicit plan rather than inheriting one.
+Plan execution records the exact approved artifact text as immutable `approved_plan` state through
+`workflow_create_from_plan`. Direct or non-plan workflows explicitly pass `null`; structured objective,
+paths, acceptance criteria, and validation requirements remain the enforceable workflow contract. The
+plan is visible to the parent and implementer only, and linked follow-ups provide an explicit plan
+rather than inheriting one.
 Approved paths are an append-only narrow mutation scope. Linked follow-ups retain that remediation
 allowlist, then require a fresh independent combined review over the inherited logical-change paths
 before commit eligibility; the source is superseded so only the active leaf can commit. In an active
@@ -54,7 +56,7 @@ commits an authorization-time content commitment and verifies it before resume a
 creation.
 
 Workflow creation also accepts optional generic work-item provenance. Records preserve provider-neutral
-metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v6, survive
+metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v8, survive
 restart, and flow automatically through linked follow-ups. Only parent and committer views expose this
 metadata; it is not authorization, scope, review evidence, or tracker mutation. Committers render
 authoritative items as neutral `Refs <display_ref>` lines and never infer IDs or emit completion keywords.
@@ -94,7 +96,7 @@ continue to be validated through `Bun.TOML.parse` and the existing semantic asse
 
 Opening `codex-agents` itself in Codex loads the three shared agents from `.codex/agents/` and registers
 the local `workflow_state` bootstrap supervisor via `.codex/config.toml`. Opening it in OpenCode loads the
-the execution subagents plus generated `planner`/`explorer` and the `orchestrator` primary agent from `.opencode/agents/` and registers the same server as a local MCP
+the execution subagents plus generated `planner`/`explorer` and the `orchestrator` primary agent from `.opencode/agents/`, applies the native built-in `agent.plan` mediator override, and registers the same server as a local MCP
 (`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
   (a temporary copy materialized from `git show HEAD:.codex/workflow-mcp/bootstrap.ts`) and the same `enabled`/`timeout` semantics as
 installer-generated registrations. The self-host OpenCode registration is checked into the
@@ -103,11 +105,12 @@ repository and a test keeps it from silently diverging from the installer's regi
 OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
 `default_agent`. See the [OpenCode orchestration flow](docs/opencode-orchestration-flow.md) for the
 current architecture and handoff sequence. Use the normal primary-agent switcher (Tab by default)
-to select Plan for optional analysis/refinement or Build for deliberate ordinary direct coding. The
-generated `planner` is the repository-native planning route and does not create an implementation
-workflow; after approving a plan, switch to Orchestrator and say
-`implement the plan`. Orchestrator performs bounded read-only preflight, creates or reuses the
-authoritative workflow, and automatically dispatches `implementer`, `code_reviewer`, and—after
+to select the built-in Plan mediator or Build for deliberate ordinary direct coding. For a persisted
+non-trivial plan, Plan delegates to generated `planner`, retrieves and renders the exact authoritative
+`full_plan` verbatim, and explicitly approves only after user confirmation; it never creates a
+workflow. Then switch to Orchestrator and name the exact `plan_id` and revision with `implement the
+plan`. Orchestrator performs bounded read-only preflight, parent-verifies the current approved plan,
+calls `workflow_create_from_plan`, and automatically dispatches `implementer`, `code_reviewer`, and—after
 explicit user commit authorization—`committer`. Worker handoffs contain only the `workflow_id`; each
 role reads authoritative state and its `expected_version` through its dedicated getter. The single
 capability remains parent-only for privileged transitions, with separation enforced by role-specific
@@ -115,14 +118,17 @@ tool exposure and Workflow MCP workflow, phase, version, and invariant checks. O
 edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
 
-Planning is a separate pre-workflow path: the orchestrator delegates only to `planner`, which may
-launch zero through four disposable read-only explorers. Explorer context is bounded and never
-persisted in Workflow MCP or plan artifacts. The planner uses only the three planning operations,
-reconciles every executable validation argv against the target's exact reviewer policy, and returns a
-bounded `PlannerHandoff`; parent retrieval, approval, and workflow creation remain orchestrator-only.
+Planning is a separate pre-workflow path: built-in Plan delegates substantial planning and every
+material refinement only to `planner`, which may launch zero through four disposable read-only
+explorers. Explorer context is bounded and never persisted in Workflow MCP or plan artifacts. The
+planner uses only the three planner-side operations, reconciles every executable validation argv
+against the target's exact reviewer policy, and returns a bounded `PlannerHandoff`; Plan performs
+exact parent retrieval, verbatim presentation, and explicit approval, while Orchestrator performs
+exact approved execution only.
 The optional target-owned `.codex/planner-policy.json` supplies advisory repository guidance and is
-not copied by the installer. This planner topology is issue #60; user-facing plan approval UX is
-issue #61.
+not copied by the installer. Only the current approved revision can execute; stale or historical
+revisions stop without workflow creation. Direct Orchestrator implementation remains a deliberate
+fallback and uses `workflow_create` with `approved_plan: null`. Build remains independent.
 After an external Git commit succeeds, Workflow MCP itself observes and persists the verified commit
 SHA, without requiring the committer to submit it.
 
@@ -157,10 +163,12 @@ sources. Their direct provider-server registration has no runtime-artifact affin
 server uses the target repository's Git and durable state normally.
 
 For OpenCode, a new config or an existing config without `default_agent` defaults to
-`orchestrator`, and a new or depth-absent config gets `subagent_depth: 2`. Existing explicit
-`default_agent` and `subagent_depth` values are preserved; the orchestrator is still
-installed and can be selected with the primary-agent switcher. This prevents installation from
-overwriting a target project's deliberate default.
+`orchestrator`, and a new or depth-absent config gets `subagent_depth: 2`. Installation adds the
+canonical native `agent.plan` override only when `agent.plan` is absent. Existing explicit
+`default_agent`, `subagent_depth`, `agent.plan`, unrelated agent/config settings, comments, and
+trailing commas are preserved; malformed `agent` or `agent.plan` shapes fail closed before partial
+installation. The orchestrator is still installed and can be selected with the primary-agent
+switcher.
 
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
 `code_reviewer.md`, `committer.md`, `planner.md`, `explorer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated
@@ -186,8 +194,10 @@ other. The generated OpenCode definitions pin the provider/model IDs and reasoni
 `.codex/agents/model-policy.yaml`, so the configured provider must be connected (`/connect`) or the
 per-agent models overridden for the subagent models to resolve.
 
-OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the orchestrator
-has `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
+OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the built-in Plan
+override denies edit, bash, planner-side Workflow MCP operations, workflow creation, and direct
+planner dispatch while allowing only parent plan retrieval/approval; the orchestrator has
+`edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
 to the three workflow subagents; the reviewer
   gets `edit: deny` plus a narrow bash allowlist containing only Git inspection (including `git grep`),
   receipt inspection, and the project-owned reviewer validation runner. Reviewer semantic searches

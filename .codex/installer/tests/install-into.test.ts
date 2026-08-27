@@ -236,7 +236,15 @@ test("install-into.ts preserves an existing OpenCode default_agent preference", 
   try {
     write(
       "opencode.json",
-      '{\n  "$schema": "https://opencode.ai/config.json",\n  "default_agent": "plan"\n}\n',
+      JSON.stringify(
+        {
+          $schema: "https://opencode.ai/config.json",
+          default_agent: "plan",
+          agent: { plan: { prompt: "target-owned", permission: { edit: "allow" }, custom: true } },
+        },
+        null,
+        2,
+      ),
     );
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);
@@ -244,10 +252,16 @@ test("install-into.ts preserves an existing OpenCode default_agent preference", 
       default_agent: string;
       subagent_depth: number;
       mcp: Record<string, unknown>;
+      agent: { plan: Record<string, unknown> };
     };
     assert.equal(config.default_agent, "plan");
     assert.equal(config.subagent_depth, 2);
     assert.ok(config.mcp.workflow_state);
+    assert.deepEqual(config.agent.plan, {
+      prompt: "target-owned",
+      permission: { edit: "allow" },
+      custom: true,
+    });
     assert.ok(existsSync(join(root, ".opencode/agents/orchestrator.md")));
   } finally {
     rmSync(root, { recursive: true, force: true });

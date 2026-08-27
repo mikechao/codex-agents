@@ -13,12 +13,16 @@ implicit migration.
 
 Planning is a separate pre-workflow domain. `plan_create` and `plan_revise` persist complete,
 insert-only PlanArtifact revisions; reads and revisions require exact optimistic revision numbers.
-`plan_approve` is a separate parent-only tool surface, so planner writes cannot self-approve. Only
-the current approved revision can seed `workflow_create_from_plan`; historical approved revisions
-remain readable but are stale for execution. The server snapshots the full plan, bounded execution
-brief, normalized objective/scope/contracts, and digest provenance into a working-tree change
-workflow. Plans have no runtime affinity and introduce no workflow phase. Direct `workflow_create`
-continues to be supported.
+The generated planner uses those planner-side operations as the sole plan writer/refiner. Built-in
+OpenCode Plan retrieves exact revisions through the parent `plan_parent_get` surface, presents the
+authoritative `full_plan` verbatim, and explicitly approves with parent-only `plan_approve`. Orchestrator
+only parent-reads an already-approved exact revision and calls `workflow_create_from_plan`; it does
+not approve or re-plan. Only the current approved revision can seed execution; historical approved
+revisions remain readable but are stale for execution. The server snapshots the exact full plan,
+bounded execution brief, normalized objective/scope/contracts, digest, and provenance into a
+working-tree change workflow. Plans have no runtime affinity and introduce no workflow phase. Direct
+`workflow_create` continues to be supported as the non-plan fallback. The server, schema, transport,
+and persistence mechanism are unchanged.
 
 Managed commits use only authoritative committer-view provenance: one neutral `Refs <display_ref>`
 line per distinct display reference, preserving exact text and first occurrence. Empty provenance emits

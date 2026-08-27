@@ -270,25 +270,30 @@ Workflow MCP state. Restart host sessions after changing policy.
 ## OpenCode host adapter
 
 Run in an installed OpenCode project (`.opencode/agents/` plus the `mcp.workflow_state` local
-registration) after changing the orchestrator, installer, generator, or a canonical contract.
+registration) after changing the orchestrator, installer, native Plan override, or a canonical
+contract.
 
-- Direct Orchestrator implementation: in a fresh Orchestrator session, submit a non-trivial request
-  such as `Implement <issue>`. Confirm it performs only bounded read-only preflight, does not create
-  source-level implementation TODOs or mutate repository files, creates or reuses the authoritative
-  workflow, captures the exact `workflow_id`, and automatically delegates to `implementer` in the
-  same turn with only the exact workflow ID; confirm the implementer's first authoritative action is
-  `workflow_implementer_get` and that implementation occurs inside `implementer`.
-- Plan -> Orchestrator execution: run `/plan <non-trivial issue>` in Plan, allow it to finish a
-  detailed plan without creating an implementation workflow, switch to Orchestrator, and say
-  `implement the plan`. Confirm Orchestrator does not perform a second planning pass or mutate files,
-  creates or reuses the workflow, and automatically delegates the approved plan as execution context
-  to `implementer` with only the exact `workflow_id`.
-- Build independence: switch to the built-in Build agent and confirm it no longer receives project
-  instructions claiming it is the workflow orchestrator; Build remains available for deliberate
-  ordinary direct coding.
+- Built-in Plan delegation: in a fresh Plan session, submit a substantial non-trivial request and
+  confirm Plan delegates only to generated `planner`, exposes no edit/bash/workflow creation or
+  planner-side MCP operations, accepts only bounded `PlannerHandoff`, and does not create a workflow.
+- Exact Plan presentation and approval: confirm Plan parent-reads the exact returned plan ID/revision,
+  renders authoritative `full_plan` character-for-character, labels drafts awaiting approval, waits
+  for explicit approval, and calls `plan_approve` only for that exact current revision. Confirm stale,
+  historical, malformed, conflicting, and `needs_input` results stop without workflow creation.
+- Plan refinement: issue a material refinement and confirm the planner receives the immutable plan ID,
+  exact base revision, and bounded feedback without pasted old plan text, calls `plan_get` before one
+  complete `plan_revise`, and returns a bounded handoff.
+- Plan -> Orchestrator execution: after Plan explicitly approves, switch to Orchestrator and name the
+  exact plan ID/revision. Confirm Orchestrator parent-reads the exact current approved revision,
+  performs policy preflight, calls `workflow_create_from_plan` without retranscribing plan fields,
+  captures the exact workflow ID, and delegates only that ID to `implementer`.
 - Orchestrator permissions: confirm `mode: primary`, `edit: deny`, fail-closed Task permissions that
-  allow only `implementer`, `code_reviewer`, and `committer`, read-only repository inspection, no Git
-  mutation commands, and only parent/orchestration `workflow_state` tools.
+  allow only `implementer`, `code_reviewer`, and `committer`, no `plan_approve` or planner dispatch,
+  read-only repository inspection, no Git mutation commands, and only parent/orchestration
+  `workflow_state` tools. Confirm direct non-plan requests use `workflow_create` with
+  `approved_plan: null`.
+- Build independence: switch to the built-in Build agent and confirm it receives no project-global
+  orchestration instructions and remains available for deliberate ordinary direct coding.
 - Subagent loading: OpenCode loads `implementer`, `code_reviewer`, and `committer` from
   `.opencode/agents/` as `mode: subagent`, and Orchestrator can dispatch each without a manual
   `@implementer` invocation.
@@ -325,16 +330,22 @@ registration) after changing the orchestrator, installer, generator, or a canoni
 - Default-agent installation policy: a new target or target config without `default_agent` starts in
   Orchestrator; an explicit existing `default_agent` is preserved while the Orchestrator definition
   is installed.
-- Validation-policy preflight (#34 regression): before `workflow_create`, Orchestrator reads the
-  target `.codex/reviewer-validation.json` policy and checks every proposed executable validation by
-  exact argv-array equality, including length, ordering, and each argument. Validation IDs,
-  descriptions, prefixes, and approximate matches do not authorize execution; `argv: null` remains
-  an explicit manual check. If an executable requirement is unauthorized, Orchestrator does not
-  create the workflow, edit policy, run the reviewer validation, silently drop the check, or claim
-  it passed manually. A valid reformulation either uses an already-authorized exact argv that is
-  genuinely sufficient for the same check or represents a genuinely manual check with `argv: null`;
-  otherwise it reports the mismatch and stops. The read-only preflight remains bounded and does not
-  broaden reviewer enforcement.
+- Native Plan installation and reload: confirm fresh configs contain the canonical Plan prompt and
+  exact permission map; insertion adds `agent.plan` to an absent/object `agent`, while explicit
+  `agent.plan`, unrelated agents/config settings, JSONC comments/trailing commas, and MCP settings
+  remain unchanged. Confirm scalar/array/null `agent` and `agent.plan` values fail closed with no
+  partial installation, then reload and verify the actual Plan tool surface.
+- Validation-policy preflight (#34 regression): before `workflow_create` or
+  `workflow_create_from_plan`, Orchestrator reads the target `.codex/reviewer-validation.json` policy
+  and checks every proposed executable validation by exact argv-array equality, including length,
+  ordering, and each argument. Validation IDs, descriptions, prefixes, and approximate matches do
+  not authorize execution; `argv: null` remains an explicit manual check. If an executable
+  requirement is unauthorized, Orchestrator does not create either workflow route, edit policy, run
+  the reviewer validation, silently drop the check, or claim it passed manually. A valid
+  reformulation either uses an already-authorized exact argv that is genuinely sufficient for the
+  same check or represents a genuinely manual check with `argv: null`; otherwise it reports the
+  mismatch and stops. The read-only preflight remains bounded and does not broaden reviewer
+  enforcement; direct non-plan fallback still uses `workflow_create` with `approved_plan: null`.
 
 ## Acceptance
 

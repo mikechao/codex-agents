@@ -9,7 +9,8 @@ definitions are host adapters: Codex TOML under `.codex/agents/` and OpenCode Ma
 `.codex/agents/contracts/` and `.codex/agents/model-policy.yaml` by `bun run generate:agents`; the checked-in definitions must stay
 byte-identical to the generator output (`bun run test:agents` enforces this). The project-scoped
 configuration in `.codex/config.toml` registers the local workflow-state server for Codex; the
-root `opencode.json` registers the same server for direct OpenCode use of this repository, and
+root `opencode.json` registers the same server for direct OpenCode use of this repository and applies
+the native built-in `agent.plan` mediator override, and
 `install-into.ts` registers it for OpenCode in target repositories. The generated
 `implementer`, `code_reviewer`, and `committer` files are the shared cross-host worker adapters;
 .opencode also receives OpenCode-only generated `planner` and hidden read-only `explorer` adapters;
@@ -17,9 +18,11 @@ root `opencode.json` registers the same server for direct OpenCode use of this r
 the shared generator and must not be added to the host-neutral contracts or overwritten by
 generation. The root `opencode.json` selects that primary with `default_agent: "orchestrator"` and
 does not inject orchestration instructions globally into the built-in Build agent. The installer
-copies the orchestrator into target repositories, defaults a new OpenCode config (or one without
-`default_agent`) to `orchestrator`, and preserves an existing explicit `default_agent` while still
-installing the orchestrator as an available primary agent. The historical v2
+copies the orchestrator into target repositories, adds the canonical Plan override only when
+`agent.plan` is absent, refuses malformed agent shapes, defaults a new OpenCode config (or one without
+`default_agent`) to `orchestrator`, and preserves existing explicit `default_agent`, `agent.plan`,
+and unrelated configuration while still installing the orchestrator as an available primary agent.
+The historical v2
 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 
 `.codex/agents/model-policy.yaml` is the only supported edit point for managed worker model and
@@ -47,6 +50,10 @@ state.
 - Planner-to-explorer fan-out is disposable OpenCode context: keep explorer findings, transcripts,
   counts, and retries out of Workflow MCP and plan artifacts. Repository-specific planning guidance
   belongs in the optional target-owned `.codex/planner-policy.json`, not reusable contracts.
+- Built-in OpenCode Plan is the user-facing planning mediator: it delegates persisted planning and
+  refinements to generated `planner`, parent-reads and presents exact `full_plan` text, and explicitly
+  approves. Orchestrator is execution-only for an exact current approved plan and retains the direct
+  non-plan workflow fallback; do not duplicate plan state or authority in prompts or agents.
 - Host reload, stale configuration, transport, and similar infrastructure failures belong at their
   owning boundary; do not model them as workflow-domain phases without genuine durable meaning.
 

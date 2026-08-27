@@ -51,6 +51,37 @@ const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 const OPENCODE_DEFAULT_AGENT = "orchestrator";
 const OPENCODE_SUBAGENT_DEPTH = 2;
 
+export const OPENCODE_PLAN_PROMPT = `You are the built-in OpenCode Plan primary and the user-facing planning mediator and presenter. Preserve native Plan's ordinary read/search and user-facing planning/review behavior, but use the generated planner as the sole author of persisted plan revisions.
+
+For every substantial non-trivial planning request, and for every material refinement, delegate only to the generated \`planner\` subagent. Accept only its bounded \`PlannerHandoff\` (\`plan_id\`, revision, status, summary, questions, and risks). For refinement, send the exact plan identity, exact base revision, and bounded user feedback; never paste or reconstruct the old full plan. Do not call planner-side plan creation, reading, or revision operations yourself, and do not edit, run bash, implement, create workflows, or dispatch implementation workers.
+
+When the planner reports \`ready_for_approval\`, use \`workflow_state_plan_parent_get\` to retrieve the exact returned plan ID and revision. Verify that the result is the current requested draft revision and stop with bounded input on missing, stale, historical, malformed, conflicting, or \`needs_input\` state. Present the authoritative \`full_plan\` character-for-character as Markdown: do not paraphrase, normalize, reorder, truncate, wrap, or substitute the summary. Clearly label an unapproved artifact as a draft awaiting approval.
+
+Wait for an explicit user instruction approving that exact plan ID and revision. Then parent-read the same exact identity again and call \`workflow_state_plan_approve\` with that identity and bounded authorization only. Never create a workflow or dispatch an implementer. After approval, report the exact plan ID and revision so the user can switch to Orchestrator and name them for execution. Plan approval is separate from workflow and commit authorization.`;
+
+export const OPENCODE_PLAN_PERMISSION = {
+  edit: "deny",
+  bash: "deny",
+  task: { "*": "deny", planner: "allow" },
+  "workflow_state_*": "deny",
+  workflow_state_plan_parent_get: "allow",
+  workflow_state_plan_approve: "allow",
+} as const;
+
+export function openCodePlanAgent(): Record<string, unknown> {
+  return {
+    prompt: OPENCODE_PLAN_PROMPT,
+    permission: {
+      edit: OPENCODE_PLAN_PERMISSION.edit,
+      bash: OPENCODE_PLAN_PERMISSION.bash,
+      task: { ...OPENCODE_PLAN_PERMISSION.task },
+      "workflow_state_*": OPENCODE_PLAN_PERMISSION["workflow_state_*"],
+      workflow_state_plan_parent_get: OPENCODE_PLAN_PERMISSION.workflow_state_plan_parent_get,
+      workflow_state_plan_approve: OPENCODE_PLAN_PERMISSION.workflow_state_plan_approve,
+    },
+  };
+}
+
 export function materializeAgentDefinitions(
   sourceRoot: string,
   codexDestination: string,
@@ -464,6 +495,7 @@ export function createOpenCodeConfig(serverPath: string): string {
       $schema: OPENCODE_CONFIG_SCHEMA,
       default_agent: OPENCODE_DEFAULT_AGENT,
       subagent_depth: OPENCODE_SUBAGENT_DEPTH,
+      agent: { plan: openCodePlanAgent() },
       mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
     },
     null,
@@ -477,7 +509,24 @@ export function stageOpenCodeConfig(
   serverPath: string,
 ): string {
   if (existing === null) return createOpenCodeConfig(serverPath);
-  const parsedExisting = objectValue(parseJsoncConfig(configPath, existing), "mcp") ?? {};
+  const parsedRoot = parseJsoncConfig(configPath, existing);
+  const parsedExisting = objectValue(parsedRoot, "config") ?? {};
+  if (Object.hasOwn(parsedExisting, "agent")) {
+    const agent = parsedExisting.agent;
+    if (agent === null || typeof agent !== "object" || Array.isArray(agent)) {
+      error(
+        `${configPath} agent must be an object; refusing to modify the existing OpenCode config`,
+      );
+    }
+    if (Object.hasOwn(agent as Record<string, unknown>, "plan")) {
+      const plan = (agent as Record<string, unknown>).plan;
+      if (plan === null || typeof plan !== "object" || Array.isArray(plan)) {
+        error(
+          `${configPath} agent.plan must be an object; refusing to modify the existing OpenCode config`,
+        );
+      }
+    }
+  }
   if (Object.hasOwn(parsedExisting, "mcp")) {
     const mcp = objectValue(parsedExisting.mcp, "mcp");
     if (mcp !== null && Object.hasOwn(mcp, OPENCODE_SERVER_NAME)) {
@@ -500,6 +549,17 @@ export function stageOpenCodeConfig(
       modify(staged, ["subagent_depth"], OPENCODE_SUBAGENT_DEPTH, formattingOptions),
     );
   }
+  if (!Object.hasOwn(parsedExisting, "agent")) {
+    staged = applyEdits(
+      staged,
+      modify(staged, ["agent"], { plan: openCodePlanAgent() }, formattingOptions),
+    );
+  } else if (!Object.hasOwn(parsedExisting.agent as Record<string, unknown>, "plan")) {
+    staged = applyEdits(
+      staged,
+      modify(staged, ["agent", "plan"], openCodePlanAgent(), formattingOptions),
+    );
+  }
   staged = applyEdits(
     staged,
     modify(
@@ -513,8 +573,8 @@ export function stageOpenCodeConfig(
   const stagedRecord = parsedStaged ?? {};
   if (
     !deepEqual(
-      withoutKeys(parsedExisting, ["mcp", "default_agent", "subagent_depth"]),
-      withoutKeys(stagedRecord, ["mcp", "default_agent", "subagent_depth"]),
+      withoutKeys(parsedExisting, ["mcp", "default_agent", "subagent_depth", "agent"]),
+      withoutKeys(stagedRecord, ["mcp", "default_agent", "subagent_depth", "agent"]),
     )
   ) {
     error(
@@ -536,6 +596,23 @@ export function stageOpenCodeConfig(
   if (!deepEqual(stagedMcp[OPENCODE_SERVER_NAME], openCodeMcpRegistration(serverPath))) {
     error(
       `Staged OpenCode workflow_state registration is invalid; refusing to install: ${configPath}`,
+    );
+  }
+  const existingAgent = Object.hasOwn(parsedExisting, "agent")
+    ? (parsedExisting.agent as Record<string, unknown>)
+    : {};
+  const stagedAgent = objectValue(stagedRecord.agent, "staged agent") ?? {};
+  if (!deepEqual(withoutKey(existingAgent, "plan"), withoutKey(stagedAgent, "plan"))) {
+    error(
+      `Staged OpenCode agent settings would alter unrelated entries; refusing to install: ${configPath}`,
+    );
+  }
+  const expectedPlan = Object.hasOwn(existingAgent, "plan")
+    ? existingAgent.plan
+    : openCodePlanAgent();
+  if (!deepEqual(stagedAgent.plan, expectedPlan)) {
+    error(
+      `Staged OpenCode agent.plan would alter the existing preference; refusing to install: ${configPath}`,
     );
   }
   const expectedDefaultAgent = Object.hasOwn(parsedExisting, "default_agent")

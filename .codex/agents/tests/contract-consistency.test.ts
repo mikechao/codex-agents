@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { TOML } from "bun";
+import { openCodePlanAgent } from "../../../install-into.js";
 import {
   CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
   generateDefinitions,
@@ -365,6 +366,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     assert.match(content, new RegExp(`^    "${role}": allow$`, "m"));
   }
+  assert.ok(!content.includes('    "planner": allow'));
   assert.match(content, /^  workflow_state_\*: deny$/m);
   for (const parentTool of [
     "workflow_create",
@@ -400,6 +402,32 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
+  assert.ok(!content.includes("workflow_state_plan_approve"));
+  assert.match(content, /workflow_create_from_plan/);
+  assert.match(content, /exact `plan_id` and revision/);
+  assert.match(content, /do not pass pasted plan text/);
+});
+
+test("the checked-in native Plan override is canonical and isolated from generated agents", () => {
+  const config = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
+  ) as {
+    agent?: { plan?: unknown };
+    instructions?: unknown;
+  };
+  assert.deepEqual(config.agent, { plan: openCodePlanAgent() });
+  assert.equal(config.instructions, undefined);
+  const plan = config.agent?.plan as { permission?: Record<string, unknown> };
+  assert.deepEqual(plan.permission, {
+    edit: "deny",
+    bash: "deny",
+    task: { "*": "deny", planner: "allow" },
+    "workflow_state_*": "deny",
+    workflow_state_plan_parent_get: "allow",
+    workflow_state_plan_approve: "allow",
+  });
+  const generatedPaths = Object.keys(generateDefinitions());
+  assert.ok(!generatedPaths.some((path) => path.endsWith("/.opencode/agents/plan.md")));
 });
 
 test("orchestrator summarizes refreshed authoritative transitions before routing", () => {
@@ -472,6 +500,11 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
     "utf8",
   ).replace(/\s+/gu, " ");
+  const readme = readFileSync(resolve(import.meta.dir, "../../../README.md"), "utf8").replace(
+    /\s+/gu,
+    " ",
+  );
+  const evals = readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator, workflow, guide]) {
     assert.match(contract, /unchanged (?:objective|approved intent)/iu);
@@ -502,6 +535,37 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     assert.match(contract, /fresh combined review/u);
   }
 
+  assert.match(
+    guide,
+    /explicit user-approved work-item metadata to `workflow_create` or `workflow_create_from_plan`/u,
+    "the guide must document work-item propagation for both creation routes",
+  );
+  assert.match(
+    guide,
+    /policy mismatch and stops before `workflow_create` or `workflow_create_from_plan`/u,
+    "the guide must document policy preflight stops for both creation routes",
+  );
+  assert.match(
+    readme,
+    /generic work-item provenance\. Records preserve provider-neutral metadata[^.]*immutably in schema v8/u,
+    "README must describe current schema v8 work-item provenance",
+  );
+  assert.match(
+    evals,
+    /before `workflow_create` or `workflow_create_from_plan`, Orchestrator reads the target `\.codex\/reviewer-validation\.json` policy and checks every proposed executable validation/u,
+    "manual evaluations must preflight both workflow creation routes",
+  );
+  assert.match(
+    evals,
+    /does not create either workflow route/u,
+    "manual evaluations must require a stop for either creation route",
+  );
+  assert.match(
+    evals,
+    /direct non-plan fallback still uses `workflow_create` with `approved_plan: null`/u,
+    "manual evaluations must preserve the direct fallback distinction",
+  );
+
   const terminalRefresh = orchestrator.indexOf("After every terminal subagent handoff");
   const conciseSummary = orchestrator.indexOf("before summarizing or routing", terminalRefresh);
   const route = orchestrator.indexOf("permitted_next_actions", conciseSummary);
@@ -530,7 +594,7 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     [
       orchestrator,
       "For final-tree reconciliation",
-      "Before `workflow_create`, extract",
+      "Before `workflow_create` or `workflow_create_from_plan`, extract",
       "orchestrator",
     ],
     [

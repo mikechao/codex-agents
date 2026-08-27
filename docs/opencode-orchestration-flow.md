@@ -5,11 +5,14 @@ This guide describes the current OpenCode architecture in this repository. The c
 MCP workflow and delegates repository work to the shared worker roles. It is not a replacement for
 the normal OpenCode agents, and it does not edit, stage, or commit files.
 
-OpenCode planning is a separate pre-workflow topology: `orchestrator` delegates only to the
-generated `planner`, which may fan out zero to four hidden, read-only `explorer` agents. Explorer
-context is disposable and is never persisted in Workflow MCP or plan artifacts. The planner returns
-one bounded `PlannerHandoff`; parent plan retrieval, exact-revision approval, and workflow creation
-remain orchestrator-only. This is the issue #60 boundary; user-facing plan approval UX remains #61.
+OpenCode planning is a separate pre-workflow topology. The native built-in `agent.plan` override is
+the user-facing mediator and presenter: it delegates substantial planning and every material
+refinement to the generated `planner`, which may fan out zero to four hidden, read-only `explorer`
+agents. Explorer context is disposable and is never persisted in Workflow MCP or plan artifacts.
+Planner is the sole complete plan writer/refiner and returns one bounded `PlannerHandoff`; Plan uses
+the parent surface to retrieve and render exact `full_plan` text verbatim, then explicitly approves.
+Orchestrator only parent-reads the exact current approved plan and executes it through
+`workflow_create_from_plan`.
 
 The complete workflow-state contract, including every transition and stop condition, is in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md). This guide explains how the OpenCode
@@ -24,22 +27,22 @@ There are two supported ways to begin implementation:
    status and `HEAD`, plus the exact objective, approved paths, acceptance criteria, and validation
    requirements), then creates or reuses the authoritative workflow. It does not investigate the
    implementation in depth or solve it in the primary session.
-2. **Plan -> Orchestrator.** A user runs `/plan <request>` in Plan, allows the plan to finish, then
-   switches to Orchestrator and says `implement the plan` (or equivalent). Planning is pre-workflow:
-   Plan does not create an implementation workflow. Once the approved plan is handed to Orchestrator,
-   it is execution context; Orchestrator does not re-plan an approved plan. It performs the same
-   bounded preflight, then creates or reuses the workflow and dispatches the plan to the implementer.
+2. **Plan -> Orchestrator.** A user runs `/plan <request>` in the built-in Plan primary. Plan
+   delegates to `planner`, retrieves the exact plan artifact, renders its `full_plan` verbatim, and
+   waits for explicit approval of the exact plan ID/revision. Plan does not create an implementation
+   workflow. The user then switches to Orchestrator, names that exact identity, and says `implement
+   the plan` (or equivalent). Orchestrator parent-verifies it, performs policy preflight, calls
+   `workflow_create_from_plan`, and dispatches the plan-derived workflow to the implementer.
 
 In both paths, the custom Orchestrator primary is the workflow control plane rather than Build.
 OpenCode's built-in Build agent remains available for deliberate ordinary direct coding and receives
 no project-global orchestration instructions. Select it explicitly when workflow-backed delegation
 is not wanted.
 
-The generated planner is the repository-native planning route when the request needs a persisted
-plan or refinement. The host-native Plan agent remains an optional analysis surface, but it is not the
-only planning route and it does not own Workflow MCP planning authority. When using the orchestrator
-for planning, it delegates only to `planner` and accepts its bounded handoff before parent retrieval,
-approval, or later workflow creation.
+The generated planner is the sole author of persisted plan revisions. The host-native Plan agent is
+the user-facing mediator, not a second planner implementation: it delegates only to `planner` and
+accepts its bounded handoff before parent retrieval and approval. Orchestrator is not a planning
+entry point and has no plan approval or planner dispatch authority.
 
 For planning requests, delegate only to `planner`, never directly to `explorer`. The planner may use
 the optional target-owned `.codex/planner-policy.json` as advisory guidance, but malformed or
@@ -48,16 +51,17 @@ scope, or validation authority. Before `ready_for_approval`, each executable val
 match `.codex/reviewer-validation.json` by exact array equality. A missing or mismatched policy stops
 planning rather than guessing.
 
-For Plan -> Orchestrator execution, `workflow_create` receives the exact approved Plan-mode text in
-immutable `approved_plan`; Orchestrator must not summarize or reconstruct it. Direct requests pass
-`approved_plan: null`. The parent view and implementer view expose this execution intent, while
+For Plan -> Orchestrator execution, `workflow_create_from_plan` receives only the exact approved
+plan ID/revision and supported creation options; the server copies immutable `approved_plan` and
+provenance from the authoritative artifact. Orchestrator must not summarize or reconstruct it.
+Direct requests pass `approved_plan: null`. The parent view and implementer view expose this execution intent, while
 reviewer and committer views retain least-context projections. Objective, paths, acceptance criteria,
 validation requirements, and authorized remediation/findings remain structured enforcement fields.
 
-The orchestrator passes only explicit user-approved work-item metadata to `workflow_create`; absent
-tracker metadata is represented as `work_items: []`. These generic immutable references are schema v6
-state, shown only to parent and committer, and inherited automatically by linked follow-ups. Linked
-creation never accepts retranscribed replacements or externally discovered identifiers. The committer
+The orchestrator passes only explicit user-approved work-item metadata to `workflow_create` or
+`workflow_create_from_plan`; absent tracker metadata is represented as `work_items: []`. These generic
+immutable references are schema v8 state, shown only to parent and committer, and inherited automatically
+by linked follow-ups. Linked creation never accepts retranscribed replacements or externally discovered identifiers. The committer
 renders exact authoritative display references as neutral `Refs <display_ref>` lines, with no tracker
 API calls and no `Fixes`/`Closes`/`Resolves` completion semantics.
 
@@ -126,7 +130,7 @@ an unavailable check. When a proposed command is not authorized, Orchestrator do
 policy, run the reviewer validation, silently drop the requirement, or claim that it passed manually.
 It may use an already-authorized exact argv only when that command is genuinely sufficient for the
 same check, or represent a genuinely manual check with `argv: null`; otherwise it reports the policy
-mismatch and stops before `workflow_create`. Policy reading and comparison stay bounded and
+mismatch and stops before `workflow_create` or `workflow_create_from_plan`. Policy reading and comparison stay bounded and
 read-only, with no helper execution or reviewer enforcement changes.
 
 The illustrative happy path is:
@@ -192,12 +196,20 @@ sequenceDiagram
         User->>Orchestrator: Implement request
     else Approved Plan execution
         User->>Plan: /plan non-trivial request
-        Plan-->>User: Approved plan (no workflow created)
-        User->>Orchestrator: implement the plan
-        Note over Plan,Orchestrator: Planning is pre-workflow; Orchestrator does not re-plan.
+        Plan->>planner: Delegate planning/refinement
+        planner-->>Plan: Bounded PlannerHandoff
+        Plan->>workflow_state: Parent-read exact plan revision
+        workflow_state-->>Plan: Authoritative full_plan
+        Plan-->>User: Render full_plan verbatim; await explicit approval
+        User->>Plan: Approve exact plan ID/revision
+        Plan->>workflow_state: Parent-read and approve exact revision
+        Plan-->>User: Exact approved plan ID/revision
+        User->>Orchestrator: implement exact plan ID/revision
+        Note over Plan,Orchestrator: Planning is pre-workflow; Orchestrator does not re-plan or approve.
     end
     Orchestrator->>GitWorkingTree: Read-only preflight: status and HEAD
-    Orchestrator->>workflow_state: Create or reuse workflow
+    Orchestrator->>workflow_state: Parent-read exact approved plan and policy preflight
+    Orchestrator->>workflow_state: workflow_create_from_plan (identity/options/work items only)
     workflow_state-->>Orchestrator: Exact workflow_id + one parent capability
     Orchestrator->>implementer: Exact workflow_id
     implementer->>workflow_state: Initial workflow_implementer_get
@@ -265,8 +277,10 @@ the target repository.
 
 ## Boundary summary
 
-- **Orchestrator:** primary workflow control plane; bounded read-only preflight and routing only.
-- **Plan:** optional pre-workflow analysis and plan refinement; never the implementation workflow.
+- **Orchestrator:** primary execution control plane; exact approved-plan parent read, bounded
+  policy/Git preflight, workflow creation, and routing only; no plan approval or planner dispatch.
+- **Plan:** native user-facing pre-workflow mediator/presenter; delegates to the generated planner,
+  renders exact `full_plan` verbatim, and explicitly approves; never creates an implementation workflow.
 - **Implementer:** detailed investigation, edits, validation, and implementation evidence.
 - **Code reviewer:** independent read-only review and semantic findings; receipt capture and
   comparison remain inside Workflow MCP.
