@@ -21,7 +21,7 @@ const _instructions =
   "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent, while approved_paths is an append-only narrow mutation scope: only the parent may expand it with fresh user authorization naming exact paths in permitted active states. Linked follow-ups retain that narrow remediation scope and require a fresh independent combined review over inherited logical-change paths before approval or commit. Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; only combined APPROVED stops a linked logical change; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 */
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -220,6 +220,7 @@ export const PARENT_PLANNING_OPERATIONS = [
   "plan_parent_get",
   "plan_approve",
   "workflow_create_from_plan",
+  "workflow_create_linked_followup_from_plan",
 ] as const;
 
 export const tools: Tool[] = [
@@ -755,6 +756,27 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "workflow_create_linked_followup_from_plan",
+    description:
+      "Create a fresh linked cycle-0 remediation workflow by resolving the exact current approved child PlanArtifact server-side; after remediation approval it requires a fresh combined review of the inherited logical-change scope before commit eligibility.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        ...planIdentityProperties,
+        finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "plan_id", "revision", "finding_ids", "user_authorization"],
+    ),
+    annotations: {
+      title: "Create linked follow-up from plan",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
     name: "workflow_authorize_commit",
     description:
       "Record separate parent/user commit authorization after receipt freshness verification.",
@@ -990,6 +1012,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
             break;
           case "workflow_create_linked_followup":
             result = store.createLinkedFollowup(args);
+            break;
+          case "workflow_create_linked_followup_from_plan":
+            result = store.createLinkedFollowupFromPlan(args);
             break;
           case "workflow_authorize_commit":
             result = store.authorizeCommit(args);

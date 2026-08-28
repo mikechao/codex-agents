@@ -211,7 +211,9 @@ it never dispatches an implementer and never approves the workflow. Remaining ef
 enter `REPAIRING` via `workflow_authorize_repair` and become terminal
 `STOPPED_REPAIR_EXHAUSTED` via `workflow_finalize_repair_exhausted` only when the repair cycle equals
 the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0
-workflow with `workflow_create_linked_followup`. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
+workflow with the legacy direct-contract `workflow_create_linked_followup` or the identity-only
+`workflow_create_linked_followup_from_plan`. The latter resolves the exact current approved child
+PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
 recoverable with `workflow_resume_review`. Implementation context/block stops are recoverable with
 `workflow_resume_implementation`. `STOPPED_CONCERNS` enters review via `workflow_accept_concerns`
 under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED`,
@@ -601,15 +603,16 @@ Planning is a separate pre-workflow domain. Complete PlanArtifact revisions are 
 read/revise operations require exact optimistic revision numbers. Parent approval is a separate
 exact-revision operation; planner-facing writes cannot self-approve. Historical approved revisions
 remain readable but only the current approved revision can seed a workflow. `workflow_create_from_plan`
-constructs a working-tree change workflow server-side and snapshots the authoritative full plan,
+and `workflow_create_linked_followup_from_plan` construct workflows server-side and snapshot the authoritative full plan,
 bounded execution brief, normalized contracts, and digest provenance. Plans are not runtime-affined,
 and planning adds no WorkflowPhase or worker-attempt state. Direct `workflow_create` remains supported.
 
 Persisted Workflow MCP state has one current schema. `approved_plan` is stored as exact text in the
 state JSON: `workflow_create_from_plan` copies it from the exact current approved revision, while
 direct/non-plan workflow creation supplies `null`; it cannot be changed by ordinary mutations or
-runtime adoption. Linked follow-ups receive an explicit plan input rather than silently copying the
-source plan. Incompatible databases are rejected at startup
+runtime adoption. Legacy linked follow-ups retain their raw direct-contract and null-plan behavior;
+plan-native linked follow-ups receive only plan identity and never silently copy the source plan.
+Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
 `workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.

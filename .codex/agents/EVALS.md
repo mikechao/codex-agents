@@ -245,6 +245,9 @@ Workflow MCP state. Restart host sessions after changing policy.
 - Linked follow-up workflow: `workflow_create_linked_followup` creates a cycle-0 child with a new
   ID, exact scope, copied findings, remediation context, and parent/source links from an approved or
   exhausted source workflow.
+- Plan-native linked follow-up: `workflow_create_linked_followup_from_plan` accepts only source
+  authority/version, exact child plan identity, exact finding IDs, and explicit authorization; the
+  server binds the current approved artifact and rejects raw PlanArtifact retranscription.
 - Commit preparation: prepare binds the exact HEAD, index tree, paths, and review receipt, uses
   rename-independent exact delete+add paths, rejects empty/partial/extra/untracked staging, and
   never changes Git state or runs hooks. Supported pre-commit failures persist a
@@ -341,8 +344,7 @@ contract.
   `agent.plan`, unrelated agents/config settings, JSONC comments/trailing commas, and MCP settings
   remain unchanged. Confirm scalar/array/null `agent` and `agent.plan` values fail closed with no
   partial installation, then reload and verify the actual Plan tool surface.
-- Validation-policy preflight (#34 regression): before `workflow_create` or
-  `workflow_create_from_plan`, Orchestrator reads the target `.codex/reviewer-validation.json` policy
+- Validation-policy preflight (#34 regression): before `workflow_create` or `workflow_create_from_plan`, Orchestrator reads the target `.codex/reviewer-validation.json` policy and checks every proposed executable validation; the same preflight applies before plan-native linked creation.
   and checks every proposed executable validation by exact argv-array equality, including length,
   ordering, and each argument. Validation IDs, descriptions, prefixes, and approximate matches do
   not authorize execution; `argv: null` remains an explicit manual check. If an executable

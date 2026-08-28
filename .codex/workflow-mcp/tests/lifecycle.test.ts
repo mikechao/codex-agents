@@ -73,13 +73,17 @@ const ACTIONS = {
     committer: [],
   },
   approved: {
-    parent: ["workflow_authorize_commit", "workflow_create_linked_followup"],
+    parent: [
+      "workflow_authorize_commit",
+      "workflow_create_linked_followup",
+      "workflow_create_linked_followup_from_plan",
+    ],
     implementer: [],
     reviewer: [],
     committer: [],
   },
   approvedRange: {
-    parent: ["workflow_create_linked_followup"],
+    parent: ["workflow_create_linked_followup", "workflow_create_linked_followup_from_plan"],
     implementer: [],
     reviewer: [],
     committer: [],
@@ -104,7 +108,7 @@ const ACTIONS = {
     committer: [],
   },
   exhausted: {
-    parent: ["workflow_create_linked_followup"],
+    parent: ["workflow_create_linked_followup", "workflow_create_linked_followup_from_plan"],
     implementer: [],
     reviewer: [],
     committer: [],
@@ -219,6 +223,13 @@ const EVENTS = {
     "REVIEW_SUBMITTED",
     "REPAIR_EXHAUSTED",
     "LINKED_FOLLOWUP_CREATED",
+  ],
+  linkedRemediationReview: ["WORKFLOW_CREATED", "IMPLEMENTATION_SUBMITTED", "REVIEW_SUBMITTED"],
+  linkedCombinedReview: [
+    "WORKFLOW_CREATED",
+    "IMPLEMENTATION_SUBMITTED",
+    "REVIEW_SUBMITTED",
+    "REVIEW_SUBMITTED",
   ],
   inconclusiveResumed: [
     "WORKFLOW_CREATED",
@@ -462,6 +473,75 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
     validation_requirements: ["child validation"],
     finding_ids: findingIds,
     user_authorization: "user authorized follow-up",
+  });
+}
+
+function doCreateChildPlan(ctx: any) {
+  ctx.plan = ctx.store.planCreate({
+    full_plan: "# exact linked child plan\n\nApply the authorized remediation.",
+    execution_brief: "Apply only the server-bound remediation plan.",
+    objective: "planned linked remediation",
+    approved_paths: ["note.txt"],
+    acceptance_criteria: ["the linked remediation is complete"],
+    validation_requirements: ["linked remediation validation"],
+  });
+  ctx.store.planApprove({
+    plan_id: ctx.plan.plan_id,
+    revision: ctx.plan.revision,
+    user_authorization: "user approved exact linked child plan",
+  });
+}
+
+function doLinkedFollowupFromPlan(ctx: any, findingIds: string[]) {
+  const { workflow, capability } = ctx.created;
+  ctx.child = ctx.store.createLinkedFollowupFromPlan({
+    workflow_id: workflow.workflow_id,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    plan_id: ctx.plan.plan_id,
+    revision: ctx.plan.revision,
+    finding_ids: findingIds,
+    user_authorization: "user authorized exact planned remediation",
+  });
+}
+
+function doChildImplementation(ctx: any, options: any = {}) {
+  const { workflow } = ctx.child;
+  ctx.store.submitImplementation({
+    workflow_id: workflow.workflow_id,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    status: "DONE",
+    summary: "planned remediation implemented",
+    agent_touched_paths: [],
+    acceptance_results: workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
+      criterion_id,
+      status: "satisfied",
+      evidence: "acceptance evidence",
+    })),
+    validation_results: workflow.validation_requirements.map(({ validation_id }: any) => ({
+      validation_id,
+      status: "passed",
+      evidence: "validation evidence",
+    })),
+    known_failures: [],
+    finding_resolution_map: options.resolution ?? {},
+  });
+}
+
+function doChildReview(ctx: any, prior: any = {}) {
+  const { workflow } = ctx.child;
+  const id = workflow.workflow_id;
+  ctx.store.beginReview({
+    workflow_id: id,
+    expected_version: ctx.store.parentGet(id).version,
+  });
+  ctx.store.submitReview({
+    workflow_id: id,
+    expected_version: ctx.store.parentGet(id).version,
+    review_status: "APPROVED",
+    blocking_findings: [],
+    optional_findings: [],
+    prior_finding_classifications: prior,
   });
 }
 
@@ -1028,6 +1108,93 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
     snapshots: [
       snap("parent", "STOPPED_REPAIR_EXHAUSTED", 7, ACTIONS.none, EVENTS.exhaustedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
+    ],
+  },
+]);
+
+scenario("plan-native linked remediation requires fresh combined approval", [
+  {
+    name: "create source",
+    run: (ctx: any) => doCreate(ctx, { max_repair_cycles: 1 }),
+    snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
+  },
+  {
+    name: "implement source",
+    run: (ctx: any) => doImplementation(ctx, 0),
+    snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
+  },
+  {
+    name: "write source change",
+    run: doWriteChange,
+    snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
+  },
+  {
+    name: "source blocker",
+    run: (ctx: any) =>
+      doReview(ctx, 1, { status: "CHANGES_REQUESTED", blocking: [blocker("F-PLAN")] }),
+    snapshots: [
+      snap("parent", "REPAIR_REQUIRED", 2, ACTIONS.repairRequired, EVENTS.reviewSubmitted),
+    ],
+  },
+  {
+    name: "authorize source repair",
+    run: (ctx: any) => doAuthorizeRepair(ctx, 2, ["F-PLAN"]),
+    snapshots: [snap("parent", "REPAIRING", 3, ACTIONS.repairing, EVENTS.repairAuthorized)],
+  },
+  {
+    name: "source repair remains",
+    run: (ctx: any) => doImplementation(ctx, 3, { resolution: { "F-PLAN": "still_present" } }),
+    snapshots: [snap("parent", "REVIEWING", 4, ACTIONS.reviewing, EVENTS.repairedSubmitted)],
+  },
+  {
+    name: "source blocker remains",
+    run: (ctx: any) =>
+      doReview(ctx, 4, {
+        status: "CHANGES_REQUESTED",
+        blocking: [blocker("F-PLAN")],
+        prior: { "F-PLAN": "still_present" },
+      }),
+    snapshots: [
+      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview),
+    ],
+  },
+  {
+    name: "finalize source exhaustion",
+    run: (ctx: any) => doFinalize(ctx, 5),
+    snapshots: [
+      snap("parent", "STOPPED_REPAIR_EXHAUSTED", 6, ACTIONS.exhausted, EVENTS.repairExhausted),
+    ],
+  },
+  {
+    name: "create and approve exact child plan",
+    run: doCreateChildPlan,
+    snapshots: [
+      snap("parent", "STOPPED_REPAIR_EXHAUSTED", 6, ACTIONS.exhausted, EVENTS.repairExhausted),
+    ],
+  },
+  {
+    name: "create plan-native child",
+    run: (ctx: any) => doLinkedFollowupFromPlan(ctx, ["F-PLAN"]),
+    snapshots: [
+      snap("parent", "STOPPED_REPAIR_EXHAUSTED", 7, ACTIONS.none, EVENTS.exhaustedLinked),
+      snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
+    ],
+  },
+  {
+    name: "implement narrow remediation",
+    run: (ctx: any) => doChildImplementation(ctx, { resolution: { "F-PLAN": "resolved" } }),
+    snapshots: [snap("child", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
+  },
+  {
+    name: "review remediation stage",
+    run: (ctx: any) => doChildReview(ctx, { "F-PLAN": "resolved" }),
+    snapshots: [snap("child", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.linkedRemediationReview)],
+  },
+  {
+    name: "review combined stage",
+    run: (ctx: any) => doChildReview(ctx),
+    snapshots: [
+      snap("child", "STOPPED_APPROVED", 5, ACTIONS.approved, EVENTS.linkedCombinedReview),
     ],
   },
 ]);

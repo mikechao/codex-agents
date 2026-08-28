@@ -156,6 +156,7 @@ export type WorkflowAction =
   | "workflow_resume_review"
   | "workflow_finalize_repair_exhausted"
   | "workflow_create_linked_followup"
+  | "workflow_create_linked_followup_from_plan"
   | "workflow_authorize_commit"
   | "workflow_prepare_commit"
   | "workflow_submit_commit_result"

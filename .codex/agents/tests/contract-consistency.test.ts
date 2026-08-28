@@ -382,6 +382,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_resume_review",
     "workflow_finalize_repair_exhausted",
     "workflow_create_linked_followup",
+    "workflow_create_linked_followup_from_plan",
     "workflow_authorize_commit",
     "workflow_retry_commit_preparation",
     "workflow_return_commit_to_review",
@@ -404,8 +405,10 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
   assert.ok(!content.includes("workflow_state_plan_approve"));
   assert.match(content, /workflow_create_from_plan/);
+  assert.match(content, /workflow_create_linked_followup_from_plan/);
   assert.match(content, /exact `plan_id` and revision/);
   assert.match(content, /do not pass pasted plan text/);
+  assert.match(content, /never pass or retranscribe its full plan/);
 });
 
 test("the checked-in native Plan override is canonical and isolated from generated agents", () => {

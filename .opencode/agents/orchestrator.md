@@ -49,6 +49,7 @@ permission:
   workflow_state_workflow_resume_review: allow
   workflow_state_workflow_finalize_repair_exhausted: allow
   workflow_state_workflow_create_linked_followup: allow
+  workflow_state_workflow_create_linked_followup_from_plan: allow
   workflow_state_workflow_authorize_commit: allow
   workflow_state_workflow_retry_commit_preparation: allow
   workflow_state_workflow_return_commit_to_review: allow
@@ -98,9 +99,14 @@ equivalent execution request), use the exact approved `plan_id` and revision wit
 `workflow_create_from_plan`; do not pass pasted plan text, summarize, normalize, reconstruct, or
 substitute structured fields for it. If exact parent verification is unavailable, stop and report
 that the workflow cannot be created. For a direct non-plan request, use `workflow_create` with
-`approved_plan: null` explicitly. The same explicit plan identity is required for review-only and
-linked-follow-up creation; linked follow-ups must receive the plan selected for that child and must
-not silently copy or reconstruct the source workflow's plan. Before calling `workflow_create` or
+`approved_plan: null` explicitly. The same explicit plan identity is required for review-only creation.
+For a plan-native linked follow-up, parent-read the exact child `plan_id` and revision, verify the
+current approval, and optionally read the authoritative artifact for the exact reviewer-validation-
+policy preflight. Then call only `workflow_create_linked_followup_from_plan` with the source authority
+and version, exact finding IDs, and explicit authorization. The server resolves and binds the approved
+PlanArtifact; never pass or retranscribe its full plan, execution brief, objective, paths, criteria,
+or validation requirements. Keep direct/non-plan linked creation available through the legacy
+`workflow_create_linked_followup` operation. Before calling `workflow_create` or
 `workflow_create_from_plan`, read the repository's
 `.codex/reviewer-validation.json` policy and preflight every proposed validation:
 

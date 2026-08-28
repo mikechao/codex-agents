@@ -16,8 +16,9 @@ insert-only PlanArtifact revisions; reads and revisions require exact optimistic
 The generated planner uses those planner-side operations as the sole plan writer/refiner. Built-in
 OpenCode Plan retrieves exact revisions through the parent `plan_parent_get` surface, presents the
 authoritative `full_plan` verbatim, and explicitly approves with parent-only `plan_approve`. Orchestrator
-only parent-reads an already-approved exact revision and calls `workflow_create_from_plan`; it does
-not approve or re-plan. Only the current approved revision can seed execution; historical approved
+only parent-reads an already-approved exact revision and calls `workflow_create_from_plan`, or uses
+the identity-only `workflow_create_linked_followup_from_plan` for a linked child; it does not approve
+or re-plan. Only the current approved revision can seed execution; historical approved
 revisions remain readable but are stale for execution. The server snapshots the exact full plan,
 bounded execution brief, normalized objective/scope/contracts, digest, and provenance into a
 working-tree change workflow. Plans have no runtime affinity and introduce no workflow phase. Direct
@@ -200,8 +201,11 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
   the operation without appending audit or changing workflow state. Historical-runtime recovery
   permits only this adoption, the guarded resume preflight, and the guarded review-start snapshot.
 - `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh cycle-0 linked change workflow
-  with `workflow_create_linked_followup`, copying the exact findings and remediation context. The
-  child mutation allowlist remains narrow; remediation approval transitions it back to `REVIEWING`
+  with the legacy direct-contract `workflow_create_linked_followup`, or with the identity-only
+  `workflow_create_linked_followup_from_plan`. The plan-native operation resolves the exact current
+  approved child PlanArtifact server-side from `plan_id` and `revision`; it accepts no retranscribed
+  artifact fields. Both routes copy the exact findings and remediation context. The child mutation
+  allowlist remains narrow; remediation approval transitions it back to `REVIEWING`
   with an authoritative combined target covering the inherited logical-change scope. Only a fresh
   independent approval of that combined target can authorize a commit, and the source workflow is
   superseded so it cannot create a competing successor or commit.
@@ -243,8 +247,9 @@ startup never performs implicit schema upgrades or row rewrites. Current workflo
 The current state stores `approved_plan` exactly in the JSON state: Plan-mode execution supplies the
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
 execution intent exposed only to parent and implementer views. Structured objective, paths, criteria,
-validations, and remediation/findings remain enforceable contracts. Linked follow-ups receive their
-own explicit plan input and never reconstruct or silently inherit the source plan. The current state
+validations, and remediation/findings remain enforceable contracts. Legacy linked follow-ups retain
+their direct contract and null-plan semantics; plan-native linked follow-ups receive only exact plan
+identity and server-bind the selected artifact. They never reconstruct or silently inherit the source plan. The current state
 also stores append-only parent-only scope amendments, authorization-time baselines, and schema-v7
 finding-adjudication state. State schema changes are clean breaks and require resetting incompatible
 databases. Planning tables are part of the v8 clean break as well: unfinished v7 and earlier

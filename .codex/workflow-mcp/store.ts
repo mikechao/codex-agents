@@ -45,6 +45,7 @@ import {
   IMPLEMENTATION_STOP_PHASES,
   linkedFollowupChildState,
   linkedFollowupInput,
+  linkedFollowupInputFromPlan,
   prepareCommit,
   rangeDirtyBaselinePaths,
   resumeImplementation,
@@ -944,6 +945,44 @@ export class WorkflowStore {
     return { plan, revision: row, artifact, approval };
   }
 
+  #approvedPlan(
+    planValue: unknown,
+    revisionValue: unknown,
+  ): {
+    plan: PlanRow;
+    revision: PlanRevisionRow;
+    artifact: PlanRevisionArtifact;
+    approval: PlanApproval;
+  } {
+    const resolved = this.#planRevision(planValue, revisionValue);
+    if (resolved.plan.current_revision !== resolved.revision.revision)
+      fail("ERROR_PLAN_STALE", "plan revision is stale");
+    if (
+      !resolved.approval ||
+      resolved.approval.artifact_digest !== resolved.revision.artifact_digest
+    )
+      fail("ERROR_PLAN_UNAPPROVED", "plan revision is not approved");
+    return resolved as {
+      plan: PlanRow;
+      revision: PlanRevisionRow;
+      artifact: PlanRevisionArtifact;
+      approval: PlanApproval;
+    };
+  }
+
+  #planProvenance(resolved: {
+    revision: PlanRevisionRow;
+    artifact: PlanRevisionArtifact;
+    approval: PlanApproval;
+  }): PlanProvenance {
+    return {
+      plan_id: resolved.artifact.plan_id,
+      revision: resolved.artifact.revision,
+      artifact_digest: resolved.revision.artifact_digest as PlanProvenance["artifact_digest"],
+      approved_at: resolved.approval.approved_at,
+    };
+  }
+
   #planRead(planValue: unknown, revisionValue: unknown, includeApproval: boolean): PlanRead {
     this.#ensureOpen();
     const resolved = this.#planRevision(planValue, revisionValue);
@@ -1127,23 +1166,11 @@ export class WorkflowStore {
     const inheritedItems = workItems(args.work_items ?? []);
     return this.db
       .transaction(() => {
-        const resolved = this.#planRevision(id, requested);
-        if (resolved.plan.current_revision !== requested)
-          fail("ERROR_PLAN_STALE", "plan revision is stale");
-        if (
-          !resolved.approval ||
-          resolved.approval.artifact_digest !== resolved.revision.artifact_digest
-        )
-          fail("ERROR_PLAN_UNAPPROVED", "plan revision is not approved");
+        const resolved = this.#approvedPlan(id, requested);
         const head = currentHead(this.root);
         const state = createStateFromPlan(
           resolved.artifact,
-          {
-            plan_id: id,
-            revision: requested,
-            artifact_digest: resolved.revision.artifact_digest as PlanProvenance["artifact_digest"],
-            approved_at: resolved.approval.approved_at,
-          },
+          this.#planProvenance(resolved),
           head,
           maxRepairCycles,
           inheritedItems,
@@ -2286,6 +2313,112 @@ export class WorkflowStore {
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);
         const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
+        const childId = randomUUID() as WorkflowId;
+        const childState = linkedFollowupChildState(followup);
+        const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+        childState.runtime_id = parentAffinity.runtime_id;
+        childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
+        childState.workflow_id = childId;
+        const childReceipt = createReceipt(this.root, childState.approved_paths, true);
+        if (childReceipt.base_head !== followup.base_head)
+          fail("ERROR_STALE_BASE", "scope base is stale");
+        childState.initial_receipt = childReceipt;
+        childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
+        validateWorkflowStateV8(childState);
+        const childCapability = issueCapability();
+        const childHash = hashCapability(childCapability);
+        const now = isoNow();
+        this.db
+          .prepare(
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+          )
+          .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
+        this.#audit(
+          childId,
+          0,
+          "WORKFLOW_CREATED",
+          "parent",
+          auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
+        );
+        const next = {
+          ...state,
+          superseded_by_workflow_id: childId,
+          version: (expectedVersionNumber + 1) as WorkflowVersion,
+        };
+        assertWorkItemsUnchanged(state, next);
+        validateWorkflowStateV8(next);
+        const update = this.db
+          .prepare(
+            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+          )
+          .run(
+            next.version,
+            JSON.stringify(next),
+            objectDigest(next),
+            now,
+            id,
+            expectedVersionNumber,
+          );
+        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        this.#audit(
+          id,
+          next.version,
+          "LINKED_FOLLOWUP_CREATED",
+          "parent",
+          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
+            linked_workflow_id: childId,
+          }),
+        );
+        if (this.faultAfterLinkedChildInsert)
+          fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
+        return { childState, childCapability };
+      })
+      .immediate();
+    return {
+      workflow: roleView(result.childState, "parent"),
+      capability: result.childCapability,
+    };
+  }
+
+  createLinkedFollowupFromPlan(input: unknown): {
+    workflow: ParentView;
+    capability: ParentCapability;
+  } {
+    this.#ensureOpen();
+    const args = mutationInput(input);
+    exactKeys(
+      args,
+      [
+        "workflow_id",
+        "capability",
+        "expected_version",
+        "plan_id",
+        "revision",
+        "finding_ids",
+        "user_authorization",
+      ],
+      "plan linked follow-up",
+    );
+    const expectedVersionNumber = expectedVersion(args.expected_version);
+    const result = this.db
+      .transaction(() => {
+        const row = this.#row(args.workflow_id);
+        const id = row.workflow_id as WorkflowId;
+        this.#assertParentAuth(row, args.capability);
+        this.#assertRuntimeOwnership(row);
+        if (row.version !== expectedVersionNumber)
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        const state = parseState(row);
+        // Resolve and approve the child plan inside the same immediate transaction as the
+        // source supersession and child insertion. The caller supplies identity only.
+        const resolved = this.#approvedPlan(args.plan_id, args.revision);
+        const followup = linkedFollowupInputFromPlan(
+          state,
+          args,
+          resolved.artifact,
+          this.#planProvenance(resolved),
+          currentHead(this.root),
+        );
         const childId = randomUUID() as WorkflowId;
         const childState = linkedFollowupChildState(followup);
         const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);

@@ -42,8 +42,9 @@ Runtime SQLite state is stored outside the repository under the user's Codex sta
 Plan execution records the exact approved artifact text as immutable `approved_plan` state through
 `workflow_create_from_plan`. Direct or non-plan workflows explicitly pass `null`; structured objective,
 paths, acceptance criteria, and validation requirements remain the enforceable workflow contract. The
-plan is visible to the parent and implementer only, and linked follow-ups provide an explicit plan
-rather than inheriting one.
+plan is visible to the parent and implementer only. Legacy linked follow-ups retain their explicit
+direct contract; plan-native linked follow-ups pass only the exact child plan identity and let the
+server resolve the approved artifact rather than retranscribing or inheriting the source plan.
 Approved paths are an append-only narrow mutation scope. Linked follow-ups retain that remediation
 allowlist, then require a fresh independent combined review over the inherited logical-change paths
 before commit eligibility; the source is superseded so only the active leaf can commit. In an active

@@ -408,6 +408,7 @@ test("repair and re-review use authoritative expected versions", () => {
     assert.deepEqual(store.parentGet(id).permitted_next_actions, [
       "workflow_authorize_commit",
       "workflow_create_linked_followup",
+      "workflow_create_linked_followup_from_plan",
     ]);
     store.close();
   } finally {

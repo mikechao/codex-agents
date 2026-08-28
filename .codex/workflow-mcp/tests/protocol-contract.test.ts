@@ -25,6 +25,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_create",
     "workflow_create_from_plan",
     "workflow_create_linked_followup",
+    "workflow_create_linked_followup_from_plan",
     "workflow_expand_scope",
     "workflow_finalize_repair_exhausted",
     "workflow_get_audit",
@@ -57,11 +58,25 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const reconciliation = tools.find((tool) => tool.name === "workflow_reconcile_commit_result");
   const adjudication = tools.find((tool) => tool.name === "workflow_adjudicate_findings");
   const create = tools.find((tool) => tool.name === "workflow_create");
-  assert.ok(implementation && review && begin && expansion && adoption && create && adjudication);
+  const linkedFromPlan = tools.find(
+    (tool) => tool.name === "workflow_create_linked_followup_from_plan",
+  );
+  assert.ok(
+    implementation &&
+      review &&
+      begin &&
+      expansion &&
+      adoption &&
+      create &&
+      adjudication &&
+      linkedFromPlan,
+  );
   assert.match(create.description ?? "", /one parent capability/u);
   assert.equal((create.description ?? "").includes("role capabilities"), false);
   assert.equal(protocolInstructions.includes("workflow_get"), false);
   assert.equal(protocolInstructions.includes("role capability"), false);
+  assert.match(protocolInstructions, /PlanArtifact/);
+  assert.match(protocolInstructions, /exact child plan identity only/);
   const adjudicationSchema = adjudication.inputSchema as any;
   assert.deepEqual(Object.keys(adjudicationSchema.properties).sort(), [
     "capability",
@@ -126,6 +141,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "plan_parent_get",
     "plan_approve",
     "workflow_create_from_plan",
+    "workflow_create_linked_followup_from_plan",
   ]);
   assert.equal(
     new Set([...PLANNER_PLANNING_OPERATIONS, ...PARENT_PLANNING_OPERATIONS]).size,
@@ -138,4 +154,21 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "expected_version",
     "workflow_id",
   ]);
+  const linkedFromPlanSchema = linkedFromPlan.inputSchema as any;
+  assert.deepEqual(Object.keys(linkedFromPlanSchema.properties).sort(), [
+    "capability",
+    "expected_version",
+    "finding_ids",
+    "plan_id",
+    "revision",
+    "user_authorization",
+    "workflow_id",
+  ]);
+  assert.equal("full_plan" in linkedFromPlanSchema.properties, false);
+  assert.equal("execution_brief" in linkedFromPlanSchema.properties, false);
+  assert.equal("objective" in linkedFromPlanSchema.properties, false);
+  assert.equal("approved_paths" in linkedFromPlanSchema.properties, false);
+  assert.equal("acceptance_criteria" in linkedFromPlanSchema.properties, false);
+  assert.equal("validation_requirements" in linkedFromPlanSchema.properties, false);
+  assert.match(linkedFromPlan.description ?? "", /resolv.*approved.*PlanArtifact server-side/u);
 });

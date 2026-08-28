@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { WorkflowStore } from "../store.js";
@@ -24,6 +24,76 @@ function category(action: () => unknown): string {
   } catch (error) {
     return error instanceof WorkflowError ? error.category : "unknown";
   }
+}
+
+function sourceInput(git: (...args: string[]) => string) {
+  const approvedPaths = ["note.txt"];
+  return {
+    workflow_type: "change",
+    objective: "source workflow",
+    approved_plan: null,
+    approved_paths: approvedPaths,
+    acceptance_criteria: ["source criterion"],
+    validation_requirements: ["source validation"],
+    review_target: {
+      review_mode: "working_tree",
+      base_revision: git("rev-parse", "HEAD"),
+      head_revision: null,
+      approved_paths: approvedPaths,
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    },
+  };
+}
+
+function approvedSource(store: any, git: (...args: string[]) => string) {
+  const source = store.create(sourceInput(git));
+  const id = source.workflow.workflow_id;
+  store.submitImplementation({
+    workflow_id: id,
+    expected_version: 0,
+    status: "DONE",
+    summary: "source implementation",
+    agent_touched_paths: [],
+    acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+    validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "done" }],
+    known_failures: [],
+    finding_resolution_map: {},
+  });
+  writeFileSync(join(store.root, "note.txt"), "source change\n");
+  store.beginReview({ workflow_id: id, expected_version: 1 });
+  const optional = {
+    finding_id: "PLAN-OPTIONAL",
+    severity: "P3",
+    blocking: false,
+    file_and_line: "note.txt:1",
+    failure_scenario: "scenario",
+    impact: "impact",
+    violated_requirement: "requirement",
+    remediation: "remediation",
+    missing_or_inadequate_test: "test",
+  };
+  store.submitReview({
+    workflow_id: id,
+    expected_version: 2,
+    review_status: "APPROVED",
+    blocking_findings: [],
+    optional_findings: [optional],
+    prior_finding_classifications: {},
+  });
+  return { source, id, optional };
+}
+
+function planInput(path = "planned.txt") {
+  return {
+    ...revisionInput(),
+    objective: "authoritative child objective",
+    execution_brief: "authoritative child execution brief",
+    approved_paths: [path],
+    acceptance_criteria: ["authoritative child criterion"],
+    validation_requirements: ["authoritative child validation"],
+  };
 }
 
 test("plans preserve exact revisions, approval, and workflow provenance", () => {
@@ -92,6 +162,120 @@ test("plan revisions are complete replacements and stale revisions fail closed",
   );
   store.close();
   disposeFixture(target.root);
+});
+
+test("plan-native linked follow-up binds only the exact current approved child artifact", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const { source, id, optional } = approvedSource(store, target.git);
+    const draft = store.planCreate(planInput());
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: 1,
+      user_authorization: "approve child remediation plan",
+    });
+    const child = store.createLinkedFollowupFromPlan({
+      workflow_id: id,
+      capability: source.capability,
+      expected_version: 3,
+      plan_id: draft.plan_id,
+      revision: 1,
+      finding_ids: [optional.finding_id],
+      user_authorization: "authorize exact child plan remediation",
+    });
+    const childView = store.parentGet(child.workflow.workflow_id);
+    assert.equal(childView.objective, planInput().objective);
+    assert.equal(childView.approved_plan, planInput().full_plan);
+    assert.equal(childView.execution_brief, planInput().execution_brief);
+    assert.deepEqual(childView.approved_paths, ["planned.txt"]);
+    assert.deepEqual(childView.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "authoritative child criterion" },
+    ]);
+    assert.deepEqual(childView.validation_requirements, [
+      {
+        validation_id: "VAL-001",
+        description: "authoritative child validation",
+        argv: null,
+      },
+    ]);
+    assert.deepEqual(childView.plan_provenance, {
+      plan_id: draft.plan_id,
+      revision: 1,
+      artifact_digest: approved.artifact_digest,
+      approved_at: approved.metadata.approval?.approved_at,
+    });
+    assert.deepEqual(childView.linked_findings, [optional]);
+    assert.equal(childView.repair_cycle, 0);
+    assert.equal(childView.remediation_context.authorized_finding_ids[0], optional.finding_id);
+    assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow.workflow_id);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan-native linked follow-up rejects raw artifact fields and fails atomically", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const { source, id, optional } = approvedSource(store, target.git);
+    const draft = store.planCreate(planInput());
+    const beforeVersion = store.parentGet(id).version;
+    const beforeAudit = store.audit(id, source.capability).length;
+    assert.equal(
+      category(() =>
+        store.createLinkedFollowupFromPlan({
+          workflow_id: id,
+          capability: source.capability,
+          expected_version: beforeVersion,
+          plan_id: draft.plan_id,
+          revision: 1,
+          finding_ids: [optional.finding_id],
+          user_authorization: "authorized",
+          full_plan: "model supplied plan",
+        }),
+      ),
+      "ERROR_INVALID_SHAPE",
+    );
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+    assert.equal(
+      category(() =>
+        store.createLinkedFollowupFromPlan({
+          workflow_id: id,
+          capability: source.capability,
+          expected_version: beforeVersion,
+          plan_id: "00000000-0000-4000-8000-000000000000",
+          revision: 1,
+          finding_ids: [optional.finding_id],
+          user_authorization: "authorized",
+        }),
+      ),
+      "ERROR_PLAN_NOT_FOUND",
+    );
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+    assert.equal(
+      category(() =>
+        store.createLinkedFollowupFromPlan({
+          workflow_id: id,
+          capability: source.capability,
+          expected_version: beforeVersion,
+          plan_id: draft.plan_id,
+          revision: 1,
+          finding_ids: [optional.finding_id],
+          user_authorization: "authorized",
+        }),
+      ),
+      "ERROR_PLAN_UNAPPROVED",
+    );
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
 });
 
 test("malformed persisted plan artifacts fail closed as state corruption", () => {

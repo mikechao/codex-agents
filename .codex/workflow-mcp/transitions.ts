@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
 import type {
+  AcceptanceCriterion,
   ApprovedPathBaseline,
   ApprovedPathBaselineView,
   BlockingFinding,
@@ -31,6 +32,7 @@ import type {
   Role,
   RoleView,
   StoppingImplementationStatus,
+  ValidationRequirement,
   WorkflowAction,
   WorkflowId,
   WorkflowPhase,
@@ -424,8 +426,15 @@ const ACTION_MATRIX: Partial<
       "workflow_finalize_repair_exhausted",
     ],
     REPAIRING: ["workflow_expand_scope"],
-    STOPPED_APPROVED: ["workflow_authorize_commit", "workflow_create_linked_followup"],
-    STOPPED_REPAIR_EXHAUSTED: ["workflow_create_linked_followup"],
+    STOPPED_APPROVED: [
+      "workflow_authorize_commit",
+      "workflow_create_linked_followup",
+      "workflow_create_linked_followup_from_plan",
+    ],
+    STOPPED_REPAIR_EXHAUSTED: [
+      "workflow_create_linked_followup",
+      "workflow_create_linked_followup_from_plan",
+    ],
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_expand_scope", "workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_expand_scope", "workflow_resume_implementation"],
@@ -490,7 +499,9 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   if (actorRole === "parent" && state.superseded_by_workflow_id) {
     actions = actions.filter(
       (action) =>
-        action !== "workflow_authorize_commit" && action !== "workflow_create_linked_followup",
+        action !== "workflow_authorize_commit" &&
+        action !== "workflow_create_linked_followup" &&
+        action !== "workflow_create_linked_followup_from_plan",
     );
   }
   return actions.sort();
@@ -1631,9 +1642,11 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
 export interface LinkedFollowupPlan {
   objective: string;
   approved_plan: string | null;
+  execution_brief: string | null;
+  plan_provenance: PlanProvenance | null;
   approved_paths: ExactRepoPath[];
-  acceptance_criteria: string[]; // raw caller order; contractList runs in child
-  validation_requirements: string[];
+  acceptance_criteria: AcceptanceCriterion[] | string[];
+  validation_requirements: ValidationRequirement[] | string[];
   base_head: GitCommitSha;
   max_repair_cycles: number;
   parent_workflow_id: WorkflowId | null;
@@ -1674,6 +1687,75 @@ export function linkedFollowupInput(
     ],
     "linked follow-up",
   );
+  return linkedFollowupInputCore(
+    state,
+    args,
+    exactPaths(args.approved_paths, repositoryRoot),
+    currentHead,
+    {
+      objective: boundedString(args.objective, "objective"),
+      approved_plan: approvedPlan(args.approved_plan),
+      execution_brief: null,
+      plan_provenance: null,
+      acceptance_criteria: args.acceptance_criteria as string[],
+      validation_requirements: args.validation_requirements as string[],
+    },
+  );
+}
+
+/** Adapt a server-resolved approved PlanArtifact to the shared linked-follow-up checks. */
+export function linkedFollowupInputFromPlan(
+  state: WorkflowState,
+  input: unknown,
+  artifact: PlanRevisionArtifact,
+  provenance: PlanProvenance,
+  currentHead: GitCommitSha,
+): LinkedFollowupPlan {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_FOLLOWUP", "plan linked follow-up input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    [
+      "workflow_id",
+      "capability",
+      "expected_version",
+      "plan_id",
+      "revision",
+      "finding_ids",
+      "user_authorization",
+    ],
+    "plan linked follow-up",
+  );
+  if (args.plan_id !== artifact.plan_id || args.revision !== artifact.revision) {
+    fail("ERROR_INVALID_FOLLOWUP", "resolved plan identity does not match request");
+  }
+  return linkedFollowupInputCore(state, args, artifact.approved_paths, currentHead, {
+    objective: artifact.objective,
+    approved_plan: artifact.full_plan,
+    execution_brief: artifact.execution_brief,
+    plan_provenance: provenance,
+    acceptance_criteria: clone(artifact.acceptance_criteria),
+    validation_requirements: clone(artifact.validation_requirements),
+  });
+}
+
+interface LinkedFollowupContract {
+  objective: string;
+  approved_plan: string | null;
+  execution_brief: string | null;
+  plan_provenance: PlanProvenance | null;
+  acceptance_criteria: AcceptanceCriterion[] | string[];
+  validation_requirements: ValidationRequirement[] | string[];
+}
+
+function linkedFollowupInputCore(
+  state: WorkflowState,
+  args: Record<string, unknown>,
+  remediationPaths: ExactRepoPath[],
+  currentHead: GitCommitSha,
+  contract: LinkedFollowupContract,
+): LinkedFollowupPlan {
   ensurePhase(state, "STOPPED_APPROVED", "STOPPED_REPAIR_EXHAUSTED");
   if (state.superseded_by_workflow_id) {
     fail("ERROR_INVALID_FOLLOWUP", "workflow already has an active linked successor");
@@ -1689,7 +1771,6 @@ export function linkedFollowupInput(
   const linkedFindings = [...effectiveBlockingFindings(state), ...state.optional_findings].filter(
     (finding) => ids.includes(finding.finding_id),
   );
-  const remediationPaths = exactPaths(args.approved_paths, repositoryRoot);
   const isWorkingTree = state.review_target.review_mode === "working_tree";
   const inheritedCombined =
     state.linked_continuation?.combined_review_paths ?? state.review_target.approved_paths;
@@ -1705,11 +1786,13 @@ export function linkedFollowupInput(
     ? [...state.linked_continuation.lineage_workflow_ids, state.workflow_id]
     : [state.workflow_id];
   return {
-    objective: boundedString(args.objective, "objective"),
-    approved_plan: approvedPlan(args.approved_plan),
+    objective: contract.objective,
+    approved_plan: contract.approved_plan,
+    execution_brief: contract.execution_brief,
+    plan_provenance: contract.plan_provenance,
     approved_paths: remediationPaths,
-    acceptance_criteria: args.acceptance_criteria as string[], // raw passthrough to the child
-    validation_requirements: args.validation_requirements as string[],
+    acceptance_criteria: contract.acceptance_criteria,
+    validation_requirements: contract.validation_requirements,
     base_head: revision(originalBase, "base_head"),
     max_repair_cycles: state.max_repair_cycles,
     parent_workflow_id: state.workflow_id,
@@ -1730,6 +1813,8 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
   const state = baseState({
     objective: followup.objective,
     approvedPlan: followup.approved_plan,
+    executionBrief: followup.execution_brief,
+    planProvenance: followup.plan_provenance,
     approvedPaths: followup.approved_paths,
     baseHead: followup.base_head,
     maxRepairCycles: followup.max_repair_cycles,
@@ -1753,18 +1838,25 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
       user_authorization: followup.user_authorization,
     },
   });
-  state.acceptance_criteria = contractList(
-    followup.acceptance_criteria,
-    "acceptance_criteria",
-    "AC",
-    "criterion_id",
-  );
-  state.validation_requirements = contractList(
-    followup.validation_requirements,
-    "validation_requirements",
-    "VAL",
-    "validation_id",
-  );
+  if (followup.plan_provenance) {
+    state.acceptance_criteria = clone(followup.acceptance_criteria) as AcceptanceCriterion[];
+    state.validation_requirements = clone(
+      followup.validation_requirements,
+    ) as ValidationRequirement[];
+  } else {
+    state.acceptance_criteria = contractList(
+      followup.acceptance_criteria,
+      "acceptance_criteria",
+      "AC",
+      "criterion_id",
+    );
+    state.validation_requirements = contractList(
+      followup.validation_requirements,
+      "validation_requirements",
+      "VAL",
+      "validation_id",
+    );
+  }
   return state;
 }
 

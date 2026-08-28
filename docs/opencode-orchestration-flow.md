@@ -58,6 +58,13 @@ Direct requests pass `approved_plan: null`. The parent view and implementer view
 reviewer and committer views retain least-context projections. Objective, paths, acceptance criteria,
 validation requirements, and authorized remediation/findings remain structured enforcement fields.
 
+For a plan-native linked follow-up, parent-read the exact child plan identity and approval, optionally
+read the artifact for reviewer-policy preflight, then call `workflow_create_linked_followup_from_plan`
+with only source authority/version, plan ID/revision, exact finding IDs, and explicit authorization.
+The server resolves and binds the current approved artifact inside the source/child transaction;
+artifact prose and contracts are never retranscribed. The legacy
+`workflow_create_linked_followup` remains the direct-contract compatibility route.
+
 The orchestrator passes only explicit user-approved work-item metadata to `workflow_create` or
 `workflow_create_from_plan`; absent tracker metadata is represented as `work_items: []`. These generic
 immutable references are schema v8 state, shown only to parent and committer, and inherited automatically
