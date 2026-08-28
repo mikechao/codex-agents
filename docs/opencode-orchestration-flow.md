@@ -107,6 +107,12 @@ tool. After a successful terminal submission, the OpenCode adapter also requires
 text report to the parent. Orchestrator refreshes the parent view immediately after each terminal
 worker handoff before deciding what happens next.
 
+The refresh is phase-first. After every terminal implementation handoff—including an authorized
+repair completion—Orchestrator calls `workflow_parent_get` before summarizing or routing. If the
+refreshed phase is `REVIEWING`, it directly dispatches a fresh `code_reviewer`, even when the view
+retains an earlier blocker such as `REV-X-001`. Retained blockers (`blocking_findings`) are
+history/remediation context only and do not cause a duplicate repair-authorization prompt.
+
 ## Normal implementation, review, and commit flow
 
 Orchestrator's preflight is deliberately bounded. The implementer owns detailed implementation
@@ -251,6 +257,13 @@ When review identifies blocking findings, the parent authorizes a bounded repair
 finding IDs, then sends the implementer back to `REPAIRING` and re-runs independent review. The
 complete repair-cycle limit and transition semantics are defined in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md); this guide does not duplicate them.
+
+Only a fresh reviewer result that leaves authoritative state in `REPAIR_REQUIRED`, with
+`workflow_authorize_repair` present in refreshed `permitted_next_actions`, can request repair
+authorization. The prompt uses only the current exact blocker IDs and bounded reasons. A fresh
+review that reconfirms the same ID may request that ID again; if the old ID is resolved and a
+different blocker is current, only the different current ID is requested. A retained non-empty
+blocker list alone never prompts for repair, and an absent permitted action fails closed.
 
 For reconciliation, the reviewer-only start is mandatory even when implementation files are already
 dirty. A blocking result can enter ordinary exact-ID repair only after explicit authorization, then

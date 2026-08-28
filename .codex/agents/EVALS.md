@@ -169,6 +169,12 @@ Workflow MCP state. Restart host sessions after changing policy.
 - Refresh-before-route: after every terminal worker handoff and every parent mutation, confirm the
   parent refreshes `workflow_parent_get`, summarizes only the refreshed authoritative view, and routes
   from refreshed `permitted_next_actions`, never stale prose or dirty-path inference.
+- Repair-terminal refresh: authorize repair for `REV-X-001`, complete the repair, and confirm the
+  refreshed `REVIEWING` view retains `REV-X-001` as history while automatically dispatching a fresh
+  reviewer without a duplicate authorization prompt. Confirm a fresh same-ID re-report requests that
+  exact ID again only when repair is permitted; resolving the old ID and reporting a different current
+  blocker requests only the new ID; and a retained blocker list alone, or an absent
+  `workflow_authorize_repair` action, never prompts for repair.
 - Two-cycle stopping: after an initial review, the parent performs at most two implementer-to-
   reviewer repair cycles, passes prior findings and resolution claims each time, and stops without
   commit when blocking findings remain after the second cycle.

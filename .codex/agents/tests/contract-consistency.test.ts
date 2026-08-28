@@ -493,6 +493,56 @@ test("orchestrator summarizes refreshed authoritative transitions before routing
   );
 });
 
+test("repair-terminal routing is phase-first and fail-closed", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+
+  const terminal = orchestrator.indexOf("After every terminal implementation handoff");
+  const refresh = orchestrator.indexOf("call `workflow_parent_get` first", terminal);
+  const phase = orchestrator.indexOf("refreshed `phase` as the first discriminator", terminal);
+  const reviewing = orchestrator.indexOf("When the refreshed phase is `REVIEWING`", terminal);
+  const reviewer = orchestrator.indexOf("dispatch `code_reviewer` for a fresh review", reviewing);
+  assert.ok(terminal >= 0 && terminal < refresh);
+  assert.ok(refresh < phase && phase < reviewing && reviewing < reviewer);
+
+  for (const contract of [orchestrator, workflow, guide]) {
+    assert.match(contract, /retained (?:findings|blockers)[^.]*history\/remediation context/iu);
+    assert.ok(
+      /non-empty list alone never constitutes a fresh review result/u.test(contract) ||
+        /non-empty retained list is not a fresh review result/u.test(contract) ||
+        /retained non-empty blocker list alone never prompts for repair/u.test(contract),
+      "retained findings must never be treated as a fresh repair result",
+    );
+    assert.match(
+      contract,
+      /fresh (?:reviewer handoff that leaves|review resulting|reviewer result that leaves).*?`REPAIR_REQUIRED`.*?(?:`workflow_authorize_repair`.*?permitted_next_actions|permitted_next_actions.*?`workflow_authorize_repair`)/u,
+    );
+    assert.match(contract, /current exact (?:(?:blocking )?(?:finding )?IDs|blocker IDs)/u);
+    assert.ok(
+      contract.includes("fail closed") || contract.includes("fails closed"),
+      "an unavailable repair action must fail closed",
+    );
+  }
+
+  for (const contract of [orchestrator, guide]) {
+    assert.match(contract, /same[- ]ID[^.]*again/u);
+    assert.match(contract, /old ID[^.]*resolved[^.]*different (?:current )?blocker/u);
+  }
+  assert.match(
+    readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " "),
+    /same-ID[^.]*exact ID[^.]*resolv(?:ing|ed)[^.]*old ID[^.]*different current blocker/u,
+  );
+
+  const repairBranch = orchestrator.indexOf("Only a fresh reviewer handoff");
+  const repairAction = orchestrator.indexOf("`workflow_authorize_repair`", repairBranch);
+  const currentIds = orchestrator.indexOf("current exact blocking finding IDs", repairBranch);
+  assert.ok(repairBranch >= 0 && repairBranch < repairAction && repairAction < currentIds);
+});
+
 test("orchestration contracts classify intent and reconcile the final tree explicitly", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");

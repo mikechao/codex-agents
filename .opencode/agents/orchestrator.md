@@ -206,6 +206,21 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
 5. Only after the user explicitly authorizes the commit, call the parent commit-authorization tool,
    refresh the authoritative view, and delegate commit preparation/execution to `committer`.
 
+After every terminal implementation handoff, including an implementation handoff from `REPAIRING`,
+call `workflow_parent_get` first, before summarizing or routing. Use the refreshed `phase` as the
+first discriminator and the refreshed `permitted_next_actions` as the authority for the next route.
+When the refreshed phase is `REVIEWING`, immediately dispatch `code_reviewer` for a fresh review,
+even if `blocking_findings` still contains an earlier ID such as `REV-X-001`. Those retained
+findings are history/remediation context, not a new review result and never authorize, request, or
+invoke repair by themselves.
+
+Only a fresh reviewer handoff that leaves the refreshed phase in `REPAIR_REQUIRED` may lead to a
+repair-authorization prompt, and only when the refreshed `permitted_next_actions` includes
+`workflow_authorize_repair`. Surface only the current exact blocking finding IDs and bounded reasons;
+never prompt for or call an action absent from the refreshed action list. A fresh review may validly
+reconfirm the same ID, while a resolved old ID and a different current blocker means only the new
+current ID is requested.
+
 The same exact workflow ID must flow through implementer, reviewer, blocking remediation, and
 committer handoffs. Review-only workflows may skip implementer when the authoritative view says so.
 Handle recoverable context, concern, inconclusive-review, commit-preparation, and commit-failure
@@ -224,7 +239,11 @@ the same authoritative workflow constraints.
 
 After every terminal subagent handoff, refresh `workflow_parent_get` with the current workflow ID
 and parent capability before summarizing or routing. Use this fixed read-before-route sequence
-immediately after the subagent reports.
+immediately after the subagent reports. The refreshed `phase` is the first routing discriminator:
+after a terminal implementation handoff, a `REVIEWING` phase routes directly to `code_reviewer`,
+including after authorized repair completion when retained `blocking_findings` still contains a
+prior blocker. Retained findings are history/remediation context only; a non-empty list alone never
+constitutes a fresh review result and never prompts for or invokes repair.
 Treat that refreshed authoritative view, including its `phase`, result fields, stop and recovery
 context, repair counters, `blocking_findings`, `optional_findings`, commit result, linked-workflow metadata, and
 `permitted_next_actions`, as the only source for the next concise user-visible summary. Summarize
@@ -255,6 +274,13 @@ After every parent mutation (including repair, resume, concern acceptance, exhau
 linked-follow-up mutations), refresh `workflow_parent_get` again and write a fresh summary
 before redispatching any role or requesting the next authorization. Never route from a stale view,
 an earlier summary, or a worker's full report.
+
+Repair authorization is requested only in the fresh-review branch: the reviewer handoff must have
+produced authoritative `REPAIR_REQUIRED` state and the refreshed `permitted_next_actions` must
+include `workflow_authorize_repair`. The prompt and subsequent action use only the current exact
+blocking IDs and bounded reasons. A same-ID blocker may be requested again when freshly reported;
+when an old ID is resolved and a different blocker is current, request only that current ID. If the
+permitted repair action is absent, fail closed and do not prompt or invoke it.
 
 Build remains an ordinary OpenCode Build agent. Do not invoke it as the workflow control plane and
 do not attempt to perform any role's repository work in the primary session. Manual direct

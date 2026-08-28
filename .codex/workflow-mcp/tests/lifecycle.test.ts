@@ -701,7 +701,19 @@ scenario("repair cycle and approval lifecycle", [
   },
   {
     name: "implement repair done",
-    run: (ctx: any) => doImplementation(ctx, 3, { resolution: { "F-1": "resolved" } }),
+    run: (ctx: any) => {
+      doImplementation(ctx, 3, { resolution: { "F-1": "resolved" } });
+      const view = ctx.store.parentGet(ctx.created.workflow.workflow_id);
+      assert.equal(view.phase, "REVIEWING");
+      assert.ok(
+        view.blocking_findings.some(({ finding_id }: any) => finding_id === "F-1"),
+        "the repaired review retains the prior blocker as history/remediation context",
+      );
+      assert.ok(
+        !view.permitted_next_actions.includes("workflow_authorize_repair"),
+        "retained findings must not expose repair authorization before a fresh review",
+      );
+    },
     snapshots: [snap("parent", "REVIEWING", 4, ACTIONS.reviewing, EVENTS.repairedSubmitted)],
   },
   {

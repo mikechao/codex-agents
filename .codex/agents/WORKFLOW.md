@@ -409,6 +409,18 @@ and maximum, `stop_context` or `recovery_context`, `commit_result`, and material
 metadata when present. It must not dump receipts, audit events, capabilities, validation logs, or a
 complete worker report. `permitted_next_actions` remains the routing boundary.
 
+The phase is the first discriminator after this refresh. After a terminal implementation handoff,
+including completion of an authorized repair, a refreshed `REVIEWING` phase routes directly to a
+fresh `code_reviewer` even when `blocking_findings` still retains an earlier blocker such as
+`REV-X-001`. Retained blockers are history/remediation context only; a non-empty retained list is
+not a fresh review result and never authorizes, requests, or invokes repair by itself. Only a fresh
+review resulting in `REPAIR_REQUIRED` with `workflow_authorize_repair` present in refreshed
+`permitted_next_actions` may lead to an exact-ID repair-authorization prompt using only the current
+exact blocking finding IDs. This convention changes neither Workflow MCP authority nor phases,
+schema, persistence, transition semantics,
+repair-cycle policy, or attempt bookkeeping. If the permitted repair action is absent, fail closed
+without prompting or invoking repair.
+
 The summary must cover the following transitions without changing their existing semantics:
 
 - Implementation completion, incomplete continuation, concern, context, and block outcomes identify
