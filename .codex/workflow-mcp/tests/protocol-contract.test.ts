@@ -1,14 +1,18 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  DISPATCH_TOOL_NAMES,
   PARENT_PLANNING_OPERATIONS,
   PLANNER_PLANNING_OPERATIONS,
   protocolInstructions,
+  SERVER_TOOL_NAMES,
   tools,
 } from "../server.js";
 
 test("protocol tool contract exposes the workflow actions with stable annotations", () => {
   const names = tools.map((tool) => tool.name).sort();
+  assert.deepEqual(names, [...SERVER_TOOL_NAMES].sort());
+  assert.deepEqual([...DISPATCH_TOOL_NAMES].sort(), names);
   assert.deepEqual(names, [
     "plan_approve",
     "plan_create",

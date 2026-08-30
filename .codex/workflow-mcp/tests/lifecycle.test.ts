@@ -621,6 +621,39 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   );
 }
 
+test("reviewer projection conditionally includes the implementer handoff", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  const ctx: any = { root, git, store };
+  const handoffFields = [
+    "implementation_summary",
+    "implementation_status",
+    "implementation_known_failures",
+    "agent_touched_paths",
+    "scope_changed_paths",
+    "acceptance_results",
+    "validation_results",
+    "finding_resolution_map",
+  ];
+  try {
+    doCreate(ctx);
+    const changeReviewer = store.reviewerGet(ctx.created.workflow.workflow_id);
+    for (const field of handoffFields) {
+      assert.equal(field in changeReviewer, true, `change reviewer handoff includes ${field}`);
+    }
+    assert.equal("implementation_receipt" in changeReviewer, false);
+
+    doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] });
+    const reviewOnlyReviewer = store.reviewerGet(ctx.created.workflow.workflow_id);
+    for (const field of handoffFields) {
+      assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
+    }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function scenario(name: string, steps: any[], options: any = {}) {
   test(name, () => {
     const base = options.fixture ? options.fixture() : fixture();

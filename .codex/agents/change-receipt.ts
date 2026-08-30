@@ -13,13 +13,28 @@ interface HeadEntry {
   digest: string;
 }
 
-interface ReceiptEntry {
+export interface AbsentReceiptEntry {
   path: string;
-  state: "added" | "modified" | "deleted" | "unchanged" | "absent";
-  kind: "file" | "symlink" | "missing";
-  mode?: GitMode;
-  digest?: string;
+  state: "absent";
+  kind: "missing";
 }
+
+export interface DeletedReceiptEntry {
+  path: string;
+  state: "deleted";
+  kind: "missing";
+  mode: GitMode;
+}
+
+export interface PresentReceiptEntry {
+  path: string;
+  state: "added" | "modified" | "unchanged";
+  kind: "file" | "symlink";
+  mode: GitMode;
+  digest: string;
+}
+
+export type ReceiptEntry = AbsentReceiptEntry | DeletedReceiptEntry | PresentReceiptEntry;
 
 interface Receipt {
   schema_version: 1;

@@ -19,7 +19,6 @@ import type {
   GitFileMode,
   GitTreeEntry,
   GitTreeSha,
-  RangePathKind,
   ReviewRange,
   WorkflowState,
   WorktreeEntry,
@@ -34,6 +33,7 @@ import {
   worktreePlan as pureWorktreePlan,
   worktreeValidationResult,
 } from "./validation.js";
+import { COMMIT_SUBMISSION_OUTCOME_VALUES, GIT_FILE_MODE_VALUES, isValue } from "./values.js";
 
 const MAX_GIT_DETAIL = 500;
 const MAX_TEXTUAL_OUTPUT = 4 * 1024 * 1024;
@@ -544,26 +544,31 @@ export async function reviewRangeAsync(
   }
   const results: ReviewRange["paths"] = new Array(paths.length);
   let nextPath = 0;
-  const reviewPath = async (path: ExactRepoPath) => {
+  const reviewPath = async (path: ExactRepoPath): Promise<ReviewRange["paths"][number]> => {
     const base = await treeEntryAsync(root, base_revision, path);
     const head = await treeEntryAsync(root, head_revision, path);
     if ((base && base.type !== "blob") || (head && head.type !== "blob"))
       fail("ERROR_INVALID_REVIEW_PATH", "review path is not a file");
     if (!base && !head)
       fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
-    const kind: RangePathKind =
-      base && head
-        ? base.object === head.object
-          ? "unchanged"
-          : "modified"
-        : base
-          ? "deleted"
-          : "added";
+    if (!base) {
+      if (!head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
+      return {
+        path,
+        kind: "added",
+        base: null,
+        head: { mode: normalizeMode(head.mode), object: head.object as GitBlobSha },
+      };
+    }
+    const baseEntry = { mode: normalizeMode(base.mode), object: base.object as GitBlobSha };
+    if (!head) return { path, kind: "deleted", base: baseEntry, head: null };
+    const headEntry = { mode: normalizeMode(head.mode), object: head.object as GitBlobSha };
+    const kind: "unchanged" | "modified" = base.object === head.object ? "unchanged" : "modified";
     return {
       path,
       kind,
-      base: base ? { mode: normalizeMode(base.mode), object: base.object as GitBlobSha } : null,
-      head: head ? { mode: normalizeMode(head.mode), object: head.object as GitBlobSha } : null,
+      base: baseEntry,
+      head: headEntry,
     };
   };
   const worker = async () => {
@@ -720,7 +725,7 @@ export function reviewRange(root: string, target: CommitRangeReviewTarget): Revi
   } catch {
     fail("ERROR_INVALID_REVIEW_PATH", "review path is invalid");
   }
-  const results = paths.map((path) => {
+  const results = paths.map((path): ReviewRange["paths"][number] => {
     const base = treeEntry(root, base_revision, path);
     const head = treeEntry(root, head_revision, path);
     if ((base && base.type !== "blob") || (head && head.type !== "blob")) {
@@ -729,19 +734,24 @@ export function reviewRange(root: string, target: CommitRangeReviewTarget): Revi
     if (!base && !head) {
       fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
     }
-    const kind: RangePathKind =
-      base && head
-        ? base.object === head.object
-          ? "unchanged"
-          : "modified"
-        : base
-          ? "deleted"
-          : "added";
+    if (!base) {
+      if (!head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
+      return {
+        path,
+        kind: "added",
+        base: null,
+        head: { mode: normalizeMode(head.mode), object: head.object as GitBlobSha },
+      };
+    }
+    const baseEntry = { mode: normalizeMode(base.mode), object: base.object as GitBlobSha };
+    if (!head) return { path, kind: "deleted", base: baseEntry, head: null };
+    const headEntry = { mode: normalizeMode(head.mode), object: head.object as GitBlobSha };
+    const kind: "unchanged" | "modified" = base.object === head.object ? "unchanged" : "modified";
     return {
       path,
       kind,
-      base: base ? { mode: base.mode as GitFileMode, object: base.object as GitBlobSha } : null,
-      head: head ? { mode: head.mode as GitFileMode, object: head.object as GitBlobSha } : null,
+      base: baseEntry,
+      head: headEntry,
     };
   });
   return { base_revision, head_revision, paths: results };
@@ -752,7 +762,7 @@ function digest(value: Buffer): ContentDigest {
 }
 
 function normalizeMode(mode: string): GitFileMode {
-  if (!["100644", "100755", "120000"].includes(mode))
+  if (!(GIT_FILE_MODE_VALUES as readonly string[]).includes(mode))
     fail("ERROR_UNSUPPORTED_MODE", "file mode is unsupported");
   return mode as GitFileMode;
 }
@@ -1013,6 +1023,8 @@ export function verifyCommitResult(
   state: WorkflowState,
   input: Record<string, unknown>,
 ): { category: CommitMismatchCategory | null; commit_hash: GitCommitSha | null } {
+  if (!isValue(COMMIT_SUBMISSION_OUTCOME_VALUES, input.outcome))
+    fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
   if (input.outcome === "committed") {
     return verifyPreparedCommit(root, state);
   }

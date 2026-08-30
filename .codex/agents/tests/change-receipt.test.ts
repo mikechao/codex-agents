@@ -173,6 +173,23 @@ test("reports deletion using HEAD metadata without a digest", () => {
   });
 });
 
+test("reports an explicitly allowed absent path with no mode or digest", () => {
+  withRepository((root) => {
+    writeFileSync(join(root, "tracked.txt"), "tracked\n");
+    commit(root);
+    const result = runWithFlags(root, ["--allow-absent"], ["not-present.txt"]);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout) as Receipt;
+    assert.deepEqual(parsed.paths[0], {
+      path: "not-present.txt",
+      state: "absent",
+      kind: "missing",
+    });
+    assert.equal("mode" in parsed.paths[0], false);
+    assert.equal("digest" in parsed.paths[0], false);
+  });
+});
+
 const skipOnWindows = test.skipIf(process.platform === "win32");
 
 skipOnWindows("handles symlinks and changes to their link targets", () => {

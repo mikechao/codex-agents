@@ -19,6 +19,7 @@ import type {
   FindingResolution,
   FindingSeverity,
   GitCommitSha,
+  ImplementerHandoffView,
   ImplementerView,
   LinkedContinuation,
   ParentView,
@@ -26,11 +27,13 @@ import type {
   PlanRevisionArtifact,
   RemediationContext,
   ReviewerView,
+  ReviewerViewBase,
   ReviewFinding,
   ReviewRange,
   ReviewTarget,
   Role,
   RoleView,
+  RoleViewCommon,
   StoppingImplementationStatus,
   ValidationRequirement,
   WorkflowAction,
@@ -61,7 +64,6 @@ import {
   MAX_TEXT,
   objectDigest,
   optionalText,
-  RESOLUTION_STATUSES,
   repairCycle,
   resolutionMap,
   revision,
@@ -71,6 +73,24 @@ import {
   VALIDATION_STATUSES,
   workItems,
 } from "./validation.js";
+import {
+  ACCEPTANCE_STATUS_SET,
+  COMMIT_MISMATCH_CATEGORY_SET,
+  COMMIT_OUTCOME_VALUES,
+  COMMIT_SUBMISSION_OUTCOME_VALUES,
+  FINDING_ADJUDICATION_VALUES,
+  FINDING_SEVERITIES,
+  GIT_FILE_MODE_SET,
+  IMPLEMENTATION_STATUS_VALUES,
+  isValue,
+  RECEIPT_PATH_STATE_VALUES,
+  RESOLUTION_STATUS_SET,
+  REVIEW_MODE_VALUES,
+  REVIEW_STATUS_VALUES,
+  VALIDATION_STATUS_SET,
+  WORKFLOW_PHASE_VALUES,
+  WORKFLOW_TYPE_VALUES,
+} from "./values.js";
 
 export const SCHEMA_VERSION = CURRENT_STATE_SCHEMA_VERSION;
 
@@ -113,33 +133,12 @@ export function approvedPathBaselineView(value: ApprovedPathBaseline): ApprovedP
   };
 }
 
-export const PHASES: readonly WorkflowPhase[] = [
-  "IMPLEMENTING",
-  "REVIEWING",
-  "REPAIR_REQUIRED",
-  "REPAIRING",
-  "STOPPED_APPROVED",
-  "STOPPED_INCONCLUSIVE",
-  "STOPPED_CONCERNS",
-  "STOPPED_NEEDS_CONTEXT",
-  "STOPPED_IMPLEMENTATION_BLOCKED",
-  "STOPPED_REPAIR_EXHAUSTED",
-  "COMMIT_AUTHORIZED",
-  "COMMIT_PREPARED",
-  "STOPPED_COMMIT_PREPARATION",
-  "STOPPED_NOT_COMMITTED",
-  "STOPPED_COMMIT_MISMATCH",
-  "COMMITTED",
-];
+export const PHASES: readonly WorkflowPhase[] = WORKFLOW_PHASE_VALUES;
 
-export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> = new Set([
-  "HEAD_CHANGED",
-  "PARENT_MISMATCH",
-  "TREE_MISMATCH",
-  "PATH_MISMATCH",
-]);
+export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
+  COMMIT_MISMATCH_CATEGORY_SET;
 
-const V8_STATE_KEYS: readonly string[] = [
+export const V8_STATE_KEYS = [
   "schema_version",
   "version",
   "workflow_id",
@@ -192,10 +191,17 @@ const V8_STATE_KEYS: readonly string[] = [
   "commit_authorization",
   "commit_preparation",
   "commit_result",
-];
+] as const satisfies readonly (keyof WorkflowState)[];
+type MissingV8StateKey = Exclude<keyof WorkflowState, (typeof V8_STATE_KEYS)[number]>;
+const V8_STATE_KEYS_ARE_EXHAUSTIVE: MissingV8StateKey extends never ? true : never = true;
+void V8_STATE_KEYS_ARE_EXHAUSTIVE;
 
-function ensurePhase(state: WorkflowState, ...allowed: WorkflowPhase[]): void {
-  if (!allowed.includes(state.phase)) fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
+export function ensurePhase<const P extends WorkflowPhase>(
+  state: WorkflowState,
+  ...allowed: readonly P[]
+): asserts state is WorkflowState & { phase: P } {
+  if (!(allowed as readonly WorkflowPhase[]).includes(state.phase))
+    fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
 }
 
 function scopeExpansion(
@@ -256,7 +262,7 @@ function scopeExpansion(
     );
   }
   const priorVersion = state.version;
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   const resultingPaths = [...state.approved_paths, ...addedPaths].sort();
   next.approved_paths = resultingPaths;
   const combinedPaths = next.linked_continuation?.combined_review_paths ?? resultingPaths;
@@ -306,7 +312,7 @@ function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>)
   return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
 }
 
-const ROLE_VIEW_COMMON: readonly string[] = [
+export const ROLE_VIEW_COMMON = [
   "workflow_id",
   "schema_version",
   "version",
@@ -319,9 +325,10 @@ const ROLE_VIEW_COMMON: readonly string[] = [
   "review_target",
   "superseded_by_workflow_id",
   "linked_continuation",
-];
+  "permitted_next_actions",
+] as const satisfies readonly (keyof import("./types.js").RoleViewCommon)[];
 
-const REVIEWER_IMPLEMENTER_HANDOFF: readonly string[] = [
+export const REVIEWER_IMPLEMENTER_HANDOFF = [
   "implementation_summary",
   "implementation_status",
   "implementation_receipt",
@@ -331,9 +338,9 @@ const REVIEWER_IMPLEMENTER_HANDOFF: readonly string[] = [
   "acceptance_results",
   "validation_results",
   "finding_resolution_map",
-];
+] as const satisfies readonly (keyof WorkflowState)[];
 
-const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly string[]> = {
+export const ROLE_VIEW_EXTRA = {
   implementer: [
     "approved_plan",
     "execution_brief",
@@ -405,7 +412,80 @@ const ROLE_VIEW_EXTRA: Record<"implementer" | "reviewer" | "committer", readonly
     "stop_context",
     "recovery_context",
   ],
-};
+} as const satisfies Record<
+  "implementer" | "reviewer" | "committer",
+  readonly (keyof WorkflowState)[]
+>;
+
+type InternalReceiptField =
+  | "initial_receipt"
+  | "review_start_receipt"
+  | "implementation_receipt"
+  | "review_receipt";
+type VisibleRegistryKeys<Keys extends readonly PropertyKey[]> = Exclude<
+  Keys[number],
+  InternalReceiptField
+>;
+type ExactKeySet<Actual extends PropertyKey, Expected extends PropertyKey> = [
+  Exclude<Actual, Expected>,
+  Exclude<Expected, Actual>,
+] extends [never, never]
+  ? true
+  : false;
+type NoDuplicateKeys<
+  Keys extends readonly PropertyKey[],
+  Seen extends PropertyKey = never,
+> = Keys extends readonly [infer Head extends PropertyKey, ...infer Tail extends PropertyKey[]]
+  ? Head extends Seen
+    ? false
+    : NoDuplicateKeys<Tail, Seen | Head>
+  : true;
+type AssertTrue<Value extends true> = Value;
+
+type ImplementerExtraKeys = Exclude<keyof ImplementerView, keyof RoleViewCommon>;
+type ReviewerExtraKeys =
+  | Exclude<keyof ReviewerViewBase, keyof RoleViewCommon>
+  | keyof ImplementerHandoffView;
+type CommitterExtraKeys = Exclude<keyof CommitterView, keyof RoleViewCommon>;
+
+type _ImplementerRegistryIsExact = AssertTrue<
+  ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.implementer>, ImplementerExtraKeys>
+>;
+type _ReviewerRegistryIsExact = AssertTrue<
+  ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.reviewer>, ReviewerExtraKeys>
+>;
+type _CommitterRegistryIsExact = AssertTrue<
+  ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.committer>, CommitterExtraKeys>
+>;
+type _HandoffRegistryIsExact = AssertTrue<
+  ExactKeySet<
+    VisibleRegistryKeys<typeof REVIEWER_IMPLEMENTER_HANDOFF>,
+    keyof ImplementerHandoffView
+  >
+>;
+type _ImplementerRegistryHasNoDuplicates = AssertTrue<
+  NoDuplicateKeys<typeof ROLE_VIEW_EXTRA.implementer>
+>;
+type _ReviewerRegistryHasNoDuplicates = AssertTrue<
+  NoDuplicateKeys<typeof ROLE_VIEW_EXTRA.reviewer>
+>;
+type _CommitterRegistryHasNoDuplicates = AssertTrue<
+  NoDuplicateKeys<typeof ROLE_VIEW_EXTRA.committer>
+>;
+type _HandoffRegistryHasNoDuplicates = AssertTrue<
+  NoDuplicateKeys<typeof REVIEWER_IMPLEMENTER_HANDOFF>
+>;
+const ROLE_VIEW_REGISTRIES_ARE_EXACT: [
+  _ImplementerRegistryIsExact,
+  _ReviewerRegistryIsExact,
+  _CommitterRegistryIsExact,
+  _HandoffRegistryIsExact,
+  _ImplementerRegistryHasNoDuplicates,
+  _ReviewerRegistryHasNoDuplicates,
+  _CommitterRegistryHasNoDuplicates,
+  _HandoffRegistryHasNoDuplicates,
+] = [true, true, true, true, true, true, true, true];
+void ROLE_VIEW_REGISTRIES_ARE_EXACT;
 
 const ACTION_MATRIX: Partial<
   Record<Role, Partial<Record<WorkflowPhase, readonly WorkflowAction[]>>>
@@ -451,7 +531,7 @@ const ACTION_MATRIX: Partial<
   },
 };
 
-const INTERNAL_RECEIPT_FIELDS = new Set([
+const INTERNAL_RECEIPT_FIELDS = new Set<keyof WorkflowState>([
   "initial_receipt",
   "review_start_receipt",
   "implementation_receipt",
@@ -534,12 +614,12 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
   view.permitted_next_actions = permittedNextActions(state, actorRole);
   if (actorRole === "parent") {
     for (const key of Object.keys(state)) {
-      if (ROLE_VIEW_COMMON.includes(key)) continue;
+      if ((ROLE_VIEW_COMMON as readonly string[]).includes(key)) continue;
       if (key === "approved_path_baselines") {
         view[key] = (raw[key] as ApprovedPathBaseline[]).map(approvedPathBaselineView);
         continue;
       }
-      if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
+      if (INTERNAL_RECEIPT_FIELDS.has(key as keyof WorkflowState)) continue;
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
           string,
@@ -553,7 +633,9 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
   } else {
     const extra =
       actorRole === "reviewer" && state.workflow_type === "review_only"
-        ? ROLE_VIEW_EXTRA[actorRole].filter((key) => !REVIEWER_IMPLEMENTER_HANDOFF.includes(key))
+        ? ROLE_VIEW_EXTRA[actorRole].filter(
+            (key) => !(REVIEWER_IMPLEMENTER_HANDOFF as readonly string[]).includes(key),
+          )
         : ROLE_VIEW_EXTRA[actorRole];
     for (const key of extra) {
       if (
@@ -562,7 +644,7 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
         state.linked_continuation === null
       )
         continue;
-      if (INTERNAL_RECEIPT_FIELDS.has(key)) continue;
+      if (INTERNAL_RECEIPT_FIELDS.has(key as keyof WorkflowState)) continue;
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
           string,
@@ -703,7 +785,7 @@ function reviewTarget(
   if (JSON.stringify(targetPaths) !== JSON.stringify(approvedPaths)) {
     fail("ERROR_INVALID_SHAPE", "review target paths do not match approved paths");
   }
-  if (args.review_mode === "working_tree") {
+  if (args.review_mode === REVIEW_MODE_VALUES[0]) {
     const baseRevision = revision(args.base_revision, "base_revision");
     if (baseRevision !== currentHead) fail("ERROR_STALE_BASE", "base HEAD is not current");
     if (args.head_revision !== null) {
@@ -726,7 +808,7 @@ function reviewTarget(
       include_untracked: true,
     };
   }
-  if (args.review_mode === "commit_range") {
+  if (args.review_mode === REVIEW_MODE_VALUES[1]) {
     if (workflowType !== "review_only") {
       fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "commit ranges require review-only workflows");
     }
@@ -802,7 +884,7 @@ export function createState(
     "workflow create",
     ["max_repair_cycles", "work_items"],
   );
-  if (args.workflow_type !== "change" && args.workflow_type !== "review_only") {
+  if (!isValue(WORKFLOW_TYPE_VALUES, args.workflow_type)) {
     fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "workflow type is not supported");
   }
   const objective = boundedString(args.objective, "objective");
@@ -907,13 +989,7 @@ export function submitImplementation(
     "implementation submission",
   );
   ensurePhase(state, "IMPLEMENTING", "REPAIRING");
-  if (
-    args.status !== "DONE" &&
-    args.status !== "DONE_WITH_CONCERNS" &&
-    args.status !== "INCOMPLETE" &&
-    args.status !== "NEEDS_CONTEXT" &&
-    args.status !== "BLOCKED"
-  ) {
+  if (!isValue(IMPLEMENTATION_STATUS_VALUES, args.status)) {
     fail("ERROR_INVALID_IMPLEMENTATION", "implementation status is invalid");
   }
   const touchedPaths = exactPaths(args.agent_touched_paths, repositoryRoot, true);
@@ -956,7 +1032,7 @@ export function submitImplementation(
   ) {
     fail("ERROR_INVALID_FINDING", "initial implementation has prior resolutions");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.implementation_summary = boundedString(args.summary, "summary", 4000);
   next.implementation_status = args.status;
   next.agent_touched_paths = touchedPaths;
@@ -990,8 +1066,7 @@ export function submitImplementation(
     next.stop_context = {
       status: args.status,
       summary: boundedString(args.summary, "summary", 4000),
-      // Safe producer-side narrowing: ensurePhase guarantees the phase at runtime.
-      stopped_from: state.phase as "IMPLEMENTING" | "REPAIRING",
+      stopped_from: state.phase,
     };
     if (state.phase === "IMPLEMENTING") next.repair_authorized_ids = [];
   }
@@ -1058,7 +1133,7 @@ export function adoptDirtyScope(
   ) {
     fail("ERROR_SCOPE_EXPANSION_DIRTY", "scope adoption paths must be dirty");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   // Adoption changes only the authorization/audit version. The existing expansion remains the
   // immutable provenance for the paths and its historical baseline.
   next.review_start_receipt = null;
@@ -1080,7 +1155,7 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
   if (!stoppedFrom || (stoppedFrom !== "IMPLEMENTING" && stoppedFrom !== "REPAIRING")) {
     fail("ERROR_STATE_CORRUPT", "stop context is invalid");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = stoppedFrom;
   next.stop_context = null;
   next.recovery_context = {
@@ -1101,7 +1176,7 @@ export function acceptConcerns(state: WorkflowState, input: unknown): WorkflowSt
     "concern acceptance",
   );
   ensurePhase(state, "STOPPED_CONCERNS");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.concern_acceptance = {
     user_authorization: userAuthorization(args.user_authorization),
     accepted_at: isoNow(),
@@ -1136,7 +1211,7 @@ export function beginReview(
       "review has already begun; submit the review before beginning again",
     );
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.review_start_receipt = clone(startReceipt);
   return next;
 }
@@ -1162,11 +1237,7 @@ export function submitReview(
     ],
     "review submission",
   );
-  if (
-    args.review_status !== "APPROVED" &&
-    args.review_status !== "CHANGES_REQUESTED" &&
-    args.review_status !== "INCONCLUSIVE"
-  ) {
+  if (!isValue(REVIEW_STATUS_VALUES, args.review_status)) {
     fail("ERROR_INVALID_REVIEW", "review status is invalid");
   }
   const blockingFindings = findings(args.blocking_findings ?? [], "blocking_findings", true);
@@ -1239,7 +1310,7 @@ export function submitReview(
   if (args.review_status === "CHANGES_REQUESTED" && blockingFindings.length === 0) {
     fail("ERROR_INVALID_REVIEW", "changes requested without blockers");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;
   next.prior_finding_classifications = classifications;
@@ -1336,10 +1407,7 @@ export function adjudicateFindings(state: WorkflowState, input: unknown): Workfl
     ) {
       fail("ERROR_INVALID_FINDING", "finding ID is stale, reused, or not an effective blocker");
     }
-    if (
-      item.disposition !== "CONTRACT_INCONSISTENT" &&
-      item.disposition !== "OUTSIDE_APPROVED_SCOPE"
-    ) {
+    if (!isValue(FINDING_ADJUDICATION_VALUES, item.disposition)) {
       fail("ERROR_INVALID_FINDING", "finding disposition is invalid");
     }
     seen.add(id);
@@ -1354,7 +1422,7 @@ export function adjudicateFindings(state: WorkflowState, input: unknown): Workfl
       resulting_workflow_version: (state.version + 1) as WorkflowVersion,
     });
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.finding_adjudications.push(...records);
   if (effectiveBlockingFindings(next).length === 0) {
     next.phase = "REVIEWING";
@@ -1384,7 +1452,7 @@ export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowS
   if (state.repair_cycle >= state.max_repair_cycles) {
     fail("ERROR_REPAIR_LIMIT", "repair cycle limit reached");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.repair_cycle += 1;
   next.repair_authorized_ids = [...ids].sort();
   next.phase = "REPAIRING";
@@ -1401,7 +1469,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
     "review resume",
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = "REVIEWING";
   next.stop_context = null;
   next.recovery_context = {
@@ -1419,7 +1487,7 @@ export function finalizeRepairExhausted(state: WorkflowState, input: unknown): W
     fail("ERROR_INVALID_REPAIR", "no effective blockers remain");
   if (state.repair_cycle < state.max_repair_cycles)
     fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = "STOPPED_REPAIR_EXHAUSTED";
   return next;
 }
@@ -1434,7 +1502,7 @@ export function authorizeCommit(state: WorkflowState, authorization: unknown): W
     "commit authorization",
   );
   ensurePhase(state, "STOPPED_APPROVED");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.commit_authorization = {
     user_authorization: userAuthorization(args.user_authorization),
     authorized_at: isoNow(),
@@ -1450,7 +1518,7 @@ export function commitMismatch(
   if (!MISMATCH_CATEGORIES.has(category)) {
     fail("ERROR_STATE_CORRUPT", "mismatch category is invalid");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.commit_result = { outcome: "mismatch", mismatch_category: category };
   next.phase = "STOPPED_COMMIT_MISMATCH";
   return next;
@@ -1462,7 +1530,7 @@ export function commitPreparationFailed(
   summary: string,
 ): WorkflowState {
   ensurePhase(state, "COMMIT_AUTHORIZED");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = "STOPPED_COMMIT_PREPARATION";
   next.stop_context = {
     status: "COMMIT_PREPARATION_FAILED",
@@ -1485,7 +1553,7 @@ export function prepareCommit(
 ): WorkflowState {
   exactKeys(input, ["workflow_id", "expected_version"], "commit preparation");
   ensurePhase(state, "COMMIT_AUTHORIZED");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.commit_preparation = {
     attempt_id: randomUUID() as CommitAttemptId, // documented brand cast
     prepared_head: evidence.prepared_head,
@@ -1514,7 +1582,7 @@ export function retryCommitPreparation(state: WorkflowState, input: unknown): Wo
   ) {
     fail("ERROR_INVALID_TRANSITION", "preparation failure requires review recovery");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = "COMMIT_AUTHORIZED";
   next.stop_context = null;
   next.recovery_context = {
@@ -1541,7 +1609,7 @@ export function returnCommitToReview(state: WorkflowState, input: unknown): Work
   ) {
     fail("ERROR_INVALID_TRANSITION", "preparation failure is retryable");
   }
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.phase = "REVIEWING";
   next.stop_context = null;
   next.recovery_context = {
@@ -1570,7 +1638,7 @@ function commitResultInput(state: WorkflowState, input: unknown): Record<string,
   if (state.commit_preparation?.attempt_id !== args.attempt_id) {
     fail("ERROR_COMMIT_MISMATCH", "attempt ID does not match the prepared attempt");
   }
-  if (args.outcome !== "committed" && args.outcome !== "not_committed") {
+  if (!isValue(COMMIT_SUBMISSION_OUTCOME_VALUES, args.outcome)) {
     fail("ERROR_INVALID_SHAPE", "commit outcome is invalid");
   }
   if (args.outcome === "committed" && args.failure_summary !== null) {
@@ -1595,7 +1663,7 @@ export function submitCommitResult(
   verifiedCommitHash: GitCommitSha | null,
 ): WorkflowState {
   const args = commitResultInput(state, input);
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   if (args.outcome === "committed") {
     if (verifiedCommitHash === null) {
       fail("ERROR_COMMIT_MISMATCH", "committed result was not verified");
@@ -1627,7 +1695,7 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
     "commit retry",
   );
   ensurePhase(state, "STOPPED_NOT_COMMITTED");
-  const next = clone(state);
+  const next = clone<WorkflowState>(state);
   next.commit_preparation = null;
   next.commit_result = null;
   next.phase = "COMMIT_AUTHORIZED";
@@ -1935,20 +2003,12 @@ const STATE_FINDING_KEYS: readonly string[] = [
   "missing_or_inadequate_test",
 ];
 
-const STATE_FINDING_SEVERITIES: ReadonlySet<unknown> = new Set(["P0", "P1", "P2", "P3"]);
-const GIT_MODES: ReadonlySet<unknown> = new Set(["100644", "100755", "120000"]);
-const IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set([
-  "DONE",
-  "DONE_WITH_CONCERNS",
-  "INCOMPLETE",
-  "NEEDS_CONTEXT",
-  "BLOCKED",
-]);
-const STOPPING_IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set([
-  "DONE_WITH_CONCERNS",
-  "NEEDS_CONTEXT",
-  "BLOCKED",
-]);
+const STATE_FINDING_SEVERITIES: ReadonlySet<unknown> = FINDING_SEVERITIES;
+const GIT_MODES: ReadonlySet<unknown> = GIT_FILE_MODE_SET;
+const IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set(IMPLEMENTATION_STATUS_VALUES);
+const STOPPING_IMPLEMENTATION_STATUSES: ReadonlySet<unknown> = new Set(
+  IMPLEMENTATION_STATUS_VALUES.filter((status) => status !== "DONE" && status !== "INCOMPLETE"),
+);
 
 // Hand-written runtime validation for persisted current-schema states. Every failure is
 // ERROR_STATE_CORRUPT.
@@ -2056,7 +2116,7 @@ function resolutionMapShape(value: unknown): void {
   if (!isObject(value)) corrupt();
   for (const [id, status] of Object.entries(value)) {
     if (id.length === 0 || id.length > 80) corrupt();
-    if (!RESOLUTION_STATUSES.has(status as FindingResolution)) corrupt();
+    if (!RESOLUTION_STATUS_SET.has(status as FindingResolution)) corrupt();
   }
 }
 
@@ -2129,11 +2189,7 @@ function findingAdjudicationsShape(value: unknown): void {
       corrupt();
     if ((item.finding_snapshot as { finding_id?: unknown }).finding_id !== item.finding_id)
       corrupt();
-    if (
-      item.disposition !== "CONTRACT_INCONSISTENT" &&
-      item.disposition !== "OUTSIDE_APPROVED_SCOPE"
-    )
-      corrupt();
+    if (!isValue(FINDING_ADJUDICATION_VALUES, item.disposition)) corrupt();
     bounded(item.reason, MAX_DETAIL);
     bounded(item.user_authorization, MAX_DETAIL);
     bounded(item.adjudicated_at, 64);
@@ -2146,6 +2202,7 @@ function receiptPathShape(value: unknown): void {
   const path = value.path;
   if (typeof path !== "string" || path.length === 0 || path.length > 300) corrupt();
   const state = value.state;
+  if (!isValue(RECEIPT_PATH_STATE_VALUES, state)) corrupt();
   if (state === "absent") {
     checkKeys(value, ["path", "state", "kind"]);
     if (value.kind !== "missing") corrupt();
@@ -2279,7 +2336,7 @@ function reviewTargetShape(value: unknown): void {
   ]);
   sha40(value.base_revision);
   pathList(value.approved_paths, false);
-  if (value.review_mode === "working_tree") {
+  if (value.review_mode === REVIEW_MODE_VALUES[0]) {
     if (value.head_revision !== null) corrupt();
     if (
       value.include_staged !== true ||
@@ -2288,7 +2345,7 @@ function reviewTargetShape(value: unknown): void {
     ) {
       corrupt();
     }
-  } else if (value.review_mode === "commit_range") {
+  } else if (value.review_mode === REVIEW_MODE_VALUES[1]) {
     sha40(value.head_revision);
     if (
       value.include_staged !== false ||
@@ -2437,6 +2494,7 @@ function commitPreparationShape(value: unknown): void {
 function commitResultShape(value: unknown): void {
   if (value === null || value === undefined) return;
   if (!isObject(value)) corrupt();
+  if (!isValue(COMMIT_OUTCOME_VALUES, value.outcome)) corrupt();
   if (value.outcome === "committed") {
     checkKeys(value, ["outcome", "commit_hash", "failure_summary"]);
     sha40(value.commit_hash);
@@ -2458,7 +2516,7 @@ function commitResultShape(value: unknown): void {
 export function validateWorkflowStateV8(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V8_STATE_KEYS].sort();
+  const required = [...V8_STATE_KEYS].sort() as string[];
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -2466,7 +2524,7 @@ export function validateWorkflowStateV8(value: unknown): WorkflowState {
   if (!Number.isSafeInteger(value.version) || (value.version as number) < 0) corrupt();
   if (typeof value.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(value.workflow_id))
     corrupt();
-  if (value.workflow_type !== "change" && value.workflow_type !== "review_only") corrupt();
+  if (!isValue(WORKFLOW_TYPE_VALUES, value.workflow_type)) corrupt();
   if (value.runtime_id !== null && !/^[0-9a-f]{64}$/u.test(String(value.runtime_id))) corrupt();
   if (value.runtime_revision !== null) sha40(value.runtime_revision);
   if ((value.runtime_id === null) !== (value.runtime_revision === null)) corrupt();
@@ -2685,13 +2743,13 @@ export function validateWorkflowStateV8(value: unknown): WorkflowState {
     value.acceptance_results,
     "criterion_id",
     "AC",
-    ACCEPTANCE_STATUSES as ReadonlySet<string>,
+    ACCEPTANCE_STATUS_SET as ReadonlySet<string>,
   );
   resultsShape(
     value.validation_results,
     "validation_id",
     "VAL",
-    VALIDATION_STATUSES as ReadonlySet<string>,
+    VALIDATION_STATUS_SET as ReadonlySet<string>,
   );
   nullableReceipt(value.implementation_receipt);
   stringArrayShape(value.implementation_known_failures, 50, MAX_DETAIL);

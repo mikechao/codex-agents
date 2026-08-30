@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fail, WorkflowError } from "./errors.js";
 import type {
   AcceptanceCriterion,
+  AcceptanceCriterionId,
   AcceptanceResult,
   AcceptanceStatus,
   BlockingFinding,
@@ -26,6 +27,7 @@ import type {
   Role,
   StateDigest,
   ValidationRequirement,
+  ValidationRequirementId,
   ValidationResult,
   ValidationStatus,
   WorkflowId,
@@ -35,6 +37,13 @@ import type {
   WorktreeValidationIssue,
   WorktreeValidationResult,
 } from "./types.js";
+import {
+  ACCEPTANCE_STATUS_SET,
+  FINDING_SEVERITIES,
+  RESOLUTION_STATUS_SET,
+  ROLE_VALUES,
+  VALIDATION_STATUS_SET,
+} from "./values.js";
 
 export const MAX_PATHS = 200;
 export const MAX_FINDINGS = 200;
@@ -47,7 +56,6 @@ export const MAX_EXECUTION_BRIEF = 32 * 1024;
 const WORKTREE_NAME_SEPARATOR = /[\\/]+/gu;
 const WORKTREE_NAME_INVALID = /[^a-zA-Z0-9._-]+/gu;
 
-const FINDING_SEVERITIES: ReadonlySet<FindingSeverity> = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_KEYS = [
   "finding_id",
   "severity",
@@ -60,22 +68,11 @@ const FINDING_KEYS = [
   "missing_or_inadequate_test",
 ] as const satisfies readonly (keyof Finding)[];
 
-export const RESOLUTION_STATUSES: ReadonlySet<FindingResolution> = new Set([
-  "resolved",
-  "still_present",
-  "superseded",
-]);
-export const ACCEPTANCE_STATUSES: ReadonlySet<AcceptanceStatus> = new Set([
-  "satisfied",
-  "not_satisfied",
-]);
-export const VALIDATION_STATUSES: ReadonlySet<ValidationStatus> = new Set([
-  "passed",
-  "failed",
-  "not_run",
-]);
+export const RESOLUTION_STATUSES: ReadonlySet<FindingResolution> = RESOLUTION_STATUS_SET;
+export const ACCEPTANCE_STATUSES: ReadonlySet<AcceptanceStatus> = ACCEPTANCE_STATUS_SET;
+export const VALIDATION_STATUSES: ReadonlySet<ValidationStatus> = VALIDATION_STATUS_SET;
 
-export const ROLES: readonly Role[] = ["parent", "implementer", "reviewer", "committer"];
+export const ROLES: readonly Role[] = ROLE_VALUES;
 
 function hasWorkItemControl(value: string): boolean {
   return [...value].some((character) => {
@@ -685,7 +682,7 @@ export function contractList(
     const id = `${idPrefix}-${String(index + 1).padStart(3, "0")}`;
     if (idField === "criterion_id") {
       return {
-        criterion_id: id,
+        criterion_id: id as AcceptanceCriterionId,
         description: boundedString(item, `${name} description`),
       };
     }
@@ -694,7 +691,7 @@ export function contractList(
     // descriptions are never interpreted as commands.
     if (typeof item === "string") {
       return {
-        validation_id: id,
+        validation_id: id as ValidationRequirementId,
         description: boundedString(item, `${name} description`),
         argv: null,
       };
@@ -717,11 +714,33 @@ export function contractList(
       fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
     }
     return {
-      validation_id: id,
+      validation_id: id as ValidationRequirementId,
       description: boundedString(record.description, `${name} description`),
       argv,
     };
-  }) as unknown as AcceptanceCriterion[] | ValidationRequirement[];
+  }) as AcceptanceCriterion[] | ValidationRequirement[];
+}
+
+function checkedEvidenceRecord(
+  value: unknown,
+  name: string,
+  index: number,
+  idField: "criterion_id" | "validation_id",
+  expectedId: AcceptanceCriterionId | ValidationRequirementId,
+  statuses: ReadonlySet<AcceptanceStatus | ValidationStatus>,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("ERROR_INVALID_IMPLEMENTATION", `${name} result ${index} is invalid`);
+  }
+  const record = value as Record<string, unknown>;
+  exactKeys(value, [idField, "status", "evidence"], `${name} result`);
+  if (record[idField] !== expectedId) {
+    fail("ERROR_INVALID_IMPLEMENTATION", `${name} ID is not in contract order`);
+  }
+  if (!statuses.has(record.status as AcceptanceStatus | ValidationStatus)) {
+    fail("ERROR_INVALID_IMPLEMENTATION", `${name} status is invalid`);
+  }
+  return record;
 }
 
 export function evidenceResults(
@@ -738,6 +757,7 @@ export function evidenceResults(
   idField: "validation_id",
   statuses: ReadonlySet<ValidationStatus>,
 ): ValidationResult[];
+
 export function evidenceResults(
   value: unknown,
   name: string,
@@ -748,29 +768,44 @@ export function evidenceResults(
   if (!Array.isArray(value) || value.length !== contracts.length) {
     fail("ERROR_INVALID_IMPLEMENTATION", `${name} results are invalid`);
   }
-  return value.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      fail("ERROR_INVALID_IMPLEMENTATION", `${name} result ${index} is invalid`);
-    }
-    const record = item as Record<string, unknown>;
-    const contract = contracts[index];
-    const expectedId =
-      idField === "criterion_id"
-        ? (contract as AcceptanceCriterion).criterion_id
-        : (contract as ValidationRequirement).validation_id;
-    exactKeys(item, [idField, "status", "evidence"], `${name} result`);
-    if (record[idField] !== expectedId) {
-      fail("ERROR_INVALID_IMPLEMENTATION", `${name} ID is not in contract order`);
-    }
-    if (!statuses.has(record.status as AcceptanceStatus | ValidationStatus)) {
-      fail("ERROR_INVALID_IMPLEMENTATION", `${name} status is invalid`);
-    }
+  if (idField === "criterion_id") {
+    const acceptanceContracts = contracts as ReadonlyArray<AcceptanceCriterion>;
+    const acceptanceStatuses = statuses as ReadonlySet<AcceptanceStatus>;
+    return value.map((item, index): AcceptanceResult => {
+      const expectedId = acceptanceContracts[index].criterion_id;
+      const record = checkedEvidenceRecord(
+        item,
+        name,
+        index,
+        idField,
+        expectedId,
+        acceptanceStatuses,
+      );
+      return {
+        criterion_id: expectedId,
+        status: record.status as AcceptanceStatus,
+        evidence: boundedString(record.evidence, `${name} evidence`, MAX_DETAIL),
+      };
+    });
+  }
+  const validationContracts = contracts as ReadonlyArray<ValidationRequirement>;
+  const validationStatuses = statuses as ReadonlySet<ValidationStatus>;
+  return value.map((item, index): ValidationResult => {
+    const expectedId = validationContracts[index].validation_id;
+    const record = checkedEvidenceRecord(
+      item,
+      name,
+      index,
+      idField,
+      expectedId,
+      validationStatuses,
+    );
     return {
-      [idField]: record[idField],
-      status: record.status,
+      validation_id: expectedId,
+      status: record.status as ValidationStatus,
       evidence: boundedString(record.evidence, `${name} evidence`, MAX_DETAIL),
     };
-  }) as unknown as AcceptanceResult[] | ValidationResult[];
+  });
 }
 
 export function resolutionMap(

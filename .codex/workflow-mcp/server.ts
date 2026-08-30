@@ -12,6 +12,18 @@ import { withDiagnosticRequest } from "./diagnostics.js";
 import { fail, safeError } from "./errors.js";
 import type { WorkflowStore } from "./store.js";
 import { openStore } from "./store.js";
+import {
+  ACCEPTANCE_STATUS_VALUES,
+  COMMIT_SUBMISSION_OUTCOME_VALUES,
+  FINDING_ADJUDICATION_VALUES,
+  FINDING_RESOLUTION_VALUES,
+  FINDING_SEVERITY_VALUES,
+  IMPLEMENTATION_STATUS_VALUES,
+  REVIEW_MODE_VALUES,
+  REVIEW_STATUS_VALUES,
+  VALIDATION_STATUS_VALUES,
+  WORKFLOW_TYPE_VALUES,
+} from "./values.js";
 
 type JsonSchema = Record<string, JSONValue>;
 
@@ -70,14 +82,14 @@ const workerCommon: {
 
 const resolutionMapSchema: JsonSchema = {
   type: "object",
-  additionalProperties: { type: "string", enum: ["resolved", "still_present", "superseded"] },
+  additionalProperties: { type: "string", enum: [...FINDING_RESOLUTION_VALUES] },
 };
 
 const findingSchema: JsonSchema = {
   type: "object",
   properties: {
     finding_id: { type: "string", minLength: 1, maxLength: 80 },
-    severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
+    severity: { type: "string", enum: [...FINDING_SEVERITY_VALUES] },
     blocking: { type: "boolean" },
     file_and_line: { type: "string", minLength: 1, maxLength: 300 },
     failure_scenario: { type: "string", minLength: 1, maxLength: 2000 },
@@ -103,7 +115,7 @@ const findingSchema: JsonSchema = {
 const workingTreeReviewTargetSchema: JsonSchema = {
   type: "object",
   properties: {
-    review_mode: { type: "string", enum: ["working_tree"] },
+    review_mode: { type: "string", enum: [REVIEW_MODE_VALUES[0]] },
     base_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
     head_revision: { type: "null" },
     approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
@@ -126,7 +138,7 @@ const workingTreeReviewTargetSchema: JsonSchema = {
 const commitRangeReviewTargetSchema: JsonSchema = {
   type: "object",
   properties: {
-    review_mode: { type: "string", enum: ["commit_range"] },
+    review_mode: { type: "string", enum: [REVIEW_MODE_VALUES[1]] },
     base_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
     head_revision: { type: "string", pattern: "^[0-9a-f]{40}$" },
     approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
@@ -223,7 +235,47 @@ export const PARENT_PLANNING_OPERATIONS = [
   "workflow_create_linked_followup_from_plan",
 ] as const;
 
-export const tools: Tool[] = [
+/** Closed protocol names. This is deliberately separate from WorkflowAction: planning and the
+ * semantic operator read are server surfaces, not phase transition actions. */
+export const SERVER_TOOL_NAMES = [
+  "plan_create",
+  "plan_get",
+  "plan_revise",
+  "plan_parent_get",
+  "plan_approve",
+  "workflow_create_from_plan",
+  "workflow_adopt_dirty_scope",
+  "workflow_expand_scope",
+  "workflow_create",
+  "workflow_parent_get",
+  "workflow_operator_decision_get",
+  "workflow_implementer_get",
+  "workflow_reviewer_get",
+  "workflow_committer_get",
+  "workflow_get_audit",
+  "workflow_submit_implementation",
+  "workflow_resume_implementation",
+  "workflow_accept_concerns",
+  "workflow_begin_review",
+  "workflow_submit_review",
+  "workflow_authorize_repair",
+  "workflow_adjudicate_findings",
+  "workflow_resume_review",
+  "workflow_finalize_repair_exhausted",
+  "workflow_create_linked_followup",
+  "workflow_create_linked_followup_from_plan",
+  "workflow_authorize_commit",
+  "workflow_prepare_commit",
+  "workflow_retry_commit_preparation",
+  "workflow_return_commit_to_review",
+  "workflow_submit_commit_result",
+  "workflow_reconcile_commit_result",
+  "workflow_retry_commit",
+] as const;
+export type ServerToolName = (typeof SERVER_TOOL_NAMES)[number];
+type ServerToolDefinition = Omit<Tool, "name"> & { name: ServerToolName };
+
+export const toolDefinitions = [
   {
     name: "plan_create",
     description: "Create a complete immutable draft plan revision.",
@@ -370,7 +422,7 @@ export const tools: Tool[] = [
       "Create a change or review-only workflow and return the parent view plus one parent capability.",
     inputSchema: schema(
       {
-        workflow_type: { type: "string", enum: ["change", "review_only"] },
+        workflow_type: { type: "string", enum: [...WORKFLOW_TYPE_VALUES] },
         objective: { type: "string", minLength: 1, maxLength: 4000 },
         approved_plan: {
           oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 1048576 }],
@@ -498,7 +550,7 @@ export const tools: Tool[] = [
         ...workerCommon.properties,
         status: {
           type: "string",
-          enum: ["DONE", "DONE_WITH_CONCERNS", "INCOMPLETE", "NEEDS_CONTEXT", "BLOCKED"],
+          enum: [...IMPLEMENTATION_STATUS_VALUES],
         },
         summary: { type: "string", minLength: 1, maxLength: 4000 },
         agent_touched_paths: {
@@ -513,7 +565,7 @@ export const tools: Tool[] = [
             type: "object",
             properties: {
               criterion_id: { type: "string" },
-              status: { type: "string", enum: ["satisfied", "not_satisfied"] },
+              status: { type: "string", enum: [...ACCEPTANCE_STATUS_VALUES] },
               evidence: { type: "string", minLength: 1, maxLength: 2000 },
             },
             required: ["criterion_id", "status", "evidence"],
@@ -526,7 +578,7 @@ export const tools: Tool[] = [
             type: "object",
             properties: {
               validation_id: { type: "string" },
-              status: { type: "string", enum: ["passed", "failed", "not_run"] },
+              status: { type: "string", enum: [...VALIDATION_STATUS_VALUES] },
               evidence: { type: "string", minLength: 1, maxLength: 2000 },
             },
             required: ["validation_id", "status", "evidence"],
@@ -616,7 +668,7 @@ export const tools: Tool[] = [
     inputSchema: schema(
       {
         ...workerCommon.properties,
-        review_status: { type: "string", enum: ["APPROVED", "CHANGES_REQUESTED", "INCONCLUSIVE"] },
+        review_status: { type: "string", enum: [...REVIEW_STATUS_VALUES] },
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
         prior_finding_classifications: resolutionMapSchema,
@@ -672,7 +724,7 @@ export const tools: Tool[] = [
               finding_id: { type: "string", minLength: 1, maxLength: 80 },
               disposition: {
                 type: "string",
-                enum: ["CONTRACT_INCONSISTENT", "OUTSIDE_APPROVED_SCOPE"],
+                enum: [...FINDING_ADJUDICATION_VALUES],
               },
               reason: { type: "string", minLength: 1, maxLength: 2000 },
             },
@@ -867,7 +919,7 @@ export const tools: Tool[] = [
       {
         ...workerCommon.properties,
         attempt_id: { type: "string", pattern: "^[0-9a-f-]{36}$" },
-        outcome: { type: "string", enum: ["committed", "not_committed"] },
+        outcome: { type: "string", enum: [...COMMIT_SUBMISSION_OUTCOME_VALUES] },
         failure_summary: {
           oneOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }],
         },
@@ -920,7 +972,23 @@ export const tools: Tool[] = [
       openWorldHint: false,
     },
   },
-];
+] as const satisfies readonly ServerToolDefinition[];
+export const tools: Tool[] = [...toolDefinitions];
+
+type MissingServerToolDefinition = Exclude<
+  ServerToolName,
+  (typeof toolDefinitions)[number]["name"]
+>;
+type UnknownServerToolDefinition = Exclude<
+  (typeof toolDefinitions)[number]["name"],
+  ServerToolName
+>;
+const SERVER_TOOL_DEFINITIONS_ARE_EXACT: MissingServerToolDefinition extends never
+  ? UnknownServerToolDefinition extends never
+    ? true
+    : never
+  : never = true;
+void SERVER_TOOL_DEFINITIONS_ARE_EXACT;
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
@@ -931,11 +999,77 @@ function errorResult(error: unknown): CallToolResult {
   return { isError: true, content: [{ type: "text", text: JSON.stringify(safe) }] };
 }
 
+type ToolArguments = Record<string, unknown>;
+type ToolHandler = (args: ToolArguments) => unknown;
+
+function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> {
+  return {
+    plan_create: (args) => store.planCreate(args),
+    plan_get: (args) => store.planGet(args),
+    plan_revise: (args) => store.planRevise(args),
+    plan_parent_get: (args) => store.planParentGet(args),
+    plan_approve: (args) => store.planApprove(args),
+    workflow_create_from_plan: (args) => store.createFromPlan(args),
+    workflow_adopt_dirty_scope: (args) => store.adoptDirtyScope(args),
+    workflow_expand_scope: (args) => store.expandScope(args),
+    workflow_create: (args) => store.create(args),
+    workflow_parent_get: (args) => store.parentGet(args.workflow_id),
+    workflow_operator_decision_get: (args) => store.operatorDecisionGet(args.workflow_id),
+    workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
+    workflow_reviewer_get: (args) => store.reviewerGet(args.workflow_id),
+    workflow_committer_get: (args) => store.committerGet(args.workflow_id),
+    workflow_get_audit: (args) => store.audit(args.workflow_id, args.capability),
+    workflow_submit_implementation: (args) => store.submitImplementation(args),
+    workflow_resume_implementation: (args) => store.resumeImplementation(args),
+    workflow_accept_concerns: (args) => store.acceptConcerns(args),
+    workflow_begin_review: (args) => store.beginReview(args),
+    workflow_submit_review: (args) => store.submitReview(args),
+    workflow_authorize_repair: (args) => store.authorizeRepair(args),
+    workflow_adjudicate_findings: (args) => store.adjudicateFindings(args),
+    workflow_resume_review: (args) => store.resumeReview(args),
+    workflow_finalize_repair_exhausted: (args) => store.finalizeRepairExhausted(args),
+    workflow_create_linked_followup: (args) => store.createLinkedFollowup(args),
+    workflow_create_linked_followup_from_plan: (args) => store.createLinkedFollowupFromPlan(args),
+    workflow_authorize_commit: (args) => store.authorizeCommit(args),
+    workflow_prepare_commit: (args) => store.prepareCommit(args),
+    workflow_retry_commit_preparation: (args) => store.retryCommitPreparation(args),
+    workflow_return_commit_to_review: (args) => store.returnCommitToReview(args),
+    workflow_submit_commit_result: (args) => store.submitCommitResult(args),
+    workflow_reconcile_commit_result: (args) => store.reconcileCommitResult(args),
+    workflow_retry_commit: (args) => store.retryCommit(args),
+  };
+}
+
+/** Runtime view of the exhaustive dispatch registry, used by protocol contract tests. */
+export const DISPATCH_TOOL_NAMES = Object.keys(
+  dispatchFor(undefined as unknown as WorkflowStore),
+) as ServerToolName[];
+
+export function isServerToolName(value: string): value is ServerToolName {
+  return (SERVER_TOOL_NAMES as readonly string[]).includes(value);
+}
+
+const TOOL_NAME_SET_IS_UNIQUE = new Set(SERVER_TOOL_NAMES).size === SERVER_TOOL_NAMES.length;
+const TOOL_DEFINITION_NAME_SET_IS_UNIQUE =
+  new Set(toolDefinitions.map((tool) => tool.name)).size === toolDefinitions.length;
+const TOOL_DISPATCH_NAME_SET_IS_EXACT =
+  new Set(DISPATCH_TOOL_NAMES).size === DISPATCH_TOOL_NAMES.length &&
+  DISPATCH_TOOL_NAMES.length === SERVER_TOOL_NAMES.length &&
+  DISPATCH_TOOL_NAMES.every((name) => SERVER_TOOL_NAMES.includes(name));
+if (
+  !TOOL_NAME_SET_IS_UNIQUE ||
+  !TOOL_DEFINITION_NAME_SET_IS_UNIQUE ||
+  !TOOL_DISPATCH_NAME_SET_IS_EXACT
+) {
+  throw new Error("server tool registry contains duplicate names");
+}
+
 export function createServer(store: WorkflowStore = openStore()): Server {
   const server = new Server(
     { name: "workflow-state", version: "1.0.0" },
     { capabilities: { tools: {} }, instructions: protocolInstructions },
   );
+  const dispatch = dispatchFor(store);
   server.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => ({ tools }));
   server.setRequestHandler("tools/call", async (request, context) => {
     const requestId = context.mcpReq.id;
@@ -953,109 +1087,9 @@ export function createServer(store: WorkflowStore = openStore()): Server {
     try {
       let result: unknown;
       withDiagnosticRequest({ request_id: requestId, method: "tools/call", tool }, () => {
-        switch (request.params.name) {
-          case "plan_create":
-            result = store.planCreate(args);
-            break;
-          case "plan_get":
-            result = store.planGet(args);
-            break;
-          case "plan_revise":
-            result = store.planRevise(args);
-            break;
-          case "plan_parent_get":
-            result = store.planParentGet(args);
-            break;
-          case "plan_approve":
-            result = store.planApprove(args);
-            break;
-          case "workflow_create_from_plan":
-            result = store.createFromPlan(args);
-            break;
-          case "workflow_expand_scope":
-            result = store.expandScope(args);
-            break;
-          case "workflow_adopt_dirty_scope":
-            result = store.adoptDirtyScope(args);
-            break;
-          case "workflow_create":
-            result = store.create(args);
-            break;
-          case "workflow_parent_get":
-            result = store.parentGet(args.workflow_id);
-            break;
-          case "workflow_operator_decision_get":
-            result = store.operatorDecisionGet(args.workflow_id);
-            break;
-          case "workflow_implementer_get":
-            result = store.implementerGet(args.workflow_id);
-            break;
-          case "workflow_reviewer_get":
-            result = store.reviewerGet(args.workflow_id);
-            break;
-          case "workflow_committer_get":
-            result = store.committerGet(args.workflow_id);
-            break;
-          case "workflow_get_audit":
-            result = store.audit(args.workflow_id, args.capability);
-            break;
-          case "workflow_submit_implementation":
-            result = store.submitImplementation(args);
-            break;
-          case "workflow_resume_implementation":
-            result = store.resumeImplementation(args);
-            break;
-          case "workflow_accept_concerns":
-            result = store.acceptConcerns(args);
-            break;
-          case "workflow_begin_review":
-            result = store.beginReview(args);
-            break;
-          case "workflow_submit_review":
-            result = store.submitReview(args);
-            break;
-          case "workflow_authorize_repair":
-            result = store.authorizeRepair(args);
-            break;
-          case "workflow_adjudicate_findings":
-            result = store.adjudicateFindings(args);
-            break;
-          case "workflow_resume_review":
-            result = store.resumeReview(args);
-            break;
-          case "workflow_finalize_repair_exhausted":
-            result = store.finalizeRepairExhausted(args);
-            break;
-          case "workflow_create_linked_followup":
-            result = store.createLinkedFollowup(args);
-            break;
-          case "workflow_create_linked_followup_from_plan":
-            result = store.createLinkedFollowupFromPlan(args);
-            break;
-          case "workflow_authorize_commit":
-            result = store.authorizeCommit(args);
-            break;
-          case "workflow_prepare_commit":
-            result = store.prepareCommit(args);
-            break;
-          case "workflow_retry_commit_preparation":
-            result = store.retryCommitPreparation(args);
-            break;
-          case "workflow_return_commit_to_review":
-            result = store.returnCommitToReview(args);
-            break;
-          case "workflow_submit_commit_result":
-            result = store.submitCommitResult(args);
-            break;
-          case "workflow_reconcile_commit_result":
-            result = store.reconcileCommitResult(args);
-            break;
-          case "workflow_retry_commit":
-            result = store.retryCommit(args);
-            break;
-          default:
-            fail("ERROR_UNKNOWN_TOOL", "tool is not available");
-        }
+        if (!isServerToolName(request.params.name))
+          fail("ERROR_UNKNOWN_TOOL", "tool is not available");
+        result = dispatch[request.params.name](args);
       });
       store.diagnostics.record({
         event: "tool_result",

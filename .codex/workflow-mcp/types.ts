@@ -1,6 +1,26 @@
-// Domain types for the workflow-state MCP server. Type-only module: no runtime exports, so
-// `verbatimModuleSyntax` consumers import via `import type`. Branded values are produced only by
-// the Phase C validation helpers; see `.codex/workflow-mcp/validation.ts` (planned).
+// Domain types for the workflow-state MCP server. This module is type-only. Runtime finite-domain
+// values live in values.ts and are imported only as types here.
+import type {
+  ACCEPTANCE_STATUS_VALUES,
+  COMMIT_MISMATCH_CATEGORY_VALUES,
+  COMMIT_OUTCOME_VALUES,
+  COMMIT_SUBMISSION_OUTCOME_VALUES,
+  FINDING_ADJUDICATION_VALUES,
+  FINDING_RESOLUTION_VALUES,
+  FINDING_SEVERITY_VALUES,
+  GIT_FILE_MODE_VALUES,
+  IMPLEMENTATION_STATUS_VALUES,
+  RANGE_PATH_KIND_VALUES,
+  RECEIPT_PATH_STATE_VALUES,
+  REVIEW_STATUS_VALUES,
+  ROLE_VALUES,
+  VALIDATION_STATUS_VALUES,
+  WORKFLOW_ACTION_VALUES,
+  WORKFLOW_PHASE_VALUES,
+  WORKFLOW_TYPE_VALUES,
+} from "./values.js";
+
+type TupleValue<T extends readonly string[]> = T[number];
 
 // ---------------------------------------------------------------------------
 // 1. Brand helper
@@ -28,6 +48,8 @@ export type IsoTimestamp = Brand<string, "IsoTimestamp">;
 export type CommitAttemptId = Brand<string, "CommitAttemptId">;
 export type PlanId = Brand<string, "PlanId">;
 export type PlanRevision = Brand<number, "PlanRevision">;
+export type AcceptanceCriterionId = Brand<string, "AcceptanceCriterionId">;
+export type ValidationRequirementId = Brand<string, "ValidationRequirementId">;
 
 export interface WorkItemReference {
   provider: string;
@@ -40,48 +62,24 @@ export interface WorkItemReference {
 // 3. Core unions
 // ---------------------------------------------------------------------------
 
-export type Role = "parent" | "implementer" | "reviewer" | "committer"; // = validation ROLES
+export type Role = TupleValue<typeof ROLE_VALUES>;
 
-export type WorkflowPhase =
-  | "IMPLEMENTING"
-  | "REVIEWING"
-  | "REPAIR_REQUIRED"
-  | "REPAIRING"
-  | "STOPPED_APPROVED"
-  | "STOPPED_INCONCLUSIVE"
-  | "STOPPED_CONCERNS"
-  | "STOPPED_NEEDS_CONTEXT"
-  | "STOPPED_IMPLEMENTATION_BLOCKED"
-  | "STOPPED_REPAIR_EXHAUSTED"
-  | "COMMIT_AUTHORIZED"
-  | "COMMIT_PREPARED"
-  | "STOPPED_COMMIT_PREPARATION"
-  | "STOPPED_NOT_COMMITTED"
-  | "STOPPED_COMMIT_MISMATCH"
-  | "COMMITTED";
+export type WorkflowPhase = TupleValue<typeof WORKFLOW_PHASE_VALUES>;
 
-export type WorkflowType = "change" | "review_only";
-export type ImplementationStatus =
-  | "DONE"
-  | "DONE_WITH_CONCERNS"
-  | "INCOMPLETE"
-  | "NEEDS_CONTEXT"
-  | "BLOCKED";
+export type WorkflowType = TupleValue<typeof WORKFLOW_TYPE_VALUES>;
+export type ImplementationStatus = TupleValue<typeof IMPLEMENTATION_STATUS_VALUES>;
 export type StoppingImplementationStatus = Exclude<ImplementationStatus, "DONE" | "INCOMPLETE">;
-export type ReviewStatus = "APPROVED" | "CHANGES_REQUESTED" | "INCONCLUSIVE";
-export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
-export type FindingResolution = "resolved" | "still_present" | "superseded";
-export type FindingAdjudicationDisposition = "CONTRACT_INCONSISTENT" | "OUTSIDE_APPROVED_SCOPE";
-export type AcceptanceStatus = "satisfied" | "not_satisfied";
-export type ValidationStatus = "passed" | "failed" | "not_run";
-export type RangePathKind = "added" | "modified" | "deleted" | "unchanged";
-export type GitFileMode = "100644" | "100755" | "120000"; // normalizeMode accepted set
-export type CommitOutcome = "committed" | "not_committed" | "mismatch";
-export type CommitMismatchCategory =
-  | "HEAD_CHANGED"
-  | "PARENT_MISMATCH"
-  | "TREE_MISMATCH"
-  | "PATH_MISMATCH";
+export type ReviewStatus = TupleValue<typeof REVIEW_STATUS_VALUES>;
+export type FindingSeverity = TupleValue<typeof FINDING_SEVERITY_VALUES>;
+export type FindingResolution = TupleValue<typeof FINDING_RESOLUTION_VALUES>;
+export type FindingAdjudicationDisposition = TupleValue<typeof FINDING_ADJUDICATION_VALUES>;
+export type AcceptanceStatus = TupleValue<typeof ACCEPTANCE_STATUS_VALUES>;
+export type ValidationStatus = TupleValue<typeof VALIDATION_STATUS_VALUES>;
+export type RangePathKind = TupleValue<typeof RANGE_PATH_KIND_VALUES>;
+export type GitFileMode = TupleValue<typeof GIT_FILE_MODE_VALUES>;
+export type CommitOutcome = TupleValue<typeof COMMIT_OUTCOME_VALUES>;
+export type CommitSubmissionOutcome = TupleValue<typeof COMMIT_SUBMISSION_OUTCOME_VALUES>;
+export type CommitMismatchCategory = TupleValue<typeof COMMIT_MISMATCH_CATEGORY_VALUES>;
 
 // Normalized, read-only worktree data. These types deliberately do not expose the
 // dependency used by the Git adapter (or Git's porcelain result objects).
@@ -137,33 +135,7 @@ export interface WorktreePlan {
 export type WorktreePlanResult = WorktreePlan;
 
 // Phase-driven workflow action names. Planning tool names remain a separate domain.
-export type WorkflowAction =
-  | "workflow_create"
-  | "workflow_adopt_dirty_scope"
-  | "workflow_expand_scope"
-  | "workflow_parent_get"
-  | "workflow_implementer_get"
-  | "workflow_reviewer_get"
-  | "workflow_committer_get"
-  | "workflow_get_audit"
-  | "workflow_submit_implementation"
-  | "workflow_resume_implementation"
-  | "workflow_accept_concerns"
-  | "workflow_begin_review"
-  | "workflow_submit_review"
-  | "workflow_authorize_repair"
-  | "workflow_adjudicate_findings"
-  | "workflow_resume_review"
-  | "workflow_finalize_repair_exhausted"
-  | "workflow_create_linked_followup"
-  | "workflow_create_linked_followup_from_plan"
-  | "workflow_authorize_commit"
-  | "workflow_prepare_commit"
-  | "workflow_submit_commit_result"
-  | "workflow_reconcile_commit_result"
-  | "workflow_retry_commit_preparation"
-  | "workflow_return_commit_to_review"
-  | "workflow_retry_commit";
+export type WorkflowAction = TupleValue<typeof WORKFLOW_ACTION_VALUES>;
 
 // Read-only semantic projection used by the parent orchestrator. These types intentionally
 // contain no workflow or PlanArtifact identity, capabilities, receipts, audit data, or raw phase
@@ -457,26 +429,26 @@ export interface RemediationContext {
 // ---------------------------------------------------------------------------
 
 export interface AcceptanceCriterion {
-  criterion_id: string; // "AC-001".."AC-999"
+  criterion_id: AcceptanceCriterionId; // "AC-001".."AC-999"
   description: string;
 }
 
 export interface ValidationRequirement {
   /** Workflow-local result correlation ID; never a repository command selector. */
-  validation_id: string; // "VAL-001"..
+  validation_id: ValidationRequirementId; // "VAL-001"..
   description: string;
   /** Exact executable argv, or null for a manual validation requirement. */
   argv: string[] | null;
 }
 
 export interface AcceptanceResult {
-  criterion_id: string;
+  criterion_id: AcceptanceCriterionId;
   status: AcceptanceStatus;
   evidence: string;
 }
 
 export interface ValidationResult {
-  validation_id: string;
+  validation_id: ValidationRequirementId;
   status: ValidationStatus;
   evidence: string;
 }
@@ -485,7 +457,7 @@ export interface ValidationResult {
 // 7. Receipts and Git metadata
 // ---------------------------------------------------------------------------
 
-export type ReceiptPathState = "added" | "modified" | "deleted" | "unchanged" | "absent";
+export type ReceiptPathState = TupleValue<typeof RECEIPT_PATH_STATE_VALUES>;
 
 export type ReceiptPath =
   | { path: ExactRepoPath; state: "absent"; kind: "missing" } // no mode/digest
@@ -511,12 +483,15 @@ export interface GitTreeEntry {
   object: GitBlobSha;
 }
 
-export interface ReviewRangePath {
-  path: ExactRepoPath;
-  kind: RangePathKind;
-  base: GitTreeEntry | null;
-  head: GitTreeEntry | null;
-}
+export type ReviewRangePath =
+  | { path: ExactRepoPath; kind: "added"; base: null; head: GitTreeEntry }
+  | { path: ExactRepoPath; kind: "deleted"; base: GitTreeEntry; head: null }
+  | {
+      path: ExactRepoPath;
+      kind: "modified" | "unchanged";
+      base: GitTreeEntry;
+      head: GitTreeEntry;
+    };
 
 export interface ReviewRange {
   base_revision: GitCommitSha;
