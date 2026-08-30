@@ -22,6 +22,7 @@ import {
   verifyReviewReceipt,
 } from "./git.js";
 import { assertSupportedStateSchema } from "./migration.js";
+import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
 import {
   isValidRuntimeArtifact,
   type RuntimeArtifact,
@@ -75,6 +76,7 @@ import type {
   FindingAdjudication,
   GitCommitSha,
   IsoTimestamp,
+  OperatorDecision,
   ParentCapability,
   ParentView,
   PlanApproval,
@@ -88,6 +90,7 @@ import type {
   RoleView,
   ScopeExpansionAudit,
   StateDigest,
+  WorkflowAction,
   WorkflowId,
   WorkflowRow,
   WorkflowState,
@@ -1211,6 +1214,55 @@ export class WorkflowStore {
 
   parentGet(workflowIdValue: unknown): ParentView {
     return this.#get(workflowIdValue, "parent") as ParentView;
+  }
+
+  /**
+   * Return the bounded semantic parent projection. This intentionally does not accept a
+   * capability or mutation input: runtime ownership is the same read boundary as parentGet,
+   * while privileged details remain available only through the explicit parent/audit surfaces.
+   */
+  operatorDecisionGet(workflowIdValue: unknown): OperatorDecision {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    const state = parseState(row);
+    if (this.#isCrossRuntimeCommitReconciled(row, state)) this.#assertRuntimeAttestation();
+    else this.#assertRuntimeOwnership(row);
+    if (!state.workflow_id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
+
+    const records = new Map<string, OperatorLineageRecord>();
+    const pending: WorkflowId[] = [state.workflow_id];
+    while (pending.length > 0) {
+      const id = pending.shift() as WorkflowId;
+      if (records.has(id)) continue;
+      if (records.size >= 32)
+        fail("ERROR_STATE_CORRUPT", "explicit workflow lineage exceeds its bound");
+      const relatedRow = id === row.workflow_id ? row : this.#row(id);
+      const relatedState = id === row.workflow_id ? state : parseState(relatedRow);
+      const actions: Partial<Record<Role, WorkflowAction[]>> = {
+        parent: (roleViewForRole(relatedState, "parent").permitted_next_actions ?? []).slice(),
+        implementer: (
+          roleViewForRole(relatedState, "implementer").permitted_next_actions ?? []
+        ).slice(),
+        reviewer: (roleViewForRole(relatedState, "reviewer").permitted_next_actions ?? []).slice(),
+        committer: (
+          roleViewForRole(relatedState, "committer").permitted_next_actions ?? []
+        ).slice(),
+      };
+      records.set(id, { state: relatedState, actions });
+      const continuation = relatedState.linked_continuation;
+      const references = [
+        relatedState.parent_workflow_id,
+        relatedState.source_workflow_id,
+        relatedState.superseded_by_workflow_id,
+        continuation?.root_workflow_id ?? null,
+        continuation?.predecessor_workflow_id ?? null,
+        ...(continuation?.lineage_workflow_ids ?? []),
+      ];
+      for (const reference of references) {
+        if (reference !== null && !records.has(reference)) pending.push(reference);
+      }
+    }
+    return deriveOperatorDecision(state, [...records.values()]);
   }
 
   isCrossRuntimeCommitReconciled(workflowIdValue: unknown): boolean {

@@ -30,6 +30,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_finalize_repair_exhausted",
     "workflow_get_audit",
     "workflow_implementer_get",
+    "workflow_operator_decision_get",
     "workflow_parent_get",
     "workflow_prepare_commit",
     "workflow_reconcile_commit_result",
@@ -111,6 +112,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_implementer_get",
     "workflow_reviewer_get",
     "workflow_committer_get",
+    "workflow_operator_decision_get",
   ]) {
     const getter = tools.find((tool) => tool.name === name);
     assert.ok(getter);

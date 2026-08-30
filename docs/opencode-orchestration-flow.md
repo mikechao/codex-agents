@@ -18,6 +18,27 @@ The complete workflow-state contract, including every transition and stop condit
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md). This guide explains how the OpenCode
 primary routes a normal implementation without reproducing that state machine.
 
+## Semantic operator refresh
+
+After creation or reuse, each worker handoff, and each parent mutation, Orchestrator reads the
+read-only `workflow_operator_decision_get` projection. It is the normal routing surface: when the
+projection proves `no_user_action`, Orchestrator automatically dispatches implementation, review,
+re-review, or the already-authorized commit preparation route. The projection is bounded to the
+requested workflow and reciprocal explicit linked lineage, and normal text contains semantic
+outcomes rather than raw workflow/plan IDs, phases, actions, audits, capabilities, or receipts.
+
+Exact repair, concern/context/review recovery, bounded linked continuation, scope expansion and
+changed-intent classification, final reconciliation, and commit authorization remain explicit.
+Orchestrator compares a newly supplied objective, outcome, criteria, and logical-change scope at its
+input boundary; an ID-only projection never makes that classification. Full parent reads are used
+only for exact current mutation inputs or explicit debug/status requests.
+
+Explicit linked chains can report their existing combined-review requirement. Separately created
+workflows are not joined through matching work items, paths, branches, or conversation history. If
+authoritative logical-change topology is absent or contradictory, Orchestrator fails closed and
+requires the repository-owned relationship prerequisite described by #22 rather than synthesizing
+a reconciliation workflow.
+
 ## Entry paths
 
 There are two supported ways to begin implementation:
@@ -96,8 +117,8 @@ bootstrap, supervisor, or runtime-artifact sources, and installed mode has no ru
 lifecycle; its direct server uses the target repository's Git and durable state.
 
 The parent capability is never guessed, regenerated, or replaced. Before dispatching
-the next role, Orchestrator refreshes the parent view and uses its returned version and permitted
-actions. Each worker's first authoritative action is its dedicated capability-free getter. The
+the next role, Orchestrator refreshes the operator projection and uses its semantic decision. It
+reads the parent view only when exact mutation inputs/version are needed. Each worker's first authoritative action is its dedicated capability-free getter. The
 returned role view supplies that worker's objective, scope, criteria, evidence, receipts,
 repair context, and next actions; receipt data and digests remain internal to Workflow MCP, and the
 prompt does not duplicate them.
@@ -105,20 +126,21 @@ prompt does not duplicate them.
 The approved plan is immutable, but the effective approved path scope may be expanded append-only by
 the parent with `workflow_expand_scope` in the explicitly permitted implementation and repair stops.
 The parent must have fresh user authorization naming exact paths; Workflow MCP captures clean or
-absent baselines and records the amendment parent-only. After expansion, refresh the parent and
-implementer views before dispatch: stale implementation/review evidence is cleared and fresh
+absent baselines and records the amendment parent-only. After expansion, refresh the operator
+projection and implementer views before dispatch: stale implementation/review evidence is cleared and fresh
 implementation and review are required without consuming a repair cycle.
 
 Workers perform their role and submit a terminal MCP result through their role-specific submission
 tool. After a successful terminal submission, the OpenCode adapter also requires a non-empty normal
-text report to the parent. Orchestrator refreshes the parent view immediately after each terminal
-worker handoff before deciding what happens next.
+text report to the parent. Orchestrator refreshes the operator projection immediately after each
+terminal worker handoff before deciding what happens next.
 
-The refresh is phase-first. After every terminal implementation handoff—including an authorized
-repair completion—Orchestrator calls `workflow_parent_get` before summarizing or routing. If the
-refreshed phase is `REVIEWING`, it directly dispatches a fresh `code_reviewer`, even when the view
-retains an earlier blocker such as `REV-X-001`. Retained blockers (`blocking_findings`) are
-history/remediation context only and do not cause a duplicate repair-authorization prompt.
+The refresh is semantic-decision-first. After every terminal implementation handoff—including an
+authorized repair completion—Orchestrator calls `workflow_operator_decision_get` before summarizing
+or routing. If it reports `no_user_action/review` or `no_user_action/re_review`, it directly dispatches
+a fresh `code_reviewer`, even when the projection retains an earlier blocker summary. Retained
+blockers are history/remediation context only and do not cause a duplicate repair-authorization
+prompt. Full parent reads remain an exact-mutation-input or explicit debug/status escape hatch.
 
 ## Normal implementation, review, and commit flow
 
@@ -158,7 +180,7 @@ server's returned `expected_version` is always authoritative. Review approval st
 commit authorization, and optional findings do not authorize extra remediation.
 
 After explicit user authorization, Orchestrator authorizes the commit in the workflow, refreshes the
-parent view, and dispatches the committer. Working-tree reviewers first call `workflow_begin_review`;
+operator projection, and dispatches the committer. Working-tree reviewers first call `workflow_begin_review`;
 Workflow MCP owns receipt capture and comparison. The committer stages complete approved paths
 (never partial hunks), calls `workflow_prepare_commit`, runs the external Git commit,
 and submits the commit result whether Git succeeds or fails. Orchestrator performs the final parent
@@ -191,8 +213,9 @@ the committer stages the complete exact logical-change scope and makes one coher
 finding-linked follow-ups remain narrow: a supported active source, exact current finding IDs,
 narrow remediation context and scope, and a fresh combined review. They cannot serve as changed intent
 or reconciliation shortcuts. After every terminal worker handoff and parent mutation, refresh the
-authoritative parent view, summarize only its decision-relevant result, and route from its fresh
-`permitted_next_actions`; stale prose and dirty-path inference grant no authority.
+read-only `workflow_operator_decision_get` projection, summarize only its bounded semantic result,
+and route from its fresh decision; stale prose and dirty-path inference grant no authority. Use the
+full parent view only for exact mutation inputs/version or explicit debug/status detail.
 
 ```mermaid
 sequenceDiagram
@@ -224,14 +247,16 @@ sequenceDiagram
     Orchestrator->>workflow_state: Parent-read exact approved plan and policy preflight
     Orchestrator->>workflow_state: workflow_create_from_plan (identity/options/work items only)
     workflow_state-->>Orchestrator: Exact workflow_id + one parent capability
+    Orchestrator->>workflow_state: workflow_operator_decision_get refresh
+    workflow_state-->>Orchestrator: Semantic implementation decision
     Orchestrator->>implementer: Exact workflow_id
     implementer->>workflow_state: Initial workflow_implementer_get
     workflow_state-->>implementer: Authoritative implementer view
     implementer->>GitWorkingTree: Implement approved scope and validate
     implementer->>workflow_state: Terminal implementation submission
     implementer-->>Orchestrator: Final textual implementation report
-    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
-    workflow_state-->>Orchestrator: REVIEWING + exact reviewer handoff identity
+    Orchestrator->>workflow_state: workflow_operator_decision_get refresh
+    workflow_state-->>Orchestrator: Semantic no_user_action/review decision
     Orchestrator->>code_reviewer: Exact workflow_id
     code_reviewer->>workflow_state: Initial workflow_reviewer_get
     workflow_state-->>code_reviewer: Authoritative reviewer view
@@ -239,12 +264,12 @@ sequenceDiagram
     code_reviewer->>GitWorkingTree: Independent read-only review
     code_reviewer->>workflow_state: Terminal review submission
     code_reviewer-->>Orchestrator: Final textual review report
-    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
-    workflow_state-->>Orchestrator: STOPPED_APPROVED + sanitized approval view
+    Orchestrator->>workflow_state: workflow_operator_decision_get refresh
+    workflow_state-->>Orchestrator: Explicit commit-authorization boundary
     User->>Orchestrator: Explicit commit authorization
     Orchestrator->>workflow_state: Authorize commit
-    Orchestrator->>workflow_state: Parent workflow_parent_get refresh
-    workflow_state-->>Orchestrator: COMMIT_AUTHORIZED + exact committer handoff identity
+    Orchestrator->>workflow_state: workflow_operator_decision_get refresh
+    workflow_state-->>Orchestrator: Semantic no_user_action/commit decision
     Orchestrator->>committer: Exact workflow_id
     committer->>workflow_state: Initial workflow_committer_get
     workflow_state-->>committer: Authoritative committer view
@@ -254,8 +279,8 @@ sequenceDiagram
     committer->>GitWorkingTree: External git commit
     committer->>workflow_state: Terminal commit-result submission
     committer-->>Orchestrator: Final textual commit report
-    Orchestrator->>workflow_state: Final parent workflow_parent_get refresh
-    workflow_state-->>Orchestrator: COMMITTED (or documented stop)
+    Orchestrator->>workflow_state: Final workflow_operator_decision_get refresh
+    workflow_state-->>Orchestrator: Semantic committed outcome (or documented stop)
 ```
 
 ## Findings and stop paths
@@ -265,12 +290,13 @@ finding IDs, then sends the implementer back to `REPAIRING` and re-runs independ
 complete repair-cycle limit and transition semantics are defined in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md); this guide does not duplicate them.
 
-Only a fresh reviewer result that leaves authoritative state in `REPAIR_REQUIRED`, with
-`workflow_authorize_repair` present in refreshed `permitted_next_actions`, can request repair
-authorization. The prompt uses only the current exact blocker IDs and bounded reasons. A fresh
-review that reconfirms the same ID may request that ID again; if the old ID is resolved and a
-different blocker is current, only the different current ID is requested. A retained non-empty
-blocker list alone never prompts for repair, and an absent permitted action fails closed.
+Only a fresh reviewer result whose projection reports `approve_exact_repairs` with its authority
+boundary available can request repair authorization. The parent then reads the full view for the
+current exact blocker IDs, capability, version, and permitted mutation action. The prompt uses only
+those current exact blocker IDs and bounded reasons. A fresh review that reconfirms the same ID may
+request that ID again; if the old ID is resolved and a different blocker is current, only the
+different current ID is requested. A retained non-empty blocker list alone never prompts for repair,
+and an absent permitted action fails closed.
 
 For reconciliation, the reviewer-only start is mandatory even when implementation files are already
 dirty. A blocking result can enter ordinary exact-ID repair only after explicit authorization, then

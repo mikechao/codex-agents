@@ -643,6 +643,15 @@ describe("Workflow MCP runtime supervision", () => {
       assert.equal(routedTerminalParent.result.tool, "workflow_parent_get");
       const terminalView = JSON.parse(routedTerminalParent.result.content[0].text);
       assert.equal(terminalView.phase, "COMMITTED");
+      const routedTerminalDecision = await restarted.request(
+        10,
+        "tools/call",
+        workflowIdA,
+        {},
+        "workflow_operator_decision_get",
+      );
+      assert.equal(routedTerminalDecision.result.runtime_revision, revisionB);
+      assert.equal(routedTerminalDecision.result.tool, "workflow_operator_decision_get");
       const routedWorker = await restarted.request(
         8,
         "tools/call",

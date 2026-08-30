@@ -373,6 +373,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_adopt_dirty_scope",
     "workflow_expand_scope",
     "workflow_parent_get",
+    "workflow_operator_decision_get",
     "workflow_reconcile_commit_result",
     "workflow_get_audit",
     "workflow_resume_implementation",
@@ -433,40 +434,35 @@ test("the checked-in native Plan override is canonical and isolated from generat
   assert.ok(!generatedPaths.some((path) => path.endsWith("/.opencode/agents/plan.md")));
 });
 
-test("orchestrator summarizes refreshed authoritative transitions before routing", () => {
+test("orchestrator summarizes refreshed semantic transitions before routing", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator, workflow]) {
     assert.match(
       contract,
-      /After every terminal subagent handoff[^.]*refresh[^.]*workflow_parent_get[^.]*before summarizing or routing/u,
-      "terminal handoffs must refresh parent state before summary and routing",
+      /After every terminal (?:subagent|worker) handoff[^.]*refresh[^.]*workflow_operator_decision_get[^.]*before summarizing or routing/u,
+      "terminal handoffs must refresh the operator projection before summary and routing",
     );
     assert.match(contract, /authoritative/u, "summaries must use authoritative parent state");
-    for (const field of [
-      "phase",
-      "implementation_status",
-      "blocking_findings",
-      "optional_findings",
-    ]) {
+    for (const field of ["decision", "semantic outcome", "blocker", "authority"]) {
       assert.match(contract, new RegExp(field), `summaries must name ${field}`);
     }
     assert.match(
       contract,
-      /must not dump receipts[^.]*audit events[^.]*capabilities[^.]*validation logs/u,
+      /must not dump[^.]*receipts[^.]*audit events[^.]*capabilities[^.]*validation logs/u,
       "summaries must stay concise rather than dumping internal evidence",
     );
     assert.match(
       contract,
-      /After every parent mutation[^.]*refresh[^.]*workflow_parent_get[^.]*again[^.]*fresh summary[^.]*before redispatch/u,
-      "parent mutations require a second refresh and summary before redispatch",
+      /After every parent mutation[^.]*refresh[^.]*workflow_operator_decision_get[^.]*again[^.]*fresh semantic summary[^.]*before redispatch/u,
+      "parent mutations require a second projection refresh and summary before redispatch",
     );
   }
 
   assert.match(
     orchestrator,
-    /CHANGES_REQUESTED.*?every blocking finding ID.*?bounded human-readable reason.*?before asking for repair authorization.*?Do not authorize repair or redispatch/u,
+    /CHANGES_REQUESTED.*?every bounded blocker summary.*?before asking for repair authorization.*?exact current.*?finding IDs.*?do not authorize repair or redispatch/u,
     "blocking findings must be visible before repair routing",
   );
   assert.match(
@@ -478,6 +474,11 @@ test("orchestrator summarizes refreshed authoritative transitions before routing
     orchestrator,
     /APPROVED[^.]*optional_findings[^.]*request explicit commit authorization/u,
     "approval must precede commit authorization",
+  );
+  assert.match(
+    orchestrator,
+    /recovery_summary\.stop_reason[^.]*recovery_summary\.recovery_context[^.]*single available recovery decision/u,
+    "stop summaries must use projection-only recovery context",
   );
   assert.match(
     orchestrator,
@@ -496,7 +497,7 @@ test("orchestrator summarizes refreshed authoritative transitions before routing
   );
 });
 
-test("repair-terminal routing is phase-first and fail-closed", () => {
+test("repair-terminal routing is projection-first and fail-closed", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
   const guide = readFileSync(
@@ -505,12 +506,15 @@ test("repair-terminal routing is phase-first and fail-closed", () => {
   ).replace(/\s+/gu, " ");
 
   const terminal = orchestrator.indexOf("After every terminal implementation handoff");
-  const refresh = orchestrator.indexOf("call `workflow_parent_get` first", terminal);
-  const phase = orchestrator.indexOf("refreshed `phase` as the first discriminator", terminal);
-  const reviewing = orchestrator.indexOf("When the refreshed phase is `REVIEWING`", terminal);
-  const reviewer = orchestrator.indexOf("dispatch `code_reviewer` for a fresh review", reviewing);
+  const refresh = orchestrator.indexOf("call `workflow_operator_decision_get` first", terminal);
+  const decision = orchestrator.indexOf("semantic decision", terminal);
+  const reviewing = orchestrator.indexOf(
+    "`no_user_action/review` or `no_user_action/re_review`",
+    terminal,
+  );
+  const reviewer = orchestrator.indexOf("dispatch `code_reviewer` for a", reviewing);
   assert.ok(terminal >= 0 && terminal < refresh);
-  assert.ok(refresh < phase && phase < reviewing && reviewing < reviewer);
+  assert.ok(refresh < decision && decision < reviewing && reviewing < reviewer);
 
   for (const contract of [orchestrator, workflow, guide]) {
     assert.match(contract, /retained (?:findings|blockers)[^.]*history\/remediation context/iu);
@@ -522,7 +526,7 @@ test("repair-terminal routing is phase-first and fail-closed", () => {
     );
     assert.match(
       contract,
-      /fresh (?:reviewer handoff that leaves|review resulting|reviewer result that leaves).*?`REPAIR_REQUIRED`.*?(?:`workflow_authorize_repair`.*?permitted_next_actions|permitted_next_actions.*?`workflow_authorize_repair`)/u,
+      /fresh[^.]*?(?:projection reports `approve_exact_repairs`|`REPAIR_REQUIRED`)[^.]*?(?:(?:its )?authority boundary (?:is )?available|`workflow_authorize_repair`.*?permitted_next_actions|permitted_next_actions.*?`workflow_authorize_repair`)/u,
     );
     assert.match(contract, /current exact (?:(?:blocking )?(?:finding )?IDs|blocker IDs)/u);
     assert.ok(
@@ -541,7 +545,7 @@ test("repair-terminal routing is phase-first and fail-closed", () => {
   );
 
   const repairBranch = orchestrator.indexOf("Only a fresh reviewer handoff");
-  const repairAction = orchestrator.indexOf("`workflow_authorize_repair`", repairBranch);
+  const repairAction = orchestrator.indexOf("`approve_exact_repairs`", repairBranch);
   const currentIds = orchestrator.indexOf("current exact blocking finding IDs", repairBranch);
   assert.ok(repairBranch >= 0 && repairBranch < repairAction && repairAction < currentIds);
 });
@@ -621,26 +625,29 @@ test("orchestration contracts classify intent and reconcile the final tree expli
 
   const terminalRefresh = orchestrator.indexOf("After every terminal subagent handoff");
   const conciseSummary = orchestrator.indexOf("before summarizing or routing", terminalRefresh);
-  const route = orchestrator.indexOf("permitted_next_actions", conciseSummary);
+  const route = orchestrator.indexOf("available authority boundary", conciseSummary);
   assert.ok(terminalRefresh >= 0 && terminalRefresh < conciseSummary);
   assert.ok(conciseSummary < route, "terminal handoff must summarize before routing");
 
   const mutation = orchestrator.indexOf("After every parent mutation");
-  const secondRefresh = orchestrator.indexOf("refresh `workflow_parent_get` again", mutation);
-  const freshSummary = orchestrator.indexOf("fresh summary", mutation);
+  const secondRefresh = orchestrator.indexOf(
+    "refresh `workflow_operator_decision_get` again",
+    mutation,
+  );
+  const freshSummary = orchestrator.indexOf("fresh semantic summary", mutation);
   const redispatch = orchestrator.indexOf("before redispatching", mutation);
   assert.ok(mutation >= 0 && mutation < secondRefresh);
   assert.ok(secondRefresh < freshSummary && freshSummary < redispatch);
 
   assert.match(
     orchestrator,
-    /refreshed `permitted_next_actions`|returned version and `permitted_next_actions`/u,
-    "fresh permitted actions must remain authoritative",
+    /semantic decision|operator projection/u,
+    "fresh semantic decisions must remain authoritative",
   );
   assert.match(
     workflow,
-    /routes from refreshed\s+`permitted_next_actions`/u,
-    "workflow contract must route from refreshed permitted actions",
+    /routes?\s+from its state-provable decision/u,
+    "workflow contract must route from refreshed semantic decisions",
   );
 
   const routeSections = [

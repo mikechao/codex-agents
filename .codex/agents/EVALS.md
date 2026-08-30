@@ -167,14 +167,16 @@ Workflow MCP state. Restart host sessions after changing policy.
   narrow remediation context and scope, confirm the child remediation is followed by a fresh combined
   review and cannot be used for changed intent or reconciliation.
 - Refresh-before-route: after every terminal worker handoff and every parent mutation, confirm the
-  parent refreshes `workflow_parent_get`, summarizes only the refreshed authoritative view, and routes
-  from refreshed `permitted_next_actions`, never stale prose or dirty-path inference.
+  parent refreshes `workflow_operator_decision_get`, summarizes only its bounded semantic result, and
+  routes from its decision, never stale prose or dirty-path inference. Confirm full parent reads are
+  reserved for exact mutation inputs/version or explicit debug/status.
 - Repair-terminal refresh: authorize repair for `REV-X-001`, complete the repair, and confirm the
-  refreshed `REVIEWING` view retains `REV-X-001` as history while automatically dispatching a fresh
-  reviewer without a duplicate authorization prompt. Confirm a fresh same-ID re-report requests that
-  exact ID again only when repair is permitted; resolving the old ID and reporting a different current
-  blocker requests only the new ID; and a retained blocker list alone, or an absent
-  `workflow_authorize_repair` action, never prompts for repair.
+  refreshed projection reports `no_user_action/re_review` while retaining the blocker as history and
+  automatically dispatching a fresh reviewer without a duplicate authorization prompt. Confirm a
+  fresh `approve_exact_repairs` decision obtains exact IDs from a full parent read only for the
+  explicit mutation; a same-ID re-report requests that exact ID again only when repair is permitted;
+  resolving the old ID and reporting a different current blocker requests only the new ID; and a
+  retained blocker list alone, or an unavailable repair authority boundary, never prompts for repair.
 - Two-cycle stopping: after an initial review, the parent performs at most two implementer-to-
   reviewer repair cycles, passes prior findings and resolution claims each time, and stops without
   commit when blocking findings remain after the second cycle.
@@ -196,6 +198,19 @@ Workflow MCP state. Restart host sessions after changing policy.
   `missing_or_inadequate_test`, in both finding lists.
 - Trivial-edit exemption: a clearly trivial edit can proceed without the independent review loop,
   while commit authorization remains explicit and parent-owned.
+- Operator projection happy path: `workflow_operator_decision_get` routes implementation, review,
+  and re-review without prompts; only explicit commit authorization prompts the operator.
+- Operator projection repair/recovery: one exact current blocker prompts once, then routes automatic
+  implementation and fresh review; retained blockers in a fresh reviewing state never prompt repair;
+  concern, context, inconclusive-review, and commit stops expose only their matching explicit recovery.
+- Operator projection topology: an exhausted workflow offers only a legal bounded linked continuation;
+  explicit linked chains summarize combined review without a duplicate reconciliation prompt, while
+  separately created workflows with identical paths/work items remain unrelated and fail closed.
+- Operator projection sanitization: normal output contains semantic intent/outcome and display refs but
+  no raw workflow or PlanArtifact IDs, phases, actions, audits, capabilities, receipts, or authority.
+- Operator intent boundary: an ID-only projection never classifies a newly supplied changed request;
+  Orchestrator requires explicit new bounded objective/scope authorization and does not substitute
+  repair, path membership, adjudication, or a generic follow-up.
 
 ## Receipt utility
 
@@ -220,6 +235,9 @@ Workflow MCP state. Restart host sessions after changing policy.
   emits deterministic first-occurrence `Refs <display_ref>` lines only from its authenticated view,
   passes commit paragraphs as separate `-m` arguments so Git writes real blank lines, and never infers
   IDs or emits tracker completion keywords.
+- Operator decision read invariants: repeated projection reads are deterministic and leave version,
+  digest, audit count, capabilities, receipts, and runtime affinity unchanged; malformed, missing,
+  cyclic, or divergent explicit lineage fails closed without guessing.
 
 - Implementation state: `DONE` requires exact agent-touched paths, acceptance/validation evidence,
   a current complete receipt, and advances to `REVIEWING`; other statuses stop with deterministic

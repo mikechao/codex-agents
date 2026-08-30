@@ -165,6 +165,93 @@ export type WorkflowAction =
   | "workflow_return_commit_to_review"
   | "workflow_retry_commit";
 
+// Read-only semantic projection used by the parent orchestrator. These types intentionally
+// contain no workflow or PlanArtifact identity, capabilities, receipts, audit data, or raw phase
+// and action names. The persisted WorkflowState remains the sole authority.
+export type OperatorRoute = "implement" | "review" | "re_review" | "commit";
+export type OperatorRecovery =
+  | "accept_concerns"
+  | "resume_implementation"
+  | "resume_review"
+  | "retry_commit"
+  | "retry_commit_preparation"
+  | "return_commit_to_review";
+
+export interface OperatorBlocker {
+  severity: FindingSeverity;
+  summary: string;
+}
+
+export type OperatorFinding = OperatorBlocker;
+
+export interface OperatorRecoverySummary {
+  choice: OperatorRecovery | null;
+  stop_reason: string | null;
+  recovery_context: string | null;
+}
+
+export type OperatorPrimaryDecision =
+  | { kind: "no_user_action"; route: OperatorRoute }
+  | { kind: "approve_exact_repairs"; blocker_count: number; blockers: OperatorBlocker[] }
+  | { kind: "finalize_repair_exhausted"; reason: string }
+  | { kind: "approve_bounded_continuation"; reason: string; authorization_required: true }
+  | { kind: "approve_recovery"; recovery: OperatorRecovery; authorization_required: true }
+  | { kind: "approve_commit"; authorization_required: true }
+  | { kind: "operator_intervention"; reason: string };
+
+export type OperatorAuthorityAvailability =
+  | "available"
+  | "already_satisfied"
+  | "requires_new_user_intent"
+  | "requires_logical_change_topology"
+  | "unavailable";
+
+export interface OperatorAuthorityBoundary {
+  availability: OperatorAuthorityAvailability;
+  basis: string;
+}
+
+export interface OperatorDecision {
+  primary: OperatorPrimaryDecision;
+  optional_findings: OperatorFinding[];
+  recovery_summary: OperatorRecoverySummary;
+  authority_boundaries: {
+    approve_scope_change: OperatorAuthorityBoundary;
+    approve_final_reconciliation: OperatorAuthorityBoundary;
+  };
+  intent: {
+    objective: string;
+    scope_kind: "direct" | "approved_plan";
+    path_count: number;
+    display_references: string[];
+  };
+  outcome: {
+    status:
+      | "in_progress"
+      | "awaiting_review"
+      | "repair_needed"
+      | "recovery_needed"
+      | "approved"
+      | "committing"
+      | "completed"
+      | "superseded"
+      | "exhausted";
+    blocker_count: number;
+  };
+  related_workflows: Array<{
+    status: OperatorDecision["outcome"]["status"];
+    relation: "ancestor" | "successor" | "lineage";
+  }>;
+  reconciliation: {
+    status: "not_applicable" | "remediation_then_combined_review" | "combined_review_required";
+    basis: string;
+  };
+  commit: {
+    eligible: boolean;
+    authorization: "required" | "satisfied" | "unavailable";
+  };
+}
+
 export interface PlanRevisionArtifact {
   plan_schema_version: 1;
   plan_id: PlanId;

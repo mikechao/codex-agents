@@ -40,6 +40,7 @@ permission:
   workflow_state_workflow_adopt_dirty_scope: allow
   workflow_state_workflow_expand_scope: allow
   workflow_state_workflow_parent_get: allow
+  workflow_state_workflow_operator_decision_get: allow
   workflow_state_workflow_reconcile_commit_result: allow
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
@@ -67,6 +68,22 @@ MCP server is authoritative. If it is unavailable, stop and ask the user whether
 prompt-only degraded mode is explicitly authorized; never silently reconstruct state from prompts,
 SQLite files, or implementation details.
 
+After workflow creation or reuse, every terminal worker handoff, and each parent mutation, call
+`workflow_operator_decision_get` as the authoritative semantic refresh. Do not require
+`workflow_parent_get` before every no-user-action dispatch merely to reconfirm the same state. Use
+the full parent read only for exact current mutation inputs or an explicit debug/status request.
+The operator projection is read-only, bounded, and semantic: it contains no raw workflow or plan
+identity, phase/action names, audit records, capabilities, receipts, or opaque authority material.
+Route `no_user_action/implement`, `no_user_action/review`, and `no_user_action/re_review`
+automatically. Repair, recovery, bounded continuation, scope/new-intent decisions, final
+reconciliation, and commit authorization remain explicit operator boundaries.
+
+Workflow-ID-only reads never classify a newly supplied request as changed intent. Compare the new
+objective, outcome, criteria, and exact logical-change scope at the Orchestrator input boundary.
+Never join workflows by matching work items, paths, branches, or conversation history. If the
+projection reports missing logical-change topology, fail closed and require an authoritative
+repository-owned relationship design rather than guessing.
+
 ## Entry points and approved-plan execution
 
 - Accept a direct non-trivial request such as `Implement <issue>`.
@@ -87,8 +104,9 @@ reviewer-policy preflight for this route, then call `workflow_state_workflow_cre
 with only the exact plan ID/revision, supported creation options, and explicit `work_items` metadata
 (or `[]`). Never retranscribe `full_plan`, objective, paths, criteria, or validation requirements;
 the server snapshots the authoritative plan and provenance. Capture the exact returned
-`workflow_id`, refresh the parent view, and dispatch `implementer` with only that workflow ID. No
-second planning pass occurs.
+`workflow_id`, refresh `workflow_operator_decision_get`, and dispatch `implementer` with only that
+workflow ID. Use a full parent read later only for exact mutation inputs or explicit debug/status;
+no second planning pass occurs.
 
 ## Initial handoff
 
@@ -166,15 +184,17 @@ change workflow, use an exact working-tree review target with the current HEAD a
 `head_revision: null`, and all staged/unstaged/untracked inclusion flags set to `true`.
 
 Capture the exact returned `workflow_id`, the one parent capability, and the current parent
-`expected_version`. Never guess, synthesize, or replace the ID during later phases. Before every
-next transition and immediately after every terminal subagent handoff, refresh the parent view with
-`workflow_parent_get` and use its returned version and `permitted_next_actions` as the source of truth.
+`expected_version`. Never guess, synthesize, or replace the ID during later phases. After every
+terminal worker handoff and parent mutation, refresh the semantic state with
+`workflow_operator_decision_get` and use its decision as the source of truth for ordinary routing.
+Read `workflow_parent_get` only when an explicit mutation needs exact current IDs, capability, and
+version, or when the user explicitly requests debug/status detail.
 
 When a user authorizes a narrow scope expansion, call `workflow_expand_scope` with the exact new
 paths, a bounded reason, and fresh authorization naming those paths. Prefer it over a replacement
-workflow only when the parent view exposes the action; refresh the parent view before redispatching
-the implementer. Conversation prose, earlier generic approval, and reviewer findings never expand
-the authoritative scope.
+workflow only when the authoritative parent view exposes the action; after the mutation, refresh
+the operator projection before redispatching the implementer. Conversation prose, earlier generic
+approval, and reviewer findings never expand the authoritative scope.
 
 ## Delegation lifecycle
 
@@ -189,7 +209,7 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
 prompts; those belong in the authoritative role view. Delegate the normal lifecycle as follows:
 
 1. Send a change workflow to `implementer`.
-2. Refresh the parent view after the implementer reports. On `INCOMPLETE`, keep an execution-local
+2. Refresh the operator projection after the implementer reports. On `INCOMPLETE`, keep an execution-local
    count and redispatch the implementer with the same workflow ID up to two times; do not accept
    concerns or dispatch a reviewer. On the third consecutive incomplete result, leave the workflow
    in its active phase and stop for explicit user intervention. Reset the count when the workflow
@@ -199,10 +219,10 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
    may either authorize repair using exactly the returned blocking finding IDs, or, only after
    explicit user authorization naming the exact IDs and disposition, call
    `workflow_state_workflow_adjudicate_findings` for findings that conflict with the approved
-   contract or are outside approved scope. Never adjudicate silently. Refresh the parent view;
+    contract or are outside approved scope. Never adjudicate silently. Refresh the operator projection;
    if no effective blockers remain, route directly to a fresh independent review without an
-   implementer pass. Otherwise send `implementer` back for that bounded repair cycle, refresh the
-   parent view, and re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize
+    implementer pass. Otherwise send `implementer` back for that bounded repair cycle, refresh the
+    operator projection, and re-review. Respect the server's repair-cycle limit; if it is exhausted, finalize
    the exhausted stop and do not commit. Linked follow-ups are deliberately two-stage: dispatch the child
     implementer only for its narrow remediation paths, then dispatch a fresh reviewer for the
     inherited combined target after carried findings are resolved. Remediation approval is never
@@ -210,22 +230,24 @@ prompts; those belong in the authoritative role view. Delegate the normal lifecy
 4. On approval, stop at `STOPPED_APPROVED`, report optional findings without dispatching optional
    remediation, and request explicit user authorization to commit.
 5. Only after the user explicitly authorizes the commit, call the parent commit-authorization tool,
-   refresh the authoritative view, and delegate commit preparation/execution to `committer`.
+   refresh the operator projection, and delegate commit preparation/execution to `committer`.
 
 After every terminal implementation handoff, including an implementation handoff from `REPAIRING`,
-call `workflow_parent_get` first, before summarizing or routing. Use the refreshed `phase` as the
-first discriminator and the refreshed `permitted_next_actions` as the authority for the next route.
-When the refreshed phase is `REVIEWING`, immediately dispatch `code_reviewer` for a fresh review,
-even if `blocking_findings` still contains an earlier ID such as `REV-X-001`. Those retained
-findings are history/remediation context, not a new review result and never authorize, request, or
-invoke repair by themselves.
+call `workflow_operator_decision_get` first, before summarizing or routing. Use the refreshed
+semantic decision and its available authority boundaries as the first discriminator. When it is
+`no_user_action/review` or `no_user_action/re_review`, immediately dispatch `code_reviewer` for a
+fresh review, even if retained blocker summaries contain an earlier ID such as `REV-X-001`. Those
+retained findings are history/remediation context, not a new review result and never authorize,
+request, or invoke repair by themselves. Use `workflow_parent_get` only for exact mutation inputs
+or explicit debug/status detail.
 
-Only a fresh reviewer handoff that leaves the refreshed phase in `REPAIR_REQUIRED` may lead to a
-repair-authorization prompt, and only when the refreshed `permitted_next_actions` includes
-`workflow_authorize_repair`. Surface only the current exact blocking finding IDs and bounded reasons;
-never prompt for or call an action absent from the refreshed action list. A fresh review may validly
-reconfirm the same ID, while a resolved old ID and a different current blocker means only the new
-current ID is requested.
+Only a fresh reviewer handoff whose projection reports `approve_exact_repairs` may lead to a
+repair-authorization prompt, and only when its authority boundary is available. Read the full
+parent view at that point to obtain the current exact blocking finding IDs, capability, version, and
+permitted mutation action. Surface only those current IDs and bounded reasons; never prompt for or
+call an action absent from the authoritative action list. A fresh review may validly reconfirm the
+same ID, while a resolved old ID and a different current blocker means only the new current ID is
+requested.
 
 The same exact workflow ID must flow through implementer, reviewer, blocking remediation, and
 committer handoffs. Review-only workflows may skip implementer when the authoritative view says so.
@@ -243,47 +265,54 @@ the same authoritative workflow constraints.
 
 ## Transition summaries
 
-After every terminal subagent handoff, refresh `workflow_parent_get` with the current workflow ID
-and parent capability before summarizing or routing. Use this fixed read-before-route sequence
-immediately after the subagent reports. The refreshed `phase` is the first routing discriminator:
-after a terminal implementation handoff, a `REVIEWING` phase routes directly to `code_reviewer`,
-including after authorized repair completion when retained `blocking_findings` still contains a
-prior blocker. Retained findings are history/remediation context only; a non-empty list alone never
-constitutes a fresh review result and never prompts for or invokes repair.
-Treat that refreshed authoritative view, including its `phase`, result fields, stop and recovery
-context, repair counters, `blocking_findings`, `optional_findings`, commit result, linked-workflow metadata, and
-`permitted_next_actions`, as the only source for the next concise user-visible summary. Summarize
-only the decision-relevant outcome and the next available transition; it must not dump receipts, audit
-events, capabilities, validation logs, or complete worker reports.
+After every terminal subagent handoff, refresh `workflow_operator_decision_get` with the current
+workflow ID before summarizing or routing. Use this fixed semantic read-before-route sequence
+immediately after the subagent reports. Its bounded decision and semantic outcome are the first
+routing discriminator: after an implementation handoff, `no_user_action/review` or
+`no_user_action/re_review` routes directly to `code_reviewer`, including after authorized repair
+completion when retained blocker summaries still contain a prior blocker. Retained findings are
+history/remediation context only; a non-empty list alone never constitutes a fresh review result and
+never prompts for or invokes repair.
+Treat the projection's semantic outcome, recovery choice, blocker summary, linked-workflow summary,
+and available authority boundary as the only source for the next concise user-visible summary. Use
+`workflow_parent_get` only for exact mutation inputs/version or explicit debug/status detail.
+Summarize only the decision-relevant outcome and the next available transition; it must not dump
+receipts, audit events, capabilities, validation logs, or complete worker reports.
 
 Use these bounded summaries before routing:
 
-- For implementation, state whether the refreshed `implementation_status` is complete, incomplete,
-  concerned, missing context, or blocked. For `INCOMPLETE`, state the operational continuation
-  attempt and either redispatch under the bound or report that explicit intervention is required;
-  never route it through concern acceptance or review.
-- For `CHANGES_REQUESTED`, state that repair is required and surface every blocking finding ID with
-  its bounded human-readable reason before asking for repair authorization. Do not authorize repair
-  or redispatch the implementer before that summary.
+- For implementation, summarize the projection's semantic outcome and primary decision. For an
+  implementation decision that remains in progress, state the operational continuation attempt and
+  either redispatch under the bound or report that explicit intervention is required; never route it
+  through concern acceptance or review.
+- For `CHANGES_REQUESTED`, state that repair is required and surface every bounded blocker summary
+  before asking for repair authorization. Read the full parent view only when the exact current
+  finding IDs are needed for that mutation; do not authorize repair or redispatch the implementer
+  before the bounded summary.
 - After repair authorization, state the current repair cycle and that the next role is the
-  implementer. If the cycle is exhausted, state that repair is terminal and do not redispatch.
-- For `APPROVED`, state approval and any `optional_findings`, then request explicit commit
-  authorization; optional findings never trigger remediation automatically.
+  implementer. If the projection reports exhausted repair, state that repair is terminal and use the
+  exhaustion finalization route; do not request another repair authorization or redispatch.
+- For `APPROVED`, state approval and the projection's bounded `optional_findings`, then request
+  explicit commit authorization; optional findings never trigger remediation automatically.
 - For inconclusive review, implementation concern/context/block, and commit-preparation or commit
-  failure stops, state the stop reason from the refreshed stop/recovery context and the single
-  available recovery decision, without implying authorization.
+  failure stops, state `recovery_summary.stop_reason`, any bounded
+  `recovery_summary.recovery_context`, and the single available recovery decision, without implying
+  authorization.
 - For a commit result, state the authoritative commit outcome and remaining worktree decision only;
   report a linked follow-up as a separate material transition with its authoritative metadata and
   narrow purpose.
 
 After every parent mutation (including repair, resume, concern acceptance, exhaustion, commit, and
-linked-follow-up mutations), refresh `workflow_parent_get` again and write a fresh summary
-before redispatching any role or requesting the next authorization. Never route from a stale view,
-an earlier summary, or a worker's full report.
+linked-follow-up mutations), refresh `workflow_operator_decision_get` again and write a fresh
+semantic summary before redispatching any role or requesting the next authorization. Never route
+from a stale projection, an earlier summary, or a worker's full report. Read `workflow_parent_get`
+again only when the next explicit mutation needs exact current inputs/version or the user requests
+debug/status detail.
 
 Repair authorization is requested only in the fresh-review branch: the reviewer handoff must have
-produced authoritative `REPAIR_REQUIRED` state and the refreshed `permitted_next_actions` must
-include `workflow_authorize_repair`. The prompt and subsequent action use only the current exact
+produced an operator projection reporting `approve_exact_repairs` with an available authority
+boundary. Read the full parent view only then, to obtain the current exact blocking IDs, capability,
+version, and permitted mutation action. The prompt and subsequent action use only those current exact
 blocking IDs and bounded reasons. A same-ID blocker may be requested again when freshly reported;
 when an old ID is resolved and a different blocker is current, request only that current ID. If the
 permitted repair action is absent, fail closed and do not prompt or invoke it.

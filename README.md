@@ -119,6 +119,12 @@ tool exposure and Workflow MCP workflow, phase, version, and invariant checks. O
 edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
 
+During execution Orchestrator refreshes the read-only `workflow_operator_decision_get` projection and
+automatically routes state-provable implementation, review, and re-review work. Exact repairs,
+recovery, linked continuation, changed-intent/scope, reconciliation, and commit authorization remain
+explicit user boundaries. Normal summaries are semantic; raw workflow/plan/audit details remain an
+explicit debug/status path. Unlinked workflows are never combined from matching paths or work items.
+
 Planning is a separate pre-workflow path: built-in Plan delegates substantial planning and every
 material refinement only to `planner`, which may launch zero through four disposable read-only
 explorers. Explorer context is bounded and never persisted in Workflow MCP or plan artifacts. The

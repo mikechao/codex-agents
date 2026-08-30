@@ -25,6 +25,22 @@ working-tree change workflow. Plans have no runtime affinity and introduce no wo
 `workflow_create` continues to be supported as the non-plan fallback. The server, schema, transport,
 and persistence mechanism are unchanged.
 
+`workflow_operator_decision_get` is a read-only, idempotent semantic parent refresh. It derives a
+bounded decision from one authoritative workflow, existing permitted actions, and only reciprocal
+explicit linked-continuation references. Its output is sanitized: normal summaries omit workflow
+and PlanArtifact identity, phases, raw action names, audits, capabilities, receipts, and opaque
+authority material. The projection never writes state, authorizes a transition, persists routing
+state, or adds a logical-change/umbrella model. It covers automatic implementation/review/re-review
+routing and reports explicit repair, recovery, continuation, scope/new-intent, reconciliation, and
+commit boundaries separately.
+
+Lineage traversal is exact and bounded. Workflows with matching work items, paths, branches, or
+finding locations remain unrelated. An explicit linked chain may summarize its combined-review
+boundary; a separately created or malformed, cyclic, missing, or divergent topology fails closed
+instead of guessing. Runtime routing uses the same owner affinity and terminal cross-runtime parent
+read exception as the existing parent read. `workflow_parent_get` and `workflow_get_audit` remain
+the explicit detailed debug/status surfaces.
+
 Managed commits use only authoritative committer-view provenance: one neutral `Refs <display_ref>`
 line per distinct display reference, preserving exact text and first occurrence. Empty provenance emits
 no lines; there is no tracker discovery/API call and no `Fixes`, `Closes`, or `Resolves` inference.

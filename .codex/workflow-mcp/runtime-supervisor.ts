@@ -529,7 +529,8 @@ export class RuntimeSupervisor {
     if (typeof workflowId !== "string") return { artifact: this.defaultRuntime, adopted: false };
     if (
       message.method === "tools/call" &&
-      message.params?.name === "workflow_parent_get" &&
+      (message.params?.name === "workflow_parent_get" ||
+        message.params?.name === "workflow_operator_decision_get") &&
       this.store.isCrossRuntimeCommitReconciled(workflowId)
     ) {
       return { artifact: this.defaultRuntime, adopted: false };

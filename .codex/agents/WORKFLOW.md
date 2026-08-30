@@ -143,11 +143,28 @@ findings never trigger remediation. Finding-linked follow-ups remain limited to 
 source states, exact current finding IDs, narrow remediation context and scope, and a fresh combined
 review; they are not changed-intent or reconciliation shortcuts.
 
-After every terminal worker handoff and every parent mutation, the parent refreshes
-`workflow_parent_get`, summarizes only the refreshed authoritative view, and routes from refreshed
-`permitted_next_actions`. Worker prose, earlier summaries, dirty-path inference, and stale state
-never grant authority. This routing distinction adds no Workflow MCP phase, schema, persistence, or
-authority change.
+After every terminal worker handoff and every parent mutation, the parent refreshes the read-only
+`workflow_operator_decision_get` projection, summarizes only its bounded semantic result, and routes
+from its state-provable decision. Worker prose, earlier summaries, dirty-path inference, and stale
+state never grant authority. The parent reads `workflow_parent_get` only for exact mutation inputs
+and version/capability or an explicit debug/status request. This routing distinction adds no
+Workflow MCP phase, schema, persistence, or authority change.
+
+The read-only `workflow_operator_decision_get` projection is the normal semantic refresh above the
+parent view. It is bounded to one workflow and validated explicit linked lineage, derives only
+state-provable decisions and existing permitted actions, and never writes, authorizes, persists
+routing state, or creates a second state machine. It reports automatic `no_user_action` routes for
+implementation, review, re-review, and commit preparation; exact repair, recovery, bounded linked
+continuation, scope/new-intent, final reconciliation, and commit authorization remain explicit
+boundaries. Raw IDs, phases, actions, audits, capabilities, receipts, and PlanArtifact identity
+remain available only through explicit debug/status reads or exact mutation-input reads.
+
+The projection cannot classify a newly supplied request: the parent compares objective, outcome,
+criteria, and logical-change scope at the input boundary. A material change requires a new bounded
+workflow, not repair, adjudication, expansion, or a generic follow-up. Explicit linked lineage may
+provide an existing combined-review boundary, but separately created workflows are never joined by
+matching work items, paths, branches, or conversational history. Missing or contradictory topology
+fails closed and requires an authoritative repository-owned relationship design.
 
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
 `runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
@@ -403,25 +420,25 @@ active linked leaf can eventually authorize and prepare a commit.
 
 ### Transition-summary convention
 
-After every terminal subagent handoff, the parent must refresh `workflow_parent_get` before
+After every terminal subagent handoff, the parent must refresh `workflow_operator_decision_get` before
 summarizing or routing. The summary is a concise user-visible decision record sourced only from that
-refreshed authoritative parent view: report the current phase and result fields (including
-`implementation_status` or review result), `blocking_findings`, `optional_findings`, repair cycle
-and maximum, `stop_context` or `recovery_context`, `commit_result`, and material linked-workflow
-metadata when present. It must not dump receipts, audit events, capabilities, validation logs, or a
-complete worker report. `permitted_next_actions` remains the routing boundary.
+refreshed semantic projection: report its decision, semantic outcome, blocker summaries, recovery
+choice, available authority boundaries, and material linked-workflow summary when present. It must
+not dump raw workflow or plan identity, phase/action names, receipts, audit events, capabilities,
+validation logs, or a complete worker report. Use `workflow_parent_get` only for exact mutation
+inputs/version or an explicit debug/status request.
 
-The phase is the first discriminator after this refresh. After a terminal implementation handoff,
-including completion of an authorized repair, a refreshed `REVIEWING` phase routes directly to a
-fresh `code_reviewer` even when `blocking_findings` still retains an earlier blocker such as
-`REV-X-001`. Retained blockers are history/remediation context only; a non-empty retained list is
-not a fresh review result and never authorizes, requests, or invokes repair by itself. Only a fresh
-review resulting in `REPAIR_REQUIRED` with `workflow_authorize_repair` present in refreshed
-`permitted_next_actions` may lead to an exact-ID repair-authorization prompt using only the current
-exact blocking finding IDs. This convention changes neither Workflow MCP authority nor phases,
-schema, persistence, transition semantics,
-repair-cycle policy, or attempt bookkeeping. If the permitted repair action is absent, fail closed
-without prompting or invoking repair.
+The semantic decision is the first discriminator after this refresh. After a terminal implementation
+handoff, including completion of an authorized repair, `no_user_action/review` or
+`no_user_action/re_review` routes directly to a fresh `code_reviewer` even when blocker summaries
+still retain an earlier blocker such as `REV-X-001`. Retained blockers are history/remediation
+context only; a non-empty retained list is not a fresh review result and never authorizes, requests,
+or invokes repair by itself. Only a fresh review whose projection reports `approve_exact_repairs`
+with its authority boundary available may lead to an exact-ID repair-authorization prompt. The
+parent then reads the full view for the current exact blocking finding IDs, capability, version, and
+permitted mutation action. If that action is absent, fail closed without prompting or invoking
+repair. This convention changes neither Workflow MCP authority nor phases, schema, persistence,
+transition semantics, repair-cycle policy, or attempt bookkeeping.
 
 The summary must cover the following transitions without changing their existing semantics:
 
@@ -439,12 +456,14 @@ The summary must cover the following transitions without changing their existing
 - Commit outcomes communicate the authoritative result and material linked follow-ups communicate
   their linked metadata and narrow purpose.
 
-After every parent mutation, the parent must refresh `workflow_parent_get` again and issue a fresh
-summary before redispatching a role or requesting the next authorization. This is a presentation and
-routing convention only: it does not change Workflow MCP phases, persisted presentation fields,
-worker-attempt bookkeeping, authorization rules, the state machine, persistence schema, or worker
-isolation. The parent still owns all parent mutations and authorization; workers still receive only
-their exact workflow ID and use their dedicated authoritative getter.
+After every parent mutation, the parent must refresh `workflow_operator_decision_get` again and issue
+a fresh semantic summary before redispatching a role or requesting the next authorization. This is a
+presentation and routing convention only: it does not change Workflow MCP phases, persisted
+presentation fields, worker-attempt bookkeeping, authorization rules, the state machine, persistence
+schema, or worker isolation. The parent still owns all parent mutations and authorization; workers
+still receive only their exact workflow ID and use their dedicated authoritative getter. Read
+`workflow_parent_get` again only when the next explicit mutation needs exact inputs/version or the
+user requests debug/status detail.
 
 ## Prompt-only degraded mode
 
