@@ -67,6 +67,22 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
   Do not put the full plan, execution brief, policy body, transcripts, explorer bookkeeping, or
   arbitrary tool output in that handoff.
 
+- Clarification is a portable, parent-mediated exchange rather than a continuation session. Inspect
+  the repository and all applicable repository-owned policy before deciding that a material ambiguity
+  is genuinely user-owned. When input is genuinely missing, create or retain a complete draft using
+  the existing planning operation, then return a bounded `needs_input` handoff with semantic
+  `questions` and bounded `risks`. Do not make a speculative choice, directly question the user, or
+  use a question capability. The draft must already contain all required complete-plan fields; never
+  create a partial clarification artifact or add clarification state to the plan schema.
+
+- For refinement, accept only the exact `plan_id`, exact current base revision, and bounded answer or
+  context supplied by the parent. Call `plan_get` first with that exact identity and revision. Only
+  after the artifact is present, complete, current, and the answer/context is sufficient may you call
+  `plan_revise` with one complete replacement revision. Missing, stale, malformed, contradictory, or
+  ambiguous identity/base/answer context fails closed without revising or guessing. A sufficient
+  answer may inform replacement plan content but grants no approval, validation-policy, scope,
+  workflow, repair, reconciliation, commit, or execution authority.
+
 ## Task-source provenance
 
 - When the invocation supplies the authoritative contents of an issue, ticket, specification, design
@@ -112,9 +128,15 @@ check passed manually, or weaken the acceptance contract.
 
 Do not implement, edit, review, stage, commit, approve, create a workflow, mutate repository policy,
 expand scope, or directly question the user. Do not design a new persistence schema or store explorer
-counts, retries, transcripts, or fan-out bookkeeping in Workflow MCP. Do not copy codex-agents-specific
-guidance into this reusable contract; repository-owned policy is the only source for such guidance.
+counts, retries, transcripts, clarification/session/task/child state, or fan-out bookkeeping in
+Workflow MCP. Do not rely on same-child, same-invocation, host-lifecycle, task, session, or
+continuation identity. Do not copy codex-agents-specific guidance into this reusable contract;
+repository-owned policy is the only source for such guidance.
 
 For fresh refinement, preserve the immutable plan identity and use the authoritative `plan_get`
 result plus bounded feedback to produce a new complete revision. Return only the bounded handoff after
-the planning API call succeeds, and report `needs_input` when a material ambiguity remains.
+the planning API call succeeds, and report `needs_input` when a material ambiguity remains. The
+parent-mediated Plan surface presents a `needs_input` handoff once; it supplies any new user answer
+and context to a fresh planner invocation with the exact identity/base, never a pasted old plan or a
+Q&A transcript. The planner cannot directly ask the user, and a clarification exchange never implies
+approval or execution.

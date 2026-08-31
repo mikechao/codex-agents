@@ -353,6 +353,73 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
   assert.ok(!explorer.includes("gpt-5.6"));
 });
 
+test("planner clarification and native Plan refinement remain portable and fail closed", () => {
+  const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  const materializedPlan = openCodePlanAgent() as {
+    permission: Record<string, unknown>;
+    prompt: string;
+  };
+  const planPrompt = materializedPlan.prompt;
+  const planConfig = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
+  ) as { agent: { plan: { prompt: string; permission: Record<string, unknown> } } };
+  const planCopies = [planPrompt, planConfig.agent.plan.prompt];
+
+  for (const contract of [canonical, generated]) {
+    const normalized = contract.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /Inspect the repository and all applicable repository-owned policy before deciding/u,
+    );
+    assert.match(normalized, /complete draft.*existing planning operation.*`needs_input`/u);
+    assert.match(normalized, /semantic `questions`.*bounded `risks`/u);
+    assert.match(normalized, /Do not make a speculative choice.*directly question the user/u);
+    assert.match(
+      normalized,
+      /exact `plan_id`, exact current base revision, and bounded answer or context/u,
+    );
+    assert.match(normalized, /Call `plan_get` first.*exact identity and revision/u);
+    assert.match(
+      normalized,
+      /only after.*complete.*current.*answer\/context is sufficient.*`plan_revise`/iu,
+    );
+    assert.match(
+      normalized,
+      /Missing, stale, malformed, contradictory, or ambiguous.*fails closed/u,
+    );
+    assert.match(
+      normalized,
+      /no approval, validation-policy, scope, workflow, repair, reconciliation, commit, or execution authority/u,
+    );
+    assert.match(normalized, /clarification\/session\/task\/child state/u);
+    assert.match(
+      normalized,
+      /same-child, same-invocation, host-lifecycle, task, session, or continuation identity/u,
+    );
+  }
+
+  for (const prompt of planCopies) {
+    const normalized = prompt.replace(/\s+/gu, " ");
+    assert.match(normalized, /`needs_input`.*present.*once/u);
+    assert.match(normalized, /Do not invoke a question tool.*without new user input/u);
+    assert.match(
+      normalized,
+      /fresh refinement.*answer\/context.*exact `plan_id`.*exact base revision/u,
+    );
+    assert.match(
+      normalized,
+      /missing, stale, malformed, conflicting, or ambiguous.*stop without guessing or revising/u,
+    );
+    assert.match(normalized, /never create a workflow or dispatch an implementer/iu);
+  }
+
+  assert.equal(planConfig.agent.plan.permission.question, "deny");
+  assert.equal(planConfig.agent.plan.permission.question, materializedPlan.permission.question);
+  assert.equal(planConfig.agent.plan.permission.workflow_state_plan_get, undefined);
+  assert.equal(planConfig.agent.plan.permission.workflow_state_plan_revise, undefined);
+});
+
 test("planner preserves authoritative task-source provenance boundaries", () => {
   const canonical = readFileSync(resolve(import.meta.dir, "../contracts/planner.md"), "utf8");
   const generated = opencode("planner.md");
@@ -458,6 +525,7 @@ test("the checked-in native Plan override is canonical and isolated from generat
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",
+    question: "deny",
     task: { "*": "deny", planner: "allow" },
     "workflow_state_*": "deny",
     workflow_state_plan_parent_get: "allow",

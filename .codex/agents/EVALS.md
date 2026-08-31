@@ -26,6 +26,15 @@ Workflow MCP state. Restart host sessions after changing policy.
   creates a complete fresh revision from bounded feedback without pasted prior plan text.
 - Bounded handoff: `PlannerHandoff` contains only identity, revision, status, summary, questions,
   and risks; full plans, policy bodies, transcripts, and explorer bookkeeping remain disposable.
+- Portable clarification exchange: after repository and applicable-policy inspection finds a genuine
+  user-owned ambiguity, planner creates or retains a complete draft and returns one bounded
+  `needs_input` handoff with semantic questions and risks; Plan presents it once without a question
+  tool, then a fresh planner invocation receives the exact plan identity/base and bounded user answer
+  or context. Confirm the next complete revision reflects a sufficient answer, while missing, stale,
+  malformed, or ambiguous identity/base/answer context fails closed without revision. Confirm the
+  answer grants no approval, scope, validation-policy, workflow, repair, reconciliation, commit, or
+  execution authority, and no task/session/Q&A transcript, retry, continuation, child, or host
+  lifecycle state is persisted.
 - Supplied task-source provenance: provide complete authoritative issue, ticket, or specification text
   containing an inaccessible or private reference; verify the planner still inspects the repository
   and creates or revises a plan without a redundant source fetch. Separately provide genuinely missing

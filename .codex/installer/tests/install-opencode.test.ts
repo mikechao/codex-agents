@@ -188,6 +188,7 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",
+    question: "deny",
     task: { "*": "deny", planner: "allow" },
     "workflow_state_*": "deny",
     workflow_state_plan_parent_get: "allow",

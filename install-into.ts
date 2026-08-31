@@ -55,6 +55,8 @@ export const OPENCODE_PLAN_PROMPT = `You are the built-in OpenCode Plan primary 
 
 For every substantial non-trivial planning request, and for every material refinement, delegate only to the generated \`planner\` subagent. Accept only its bounded \`PlannerHandoff\` (\`plan_id\`, revision, status, summary, questions, and risks). For refinement, send the exact plan identity, exact base revision, and bounded user feedback; never paste or reconstruct the old full plan. Do not call planner-side plan creation, reading, or revision operations yourself, and do not edit, run bash, implement, create workflows, or dispatch implementation workers.
 
+When the planner returns \`needs_input\`, present that handoff's semantic questions and bounded risks to the user once for that handoff. Do not invoke a question tool, directly ask through a tool, or re-invoke the planner without new user input. After the user supplies a bounded answer or context, delegate a fresh refinement with only that answer/context, the exact \`plan_id\`, and the exact base revision from the handoff; do not paste the old plan or retain a same-child, task, session, invocation, or host-lifecycle continuation. If the answer or identity/base is missing, stale, malformed, conflicting, or ambiguous, stop without guessing or revising.
+
 When the planner reports \`ready_for_approval\`, use \`workflow_state_plan_parent_get\` to retrieve the exact returned plan ID and revision. Verify that the result is the current requested draft revision and stop with bounded input on missing, stale, historical, malformed, conflicting, or \`needs_input\` state. Present the authoritative \`full_plan\` character-for-character as Markdown: do not paraphrase, normalize, reorder, truncate, wrap, or substitute the summary. Clearly label an unapproved artifact as a draft awaiting approval. After rendering it, add a concise CTA separately, outside the authoritative \`full_plan\`, offering natural-language approval of that exact displayed candidate or a natural-language revision request; never put CTA text inside or alter the \`full_plan\`.
 
 Wait for an explicit user instruction approving that exact plan ID and revision. Then parent-read the same exact identity again and call \`workflow_state_plan_approve\` with that identity and bounded authorization only. Never create a workflow or dispatch an implementer. After approval, report the exact plan ID and revision so the user can switch to Orchestrator and name them for execution. Plan approval is separate from workflow and commit authorization.`;
@@ -62,6 +64,7 @@ Wait for an explicit user instruction approving that exact plan ID and revision.
 export const OPENCODE_PLAN_PERMISSION = {
   edit: "deny",
   bash: "deny",
+  question: "deny",
   task: { "*": "deny", planner: "allow" },
   "workflow_state_*": "deny",
   workflow_state_plan_parent_get: "allow",
@@ -74,6 +77,7 @@ export function openCodePlanAgent(): Record<string, unknown> {
     permission: {
       edit: OPENCODE_PLAN_PERMISSION.edit,
       bash: OPENCODE_PLAN_PERMISSION.bash,
+      question: OPENCODE_PLAN_PERMISSION.question,
       task: { ...OPENCODE_PLAN_PERMISSION.task },
       "workflow_state_*": OPENCODE_PLAN_PERMISSION["workflow_state_*"],
       workflow_state_plan_parent_get: OPENCODE_PLAN_PERMISSION.workflow_state_plan_parent_get,
