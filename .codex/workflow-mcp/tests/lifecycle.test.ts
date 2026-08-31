@@ -1689,6 +1689,19 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
       assert.deepEqual(snapshot(), before, `${label}: rejected mutation must not persist`);
     };
 
+    const beforeMalformedInvalidVersion = snapshot();
+    assert.throws(
+      () =>
+        store.resumeImplementation({
+          workflow_id: "malformed-id",
+          capability: null,
+          expected_version: -1,
+          resume_context: null,
+        }),
+      (error: any) => error.category === "ERROR_INVALID_VERSION",
+    );
+    assertUnchanged(beforeMalformedInvalidVersion, "malformed parent ID with invalid version");
+
     const beforeMalformedParent = snapshot();
     assert.throws(
       () =>
@@ -1758,6 +1771,24 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
       (error: any) => error.category === "ERROR_NOT_FOUND",
     );
     assertUnchanged(beforeMalformedWorker, "malformed worker ID");
+
+    const beforeInvalidVersionPayload = snapshot();
+    assert.throws(
+      () =>
+        store.submitImplementation({
+          workflow_id: id,
+          expected_version: -1,
+          status: "not-a-status",
+          summary: null,
+          agent_touched_paths: null,
+          acceptance_results: null,
+          validation_results: null,
+          known_failures: null,
+          finding_resolution_map: null,
+        }),
+      (error: any) => error.category === "ERROR_INVALID_VERSION",
+    );
+    assertUnchanged(beforeInvalidVersionPayload, "invalid version with malformed worker payload");
 
     const beforeStaleWorker = snapshot();
     assert.throws(

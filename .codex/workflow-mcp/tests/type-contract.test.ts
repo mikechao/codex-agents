@@ -17,6 +17,7 @@ import {
 } from "../transitions.js";
 import type {
   AcceptanceCriterion,
+  AcceptanceCriterionId,
   AcceptanceResult,
   CommitAttemptId,
   CommitSubmissionOutcome,
@@ -31,10 +32,13 @@ import type {
   Role,
   RoleViewCommon,
   ValidationRequirement,
+  ValidationRequirementId,
   ValidationResult,
   WorkflowAction,
+  WorkflowId,
   WorkflowPhase,
   WorkflowState,
+  WorkflowVersion,
 } from "../types.js";
 import {
   ACCEPTANCE_STATUS_VALUES,
@@ -124,9 +128,21 @@ function _compileBrandedCorrelation(): void {
   const validationId: typeof validation.validation_id = validationResult.validation_id;
   void criterionId;
   void validationId;
+  // @ts-expect-error acceptance criterion IDs cannot be consumed as validation requirement IDs
+  const invalidValidationId: ValidationRequirementId = criterionId;
+  // @ts-expect-error validation requirement IDs cannot be consumed as acceptance criterion IDs
+  const invalidCriterionId: AcceptanceCriterionId = validationId;
+  void invalidValidationId;
+  void invalidCriterionId;
 
   const parentMutation = undefined as unknown as RawParentMutation;
   const workerMutation = undefined as unknown as RawWorkerMutation;
+  // @ts-expect-error raw workflow IDs require authoritative validation and branding
+  const unvalidatedWorkflowId: WorkflowId = parentMutation.workflow_id;
+  // @ts-expect-error raw workflow versions require authoritative validation and branding
+  const unvalidatedWorkflowVersion: WorkflowVersion = parentMutation.expected_version;
+  void unvalidatedWorkflowId;
+  void unvalidatedWorkflowVersion;
   const parentCapability: unknown = parentMutation.capability;
   void parentCapability;
   // @ts-expect-error raw parent capability requires authoritative validation
