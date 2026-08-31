@@ -582,6 +582,27 @@ interface PlanApprovalRow {
   approved_at: string;
 }
 
+type PlanRevisionContent = Pick<
+  PlanRevisionArtifact,
+  | "full_plan"
+  | "execution_brief"
+  | "objective"
+  | "approved_paths"
+  | "acceptance_criteria"
+  | "validation_requirements"
+>;
+
+function planRevisionContent(value: PlanRevisionContent): PlanRevisionContent {
+  return {
+    full_plan: value.full_plan,
+    execution_brief: value.execution_brief,
+    objective: value.objective,
+    approved_paths: value.approved_paths,
+    acceptance_criteria: value.acceptance_criteria,
+    validation_requirements: value.validation_requirements,
+  };
+}
+
 function persistedTimestamp(value: unknown, name: string): void {
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
     fail("ERROR_STATE_CORRUPT", `${name} is invalid`);
@@ -1222,6 +1243,13 @@ export class WorkflowStore {
         if (!plan) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
         if (plan.current_revision !== base)
           fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
+        const current = this.#planRevision(id, base);
+        if (
+          canonicalJson(planRevisionContent(current.artifact)) ===
+          canonicalJson(planRevisionContent(normalized))
+        ) {
+          return this.#planRead(id, base, false);
+        }
         const nextRevision = (base + 1) as PlanRevision;
         const artifact: PlanRevisionArtifact = {
           ...normalized,

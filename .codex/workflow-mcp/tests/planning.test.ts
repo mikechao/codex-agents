@@ -164,6 +164,192 @@ test("plan revisions are complete replacements and stale revisions fail closed",
   disposeFixture(target.root);
 });
 
+test("identical current plan revisions are persisted no-ops", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    const beforePlan = store.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(draft.plan_id);
+    const beforeRevision = store.db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+      .get(draft.plan_id);
+    const beforeRevisionCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM plan_revisions WHERE plan_id = ?")
+      .get(draft.plan_id).count;
+
+    const unchanged = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: 1,
+      ...revisionInput(),
+    });
+
+    assert.equal(unchanged.revision, 1);
+    assert.equal(unchanged.metadata.current_revision, 1);
+    assert.equal(
+      store.db
+        .prepare("SELECT COUNT(*) AS count FROM plan_revisions WHERE plan_id = ?")
+        .get(draft.plan_id).count,
+      beforeRevisionCount,
+    );
+    assert.deepEqual(
+      store.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(draft.plan_id),
+      beforePlan,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+        .get(draft.plan_id),
+      beforeRevision,
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("identical approved current revisions preserve approval and plan provenance", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: 1,
+      user_authorization: "approve exact revision",
+    });
+    const beforePlan = store.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(draft.plan_id);
+    const beforeRevision = store.db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+      .get(draft.plan_id);
+    const beforeApproval = store.db
+      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? AND revision = 1")
+      .get(draft.plan_id);
+
+    const unchanged = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: 1,
+      ...revisionInput(),
+    });
+
+    assert.equal(unchanged.revision, 1);
+    assert.equal(unchanged.metadata.status, "approved");
+    assert.equal(unchanged.metadata.approval, null);
+    assert.deepEqual(
+      store.planParentGet({ plan_id: draft.plan_id, revision: 1 }).metadata.approval,
+      approved.metadata.approval,
+    );
+    assert.deepEqual(
+      store.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(draft.plan_id),
+      beforePlan,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+        .get(draft.plan_id),
+      beforeRevision,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? AND revision = 1")
+        .get(draft.plan_id),
+      beforeApproval,
+    );
+    assert.equal(
+      store.db
+        .prepare("SELECT COUNT(*) AS count FROM plan_revisions WHERE plan_id = ?")
+        .get(draft.plan_id).count,
+      1,
+    );
+
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: 1 });
+    assert.deepEqual(workflow.workflow.plan_provenance, {
+      plan_id: draft.plan_id,
+      revision: 1,
+      artifact_digest: approved.artifact_digest,
+      approved_at: approved.metadata.approval?.approved_at,
+    });
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("material revisions advance once and identical stale revisions fail without mutation", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: 1,
+      user_authorization: "approve exact revision",
+    });
+    const revised = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: 1,
+      ...revisionInput(),
+      full_plan: "replacement plan",
+    });
+    assert.equal(revised.revision, 2);
+    assert.equal(revised.metadata.current_revision, 2);
+    assert.equal(revised.metadata.status, "draft");
+    assert.equal(
+      store.db
+        .prepare("SELECT COUNT(*) AS count FROM plan_revisions WHERE plan_id = ?")
+        .get(draft.plan_id).count,
+      2,
+    );
+    assert.equal(
+      store.planParentGet({ plan_id: draft.plan_id, revision: 1 }).metadata.status,
+      "approved",
+    );
+    assert.equal(
+      store.planParentGet({ plan_id: draft.plan_id, revision: 2 }).metadata.approval,
+      null,
+    );
+
+    const beforePlanRows = store.db
+      .prepare("SELECT * FROM plans WHERE plan_id = ?")
+      .all(draft.plan_id);
+    const beforeRevisionRows = store.db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? ORDER BY revision")
+      .all(draft.plan_id);
+    const beforeApprovalRows = store.db
+      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? ORDER BY revision")
+      .all(draft.plan_id);
+    assert.equal(
+      category(() =>
+        store.planRevise({
+          plan_id: draft.plan_id,
+          base_revision: 1,
+          ...revisionInput(),
+          full_plan: "replacement plan",
+        }),
+      ),
+      "ERROR_VERSION_CONFLICT",
+    );
+    assert.deepEqual(
+      store.db.prepare("SELECT * FROM plans WHERE plan_id = ?").all(draft.plan_id),
+      beforePlanRows,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? ORDER BY revision")
+        .all(draft.plan_id),
+      beforeRevisionRows,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? ORDER BY revision")
+        .all(draft.plan_id),
+      beforeApprovalRows,
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
 test("plan-native linked follow-up binds only the exact current approved child artifact", () => {
   const target = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
