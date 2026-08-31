@@ -2,8 +2,11 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { SERVER_TOOL_NAMES, type ServerToolName, toolDefinitions } from "../server.js";
 import type {
-  ParentMutation as StoreParentMutation,
-  WorkerMutation as StoreWorkerMutation,
+  RawCommitResultMutation,
+  RawImplementationSubmissionMutation,
+  RawParentMutation,
+  RawReviewSubmissionMutation,
+  RawWorkerMutation,
 } from "../store.js";
 import {
   ensurePhase,
@@ -15,11 +18,16 @@ import {
 import type {
   AcceptanceCriterion,
   AcceptanceResult,
+  CommitAttemptId,
+  CommitSubmissionOutcome,
   CommitterView,
+  ExactRepoPath,
+  ImplementationStatus,
   ImplementerHandoffView,
   ImplementerView,
   ReviewerViewBase,
   ReviewRangePath,
+  ReviewStatus,
   Role,
   RoleViewCommon,
   ValidationRequirement,
@@ -117,12 +125,40 @@ function _compileBrandedCorrelation(): void {
   void criterionId;
   void validationId;
 
-  const parentMutation = undefined as unknown as StoreParentMutation;
-  const workerMutation = undefined as unknown as StoreWorkerMutation;
-  const parentCapability: string = parentMutation.capability;
+  const parentMutation = undefined as unknown as RawParentMutation;
+  const workerMutation = undefined as unknown as RawWorkerMutation;
+  const parentCapability: unknown = parentMutation.capability;
   void parentCapability;
+  // @ts-expect-error raw parent capability requires authoritative validation
+  const unvalidatedCapability: string = parentMutation.capability;
+  void unvalidatedCapability;
   // @ts-expect-error worker mutations intentionally carry no parent capability
   workerMutation.capability;
+
+  const implementation = undefined as unknown as RawImplementationSubmissionMutation;
+  const review = undefined as unknown as RawReviewSubmissionMutation;
+  const commit = undefined as unknown as RawCommitResultMutation;
+  // @ts-expect-error raw implementation status is not a validated finite-domain value
+  const implementationStatus: ImplementationStatus = implementation.status;
+  // @ts-expect-error raw review status is not a validated finite-domain value
+  const reviewStatus: ReviewStatus = review.review_status;
+  // @ts-expect-error raw commit outcome is not a validated finite-domain value
+  const commitOutcome: CommitSubmissionOutcome = commit.outcome;
+  // @ts-expect-error raw commit attempt IDs are not branded
+  const commitAttemptId: CommitAttemptId = commit.attempt_id;
+  // @ts-expect-error raw paths are not validated repository paths
+  const touchedPaths: ExactRepoPath[] = implementation.agent_touched_paths;
+  // @ts-expect-error raw acceptance evidence is not a typed result array
+  const acceptanceResults: AcceptanceResult[] = implementation.acceptance_results;
+  // @ts-expect-error raw validation evidence is not a typed result array
+  const validationResults: ValidationResult[] = implementation.validation_results;
+  void implementationStatus;
+  void reviewStatus;
+  void commitOutcome;
+  void commitAttemptId;
+  void touchedPaths;
+  void acceptanceResults;
+  void validationResults;
 }
 
 type _StateKeysAreExhaustive = Expect<Equal<(typeof V8_STATE_KEYS)[number], keyof WorkflowState>>;

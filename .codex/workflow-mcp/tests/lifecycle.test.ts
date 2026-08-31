@@ -1668,3 +1668,116 @@ test("dirty scope adoption binds staged-only index state", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("raw mutation fields do not change lookup, auth, or version precedence", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(createInput(root, git));
+    const id = created.workflow.workflow_id;
+    const capability = created.capability;
+    const snapshot = () => {
+      const row = store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id);
+      const auditCount = store.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE workflow_id = ?")
+        .get(id).count;
+      return { row, auditCount };
+    };
+    const assertUnchanged = (before: any, label: string) => {
+      assert.deepEqual(snapshot(), before, `${label}: rejected mutation must not persist`);
+    };
+
+    const beforeMalformedParent = snapshot();
+    assert.throws(
+      () =>
+        store.resumeImplementation({
+          workflow_id: "malformed-id",
+          capability: null,
+          expected_version: 0,
+          resume_context: null,
+        }),
+      (error: any) => error.category === "ERROR_NOT_FOUND",
+    );
+    assertUnchanged(beforeMalformedParent, "malformed parent ID");
+
+    const beforeMissingParent = snapshot();
+    assert.throws(
+      () =>
+        store.resumeImplementation({
+          workflow_id: "00000000-0000-0000-0000-000000000000",
+          capability: null,
+          expected_version: 0,
+          resume_context: null,
+        }),
+      (error: any) => error.category === "ERROR_NOT_FOUND",
+    );
+    assertUnchanged(beforeMissingParent, "missing parent ID");
+
+    const beforeInvalidCapability = snapshot();
+    assert.throws(
+      () =>
+        store.resumeImplementation({
+          workflow_id: id,
+          capability: "invalid-capability",
+          expected_version: 0,
+          resume_context: null,
+        }),
+      (error: any) => error.category === "ERROR_CAPABILITY_DENIED",
+    );
+    assertUnchanged(beforeInvalidCapability, "invalid parent capability");
+
+    const beforeStaleParent = snapshot();
+    assert.throws(
+      () =>
+        store.resumeImplementation({
+          workflow_id: id,
+          capability,
+          expected_version: 1,
+          resume_context: null,
+        }),
+      (error: any) => error.category === "ERROR_VERSION_CONFLICT",
+    );
+    assertUnchanged(beforeStaleParent, "stale parent version");
+
+    const beforeMalformedWorker = snapshot();
+    assert.throws(
+      () =>
+        store.submitImplementation({
+          workflow_id: "malformed-id",
+          expected_version: 0,
+          status: "not-a-status",
+          summary: null,
+          agent_touched_paths: null,
+          acceptance_results: null,
+          validation_results: null,
+          known_failures: null,
+          finding_resolution_map: null,
+        }),
+      (error: any) => error.category === "ERROR_NOT_FOUND",
+    );
+    assertUnchanged(beforeMalformedWorker, "malformed worker ID");
+
+    const beforeStaleWorker = snapshot();
+    assert.throws(
+      () =>
+        store.submitImplementation({
+          workflow_id: id,
+          expected_version: 1,
+          status: "not-a-status",
+          summary: null,
+          agent_touched_paths: null,
+          acceptance_results: null,
+          validation_results: null,
+          known_failures: null,
+          finding_resolution_map: null,
+        }),
+      (error: any) => error.category === "ERROR_VERSION_CONFLICT",
+    );
+    assertUnchanged(beforeStaleWorker, "stale worker version");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

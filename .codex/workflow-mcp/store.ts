@@ -70,15 +70,11 @@ import type {
   ChangeReceipt,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
-  CommitSubmissionOutcome,
   DirtyScopeAdoptionAudit,
   DirtyScopeAdoptionIndexState,
   DirtyScopeAdoptionState,
-  ExactRepoPath,
   FindingAdjudication,
-  FindingId,
   GitCommitSha,
-  ImplementationStatus,
   IsoTimestamp,
   OperatorDecision,
   ParentCapability,
@@ -89,7 +85,6 @@ import type {
   PlanRead,
   PlanRevision,
   PlanRevisionArtifact,
-  ReviewStatus,
   Role,
   RoleView,
   ScopeExpansionAudit,
@@ -216,114 +211,128 @@ function immutableRuntimeKey(
   }
 }
 
+function isMutationRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function mutationInput(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isMutationRecord(value)) {
     fail("ERROR_INVALID_SHAPE", "mutation input is invalid");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
-/** Typed DTO views. Runtime field validation remains at the established mutation/transition boundary. */
-export interface ParentMutation {
-  workflow_id: WorkflowId;
-  capability: ParentCapability;
-  expected_version: WorkflowVersion;
+/** Raw pre-routing envelopes. Runtime validation remains at the established mutation/transition boundary. */
+export interface RawParentMutation {
+  workflow_id?: unknown;
+  capability?: unknown;
+  expected_version?: unknown;
 }
 
-export interface WorkerMutation {
-  workflow_id: WorkflowId;
-  expected_version: WorkflowVersion;
+export interface RawWorkerMutation {
+  workflow_id?: unknown;
+  expected_version?: unknown;
 }
 
-export interface ContextMutation extends ParentMutation {
-  resume_context: string;
+export interface RawContextMutation extends RawParentMutation {
+  resume_context?: unknown;
 }
 
-export interface RetryContextMutation extends ParentMutation {
-  retry_context: string;
+export interface RawRetryContextMutation extends RawParentMutation {
+  retry_context?: unknown;
 }
 
-export interface ReviewContextMutation extends ParentMutation {
-  review_context: string;
+export interface RawReviewContextMutation extends RawParentMutation {
+  review_context?: unknown;
 }
 
-export interface AuthorizationMutation extends ParentMutation {
-  user_authorization: string;
+export interface RawAuthorizationMutation extends RawParentMutation {
+  user_authorization?: unknown;
 }
 
-export interface FindingIdsMutation extends ParentMutation {
-  finding_ids: FindingId[];
+export interface RawFindingIdsMutation extends RawParentMutation {
+  finding_ids?: unknown;
 }
 
-export interface ImplementationSubmissionMutation extends WorkerMutation {
-  status: ImplementationStatus;
-  summary: string;
-  agent_touched_paths: ExactRepoPath[];
-  acceptance_results: unknown;
-  validation_results: unknown;
-  known_failures: string[];
-  finding_resolution_map: unknown;
+export interface RawImplementationSubmissionMutation extends RawWorkerMutation {
+  status?: unknown;
+  summary?: unknown;
+  agent_touched_paths?: unknown;
+  acceptance_results?: unknown;
+  validation_results?: unknown;
+  known_failures?: unknown;
+  finding_resolution_map?: unknown;
 }
 
-export interface ReviewSubmissionMutation extends WorkerMutation {
-  review_status: ReviewStatus;
-  blocking_findings: unknown;
-  optional_findings: unknown;
-  prior_finding_classifications: unknown;
+export interface RawReviewSubmissionMutation extends RawWorkerMutation {
+  review_status?: unknown;
+  blocking_findings?: unknown;
+  optional_findings?: unknown;
+  prior_finding_classifications?: unknown;
 }
 
-export interface CommitResultMutation extends WorkerMutation, Record<string, unknown> {
-  attempt_id: string;
-  outcome: CommitSubmissionOutcome;
-  failure_summary: string | null;
+export interface RawCommitResultMutation extends RawWorkerMutation {
+  attempt_id?: unknown;
+  outcome?: unknown;
+  failure_summary?: unknown;
 }
 
-interface ParentFields extends ParentMutation {
-  [key: string]: unknown;
-}
-
-interface WorkerFields extends WorkerMutation {
-  [key: string]: unknown;
-}
+type RawMutationRecord = Record<string, unknown>;
+type ParentFields = RawMutationRecord & RawParentMutation;
+type WorkerFields = RawMutationRecord & RawWorkerMutation;
+type ContextFields = RawMutationRecord & RawContextMutation;
+type RetryContextFields = RawMutationRecord & RawRetryContextMutation;
+type ReviewContextFields = RawMutationRecord & RawReviewContextMutation;
+type AuthorizationFields = RawMutationRecord & RawAuthorizationMutation;
+type FindingIdsFields = RawMutationRecord & RawFindingIdsMutation;
+type ImplementationFields = RawMutationRecord & RawImplementationSubmissionMutation;
+type ReviewFields = RawMutationRecord & RawReviewSubmissionMutation;
+type CommitResultFields = RawMutationRecord & RawCommitResultMutation;
 
 function parentMutation(value: unknown): ParentFields {
-  return mutationInput(value) as ParentFields;
+  return mutationInput(value);
 }
 
 function workerMutation(value: unknown): WorkerFields {
-  return mutationInput(value) as WorkerFields;
+  return mutationInput(value);
 }
 
-function parentContextMutation(value: unknown): ContextMutation {
-  return parentMutation(value) as unknown as ContextMutation;
+function parentContextMutation(value: unknown): ContextFields {
+  return parentMutation(value);
 }
 
-function parentRetryContextMutation(value: unknown): RetryContextMutation {
-  return parentMutation(value) as unknown as RetryContextMutation;
+function parentRetryContextMutation(value: unknown): RetryContextFields {
+  return parentMutation(value);
 }
 
-function parentReviewContextMutation(value: unknown): ReviewContextMutation {
-  return parentMutation(value) as unknown as ReviewContextMutation;
+function parentReviewContextMutation(value: unknown): ReviewContextFields {
+  return parentMutation(value);
 }
 
-function parentAuthorizationMutation(value: unknown): AuthorizationMutation {
-  return parentMutation(value) as unknown as AuthorizationMutation;
+function parentAuthorizationMutation(value: unknown): AuthorizationFields {
+  return parentMutation(value);
 }
 
-function parentFindingIdsMutation(value: unknown): FindingIdsMutation {
-  return parentMutation(value) as unknown as FindingIdsMutation;
+function parentFindingIdsMutation(value: unknown): FindingIdsFields {
+  return parentMutation(value);
 }
 
-function implementationMutation(value: unknown): ImplementationSubmissionMutation {
-  return workerMutation(value) as unknown as ImplementationSubmissionMutation;
+function implementationMutation(value: unknown): ImplementationFields {
+  return workerMutation(value);
 }
 
-function reviewMutation(value: unknown): ReviewSubmissionMutation {
-  return workerMutation(value) as unknown as ReviewSubmissionMutation;
+function reviewMutation(value: unknown): ReviewFields {
+  return workerMutation(value);
 }
 
-function commitResultMutation(value: unknown): CommitResultMutation {
-  return workerMutation(value) as unknown as CommitResultMutation;
+function commitResultMutation(value: unknown): CommitResultFields {
+  return workerMutation(value);
+}
+
+function reviewAuditOutcome(value: unknown): AuditOutcome | null {
+  return value === "APPROVED" || value === "CHANGES_REQUESTED" || value === "INCONCLUSIVE"
+    ? value
+    : null;
 }
 
 function changedFields(before: WorkflowState | null, after: WorkflowState): string[] {
@@ -2100,9 +2109,13 @@ export class WorkflowStore {
         ? null
         : args.status === "INCOMPLETE"
           ? null
-          : IMPLEMENTATION_STOP_PHASES[
-              args.status as "DONE_WITH_CONCERNS" | "NEEDS_CONTEXT" | "BLOCKED"
-            ];
+          : args.status === "DONE_WITH_CONCERNS"
+            ? IMPLEMENTATION_STOP_PHASES.DONE_WITH_CONCERNS
+            : args.status === "NEEDS_CONTEXT"
+              ? IMPLEMENTATION_STOP_PHASES.NEEDS_CONTEXT
+              : args.status === "BLOCKED"
+                ? IMPLEMENTATION_STOP_PHASES.BLOCKED
+                : null;
     return this.#mutate(
       args.workflow_id,
       "implementer",
@@ -2213,7 +2226,7 @@ export class WorkflowStore {
         }
         return submitReview(state, args, finalReceipt);
       },
-      args.review_status as ReviewStatus,
+      reviewAuditOutcome(args.review_status),
     );
   }
 
