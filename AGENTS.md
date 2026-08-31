@@ -44,6 +44,11 @@ state.
 - Workflow MCP is the authoritative durable state boundary. Model handoffs should carry only the
   necessary routing or semantic context and must not replace an authoritative lookup with
   conversation memory or duplicate durable state.
+- `workflow_operator_decision_get` is the normal semantic routing projection for ordinary
+  user-facing orchestration. Use `workflow_parent_get` only for exact authoritative mutation
+  inputs or explicit debug/status inspection; normal operator UX must not expose or independently
+  interpret raw phases, capabilities, audit details, or retained historical findings when the
+  projection supplies the current decision.
 - Worker attempts, retries, process lifecycle, and worktree or execution-loop mechanics are
   orchestration concerns unless persistence is required for correctness or recovery; they should
   not create workflow fields or phases by default.
@@ -73,9 +78,13 @@ repository-local, emit no non-protocol output on stdout, preserve append-only wo
 history, and keep parent capability authentication and optimistic version checks intact. Runtime SQLite state
 belongs outside the repository by default; tests may override its location explicitly.
 
-Use `bun run test:agents` for focused receipt/contract checks, `bun run test:installer` for
-focused installer checks, and `bun run test:workflow-mcp` for focused server checks. Run the full
-`bun run test` suite before declaring any change complete.
+`.codex/reviewer-validation.json` is authoritative for executable validation: every command must
+match an authorized `argv` array exactly, including its length, ordering, and every argument;
+equivalent-but-unlisted scripts are not substitutes. Use `bun run test:agents` for focused
+receipt/contract checks, `bun run test:installer` for focused installer checks, and
+`bun run test:workflow-mcp` for focused server checks only when their exact commands are currently
+authorized by that policy. Run the full `bun run validate` gate before declaring any change
+complete.
 
 The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/` and run
 directly from source with Bun; there is no compiled `dist/` mirror.
