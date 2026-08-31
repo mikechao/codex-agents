@@ -103,12 +103,26 @@ set -u
 state=$WORKFLOW_GIT_SHIM_STATE
 real_git=$WORKFLOW_GIT_REAL
 is_ls_tree=0
+is_ls_files=0
 for argument in "$@"; do
   if [ "$argument" = "ls-tree" ]; then is_ls_tree=1; fi
+  if [ "$argument" = "ls-files" ]; then is_ls_files=1; fi
 done
-if [ "$is_ls_tree" -eq 0 ]; then exec "$real_git" "$@"; fi
+if [ "$is_ls_tree" -eq 0 ] && [ "$is_ls_files" -eq 0 ]; then exec "$real_git" "$@"; fi
 if [ "\${WORKFLOW_GIT_SHIM_LARGE:-0}" = "1" ]; then
   exec dd if=/dev/zero bs=4194305 count=1 2>/dev/null
+fi
+if [ "\${WORKFLOW_GIT_SHIM_FAIL:-0}" = "1" ]; then
+  printf '%s\n' "controlled git failure" >&2
+  exit 1
+fi
+if [ "\${WORKFLOW_GIT_SHIM_TREE_OUTPUT+x}" = "x" ]; then
+  printf '%b' "$WORKFLOW_GIT_SHIM_TREE_OUTPUT"
+  exit 0
+fi
+if [ "\${WORKFLOW_GIT_SHIM_INDEX_OUTPUT+x}" = "x" ] && [ "$is_ls_files" -eq 1 ]; then
+  printf '%b' "$WORKFLOW_GIT_SHIM_INDEX_OUTPUT"
+  exit 0
 fi
 lock=$state/lock
 while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
@@ -147,22 +161,25 @@ exit "$status"
   };
 }
 
-function runAsyncReviewChild(
+function runGitChild(
   root: string,
-  reviewTarget: CommitRangeReviewTarget,
   shim: GitShim,
-  largeOutput = false,
+  source: string,
+  options: {
+    largeOutput?: boolean;
+    fail?: boolean;
+    treeOutput?: string;
+    indexOutput?: string;
+  } = {},
 ): any {
-  const source = `(async () => {
-  const { reviewRangeAsync } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), ".codex/workflow-mcp/git.ts")).href)});
-  const result = await reviewRangeAsync(${JSON.stringify(root)}, ${JSON.stringify(reviewTarget)});
-  process.stdout.write(JSON.stringify(result));
+  const childSource = `(async () => {
+  ${source}
 })().catch((error) => {
   process.stderr.write(JSON.stringify({ category: error?.category ?? null, code: error?.code ?? null }));
   process.exitCode = 1;
 });`;
   return JSON.parse(
-    execFileSync(process.execPath, ["--no-warnings", "--eval", source], {
+    execFileSync(process.execPath, ["--no-warnings", "--eval", childSource], {
       cwd: root,
       encoding: "utf8",
       env: {
@@ -170,7 +187,14 @@ function runAsyncReviewChild(
         PATH: `${shim.directory}${delimiter}${process.env.PATH ?? ""}`,
         WORKFLOW_GIT_REAL: shim.realGit,
         WORKFLOW_GIT_SHIM_STATE: shim.state,
-        WORKFLOW_GIT_SHIM_LARGE: largeOutput ? "1" : "0",
+        WORKFLOW_GIT_SHIM_LARGE: options.largeOutput ? "1" : "0",
+        WORKFLOW_GIT_SHIM_FAIL: options.fail ? "1" : "0",
+        ...(options.treeOutput === undefined
+          ? {}
+          : { WORKFLOW_GIT_SHIM_TREE_OUTPUT: options.treeOutput }),
+        ...(options.indexOutput === undefined
+          ? {}
+          : { WORKFLOW_GIT_SHIM_INDEX_OUTPUT: options.indexOutput }),
       },
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
@@ -178,8 +202,69 @@ function runAsyncReviewChild(
   );
 }
 
+function runAsyncReviewChild(
+  root: string,
+  reviewTarget: CommitRangeReviewTarget,
+  shim: GitShim,
+  options: Parameters<typeof runGitChild>[3] = {},
+): any {
+  return runGitChild(
+    root,
+    shim,
+    `const { reviewRangeAsync } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), ".codex/workflow-mcp/git.ts")).href)});
+  const result = await reviewRangeAsync(${JSON.stringify(root)}, ${JSON.stringify(reviewTarget)});
+  process.stdout.write(JSON.stringify(result));`,
+    options,
+  );
+}
+
+function runSyncReviewChild(
+  root: string,
+  reviewTarget: CommitRangeReviewTarget,
+  shim: GitShim,
+  options: Parameters<typeof runGitChild>[3] = {},
+): any {
+  return runGitChild(
+    root,
+    shim,
+    `const { reviewRange } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), ".codex/workflow-mcp/git.ts")).href)});
+  const result = reviewRange(${JSON.stringify(root)}, ${JSON.stringify(reviewTarget)});
+  process.stdout.write(JSON.stringify(result));`,
+    options,
+  );
+}
+
+function runStagedEntriesChild(
+  root: string,
+  shim: GitShim,
+  asyncAdapter: boolean,
+  options: Parameters<typeof runGitChild>[3] = {},
+): any {
+  const functionName = asyncAdapter ? "stagedEntriesAsync" : "stagedEntries";
+  return runGitChild(
+    root,
+    shim,
+    `const { ${functionName} } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), ".codex/workflow-mcp/git.ts")).href)});
+  const result = ${asyncAdapter ? "await stagedEntriesAsync" : "stagedEntries"}(${JSON.stringify(root)});
+  process.stdout.write(JSON.stringify([...result.entries()]));`,
+    options,
+  );
+}
+
 function shimCounter(shim: GitShim, name: "active" | "max"): number {
   return Number(readFileSync(join(shim.state, name), "utf8").trim());
+}
+
+function childFailureCategory(callback: () => unknown): string {
+  try {
+    callback();
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    const category = /ERROR_[A-Z_]+/u.exec(stderr)?.[0];
+    assert.ok(category, `expected workflow category in child stderr: ${stderr}`);
+    return category;
+  }
+  assert.fail("expected child workflow error");
 }
 
 test("verifyRevision accepts commits and rejects invalid, unknown, and non-commit revisions", () => {
@@ -280,7 +365,7 @@ test("reviewRange rejects unknown and non-commit range revisions", () => {
   }
 });
 
-test("reviewRange classifies unchanged, added, deleted, and modified paths", () => {
+test("reviewRange sync and async APIs preserve classification parity", async () => {
   const { root, git, write } = fixture();
   try {
     write("unchanged.txt", "same\n");
@@ -295,10 +380,14 @@ test("reviewRange classifies unchanged, added, deleted, and modified paths", () 
     git("add", "-A");
     git("commit", "-qm", "head");
     const head = git("rev-parse", "HEAD");
-    const result = reviewRange(
-      root,
-      target(base, head, ["unchanged.txt", "modified.txt", "deleted.txt", "added.txt"]),
-    );
+    const reviewTarget = target(base, head, [
+      "unchanged.txt",
+      "modified.txt",
+      "deleted.txt",
+      "added.txt",
+    ]);
+    const result = reviewRange(root, reviewTarget);
+    assert.deepEqual(await reviewRangeAsync(root, reviewTarget), result);
     assert.equal(result.base_revision, base);
     assert.equal(result.head_revision, head);
     const byPath: Map<string, any> = new Map(result.paths.map((entry) => [entry.path, entry]));
@@ -890,7 +979,7 @@ test("async raw Git rejects oversized textual output at collection time", () => 
     const head = git("rev-parse", "HEAD");
     let failure: { stderr?: string } | undefined;
     try {
-      runAsyncReviewChild(root, target(base, head, ["note.txt"]), shim, true);
+      runAsyncReviewChild(root, target(base, head, ["note.txt"]), shim, { largeOutput: true });
     } catch (error) {
       failure = error as { stderr?: string };
     }
@@ -899,6 +988,119 @@ test("async raw Git rejects oversized textual output at collection time", () => 
 
     const normal = runAsyncReviewChild(root, target(base, head, ["note.txt"]), shim);
     assert.equal(normal.paths[0].path, "note.txt");
+  } finally {
+    shim.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sync and async tree adapters share malformed, absent, and mode failures", () => {
+  const { root, git, write } = fixture();
+  const shim = gitShim();
+  try {
+    write("fixture.txt", "content\n");
+    git("add", "fixture.txt");
+    git("commit", "-qm", "tree parser base");
+    const base = git("rev-parse", "HEAD");
+    git("commit", "--allow-empty", "-qm", "tree parser head");
+    const head = git("rev-parse", "HEAD");
+    const reviewTarget = target(base, head, ["fixture.txt"]);
+    const cases = [
+      ["missing tab", "100644 blob object", "ERROR_INVALID_REVIEW_PATH"],
+      [
+        "extra metadata",
+        "100644 blob object extra\\tfixture.txt\\x00",
+        "ERROR_INVALID_REVIEW_PATH",
+      ],
+      ["absent", "", "ERROR_INVALID_REVIEW_PATH"],
+      ["unsupported mode", "100664 blob object\\tfixture.txt\\x00", "ERROR_UNSUPPORTED_MODE"],
+    ] as const;
+    for (const [, output, expected] of cases) {
+      assert.equal(
+        childFailureCategory(() =>
+          runSyncReviewChild(root, reviewTarget, shim, { treeOutput: output }),
+        ),
+        expected,
+      );
+      assert.equal(
+        childFailureCategory(() =>
+          runAsyncReviewChild(root, reviewTarget, shim, { treeOutput: output }),
+        ),
+        expected,
+      );
+    }
+    const firstRecordOnly = "100644 blob object\\tfixture.txt\\x00malformed metadata";
+    const expectedReview = {
+      base_revision: base,
+      head_revision: head,
+      paths: [
+        {
+          path: "fixture.txt",
+          kind: "unchanged",
+          base: { mode: "100644", object: "object" },
+          head: { mode: "100644", object: "object" },
+        },
+      ],
+    };
+    assert.deepEqual(
+      runSyncReviewChild(root, reviewTarget, shim, { treeOutput: firstRecordOnly }),
+      expectedReview,
+    );
+    assert.deepEqual(
+      runAsyncReviewChild(root, reviewTarget, shim, { treeOutput: firstRecordOnly }),
+      expectedReview,
+    );
+    assert.equal(
+      childFailureCategory(() => runSyncReviewChild(root, reviewTarget, shim, { fail: true })),
+      "ERROR_GIT",
+    );
+    assert.equal(
+      childFailureCategory(() => runAsyncReviewChild(root, reviewTarget, shim, { fail: true })),
+      "ERROR_GIT",
+    );
+  } finally {
+    shim.cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sync and async staged-entry adapters preserve filtering, overwrites, and modes", () => {
+  const { root } = fixture();
+  const shim = gitShim();
+  try {
+    const objectA = "a".repeat(40);
+    const objectB = "b".repeat(40);
+    const output = [
+      "",
+      "malformed",
+      `100644 ${objectA} 1\\tignored.txt`,
+      `100644 ${objectA} 0\\tz.txt`,
+      `100755 ${objectB} 0\\tmode.txt`,
+      `120000 ${objectA} 0\\tlink.txt`,
+      `100644 ${objectA} 0\\tz.txt`,
+      "",
+    ].join("\\x00");
+    const expected = [
+      ["z.txt", { mode: "100644", object: objectA }],
+      ["mode.txt", { mode: "100755", object: objectB }],
+      ["link.txt", { mode: "120000", object: objectA }],
+    ];
+    const syncEntries = runStagedEntriesChild(root, shim, false, { indexOutput: output });
+    assert.deepEqual(syncEntries, expected);
+    assert.deepEqual(runStagedEntriesChild(root, shim, true, { indexOutput: output }), expected);
+    const unsupported = `160000 ${objectA} 0\\tgitlink`;
+    assert.equal(
+      childFailureCategory(() =>
+        runStagedEntriesChild(root, shim, false, { indexOutput: unsupported }),
+      ),
+      "ERROR_UNSUPPORTED_MODE",
+    );
+    assert.equal(
+      childFailureCategory(() =>
+        runStagedEntriesChild(root, shim, true, { indexOutput: unsupported }),
+      ),
+      "ERROR_UNSUPPORTED_MODE",
+    );
   } finally {
     shim.cleanup();
     rmSync(root, { recursive: true, force: true });

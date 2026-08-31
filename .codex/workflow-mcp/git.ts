@@ -517,6 +517,30 @@ function parseTreeRecord(output: string): GitLsTreeRecord | null {
   return { mode: fields[0], type: fields[1], object: fields[2] };
 }
 
+function classifyReviewPath(
+  path: ExactRepoPath,
+  base: GitLsTreeRecord | null,
+  head: GitLsTreeRecord | null,
+): ReviewRange["paths"][number] {
+  if ((base && base.type !== "blob") || (head && head.type !== "blob"))
+    fail("ERROR_INVALID_REVIEW_PATH", "review path is not a file");
+  if (!base && !head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
+  if (!base) {
+    if (!head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
+    return {
+      path,
+      kind: "added",
+      base: null,
+      head: { mode: normalizeMode(head.mode), object: head.object as GitBlobSha },
+    };
+  }
+  const baseEntry = { mode: normalizeMode(base.mode), object: base.object as GitBlobSha };
+  if (!head) return { path, kind: "deleted", base: baseEntry, head: null };
+  const headEntry = { mode: normalizeMode(head.mode), object: head.object as GitBlobSha };
+  const kind: "unchanged" | "modified" = base.object === head.object ? "unchanged" : "modified";
+  return { path, kind, base: baseEntry, head: headEntry };
+}
+
 async function treeEntryAsync(
   root: string,
   revision: GitCommitSha,
@@ -547,29 +571,7 @@ export async function reviewRangeAsync(
   const reviewPath = async (path: ExactRepoPath): Promise<ReviewRange["paths"][number]> => {
     const base = await treeEntryAsync(root, base_revision, path);
     const head = await treeEntryAsync(root, head_revision, path);
-    if ((base && base.type !== "blob") || (head && head.type !== "blob"))
-      fail("ERROR_INVALID_REVIEW_PATH", "review path is not a file");
-    if (!base && !head)
-      fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
-    if (!base) {
-      if (!head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
-      return {
-        path,
-        kind: "added",
-        base: null,
-        head: { mode: normalizeMode(head.mode), object: head.object as GitBlobSha },
-      };
-    }
-    const baseEntry = { mode: normalizeMode(base.mode), object: base.object as GitBlobSha };
-    if (!head) return { path, kind: "deleted", base: baseEntry, head: null };
-    const headEntry = { mode: normalizeMode(head.mode), object: head.object as GitBlobSha };
-    const kind: "unchanged" | "modified" = base.object === head.object ? "unchanged" : "modified";
-    return {
-      path,
-      kind,
-      base: baseEntry,
-      head: headEntry,
-    };
+    return classifyReviewPath(path, base, head);
   };
   const worker = async () => {
     while (true) {
@@ -590,7 +592,7 @@ async function exactChangedPathsAsync(
   prefix: readonly string[],
 ): Promise<ExactRepoPath[]> {
   const output = await rawGit(root, [...prefix, "--no-renames", "--name-only", "-z"]);
-  return output.split("\0").filter(Boolean).sort() as ExactRepoPath[];
+  return parseNulDelimitedPaths(output);
 }
 
 export async function stagedPathsAsync(root: string): Promise<ExactRepoPath[]> {
@@ -598,20 +600,7 @@ export async function stagedPathsAsync(root: string): Promise<ExactRepoPath[]> {
 }
 
 export async function stagedEntriesAsync(root: string): Promise<Map<ExactRepoPath, GitTreeEntry>> {
-  const output = await rawGit(root, ["ls-files", "--stage", "-z"]);
-  const entries = new Map<ExactRepoPath, GitTreeEntry>();
-  for (const record of output.split("\0")) {
-    if (!record) continue;
-    const separator = record.indexOf("\t");
-    if (separator < 0) continue;
-    const fields = record.slice(0, separator).split(" ");
-    if (fields.length !== 3 || fields[2] !== "0") continue;
-    entries.set(record.slice(separator + 1) as ExactRepoPath, {
-      mode: normalizeMode(fields[0]),
-      object: fields[1] as GitBlobSha,
-    });
-  }
-  return entries;
+  return parseStagedEntries(await rawGit(root, ["ls-files", "--stage", "-z"]));
 }
 
 export async function writeTreeAsync(root: string): Promise<GitTreeSha> {
@@ -701,13 +690,7 @@ function treeEntry(
   path: ExactRepoPath,
 ): GitLsTreeRecord | null {
   const output = git(root, ["ls-tree", "-z", revision, "--", path]);
-  const record = output.split("\0")[0];
-  if (!record) return null;
-  const separator = record.indexOf("\t");
-  if (separator < 0) fail("ERROR_INVALID_REVIEW_PATH", "review path metadata is invalid");
-  const fields = record.slice(0, separator).split(" ");
-  if (fields.length !== 3) fail("ERROR_INVALID_REVIEW_PATH", "review path metadata is invalid");
-  return { mode: fields[0], type: fields[1], object: fields[2] };
+  return parseTreeRecord(output);
 }
 
 export function reviewRange(root: string, target: CommitRangeReviewTarget): ReviewRange {
@@ -728,31 +711,7 @@ export function reviewRange(root: string, target: CommitRangeReviewTarget): Revi
   const results = paths.map((path): ReviewRange["paths"][number] => {
     const base = treeEntry(root, base_revision, path);
     const head = treeEntry(root, head_revision, path);
-    if ((base && base.type !== "blob") || (head && head.type !== "blob")) {
-      fail("ERROR_INVALID_REVIEW_PATH", "review path is not a file");
-    }
-    if (!base && !head) {
-      fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
-    }
-    if (!base) {
-      if (!head) fail("ERROR_INVALID_REVIEW_PATH", "review path is absent at both endpoints");
-      return {
-        path,
-        kind: "added",
-        base: null,
-        head: { mode: normalizeMode(head.mode), object: head.object as GitBlobSha },
-      };
-    }
-    const baseEntry = { mode: normalizeMode(base.mode), object: base.object as GitBlobSha };
-    if (!head) return { path, kind: "deleted", base: baseEntry, head: null };
-    const headEntry = { mode: normalizeMode(head.mode), object: head.object as GitBlobSha };
-    const kind: "unchanged" | "modified" = base.object === head.object ? "unchanged" : "modified";
-    return {
-      path,
-      kind,
-      base: baseEntry,
-      head: headEntry,
-    };
+    return classifyReviewPath(path, base, head);
   });
   return { base_revision, head_revision, paths: results };
 }
@@ -831,9 +790,7 @@ export function stagedScopeChanges(
     "--",
     ...expectedPaths,
   ]);
-  return [
-    ...new Set(output.split("\0").filter((path) => expected.has(path as ExactRepoPath))),
-  ].sort() as ExactRepoPath[];
+  return [...new Set(parseNulDelimitedPaths(output).filter((path) => expected.has(path)))].sort();
 }
 
 /**
@@ -882,14 +839,18 @@ export function stagedAdoptionStates(
 
 function exactChangedPaths(root: string, prefix: readonly string[]): ExactRepoPath[] {
   const output = git(root, [...prefix, "--no-renames", "--name-only", "-z"]);
-  return output
-    .split("\0")
-    .filter((path) => path.length > 0)
-    .sort() as ExactRepoPath[];
+  return parseNulDelimitedPaths(output);
 }
 
 export function stagedEntries(root: string): Map<ExactRepoPath, GitTreeEntry> {
-  const output = git(root, ["ls-files", "--stage", "-z"]);
+  return parseStagedEntries(git(root, ["ls-files", "--stage", "-z"]));
+}
+
+function parseNulDelimitedPaths(output: string): ExactRepoPath[] {
+  return output.split("\0").filter(Boolean).sort() as ExactRepoPath[];
+}
+
+function parseStagedEntries(output: string): Map<ExactRepoPath, GitTreeEntry> {
   const entries = new Map<ExactRepoPath, GitTreeEntry>();
   for (const record of output.split("\0")) {
     if (!record) continue;
