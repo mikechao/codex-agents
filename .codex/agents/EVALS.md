@@ -26,6 +26,10 @@ Workflow MCP state. Restart host sessions after changing policy.
   creates a complete fresh revision from bounded feedback without pasted prior plan text.
 - Bounded handoff: `PlannerHandoff` contains only identity, revision, status, summary, questions,
   and risks; full plans, policy bodies, transcripts, and explorer bookkeeping remain disposable.
+- Supplied task-source provenance: provide complete authoritative issue, ticket, or specification text
+  containing an inaccessible or private reference; verify the planner still inspects the repository
+  and creates or revises a plan without a redundant source fetch. Separately provide genuinely missing
+  or explicitly incomplete requirements and verify permitted web retrieval remains available.
 - Authority separation: planner can use only the three planning operations; explorer has no MCP,
   edit, shell, delegation, network, approval, workflow, or user-question authority; orchestrator
   delegates only to planner and retains parent plan retrieval, approval, and workflow creation.

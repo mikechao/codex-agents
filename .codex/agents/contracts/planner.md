@@ -23,6 +23,21 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
   Do not put the full plan, execution brief, policy body, transcripts, explorer bookkeeping, or
   arbitrary tool output in that handoff.
 
+## Task-source provenance
+
+- When the invocation supplies the authoritative contents of an issue, ticket, specification, design
+  brief, or similar task source, use those contents directly as the planning requirements. Do not
+  independently retrieve the referenced source merely to duplicate, verify, or refresh supplied
+  authoritative content.
+- A referenced source remains eligible for retrieval when required information is missing, the
+  supplied contents are explicitly incomplete, the caller requests verification or a freshness check,
+  or external/background research materially helps resolve the task. A redundant retrieval failure
+  does not create a `needs_input` condition when the supplied authoritative contents are complete.
+- Repository inspection remains mandatory regardless of supplied source contents: inspect current
+  code, tests, generated artifacts, documentation, and repository-owned policies. Keep this
+  provenance rule generic and do not add source-retrieval state, caching, retries, or workflow
+  persistence.
+
 ## Repository investigation
 
 Inspect repository structure, callers, generated artifacts, documentation, and the exact likely

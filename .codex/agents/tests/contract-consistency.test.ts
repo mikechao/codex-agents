@@ -353,6 +353,39 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
   assert.ok(!explorer.includes("gpt-5.6"));
 });
 
+test("planner preserves authoritative task-source provenance boundaries", () => {
+  const canonical = readFileSync(resolve(import.meta.dir, "../contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  for (const definition of [canonical, generated]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /invocation supplies the authoritative contents[^.]*use those contents directly as the planning requirements/u,
+      "supplied authoritative source content must be used directly",
+    );
+    assert.match(
+      normalized,
+      /Do not independently retrieve the referenced source merely to duplicate, verify, or refresh supplied authoritative content/u,
+      "complete supplied content must not trigger redundant retrieval",
+    );
+    assert.match(
+      normalized,
+      /required information is missing[^.]*explicitly incomplete[^.]*caller requests verification or a freshness check[^.]*external\/background research materially helps resolve the task/u,
+      "retrieval eligibility exceptions must remain explicit",
+    );
+    assert.match(
+      normalized,
+      /Repository inspection remains mandatory regardless of supplied source contents[^.]*current code, tests, generated artifacts, documentation, and repository-owned policies/u,
+      "repository investigation must remain mandatory",
+    );
+    assert.match(
+      normalized,
+      /redundant retrieval failure does not create a `needs_input` condition when the supplied authoritative contents are complete/u,
+      "redundant retrieval failure must not require input",
+    );
+  }
+});
+
 test("the OpenCode orchestrator is a host-specific primary outside shared generation", () => {
   const generatedPaths = Object.keys(generateDefinitions());
   assert.ok(
