@@ -167,7 +167,24 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   const parsed = JSON.parse(createOpenCodeConfig("/provider/server.ts")) as Record<string, unknown>;
   assert.deepEqual(parsed.agent, { plan: openCodePlanAgent() });
   const plan = (parsed.agent as Record<string, unknown>).plan as Record<string, unknown>;
-  assert.equal(plan.prompt, openCodePlanAgent().prompt);
+  const prompt = plan.prompt as string;
+  assert.equal(prompt, openCodePlanAgent().prompt);
+  const fullPlanPresentation = prompt.indexOf(
+    "Present the authoritative `full_plan` character-for-character as Markdown",
+  );
+  const cta = prompt.indexOf(
+    "After rendering it, add a concise CTA separately, outside the authoritative `full_plan`",
+  );
+  const approvalWait = prompt.indexOf("Wait for an explicit user instruction approving");
+  assert.ok(fullPlanPresentation >= 0, "Plan must preserve the exact full_plan presentation rule");
+  assert.ok(cta > fullPlanPresentation, "CTA must follow the full_plan presentation instruction");
+  assert.ok(approvalWait > cta, "CTA must precede the approval wait");
+  assert.match(prompt.slice(cta, approvalWait), /natural-language approval/u);
+  assert.match(prompt.slice(cta, approvalWait), /natural-language revision request/u);
+  assert.match(
+    prompt.slice(cta, approvalWait),
+    /never put CTA text inside or alter the `full_plan`/u,
+  );
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",

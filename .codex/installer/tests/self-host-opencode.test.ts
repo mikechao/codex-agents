@@ -47,6 +47,37 @@ test("the repository's own opencode.json registers the supervised self-host serv
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
 });
 
+test("the self-host Native Plan prompt keeps the CTA outside the exact plan rendering", () => {
+  const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
+    agent: { plan: { prompt: string } };
+  };
+  const prompt = parsed.agent.plan.prompt;
+  const normalized = prompt.replace(/\s+/gu, " ");
+  const fullPlanPresentation = normalized.indexOf(
+    "Present the authoritative `full_plan` character-for-character as Markdown",
+  );
+  const cta = normalized.indexOf(
+    "After rendering it, add a concise CTA separately, outside the authoritative `full_plan`",
+  );
+  const approvalWait = normalized.indexOf("Wait for an explicit user instruction approving");
+  assert.ok(fullPlanPresentation >= 0, "Plan must present full_plan character-for-character");
+  assert.ok(cta > fullPlanPresentation, "CTA must follow exact full_plan presentation");
+  assert.ok(approvalWait > cta, "approval must wait until after the separate CTA");
+  assert.match(normalized.slice(cta, approvalWait), /natural-language approval/u);
+  assert.match(normalized.slice(cta, approvalWait), /that exact displayed candidate/u);
+  assert.match(normalized.slice(cta, approvalWait), /natural-language revision request/u);
+  assert.match(
+    normalized.slice(cta, approvalWait),
+    /never put CTA text inside or alter the `full_plan`/u,
+  );
+  assert.match(
+    normalized,
+    /parent-read the same exact identity again.*workflow_state_plan_approve/u,
+  );
+  assert.match(normalized, /Never create a workflow or dispatch an implementer/u);
+  assert.match(normalized, /For refinement, send the exact plan identity, exact base revision/u);
+});
+
 test("the repository's own OpenCode setup uses a dedicated primary orchestrator", () => {
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     default_agent?: string;

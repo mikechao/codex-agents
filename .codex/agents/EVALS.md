@@ -307,17 +307,21 @@ contract.
 - Built-in Plan delegation: in a fresh Plan session, submit a substantial non-trivial request and
   confirm Plan delegates only to generated `planner`, exposes no edit/bash/workflow creation or
   planner-side MCP operations, accepts only bounded `PlannerHandoff`, and does not create a workflow.
-- Exact Plan presentation and approval: confirm Plan parent-reads the exact returned plan ID/revision,
-  renders authoritative `full_plan` character-for-character, labels drafts awaiting approval, waits
-  for explicit approval, and calls `plan_approve` only for that exact current revision. Confirm stale,
-  historical, malformed, conflicting, and `needs_input` results stop without workflow creation.
+- Exact Plan presentation and approval: in a fresh Plan session, confirm Plan parent-reads the exact
+  returned plan ID/revision, renders authoritative `full_plan` character-for-character, labels drafts
+  awaiting approval, and adds a separate concise CTA outside `full_plan` offering natural-language
+  approval of that exact displayed candidate or a revision request. Confirm natural-language approval
+  still triggers a parent re-read of the same exact identity and calls `plan_approve` only for that
+  exact current revision. Confirm stale, historical, malformed, conflicting, and `needs_input` results
+  stop without workflow creation, while a revision request follows the planner refinement path.
 - Plan refinement: issue a material refinement and confirm the planner receives the immutable plan ID,
   exact base revision, and bounded feedback without pasted old plan text, calls `plan_get` before one
   complete `plan_revise`, and returns a bounded handoff.
 - Plan -> Orchestrator execution: after Plan explicitly approves, switch to Orchestrator and name the
-  exact plan ID/revision. Confirm Orchestrator parent-reads the exact current approved revision,
-  performs policy preflight, calls `workflow_create_from_plan` without retranscribing plan fields,
-  captures the exact workflow ID, and delegates only that ID to `implementer`.
+  exact plan ID/revision as a separate, explicitly named execution step. Confirm Plan does not create a
+  workflow, while Orchestrator parent-reads the exact current approved revision, performs policy
+  preflight, calls `workflow_create_from_plan` without retranscribing plan fields, captures the exact
+  workflow ID, and delegates only that ID to `implementer`.
 - Orchestrator permissions: confirm `mode: primary`, `edit: deny`, fail-closed Task permissions that
   allow only `implementer`, `code_reviewer`, and `committer`, no `plan_approve` or planner dispatch,
   read-only repository inspection, no Git mutation commands, and only parent/orchestration
