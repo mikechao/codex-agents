@@ -28,6 +28,7 @@ import {
   type RuntimeArtifact,
   type RuntimeManifest,
 } from "./runtime-artifact.js";
+import type { LinkedFollowupPlan } from "./transitions.js";
 import {
   acceptConcerns,
   adjudicateFindings,
@@ -2468,6 +2469,67 @@ export class WorkflowStore {
     );
   }
 
+  #createLinkedFollowupSuccessor(
+    row: WorkflowRow,
+    state: WorkflowState,
+    expectedVersionNumber: number,
+    followup: LinkedFollowupPlan,
+  ): { childState: WorkflowState; childCapability: ParentCapability } {
+    const id = row.workflow_id as WorkflowId;
+    const childId = randomUUID() as WorkflowId;
+    const childState = linkedFollowupChildState(followup);
+    const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
+    childState.runtime_id = parentAffinity.runtime_id;
+    childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
+    childState.workflow_id = childId;
+    const childReceipt = createReceipt(this.root, childState.approved_paths, true);
+    if (childReceipt.base_head !== followup.base_head)
+      fail("ERROR_STALE_BASE", "scope base is stale");
+    childState.initial_receipt = childReceipt;
+    childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
+    validateWorkflowStateV8(childState);
+    const childCapability = issueCapability();
+    const childHash = hashCapability(childCapability);
+    const now = isoNow();
+    this.db
+      .prepare(
+        "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+      )
+      .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
+    this.#audit(
+      childId,
+      0,
+      "WORKFLOW_CREATED",
+      "parent",
+      auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
+    );
+    const next = {
+      ...state,
+      superseded_by_workflow_id: childId,
+      version: (expectedVersionNumber + 1) as WorkflowVersion,
+    };
+    assertWorkItemsUnchanged(state, next);
+    validateWorkflowStateV8(next);
+    const update = this.db
+      .prepare(
+        "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+      )
+      .run(next.version, JSON.stringify(next), objectDigest(next), now, id, expectedVersionNumber);
+    if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+    this.#audit(
+      id,
+      next.version,
+      "LINKED_FOLLOWUP_CREATED",
+      "parent",
+      auditEnvelope(state, next, row.state_digest as StateDigest | null, {
+        linked_workflow_id: childId,
+      }),
+    );
+    if (this.faultAfterLinkedChildInsert)
+      fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
+    return { childState, childCapability };
+  }
+
   createLinkedFollowup(input: unknown): {
     workflow: ParentView;
     capability: ParentCapability;
@@ -2478,72 +2540,13 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        const id = row.workflow_id as WorkflowId;
         this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);
         const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
-        const childId = randomUUID() as WorkflowId;
-        const childState = linkedFollowupChildState(followup);
-        const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
-        childState.runtime_id = parentAffinity.runtime_id;
-        childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
-        childState.workflow_id = childId;
-        const childReceipt = createReceipt(this.root, childState.approved_paths, true);
-        if (childReceipt.base_head !== followup.base_head)
-          fail("ERROR_STALE_BASE", "scope base is stale");
-        childState.initial_receipt = childReceipt;
-        childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV8(childState);
-        const childCapability = issueCapability();
-        const childHash = hashCapability(childCapability);
-        const now = isoNow();
-        this.db
-          .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
-          )
-          .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
-        this.#audit(
-          childId,
-          0,
-          "WORKFLOW_CREATED",
-          "parent",
-          auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
-        );
-        const next = {
-          ...state,
-          superseded_by_workflow_id: childId,
-          version: (expectedVersionNumber + 1) as WorkflowVersion,
-        };
-        assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV8(next);
-        const update = this.db
-          .prepare(
-            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-          )
-          .run(
-            next.version,
-            JSON.stringify(next),
-            objectDigest(next),
-            now,
-            id,
-            expectedVersionNumber,
-          );
-        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-        this.#audit(
-          id,
-          next.version,
-          "LINKED_FOLLOWUP_CREATED",
-          "parent",
-          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
-            linked_workflow_id: childId,
-          }),
-        );
-        if (this.faultAfterLinkedChildInsert)
-          fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-        return { childState, childCapability };
+        return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
     return {
@@ -2575,7 +2578,6 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        const id = row.workflow_id as WorkflowId;
         this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
@@ -2591,65 +2593,7 @@ export class WorkflowStore {
           this.#planProvenance(resolved),
           currentHead(this.root),
         );
-        const childId = randomUUID() as WorkflowId;
-        const childState = linkedFollowupChildState(followup);
-        const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
-        childState.runtime_id = parentAffinity.runtime_id;
-        childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
-        childState.workflow_id = childId;
-        const childReceipt = createReceipt(this.root, childState.approved_paths, true);
-        if (childReceipt.base_head !== followup.base_head)
-          fail("ERROR_STALE_BASE", "scope base is stale");
-        childState.initial_receipt = childReceipt;
-        childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-        validateWorkflowStateV8(childState);
-        const childCapability = issueCapability();
-        const childHash = hashCapability(childCapability);
-        const now = isoNow();
-        this.db
-          .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
-          )
-          .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
-        this.#audit(
-          childId,
-          0,
-          "WORKFLOW_CREATED",
-          "parent",
-          auditEnvelope(null, childState, null, { linked_workflow_id: state.workflow_id }),
-        );
-        const next = {
-          ...state,
-          superseded_by_workflow_id: childId,
-          version: (expectedVersionNumber + 1) as WorkflowVersion,
-        };
-        assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV8(next);
-        const update = this.db
-          .prepare(
-            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-          )
-          .run(
-            next.version,
-            JSON.stringify(next),
-            objectDigest(next),
-            now,
-            id,
-            expectedVersionNumber,
-          );
-        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-        this.#audit(
-          id,
-          next.version,
-          "LINKED_FOLLOWUP_CREATED",
-          "parent",
-          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
-            linked_workflow_id: childId,
-          }),
-        );
-        if (this.faultAfterLinkedChildInsert)
-          fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-        return { childState, childCapability };
+        return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
     return {

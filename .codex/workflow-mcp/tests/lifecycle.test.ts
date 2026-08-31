@@ -1145,6 +1145,95 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   },
 ]);
 
+test("legacy linked follow-up rolls back child and source succession after injection", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({
+    repositoryRoot: root,
+    databasePath: ":memory:",
+    faultAfterLinkedChildInsert: true,
+  });
+  try {
+    const source = store.create(createInput(root, git));
+    const id = source.workflow.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "done" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    writeFileSync(join(root, "note.txt"), "changed\n");
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [optionalFinding("F-OPT")],
+      prior_finding_classifications: {},
+    });
+
+    const beforeVersion = store.parentGet(id).version;
+    const beforeSourceRow = store.db
+      .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(id);
+    const beforeSourceAudit = store.audit(id, source.capability);
+    const beforeWorkflowCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM workflows")
+      .get().count;
+    const beforeAuditRows = store.db
+      .prepare(
+        "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json FROM audit_events ORDER BY event_id",
+      )
+      .all();
+
+    assert.throws(
+      () =>
+        store.createLinkedFollowup({
+          workflow_id: id,
+          capability: source.capability,
+          expected_version: beforeVersion,
+          objective: "linked child",
+          approved_plan: null,
+          approved_paths: ["note.txt"],
+          acceptance_criteria: ["child criterion"],
+          validation_requirements: ["child validation"],
+          finding_ids: ["F-OPT"],
+          user_authorization: "user authorized follow-up",
+        }),
+      (error: any) => error.category === "ERROR_INJECTED_FAILURE",
+    );
+
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id),
+      beforeSourceRow,
+    );
+    assert.deepEqual(store.audit(id, source.capability), beforeSourceAudit);
+    assert.equal(
+      store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count,
+      beforeWorkflowCount,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare(
+          "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json FROM audit_events ORDER BY event_id",
+        )
+        .all(),
+      beforeAuditRows,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 scenario("plan-native linked remediation requires fresh combined approval", [
   {
     name: "create source",

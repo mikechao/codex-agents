@@ -278,6 +278,83 @@ test("plan-native linked follow-up rejects raw artifact fields and fails atomica
   }
 });
 
+test("plan-native linked follow-up rolls back child and source succession after injection", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({
+    repositoryRoot: target.root,
+    databasePath: ":memory:",
+    faultAfterLinkedChildInsert: true,
+  });
+  try {
+    const { source, id, optional } = approvedSource(store, target.git);
+    const draft = store.planCreate(planInput());
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: 1,
+      user_authorization: "approve child remediation plan",
+    });
+    const beforeVersion = store.parentGet(id).version;
+    const beforeSourceRow = store.db
+      .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(id);
+    const beforeSourceAudit = store.audit(id, source.capability);
+    const beforeWorkflowCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM workflows")
+      .get().count;
+    const beforeAuditCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM audit_events")
+      .get().count;
+    const beforeAuditRows = store.db
+      .prepare(
+        "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json FROM audit_events ORDER BY event_id",
+      )
+      .all();
+
+    assert.throws(
+      () =>
+        store.createLinkedFollowupFromPlan({
+          workflow_id: id,
+          capability: source.capability,
+          expected_version: beforeVersion,
+          plan_id: draft.plan_id,
+          revision: 1,
+          finding_ids: [optional.finding_id],
+          user_authorization: "authorize exact child plan remediation",
+        }),
+      (error: any) => error instanceof WorkflowError && error.category === "ERROR_INJECTED_FAILURE",
+    );
+
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id),
+      beforeSourceRow,
+    );
+    assert.deepEqual(store.audit(id, source.capability), beforeSourceAudit);
+    assert.equal(
+      store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count,
+      beforeWorkflowCount,
+    );
+    assert.equal(
+      store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count,
+      beforeAuditCount,
+    );
+    assert.deepEqual(
+      store.db
+        .prepare(
+          "SELECT event_id, workflow_id, version, event_type, actor_role, summary_json FROM audit_events ORDER BY event_id",
+        )
+        .all(),
+      beforeAuditRows,
+    );
+    assert.equal(approved.artifact_digest, draft.artifact_digest);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
 test("malformed persisted plan artifacts fail closed as state corruption", () => {
   const corruptions: Array<(artifact: Record<string, unknown>) => void> = [
     (artifact) => {
