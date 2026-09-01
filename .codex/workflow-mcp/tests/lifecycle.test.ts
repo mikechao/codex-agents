@@ -131,6 +131,7 @@ const ACTIONS = {
 const EVENTS = {
   created: ["WORKFLOW_CREATED"],
   incomplete: ["WORKFLOW_CREATED", "IMPLEMENTATION_INCOMPLETE"],
+  expanded: ["WORKFLOW_CREATED", "IMPLEMENTATION_INCOMPLETE", "SCOPE_EXPANDED"],
   incompleteSubmitted: [
     "WORKFLOW_CREATED",
     "IMPLEMENTATION_INCOMPLETE",
@@ -349,6 +350,18 @@ function doImplementation(ctx: any, _version: number, options: any = {}) {
     })),
     known_failures: options.knownFailures ?? [],
     finding_resolution_map: options.resolution ?? {},
+  });
+}
+
+function doExpandScope(ctx: any, _version: number, addedPaths: string[]) {
+  const { workflow, capability } = ctx.created;
+  ctx.store.expandScope({
+    workflow_id: workflow.workflow_id,
+    capability,
+    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    added_paths: addedPaths,
+    reason: "authorize the remaining implementation scope",
+    user_authorization: "explicitly authorized exact paths",
   });
 }
 
@@ -746,6 +759,63 @@ scenario("clean change lifecycle ends committed", [
         outcome: "committed",
       }),
     snapshots: [snap("parent", "COMMITTED", 5, ACTIONS.none, EVENTS.commitResult)],
+  },
+]);
+
+scenario("incomplete implementation resumes after explicit scope expansion", [
+  {
+    name: "create narrow change workflow",
+    run: doCreate,
+    snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
+  },
+  {
+    name: "submit incomplete out-of-scope implementation",
+    run: (ctx: any) =>
+      doImplementation(ctx, 0, {
+        status: "INCOMPLETE",
+        summary: "extra.txt remains outside the approved scope",
+        criterionStatus: "not_satisfied",
+        validationStatus: "failed",
+        knownFailures: ["extra.txt is outside the approved scope"],
+      }),
+    snapshots: [snap("parent", "IMPLEMENTING", 1, ACTIONS.implementing, EVENTS.incomplete)],
+  },
+  {
+    name: "expand scope and preserve incomplete audit envelope",
+    run: (ctx: any) => {
+      const id = ctx.created.workflow.workflow_id;
+      ctx.incompleteAudit = ctx.store.audit(id, ctx.created.capability)[1];
+      doExpandScope(ctx, 1, ["extra.txt"]);
+      const implementer = ctx.store.implementerGet(id);
+      assert.deepEqual(implementer.approved_paths, ["extra.txt", "note.txt"]);
+      assert.equal(implementer.implementation_summary, null);
+      assert.equal(implementer.implementation_status, null);
+      assert.deepEqual(implementer.implementation_known_failures, []);
+      assert.deepEqual(implementer.acceptance_results, []);
+      assert.deepEqual(implementer.validation_results, []);
+      assert.deepEqual(implementer.finding_resolution_map, {});
+      assert.deepEqual(ctx.store.reviewerGet(id).implementation_known_failures, []);
+    },
+    snapshots: [snap("parent", "IMPLEMENTING", 2, ACTIONS.implementing, EVENTS.expanded)],
+  },
+  {
+    name: "reopen and continue under expanded scope",
+    run: (ctx: any) => {
+      const id = ctx.created.workflow.workflow_id;
+      assert.deepEqual(ctx.store.parentGet(id).review_target.approved_paths, [
+        "extra.txt",
+        "note.txt",
+      ]);
+      assert.deepEqual(ctx.store.audit(id, ctx.created.capability)[1], ctx.incompleteAudit);
+      writeFileSync(join(ctx.root, "extra.txt"), "expanded work\n");
+      doImplementation(ctx, 2, { touched: ["extra.txt"] });
+    },
+    snapshots: [
+      snap("parent", "REVIEWING", 3, ACTIONS.reviewing, [
+        ...EVENTS.expanded,
+        "IMPLEMENTATION_SUBMITTED",
+      ]),
+    ],
   },
 ]);
 

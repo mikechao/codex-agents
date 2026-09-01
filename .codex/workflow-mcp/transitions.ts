@@ -294,8 +294,15 @@ function scopeExpansion(
       baseline: clone(entry),
     })),
   );
-  next.implementation_receipt = null;
+  next.implementation_summary = null;
+  next.implementation_status = null;
+  next.implementation_known_failures = [];
+  next.agent_touched_paths = [];
   next.scope_changed_paths = [];
+  next.acceptance_results = [];
+  next.validation_results = [];
+  next.finding_resolution_map = {};
+  next.implementation_receipt = null;
   next.review_start_receipt = null;
   next.review_receipt = null;
   next.commit_authorization = null;

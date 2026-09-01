@@ -37,13 +37,14 @@ function implementation(
   version: number | undefined = undefined,
   status = "DONE",
   resolution = {},
+  touched: string[] = [],
 ) {
   return store.submitImplementation({
     workflow_id: workflow.workflow.workflow_id,
     expected_version: version ?? store.parentGet(workflow.workflow.workflow_id).version,
     status,
     summary: "implementation evidence",
-    agent_touched_paths: [],
+    agent_touched_paths: touched,
     acceptance_results: workflow.workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
       criterion_id,
       status: "satisfied",
@@ -831,10 +832,34 @@ test("scope expansion and audit integrity remain append-only", () => {
     git("commit", "-qm", "scope baseline fixture");
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
     const created = store.create(input(git, { approved_paths: ["note.txt"] }));
+    const incomplete = store.submitImplementation({
+      workflow_id: created.workflow.workflow_id,
+      expected_version: 0,
+      status: "INCOMPLETE",
+      summary: "companion.txt and extra.txt are outside the approved scope",
+      agent_touched_paths: [],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "scope remains" },
+      ],
+      validation_results: [
+        { validation_id: "VAL-001", status: "failed", evidence: "scope remains" },
+      ],
+      known_failures: ["companion.txt is outside scope", "extra.txt is outside scope"],
+      finding_resolution_map: {},
+    });
+    const incompleteAudit = store.audit(created.workflow.workflow_id, created.capability)[1];
+    assert.equal(incomplete.phase, "IMPLEMENTING");
+    assert.equal(incomplete.version, 1);
+    assert.equal(
+      store
+        .implementerGet(created.workflow.workflow_id)
+        .implementation_summary.includes("extra.txt"),
+      true,
+    );
     const expanded = store.expandScope({
       workflow_id: created.workflow.workflow_id,
       capability: created.capability,
-      expected_version: store.parentGet(created.workflow.workflow_id).version,
+      expected_version: 1,
       added_paths: ["companion.txt", "extra.txt"],
       reason: "needed",
       user_authorization: "authorized",
@@ -845,10 +870,26 @@ test("scope expansion and audit integrity remain append-only", () => {
       "extra.txt",
       "note.txt",
     ]);
+    for (const view of [
+      store.parentGet(created.workflow.workflow_id),
+      expanded,
+      store.reviewerGet(created.workflow.workflow_id),
+      rawState(store, created.workflow.workflow_id),
+    ]) {
+      assert.equal(view.implementation_summary, null);
+      assert.equal(view.implementation_status, null);
+      assert.deepEqual(view.implementation_known_failures, []);
+      assert.deepEqual(view.agent_touched_paths, []);
+      assert.deepEqual(view.scope_changed_paths, []);
+      assert.deepEqual(view.acceptance_results, []);
+      assert.deepEqual(view.validation_results, []);
+      assert.deepEqual(view.finding_resolution_map, {});
+    }
+    assert.equal(rawState(store, created.workflow.workflow_id).implementation_receipt, null);
     assert.deepEqual(expanded.approved_path_baselines, [
       {
         path: "companion.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: {
           path: "companion.txt",
           state: "unchanged",
@@ -858,7 +899,7 @@ test("scope expansion and audit integrity remain append-only", () => {
       },
       {
         path: "extra.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: { path: "extra.txt", state: "absent", kind: "missing" },
       },
     ]);
@@ -867,7 +908,19 @@ test("scope expansion and audit integrity remain append-only", () => {
       false,
     );
     assert.equal(expanded.implementation_receipt, undefined);
-    const implemented = implementation(store, { workflow: expanded }, undefined);
+    assert.equal(expanded.phase, "IMPLEMENTING");
+    assert.equal(expanded.version, 2);
+    assert.equal(expanded.workflow_id, created.workflow.workflow_id);
+    assert.equal(store.reviewerGet(created.workflow.workflow_id).implementation_summary, null);
+    assert.equal(store.reviewerGet(created.workflow.workflow_id).implementation_status, null);
+    assert.deepEqual(
+      store.audit(created.workflow.workflow_id, created.capability)[1],
+      incompleteAudit,
+    );
+    writeFileSync(join(root, "companion.txt"), "expanded companion\n");
+    const implemented = implementation(store, { workflow: expanded }, undefined, "DONE", {}, [
+      "companion.txt",
+    ]);
     assert.equal(implemented.phase, "REVIEWING");
     assert.ok(rawState(store, created.workflow.workflow_id).implementation_receipt);
     const row: any = store.db
@@ -879,7 +932,7 @@ test("scope expansion and audit integrity remain append-only", () => {
     assert.deepEqual(audit.at(-2)?.scope_expansion?.baselines, [
       {
         path: "companion.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: {
           path: "companion.txt",
           state: "unchanged",
@@ -889,7 +942,7 @@ test("scope expansion and audit integrity remain append-only", () => {
       },
       {
         path: "extra.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: { path: "extra.txt", state: "absent", kind: "missing" },
       },
     ]);
@@ -898,7 +951,7 @@ test("scope expansion and audit integrity remain append-only", () => {
     assert.deepEqual(reopened.parentGet(created.workflow.workflow_id).approved_path_baselines, [
       {
         path: "companion.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: {
           path: "companion.txt",
           state: "unchanged",
@@ -908,11 +961,19 @@ test("scope expansion and audit integrity remain append-only", () => {
       },
       {
         path: "extra.txt",
-        approved_at_version: 1,
+        approved_at_version: 2,
         baseline: { path: "extra.txt", state: "absent", kind: "missing" },
       },
     ]);
-    assert.equal(reopened.parentGet(created.workflow.workflow_id).version, 2);
+    assert.equal(reopened.parentGet(created.workflow.workflow_id).version, 3);
+    assert.equal(
+      reopened.implementerGet(created.workflow.workflow_id).implementation_status,
+      "DONE",
+    );
+    assert.deepEqual(
+      reopened.audit(created.workflow.workflow_id, created.capability)[1].summary,
+      incompleteAudit.summary,
+    );
     assert.equal(
       reopened.audit(created.workflow.workflow_id, created.capability).at(-2)?.event_type,
       "SCOPE_EXPANDED",
