@@ -478,6 +478,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_get_audit",
     "workflow_resume_implementation",
     "workflow_accept_concerns",
+    "workflow_record_manual_validation",
     "workflow_authorize_repair",
     "workflow_adjudicate_findings",
     "workflow_resume_review",

@@ -111,6 +111,7 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "workflow_get_audit",
     "workflow_resume_implementation",
     "workflow_accept_concerns",
+    "workflow_record_manual_validation",
     "workflow_authorize_repair",
     "workflow_adjudicate_findings",
     "workflow_resume_review",
@@ -229,7 +230,11 @@ test("the orchestrator exposes the complete parent planning tool surface", () =>
     ),
   );
   const serverTools = new Set(tools.map((tool) => tool.name));
-  for (const name of ["plan_parent_get", "workflow_create_from_plan"]) {
+  for (const name of [
+    "plan_parent_get",
+    "workflow_create_from_plan",
+    "workflow_record_manual_validation",
+  ]) {
     assert.ok(allowed.has(name), `orchestrator must allow ${name}`);
     assert.ok(serverTools.has(name), `server must expose ${name}`);
   }

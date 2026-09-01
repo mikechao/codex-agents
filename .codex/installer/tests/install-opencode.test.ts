@@ -94,6 +94,23 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
         `missing .opencode/agents/${file}`,
       );
     }
+    const canonicalOrchestrator = readFileSync(
+      resolve(import.meta.dir, "../../../.opencode/agents/orchestrator.md"),
+      "utf8",
+    );
+    const installedOrchestrator = readFileSync(
+      join(root, ".opencode/agents/orchestrator.md"),
+      "utf8",
+    );
+    assert.equal(
+      installedOrchestrator,
+      canonicalOrchestrator,
+      "installed orchestrator must match the canonical source byte-for-byte",
+    );
+    assert.ok(
+      installedOrchestrator.includes("  workflow_state_workflow_record_manual_validation: allow"),
+      "installed orchestrator must allow manual validation recording",
+    );
     const { path, content } = installedOpenCodeConfig(root);
     assert.equal(basenameOf(path), "opencode.json");
     const parsed = JSON.parse(content) as {

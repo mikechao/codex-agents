@@ -45,6 +45,7 @@ permission:
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
   workflow_state_workflow_accept_concerns: allow
+  workflow_state_workflow_record_manual_validation: allow
   workflow_state_workflow_authorize_repair: allow
   workflow_state_workflow_adjudicate_findings: allow
   workflow_state_workflow_resume_review: allow
