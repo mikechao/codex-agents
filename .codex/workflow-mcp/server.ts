@@ -694,6 +694,19 @@ export const toolDefinitions = [
         blocking_findings: { type: "array", items: findingSchema, maxItems: 200 },
         optional_findings: { type: "array", items: findingSchema, maxItems: 200 },
         prior_finding_classifications: resolutionMapSchema,
+        validation_results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              validation_id: { type: "string" },
+              status: { type: "string", enum: [...VALIDATION_STATUS_VALUES] },
+              evidence: { type: "string", minLength: 1, maxLength: 2000 },
+            },
+            required: ["validation_id", "status", "evidence"],
+            additionalProperties: false,
+          },
+        },
       },
       [
         ...workerCommon.required,

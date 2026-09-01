@@ -711,13 +711,13 @@ export type ImplementerHandoffView = {
   agent_touched_paths: ExactRepoPath[];
   scope_changed_paths: ExactRepoPath[];
   acceptance_results: AcceptanceResult[];
-  validation_results: ValidationResult[];
   finding_resolution_map: FindingResolutionMap;
 };
 
 export interface ReviewerViewBase extends RoleViewCommon {
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
+  validation_results: ValidationResult[];
   dirty_baseline_paths: ExactRepoPath[];
   linked_findings: ReviewFinding[];
   blocking_findings: BlockingFinding[];

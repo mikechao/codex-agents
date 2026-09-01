@@ -170,6 +170,8 @@ function _compileBrandedCorrelation(): void {
   const acceptanceResults: AcceptanceResult[] = implementation.acceptance_results;
   // @ts-expect-error raw validation evidence is not a typed result array
   const validationResults: ValidationResult[] = implementation.validation_results;
+  // @ts-expect-error raw reviewer validation evidence is not a typed result array
+  const reviewValidationResults: ValidationResult[] = review.validation_results;
   // @ts-expect-error raw manual validation status requires transition validation
   const manualStatus: "passed" | "failed" = manualValidation.status;
   // @ts-expect-error raw manual validation IDs require transition validation and branding
@@ -181,6 +183,7 @@ function _compileBrandedCorrelation(): void {
   void touchedPaths;
   void acceptanceResults;
   void validationResults;
+  void reviewValidationResults;
   void manualStatus;
   void manualId;
 }

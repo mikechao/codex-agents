@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { fail } from "./errors.js";
+import { fail, WorkflowError } from "./errors.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
 import type {
   AcceptanceCriterion,
@@ -344,7 +344,6 @@ export const REVIEWER_IMPLEMENTER_HANDOFF = [
   "agent_touched_paths",
   "scope_changed_paths",
   "acceptance_results",
-  "validation_results",
   "finding_resolution_map",
 ] as const satisfies readonly (keyof WorkflowState)[];
 
@@ -625,6 +624,20 @@ export function pendingManualValidations(state: WorkflowState): ValidationRequir
         !results.has(requirement.validation_id) ||
         results.get(requirement.validation_id)?.status === "not_run"),
   );
+}
+
+function parseReviewerValidationResults(
+  value: unknown,
+  contracts: ReadonlyArray<ValidationRequirement>,
+): ValidationResult[] {
+  try {
+    return evidenceResults(value, "validation", contracts, "validation_id", VALIDATION_STATUSES);
+  } catch (error) {
+    if (error instanceof WorkflowError && error.category === "ERROR_INVALID_IMPLEMENTATION") {
+      fail("ERROR_INVALID_REVIEW", error.detail);
+    }
+    throw error;
+  }
 }
 
 /** Every required validation has exactly one current result and it passed. */
@@ -1311,11 +1324,40 @@ export function submitReview(
       "blocking_findings",
       "optional_findings",
       "prior_finding_classifications",
+      "validation_results",
     ],
     "review submission",
+    ["validation_results"],
   );
   if (!isValue(REVIEW_STATUS_VALUES, args.review_status)) {
     fail("ERROR_INVALID_REVIEW", "review status is invalid");
+  }
+  const executableRequirements = state.validation_requirements.filter(
+    (requirement) => requirement.argv !== null,
+  );
+  let reviewerValidationResults: ValidationResult[] | null = null;
+  if (state.workflow_type === "change") {
+    if ("validation_results" in args) {
+      fail(
+        "ERROR_INVALID_REVIEW",
+        "reviewers cannot submit validation results for change workflows",
+      );
+    }
+  } else if (executableRequirements.length > 0) {
+    if (args.review_status === "APPROVED" && !("validation_results" in args)) {
+      fail("ERROR_INVALID_REVIEW", "review-only review requires executable validation results");
+    }
+    if ("validation_results" in args) {
+      reviewerValidationResults = parseReviewerValidationResults(
+        args.validation_results,
+        executableRequirements,
+      );
+    }
+  } else if ("validation_results" in args) {
+    reviewerValidationResults = parseReviewerValidationResults(
+      args.validation_results,
+      executableRequirements,
+    );
   }
   const blockingFindings = findings(args.blocking_findings ?? [], "blocking_findings", true);
   const optionalFindings = findings(args.optional_findings ?? [], "optional_findings", false);
@@ -1388,6 +1430,24 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "changes requested without blockers");
   }
   const next = clone<WorkflowState>(state);
+  if (state.workflow_type === "review_only" && reviewerValidationResults !== null) {
+    const executableById = new Map(
+      reviewerValidationResults.map((result) => [result.validation_id, result]),
+    );
+    const manualById = new Map(
+      state.validation_results.map((result) => [result.validation_id, result]),
+    );
+    next.validation_results = state.validation_requirements.map((requirement) => {
+      const result =
+        requirement.argv === null
+          ? manualById.get(requirement.validation_id)
+          : executableById.get(requirement.validation_id);
+      if (!result) {
+        fail("ERROR_INVALID_REVIEW", "validation results are incomplete");
+      }
+      return result;
+    });
+  }
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;
   next.prior_finding_classifications = classifications;

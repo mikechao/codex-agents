@@ -649,7 +649,6 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     "agent_touched_paths",
     "scope_changed_paths",
     "acceptance_results",
-    "validation_results",
     "finding_resolution_map",
   ];
   try {
@@ -658,6 +657,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     for (const field of handoffFields) {
       assert.equal(field in changeReviewer, true, `change reviewer handoff includes ${field}`);
     }
+    assert.equal("validation_results" in changeReviewer, true);
     assert.equal("implementation_receipt" in changeReviewer, false);
 
     doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] });
@@ -665,6 +665,149 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     for (const field of handoffFields) {
       assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
     }
+    assert.equal("validation_results" in reviewOnlyReviewer, true);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("review-only reviewer validation evidence merges with parent manual evidence", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        workflow_type: "review_only",
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "manual check", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow.workflow_id;
+    assert.throws(
+      () => store.beginReview({ workflow_id: id, expected_version: 0 }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    store.recordManualValidation({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: 0,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "parent inspected the manual check",
+    });
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    const beforeRejectedSubmission = store.parentGet(id);
+    const beforeRejectedAudit = store.audit(id, created.capability);
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: beforeRejectedSubmission.version,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(store.parentGet(id).version, beforeRejectedSubmission.version);
+    assert.deepEqual(store.audit(id, created.capability), beforeRejectedAudit);
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: beforeRejectedSubmission.version,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+          validation_results: [
+            { validation_id: "VAL-002", status: "passed", evidence: "reviewer placeholder" },
+          ],
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    store.submitReview({
+      workflow_id: id,
+      expected_version: beforeRejectedSubmission.version,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "reviewer ran the check" },
+      ],
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "reviewer ran the check" },
+      { validation_id: "VAL-002", status: "passed", evidence: "parent inspected the manual check" },
+    ]);
+    store.authorizeCommit({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: 3,
+      user_authorization: "authorize reviewed change",
+    });
+    assert.equal(store.parentGet(id).phase, "COMMIT_AUTHORIZED");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("change reviewer validation results cannot overwrite implementer evidence", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(createInput(root, git));
+    const id = created.workflow.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "implementer" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    const beforeRejectedSubmission = store.parentGet(id);
+    const beforeRejectedAudit = store.audit(id, created.capability);
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: beforeRejectedSubmission.version,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+          validation_results: [
+            { validation_id: "VAL-001", status: "failed", evidence: "replacement" },
+          ],
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(store.parentGet(id).version, beforeRejectedSubmission.version);
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "implementer" },
+    ]);
+    assert.deepEqual(store.audit(id, created.capability), beforeRejectedAudit);
+    store.submitReview({
+      workflow_id: id,
+      expected_version: beforeRejectedSubmission.version,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -1194,6 +1337,60 @@ scenario("inconclusive review resumes and approves", [
     snapshots: [snap("parent", "STOPPED_APPROVED", 4, ACTIONS.approved, EVENTS.inconclusiveReview)],
   },
 ]);
+
+test("review-only inconclusive review may omit unavailable executable evidence", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        workflow_type: "review_only",
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+        ],
+      }),
+    );
+    const id = created.workflow.workflow_id;
+
+    store.beginReview({ workflow_id: id, expected_version: 0 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 1,
+      review_status: "INCONCLUSIVE",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(store.parentGet(id).validation_results, []);
+
+    store.resumeReview({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: 2,
+      resume_context: "validation runner is available",
+    });
+    store.beginReview({ workflow_id: id, expected_version: 3 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 4,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "reviewer ran the check" },
+      ],
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "reviewer ran the check" },
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 scenario("linked follow-ups copy optional and blocking findings into fresh children", [
   {

@@ -254,9 +254,14 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   resolution map, blocking findings, and permitted actions. A `change` workflow starts `IMPLEMENTING`
   and the implementer submits with `workflow_submit_implementation`.
 - Reviewer view: criteria, validations, dirty baseline, implementation evidence and results, concern
-  acceptance, finding buckets and classifications, resolution map, and permitted actions. Working-
-  tree reviewers call `workflow_begin_review` before inspection; the internal start snapshot is
-  never exposed. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
+  acceptance, finding buckets and classifications, resolution map, and permitted actions. The
+  reviewer view exposes `validation_results` for both workflow types. Implementers remain the sole
+  producer of `state.validation_results` for `change` workflows; reviewers must omit that field
+  there. For `review_only` workflows, reviewers submit only the ordered executable results after
+  the existing exact-policy runner completes them. Manual requirements are never executed or
+  submitted by reviewers, and parent terminal manual evidence remains authoritative. Working-tree
+  reviewers call `workflow_begin_review` before inspection; the internal start snapshot is never
+  exposed. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
   skipping the implementer; the reviewer view omits the nonexistent implementer handoff.
 - Committer view: criteria, validations, derived paths, implementation results and failures, concern
   acceptance, finding buckets, sanitized commit preparation, commit authorization, and permitted

@@ -279,6 +279,7 @@ export interface RawReviewSubmissionMutation extends RawWorkerMutation {
   blocking_findings?: unknown;
   optional_findings?: unknown;
   prior_finding_classifications?: unknown;
+  validation_results?: unknown;
 }
 
 export interface RawCommitResultMutation extends RawWorkerMutation {

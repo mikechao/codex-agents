@@ -114,6 +114,18 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.equal("review_receipt" in reviewSchema.properties, false);
   assert.equal("capability" in reviewSchema.properties, false);
   assert.equal("review_target" in reviewSchema.properties, false);
+  assert.equal("validation_results" in reviewSchema.properties, true);
+  assert.equal(reviewSchema.required.includes("validation_results"), false);
+  assert.deepEqual(reviewSchema.properties.validation_results.items.properties, {
+    validation_id: { type: "string" },
+    status: { type: "string", enum: ["passed", "failed", "not_run"] },
+    evidence: { type: "string", minLength: 1, maxLength: 2000 },
+  });
+  assert.deepEqual(reviewSchema.properties.validation_results.items.required, [
+    "validation_id",
+    "status",
+    "evidence",
+  ]);
   assert.deepEqual(Object.keys(beginSchema.properties).sort(), ["expected_version", "workflow_id"]);
   assert.deepEqual(Object.keys(manualValidationSchema.properties).sort(), [
     "capability",
