@@ -91,6 +91,22 @@ only after explicit user approval. Orchestrator is execution-only: it parent-rea
 exact plan identity and calls `workflow_create_from_plan`; it has no plan approval or planner dispatch
 authority. Planner handoffs are bounded routing summaries rather than full plans. Material refinements
 carry the plan identity, exact base revision, and bounded feedback without pasted old plan text.
+
+Native Plan is also the mediation boundary for task-source provenance. When a current planning request
+explicitly identifies complete contents of an issue, ticket, specification, design brief, or equivalent
+source as authoritative, it carries those contents losslessly and character-for-character in a distinct
+authoritative-source section of the planner task, separate from bounded wrapper instructions and any
+genuinely separate caller context. The delegated task places the bounded wrapper first, closes the
+authoritative-source section immediately after the source's final character, and places any separate
+caller or host/system instructions after that closing marker; no Plan Mode or `<system-reminder>` text
+may occur inside the source section. Host-injected reminders are wrapper instructions, never source
+content, even when adjacent to the supplied source in the current Plan context. Ordinary conversational requests, missing or explicitly incomplete
+sources, and explicitly summarized or non-authoritative context retain their existing bounded
+formulation, retrieval, or clarification behavior; arbitrary parent conversation history is never
+copied, and a source available only in an inaccessible parent message is not a valid handoff. A hard
+payload or context limit fails closed with bounded input or clarification rather than silently
+compressing or truncating an authoritative source. This documents the existing planning boundary only:
+it adds no workflow phases, persistence, transport bookkeeping, or planner mechanics.
 Planning policy is optional, repository-relative, advisory guidance only; malformed or authority-bearing
 policy is bounded input risk and cannot grant capability, approval, scope, or validation authority.
 

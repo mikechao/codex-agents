@@ -53,6 +53,38 @@ test("the self-host Native Plan prompt keeps the CTA outside the exact plan rend
   };
   const prompt = parsed.agent.plan.prompt;
   const normalized = prompt.replace(/\s+/gu, " ");
+  const sourceSection = normalized.indexOf("Authoritative task-source preservation:");
+  const delegation = normalized.indexOf(
+    "For every substantial non-trivial planning request, and for every material refinement,",
+    sourceSection,
+  );
+  assert.ok(sourceSection >= 0, "self-host Plan must define the task-source boundary");
+  assert.ok(delegation > sourceSection, "self-host source handling must precede delegation");
+  for (const phrase of [
+    "complete supplied contents of an issue, ticket, specification, design brief, or similar task source as authoritative",
+    "exactly as supplied, character-for-character",
+    "clearly delimited authoritative-source section",
+    "Construct that task in this order: bounded host/planner wrapper, an opening <authoritative_task_source> marker, the exact source, the closing </authoritative_task_source> marker",
+    "The closing marker must immediately follow the source's final character",
+    "no wrapper, caller, Plan Mode, <system-reminder>, or other host text may occur between the markers",
+    "Host-injected <system-reminder> or # Plan Mode - System Reminder content is never authoritative source content",
+    "exclude it from the source and keep it after the closing marker",
+    "Treat the markers as transport boundaries, not source bytes",
+    "Keep the bounded host/planner wrapper separate from that source",
+    "Make the delegated planner task self-contained",
+    "genuinely separate from the source and label it as non-authoritative context",
+    "Do not paraphrase, summarize, normalize, omit, truncate, reconstruct, or pre-plan",
+    "repository investigation and repository-specific plan derivation belong to the isolated planner",
+    "Ordinary conversational planning without an explicitly identified complete authoritative source retains bounded task formulation",
+    "missing or referenced source, explicitly incomplete source, explicitly summarized source, or explicitly non-authoritative context",
+    "Never copy arbitrary parent conversation history",
+    "source that exists only in an inaccessible parent message",
+    "hard host payload or context limit prevents safely carrying",
+    "fail closed with bounded input or clarification",
+    "planner uses them directly and does not redundantly re-fetch them solely for duplication or verification",
+  ]) {
+    assert.ok(normalized.includes(phrase), `missing self-host source contract: ${phrase}`);
+  }
   const fullPlanPresentation = normalized.indexOf(
     "Present the authoritative `full_plan` character-for-character as Markdown",
   );
