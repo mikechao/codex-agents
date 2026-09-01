@@ -67,6 +67,7 @@ export const WORKFLOW_ACTION_VALUES = [
   "workflow_committer_get",
   "workflow_get_audit",
   "workflow_submit_implementation",
+  "workflow_record_manual_validation",
   "workflow_resume_implementation",
   "workflow_accept_concerns",
   "workflow_begin_review",

@@ -33,6 +33,7 @@ import {
   acceptConcerns,
   adjudicateFindings,
   adoptDirtyScope,
+  allRequiredValidationsPassed,
   approvedPathBaselineView,
   authorizeCommit,
   authorizeRepair,
@@ -48,8 +49,10 @@ import {
   linkedFollowupChildState,
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
+  pendingManualValidations,
   prepareCommit,
   rangeDirtyBaselinePaths,
+  recordManualValidation,
   resumeImplementation,
   resumeReview,
   retryCommit,
@@ -251,6 +254,12 @@ export interface RawAuthorizationMutation extends RawParentMutation {
   user_authorization?: unknown;
 }
 
+export interface RawManualValidationMutation extends RawParentMutation {
+  validation_id?: unknown;
+  status?: unknown;
+  evidence?: unknown;
+}
+
 export interface RawFindingIdsMutation extends RawParentMutation {
   finding_ids?: unknown;
 }
@@ -285,6 +294,7 @@ type ContextFields = RawMutationRecord & RawContextMutation;
 type RetryContextFields = RawMutationRecord & RawRetryContextMutation;
 type ReviewContextFields = RawMutationRecord & RawReviewContextMutation;
 type AuthorizationFields = RawMutationRecord & RawAuthorizationMutation;
+type ManualValidationFields = RawMutationRecord & RawManualValidationMutation;
 type FindingIdsFields = RawMutationRecord & RawFindingIdsMutation;
 type ImplementationFields = RawMutationRecord & RawImplementationSubmissionMutation;
 type ReviewFields = RawMutationRecord & RawReviewSubmissionMutation;
@@ -311,6 +321,10 @@ function parentReviewContextMutation(value: unknown): ReviewContextFields {
 }
 
 function parentAuthorizationMutation(value: unknown): AuthorizationFields {
+  return parentMutation(value);
+}
+
+function parentManualValidationMutation(value: unknown): ManualValidationFields {
   return parentMutation(value);
 }
 
@@ -2171,6 +2185,9 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_STARTED",
       (state) => {
+        if (pendingManualValidations(state).length > 0) {
+          fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
+        }
         if (state.review_target.review_mode !== "working_tree") {
           fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
         }
@@ -2217,6 +2234,9 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_SUBMITTED",
       (state) => {
+        if (pendingManualValidations(state).length > 0) {
+          fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
+        }
         if (
           state.review_target.base_revision !== state.base_head ||
           (state.linked_continuation?.review_stage === "combined"
@@ -2334,6 +2354,12 @@ export class WorkflowStore {
         if (state.superseded_by_workflow_id) {
           fail("ERROR_COMMIT_NOT_ALLOWED", "superseded workflow cannot authorize a commit");
         }
+        if (!allRequiredValidationsPassed(state)) {
+          fail(
+            "ERROR_COMMIT_NOT_ALLOWED",
+            "all required validations must pass before commit authorization",
+          );
+        }
         if (!state.review_receipt) fail("ERROR_STALE_RECEIPT", "review receipt is missing");
         verifyReviewReceipt(
           this.root,
@@ -2343,6 +2369,18 @@ export class WorkflowStore {
         );
         return authorizeCommit(state, args);
       },
+    );
+  }
+
+  recordManualValidation(input: unknown): RoleView {
+    const args = parentManualValidationMutation(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.capability,
+      args.expected_version,
+      "MANUAL_VALIDATION_RECORDED",
+      (state) => recordManualValidation(state, args),
     );
   }
 

@@ -164,6 +164,10 @@ export interface OperatorRecoverySummary {
 
 export type OperatorPrimaryDecision =
   | { kind: "no_user_action"; route: OperatorRoute }
+  | {
+      kind: "manual_validation_required";
+      validations: Array<{ validation_id: ValidationRequirementId; description: string }>;
+    }
   | { kind: "approve_exact_repairs"; blocker_count: number; blockers: OperatorBlocker[] }
   | { kind: "finalize_repair_exhausted"; reason: string }
   | { kind: "approve_bounded_continuation"; reason: string; authorization_required: true }
@@ -334,6 +338,7 @@ export type AuditEventType =
   | "SCOPE_EXPANDED"
   | "WORKFLOW_RUNTIME_ADOPTED"
   | "IMPLEMENTATION_SUBMITTED"
+  | "MANUAL_VALIDATION_RECORDED"
   | "IMPLEMENTATION_INCOMPLETE"
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"

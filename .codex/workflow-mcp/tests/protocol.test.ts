@@ -54,7 +54,7 @@ function createArgs(git: (...args: string[]) => string, options: any = {}) {
     approved_plan: options.approved_plan ?? null,
     approved_paths: paths,
     acceptance_criteria: ["criterion"],
-    validation_requirements: ["validation"],
+    validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
     review_target: options.review_target ?? target(git("rev-parse", "HEAD"), paths),
   };
 }

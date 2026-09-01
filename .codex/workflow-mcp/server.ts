@@ -254,6 +254,7 @@ export const SERVER_TOOL_NAMES = [
   "workflow_committer_get",
   "workflow_get_audit",
   "workflow_submit_implementation",
+  "workflow_record_manual_validation",
   "workflow_resume_implementation",
   "workflow_accept_concerns",
   "workflow_begin_review",
@@ -607,6 +608,27 @@ export const toolDefinitions = [
       title: "Submit implementation",
       readOnlyHint: false,
       destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_record_manual_validation",
+    description:
+      "Record bounded parent-owned terminal evidence for one unresolved manual validation requirement.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        validation_id: { type: "string", pattern: "^VAL-[0-9]{3}$" },
+        status: { type: "string", enum: ["passed", "failed"] },
+        evidence: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "validation_id", "status", "evidence"],
+    ),
+    annotations: {
+      title: "Record manual validation",
+      readOnlyHint: false,
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: false,
     },
@@ -1020,6 +1042,7 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_committer_get: (args) => store.committerGet(args.workflow_id),
     workflow_get_audit: (args) => store.audit(args.workflow_id, args.capability),
     workflow_submit_implementation: (args) => store.submitImplementation(args),
+    workflow_record_manual_validation: (args) => store.recordManualValidation(args),
     workflow_resume_implementation: (args) => store.resumeImplementation(args),
     workflow_accept_concerns: (args) => store.acceptConcerns(args),
     workflow_begin_review: (args) => store.beginReview(args),

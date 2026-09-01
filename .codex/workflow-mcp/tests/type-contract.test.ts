@@ -4,6 +4,7 @@ import { SERVER_TOOL_NAMES, type ServerToolName, toolDefinitions } from "../serv
 import type {
   RawCommitResultMutation,
   RawImplementationSubmissionMutation,
+  RawManualValidationMutation,
   RawParentMutation,
   RawReviewSubmissionMutation,
   RawWorkerMutation,
@@ -152,6 +153,7 @@ function _compileBrandedCorrelation(): void {
   workerMutation.capability;
 
   const implementation = undefined as unknown as RawImplementationSubmissionMutation;
+  const manualValidation = undefined as unknown as RawManualValidationMutation;
   const review = undefined as unknown as RawReviewSubmissionMutation;
   const commit = undefined as unknown as RawCommitResultMutation;
   // @ts-expect-error raw implementation status is not a validated finite-domain value
@@ -168,6 +170,10 @@ function _compileBrandedCorrelation(): void {
   const acceptanceResults: AcceptanceResult[] = implementation.acceptance_results;
   // @ts-expect-error raw validation evidence is not a typed result array
   const validationResults: ValidationResult[] = implementation.validation_results;
+  // @ts-expect-error raw manual validation status requires transition validation
+  const manualStatus: "passed" | "failed" = manualValidation.status;
+  // @ts-expect-error raw manual validation IDs require transition validation and branding
+  const manualId: ValidationRequirementId = manualValidation.validation_id;
   void implementationStatus;
   void reviewStatus;
   void commitOutcome;
@@ -175,6 +181,8 @@ function _compileBrandedCorrelation(): void {
   void touchedPaths;
   void acceptanceResults;
   void validationResults;
+  void manualStatus;
+  void manualId;
 }
 
 type _StateKeysAreExhaustive = Expect<Equal<(typeof V8_STATE_KEYS)[number], keyof WorkflowState>>;

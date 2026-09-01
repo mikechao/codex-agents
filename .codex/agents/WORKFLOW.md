@@ -270,6 +270,13 @@ an exact structured executable `argv` array or `argv: null` for a manual check. 
 authorizes exact argv entries independently, so descriptions are never parsed as commands and
 manual requirements are never executed.
 
+Required manual validation is authoritative workflow evidence, not a prompt or conversation claim.
+Implementers must submit `not_run` for every manual (`argv: null`) requirement; only the parent may
+record bounded terminal `passed` or `failed` evidence. A complete implementation may enter
+`REVIEWING` while that evidence is pending, but reviewer routing and commit authorization remain
+gated until the parent records it. Later implementation or repair replaces the current validation
+results, returning manual checks to unresolved `not_run` and requiring fresh parent evidence.
+
 The OpenCode orchestrator performs a bounded, read-only policy preflight before
 `workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed non-null
 `argv` by exact array equality, including length, ordering, and every individual argument. Validation

@@ -27,6 +27,10 @@ Rules:
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
   tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
   behavior; never use an alternate transport.
+- Validation requirements with `argv: null` are manual checks: implementer submissions must always
+  report those results as `not_run`, including DONE and repair attempts. Only the parent may record
+  bounded terminal manual evidence through `workflow_record_manual_validation`; DONE may therefore
+  hand off an otherwise complete implementation while manual checks remain unresolved.
 - Submit the complete implementation schema with `workflow_submit_implementation`: `status`,
   `summary`, exact `agent_touched_paths`, acceptance and validation evidence arrays,
   `known_failures`, and a complete `finding_resolution_map`. Workflow MCP generates and persists

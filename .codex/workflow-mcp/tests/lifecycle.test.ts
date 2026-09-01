@@ -26,7 +26,9 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
     approved_plan: options.approved_plan ?? null,
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
-    validation_requirements: options.validation_requirements ?? ["validation A"],
+    validation_requirements: options.validation_requirements ?? [
+      { description: "validation A", argv: ["bun", "run", "check"] },
+    ],
     review_target: options.review_target ?? {
       review_mode: "working_tree",
       base_revision: git("rev-parse", "HEAD"),
@@ -483,7 +485,7 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
     approved_plan: null,
     approved_paths: ["note.txt"],
     acceptance_criteria: ["child criterion"],
-    validation_requirements: ["child validation"],
+    validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
     finding_ids: findingIds,
     user_authorization: "user authorized follow-up",
   });
@@ -496,7 +498,9 @@ function doCreateChildPlan(ctx: any) {
     objective: "planned linked remediation",
     approved_paths: ["note.txt"],
     acceptance_criteria: ["the linked remediation is complete"],
-    validation_requirements: ["linked remediation validation"],
+    validation_requirements: [
+      { description: "linked remediation validation", argv: ["bun", "run", "check"] },
+    ],
   });
   ctx.store.planApprove({
     plan_id: ctx.plan.plan_id,
@@ -661,6 +665,68 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     for (const field of handoffFields) {
       assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
     }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("manual validation evidence is parent-owned, ordered, audited, and commit-gated", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "manual check", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "parent evidence pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_record_manual_validation",
+    ]);
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+    assert.throws(
+      () => store.beginReview({ workflow_id: id, expected_version: 1 }),
+      /ERROR_INVALID_REVIEW/u,
+    );
+    store.recordManualValidation({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: 1,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "operator inspected the result",
+    });
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+      { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
+    ]);
+    assert.equal(
+      store.audit(id, created.capability).at(-1).event_type,
+      "MANUAL_VALIDATION_RECORDED",
+    );
+    assert.equal(
+      JSON.stringify(store.audit(id, created.capability)).includes("operator inspected"),
+      false,
+    );
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, ["workflow_begin_review"]);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -1271,7 +1337,9 @@ test("legacy linked follow-up rolls back child and source succession after injec
           approved_plan: null,
           approved_paths: ["note.txt"],
           acceptance_criteria: ["child criterion"],
-          validation_requirements: ["child validation"],
+          validation_requirements: [
+            { description: "child validation", argv: ["bun", "run", "check"] },
+          ],
           finding_ids: ["F-OPT"],
           user_authorization: "user authorized follow-up",
         }),
@@ -1629,7 +1697,7 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
-      validation_requirements: ["validation"],
+      validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
       review_target: {
         review_mode: "working_tree",
         base_revision: head,
@@ -1730,7 +1798,7 @@ test("dirty scope adoption binds staged-only index state", () => {
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
-      validation_requirements: ["validation"],
+      validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
       review_target: {
         review_mode: "working_tree",
         base_revision: head,

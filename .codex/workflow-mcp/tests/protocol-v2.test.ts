@@ -51,7 +51,9 @@ function create(git: (...args: string[]) => string, options: any = {}) {
     approved_plan: null,
     approved_paths: paths,
     acceptance_criteria: ["criterion"],
-    validation_requirements: options.validation_requirements ?? ["validation"],
+    validation_requirements: options.validation_requirements ?? [
+      { description: "validation", argv: ["bun", "run", "check"] },
+    ],
     review_target: options.review_target ?? target(git("rev-parse", "HEAD"), paths),
     max_repair_cycles: options.max_repair_cycles,
   };
@@ -178,7 +180,9 @@ test("fresh linked follow-up routes exact child IDs and preserves parent audit a
         approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["child criterion"],
-        validation_requirements: ["child validation"],
+        validation_requirements: [
+          { description: "child validation", argv: ["bun", "run", "check"] },
+        ],
         finding_ids: ["OPTIONAL-1"],
         user_authorization: "authorized child",
       })

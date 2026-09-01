@@ -34,7 +34,7 @@ function sourceInput(git: (...args: string[]) => string) {
     approved_plan: null,
     approved_paths: approvedPaths,
     acceptance_criteria: ["source criterion"],
-    validation_requirements: ["source validation"],
+    validation_requirements: [{ description: "source validation", argv: ["bun", "run", "check"] }],
     review_target: {
       review_mode: "working_tree",
       base_revision: git("rev-parse", "HEAD"),
@@ -92,7 +92,9 @@ function planInput(path = "planned.txt") {
     execution_brief: "authoritative child execution brief",
     approved_paths: [path],
     acceptance_criteria: ["authoritative child criterion"],
-    validation_requirements: ["authoritative child validation"],
+    validation_requirements: [
+      { description: "authoritative child validation", argv: ["bun", "run", "check"] },
+    ],
   };
 }
 
@@ -382,7 +384,7 @@ test("plan-native linked follow-up binds only the exact current approved child a
       {
         validation_id: "VAL-001",
         description: "authoritative child validation",
-        argv: null,
+        argv: ["bun", "run", "check"],
       },
     ]);
     assert.deepEqual(childView.plan_provenance, {

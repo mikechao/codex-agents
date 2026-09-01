@@ -16,7 +16,9 @@ function input(git: (...args: string[]) => string, options: any = {}) {
     approved_plan: options.approved_plan ?? null,
     approved_paths: paths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion"],
-    validation_requirements: options.validation_requirements ?? ["validation"],
+    validation_requirements: options.validation_requirements ?? [
+      { description: "validation", argv: ["bun", "run", "check"] },
+    ],
     review_target: options.review_target ?? {
       review_mode: "working_tree",
       base_revision: git("rev-parse", "HEAD"),
@@ -586,7 +588,7 @@ test("linked follow-up inherits findings and gets its own singular parent capabi
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
-      validation_requirements: ["child validation"],
+      validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
       finding_ids: ["OPTIONAL-1"],
       user_authorization: "authorized remediation",
     });
@@ -782,7 +784,7 @@ test("linked remediation and combined review retain receipts through a committed
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
-      validation_requirements: ["child validation"],
+      validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
       finding_ids: ["LINKED-OPTIONAL"],
       user_authorization: "authorized linked remediation",
     });

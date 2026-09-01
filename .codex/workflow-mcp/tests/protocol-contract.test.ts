@@ -38,6 +38,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "workflow_parent_get",
     "workflow_prepare_commit",
     "workflow_reconcile_commit_result",
+    "workflow_record_manual_validation",
     "workflow_resume_implementation",
     "workflow_resume_review",
     "workflow_retry_commit",
@@ -62,6 +63,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const adoption = tools.find((tool) => tool.name === "workflow_adopt_dirty_scope");
   const reconciliation = tools.find((tool) => tool.name === "workflow_reconcile_commit_result");
   const adjudication = tools.find((tool) => tool.name === "workflow_adjudicate_findings");
+  const manualValidation = tools.find((tool) => tool.name === "workflow_record_manual_validation");
   const create = tools.find((tool) => tool.name === "workflow_create");
   const linkedFromPlan = tools.find(
     (tool) => tool.name === "workflow_create_linked_followup_from_plan",
@@ -74,6 +76,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
       adoption &&
       create &&
       adjudication &&
+      manualValidation &&
       linkedFromPlan,
   );
   assert.match(create.description ?? "", /one parent capability/u);
@@ -97,6 +100,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const implementationSchema = implementation.inputSchema as any;
   const reviewSchema = review.inputSchema as any;
   const beginSchema = begin.inputSchema as any;
+  const manualValidationSchema = manualValidation.inputSchema as any;
   assert.equal("implementation_receipt" in implementationSchema.properties, false);
   assert.deepEqual(implementationSchema.properties.status.enum, [
     "DONE",
@@ -111,6 +115,15 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.equal("capability" in reviewSchema.properties, false);
   assert.equal("review_target" in reviewSchema.properties, false);
   assert.deepEqual(Object.keys(beginSchema.properties).sort(), ["expected_version", "workflow_id"]);
+  assert.deepEqual(Object.keys(manualValidationSchema.properties).sort(), [
+    "capability",
+    "evidence",
+    "expected_version",
+    "status",
+    "validation_id",
+    "workflow_id",
+  ]);
+  assert.deepEqual(manualValidationSchema.properties.status.enum, ["passed", "failed"]);
   for (const name of [
     "workflow_parent_get",
     "workflow_implementer_get",

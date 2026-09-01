@@ -10,6 +10,9 @@ function create(
   store: WorkflowStore,
   git: (...args: string[]) => string,
   workflowType: "change" | "review_only" = "change",
+  validationRequirements: Array<{ description: string; argv: string[] | null }> = [
+    { description: "validation", argv: ["bun", "run", "check"] },
+  ],
 ) {
   const paths = ["note.txt"];
   return store.create({
@@ -18,7 +21,7 @@ function create(
     approved_plan: null,
     approved_paths: paths,
     acceptance_criteria: ["criterion"],
-    validation_requirements: ["validation"],
+    validation_requirements: validationRequirements,
     review_target: {
       review_mode: "working_tree",
       base_revision: git("rev-parse", "HEAD"),
@@ -30,6 +33,81 @@ function create(
     },
   });
 }
+
+test("operator projection requests parent-owned manual evidence before review", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-manual.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const created = create(store, git, "change", [
+      { description: "executable", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", argv: null },
+    ]);
+    const id = created.workflow.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "ok" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "parent check pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "manual_validation_required",
+      validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+    });
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+    store.recordManualValidation({
+      workflow_id: id,
+      capability: created.capability,
+      expected_version: 1,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "inspected",
+    });
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "no_user_action",
+      route: "review",
+    });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("operator projection never offers commit for incomplete or failed validation", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-commit-validation.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const created = create(store, git, "change", [
+      { description: "manual inspection", argv: null },
+    ]);
+    for (const validationResults of [
+      [],
+      [{ validation_id: "VAL-001", status: "not_run", evidence: "pending" }],
+      [{ validation_id: "VAL-001", status: "failed", evidence: "failed" }],
+    ]) {
+      const approved = structuredClone(created.workflow) as any;
+      approved.phase = "STOPPED_APPROVED";
+      approved.validation_results = validationResults;
+      const decision = deriveOperatorDecision(approved, [
+        { state: approved, actions: { parent: ["workflow_authorize_commit"] } },
+      ]);
+      assert.equal(decision.commit.eligible, false);
+      assert.notEqual(decision.primary.kind, "approve_commit");
+    }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function finding(id: string, severity: "P1" | "P3" = "P1") {
   return {

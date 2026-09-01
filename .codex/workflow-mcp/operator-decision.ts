@@ -1,4 +1,9 @@
-import { effectiveBlockingFindings, permittedNextActions } from "./transitions.js";
+import {
+  allRequiredValidationsPassed,
+  effectiveBlockingFindings,
+  pendingManualValidations,
+  permittedNextActions,
+} from "./transitions.js";
 import type {
   BlockingFinding,
   OperatorDecision,
@@ -186,6 +191,23 @@ function primaryDecision(record: OperatorLineageRecord): OperatorDecision["prima
   const reviewer = actionsFor(record, "reviewer");
   const committer = actionsFor(record, "committer");
 
+  const pendingManual = pendingManualValidations(state);
+  if (state.phase === "REVIEWING" && pendingManual.length > 0) {
+    if (!parent.includes("workflow_record_manual_validation")) {
+      return {
+        kind: "operator_intervention",
+        reason: "manual validation is pending but parent evidence authority is unavailable",
+      };
+    }
+    return {
+      kind: "manual_validation_required",
+      validations: pendingManual.map((requirement) => ({
+        validation_id: requirement.validation_id,
+        description: bounded(requirement.description),
+      })),
+    };
+  }
+
   if (state.phase === "IMPLEMENTING" && implementer.includes("workflow_submit_implementation"))
     return { kind: "no_user_action", route: "implement" };
   if (state.phase === "REPAIRING" && implementer.includes("workflow_submit_implementation"))
@@ -230,7 +252,11 @@ function primaryDecision(record: OperatorLineageRecord): OperatorDecision["prima
     state.phase === "STOPPED_COMMIT_MISMATCH"
   )
     return recoveryDecision(parent);
-  if (state.phase === "STOPPED_APPROVED" && parent.includes("workflow_authorize_commit"))
+  if (
+    state.phase === "STOPPED_APPROVED" &&
+    allRequiredValidationsPassed(state) &&
+    parent.includes("workflow_authorize_commit")
+  )
     return { kind: "approve_commit", authorization_required: true };
   if (state.phase === "COMMIT_AUTHORIZED" && committer.includes("workflow_prepare_commit"))
     return { kind: "no_user_action", route: "commit" };
@@ -474,6 +500,7 @@ export function deriveOperatorDecision(
   const commitEligible =
     requested.phase === "STOPPED_APPROVED" &&
     requested.review_target.review_mode === "working_tree" &&
+    allRequiredValidationsPassed(requested) &&
     actionsFor(record, "parent").includes("workflow_authorize_commit");
   return {
     primary,

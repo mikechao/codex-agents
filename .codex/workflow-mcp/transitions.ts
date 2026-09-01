@@ -36,6 +36,7 @@ import type {
   RoleViewCommon,
   StoppingImplementationStatus,
   ValidationRequirement,
+  ValidationResult,
   WorkflowAction,
   WorkflowId,
   WorkflowPhase,
@@ -505,6 +506,7 @@ const ACTION_MATRIX: Partial<
     REVIEWING: ["workflow_begin_review", "workflow_submit_review"],
   },
   parent: {
+    REVIEWING: ["workflow_record_manual_validation"],
     IMPLEMENTING: ["workflow_expand_scope"],
     REPAIR_REQUIRED: [
       "workflow_authorize_repair",
@@ -550,13 +552,27 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   role(actorRole);
   let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
   if (actorRole === "reviewer" && state.phase === "REVIEWING") {
-    if (state.review_target.review_mode === "commit_range") {
+    if (pendingManualValidations(state).length > 0) actions = [];
+    else if (state.review_target.review_mode === "commit_range") {
       actions = ["workflow_submit_review"];
     } else if (state.review_start_receipt) {
       actions = ["workflow_submit_review"];
     } else {
       actions = ["workflow_begin_review"];
     }
+  }
+  if (
+    actorRole === "parent" &&
+    state.phase === "REVIEWING" &&
+    pendingManualValidations(state).length === 0
+  )
+    actions = [];
+  if (
+    actorRole === "parent" &&
+    state.phase === "STOPPED_APPROVED" &&
+    !allRequiredValidationsPassed(state)
+  ) {
+    actions = actions.filter((action) => action !== "workflow_authorize_commit");
   }
   if (actorRole === "parent" && state.phase === "REPAIR_REQUIRED") {
     if (effectiveBlockingFindings(state).length === 0) {
@@ -592,6 +608,33 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     );
   }
   return actions.sort();
+}
+
+/** Required manual checks without authoritative terminal evidence. */
+export function pendingManualValidations(state: WorkflowState): ValidationRequirement[] {
+  const results = new Map<string, ValidationResult>();
+  const duplicates = new Set<string>();
+  for (const result of state.validation_results) {
+    if (results.has(result.validation_id)) duplicates.add(result.validation_id);
+    else results.set(result.validation_id, result);
+  }
+  return state.validation_requirements.filter(
+    (requirement) =>
+      requirement.argv === null &&
+      (duplicates.has(requirement.validation_id) ||
+        !results.has(requirement.validation_id) ||
+        results.get(requirement.validation_id)?.status === "not_run"),
+  );
+}
+
+/** Every required validation has exactly one current result and it passed. */
+export function allRequiredValidationsPassed(state: WorkflowState): boolean {
+  if (state.validation_results.length !== state.validation_requirements.length) return false;
+  return state.validation_requirements.every(
+    (requirement, index) =>
+      state.validation_results[index]?.validation_id === requirement.validation_id &&
+      state.validation_results[index]?.status === "passed",
+  );
 }
 
 export function roleView(state: WorkflowState, actorRole: "parent"): ParentView;
@@ -1018,6 +1061,19 @@ export function submitImplementation(
     "validation_id",
     VALIDATION_STATUSES,
   );
+  if (
+    validationResults.some(
+      (result) =>
+        state.validation_requirements.find(
+          (requirement) => requirement.validation_id === result.validation_id,
+        )?.argv === null && result.status !== "not_run",
+    )
+  ) {
+    fail(
+      "ERROR_INVALID_IMPLEMENTATION",
+      "implementers cannot submit terminal manual validation evidence",
+    );
+  }
   const knownFailures = stringList(args.known_failures, "known_failures");
   const priorIds = (
     state.phase === "REPAIRING"
@@ -1060,8 +1116,18 @@ export function submitImplementation(
     }
   }
   if (args.status === "DONE") {
-    if (validationResults.some((item) => item.status !== "passed")) {
-      fail("ERROR_INVALID_IMPLEMENTATION", "done implementation requires passed validations");
+    if (
+      validationResults.some(
+        (item) =>
+          state.validation_requirements.find(
+            (requirement) => requirement.validation_id === item.validation_id,
+          )?.argv !== null && item.status !== "passed",
+      )
+    ) {
+      fail(
+        "ERROR_INVALID_IMPLEMENTATION",
+        "done implementation requires passed executable validations",
+      );
     }
     if (knownFailures.length > 0) {
       fail("ERROR_INVALID_IMPLEMENTATION", "done implementation has known failures");
@@ -1203,6 +1269,8 @@ export function beginReview(
   }
   exactKeys(input, ["workflow_id", "expected_version"], "review begin");
   ensurePhase(state, "REVIEWING");
+  if (pendingManualValidations(state).length > 0)
+    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
   if (state.review_target.review_mode !== "working_tree") {
     fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
   }
@@ -1232,6 +1300,8 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "review input is invalid");
   }
   ensurePhase(state, "REVIEWING");
+  if (pendingManualValidations(state).length > 0)
+    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
   const args = exactKeys(
     input,
     [
@@ -1509,12 +1579,69 @@ export function authorizeCommit(state: WorkflowState, authorization: unknown): W
     "commit authorization",
   );
   ensurePhase(state, "STOPPED_APPROVED");
+  if (!allRequiredValidationsPassed(state))
+    fail(
+      "ERROR_COMMIT_NOT_ALLOWED",
+      "all required validations must pass before commit authorization",
+    );
   const next = clone<WorkflowState>(state);
   next.commit_authorization = {
     user_authorization: userAuthorization(args.user_authorization),
     authorized_at: isoNow(),
   };
   next.phase = "COMMIT_AUTHORIZED";
+  return next;
+}
+
+export function recordManualValidation(state: WorkflowState, input: unknown): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    fail("ERROR_INVALID_SHAPE", "manual validation input is invalid");
+  const args = exactKeys(
+    input,
+    ["workflow_id", "capability", "expected_version", "validation_id", "status", "evidence"],
+    "manual validation",
+  );
+  ensurePhase(state, "REVIEWING");
+  if (args.status !== "passed" && args.status !== "failed")
+    fail("ERROR_INVALID_SHAPE", "manual validation status is invalid");
+  const validationId = args.validation_id;
+  const requirement = state.validation_requirements.find(
+    (candidate) => candidate.validation_id === validationId,
+  );
+  if (!requirement) fail("ERROR_INVALID_SHAPE", "manual validation ID is unknown");
+  if (requirement.argv !== null)
+    fail("ERROR_INVALID_SHAPE", "validation requirement is executable");
+  const matching = state.validation_results.filter(
+    (result) => result.validation_id === validationId,
+  );
+  if (matching.length > 1)
+    fail("ERROR_INVALID_TRANSITION", "manual validation result is duplicated");
+  const current = matching[0];
+  if (current && current.status !== "not_run")
+    fail("ERROR_INVALID_TRANSITION", "manual validation result is already terminal");
+  const result: ValidationResult = {
+    validation_id: validationId as ValidationResult["validation_id"],
+    status: args.status,
+    evidence: boundedString(args.evidence, "evidence", MAX_DETAIL),
+  };
+  const next = clone<WorkflowState>(state);
+  const existingIndex = next.validation_results.findIndex(
+    (item) => item.validation_id === validationId,
+  );
+  if (existingIndex >= 0) next.validation_results[existingIndex] = result;
+  else {
+    const requirementIndex = state.validation_requirements.findIndex(
+      (item) => item.validation_id === validationId,
+    );
+    const insertAt = next.validation_results.findIndex((item) => {
+      const index = state.validation_requirements.findIndex(
+        (requirement) => requirement.validation_id === item.validation_id,
+      );
+      return index > requirementIndex;
+    });
+    if (insertAt < 0) next.validation_results.push(result);
+    else next.validation_results.splice(insertAt, 0, result);
+  }
   return next;
 }
 
