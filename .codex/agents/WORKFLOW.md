@@ -90,7 +90,13 @@ to retrieve the exact revision, renders authoritative `full_plan` verbatim, and 
 only after explicit user approval. Orchestrator is execution-only: it parent-reads an already-approved
 exact plan identity and calls `workflow_create_from_plan`; it has no plan approval or planner dispatch
 authority. Planner handoffs are bounded routing summaries rather than full plans. Material refinements
-carry the plan identity, exact base revision, and bounded feedback without pasted old plan text.
+carry the plan identity, exact base revision, and bounded feedback without pasted old plan text. When
+the immediately preceding Native Plan handoff unambiguously binds one exact current approved
+PlanArtifact identity, Orchestrator may consume that handoff for execution without asking the operator
+to repeat the identity or revision. It must still parent-read and verify current approval before
+`workflow_create_from_plan`. Generic handoffs, pasted prose, historical or stale artifacts, missing
+identity, and conflicting or ambiguous handoffs fail closed and require bounded semantic clarification;
+conversation memory never binds a plan.
 
 Native Plan is also the mediation boundary for task-source provenance. When a current planning request
 explicitly identifies complete contents of an issue, ticket, specification, design brief, or equivalent
@@ -173,7 +179,18 @@ routing state, or creates a second state machine. It reports automatic `no_user_
 implementation, review, re-review, and commit preparation; exact repair, recovery, bounded linked
 continuation, scope/new-intent, final reconciliation, and commit authorization remain explicit
 boundaries. Raw IDs, phases, actions, audits, capabilities, receipts, and PlanArtifact identity
-remain available only through explicit debug/status reads or exact mutation-input reads.
+remain available only through explicit debug/status reads or exact mutation-input reads. The projection
+is not authorization and does not create a proposal: the parent resolves a concrete safe proposal from
+the projection plus an exact `workflow_parent_get`, presents its consequence and deterministic exact
+repository-relative visible paths, and asks only for a genuine semantic user choice. Natural-language
+responses such as contextual `yes`, `continue`, `go ahead`, and `commit it` are acceptable without a
+magic phrase or `Reply ...` syntax. Negative, ambiguous, unrelated, changed, or stale responses fail
+closed. After affirmative input, the parent re-reads authoritative state, verifies proposal, scope,
+findings, lineage, plan binding, permitted action, capability, and version, then encodes exactly that
+proposal in the existing mutation. No durable proposal state, natural-language parser, or replacement
+authority is added. Ordinary summaries do not expose internal action/phase names or raw action/tool names;
+preserved semantic enum values include `approve_recovery`, `retry_commit`,
+`approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review`.
 
 The projection cannot classify a newly supplied request: the parent compares objective, outcome,
 criteria, and logical-change scope at the input boundary. A material change requires a new bounded

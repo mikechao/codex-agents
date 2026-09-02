@@ -27,6 +27,25 @@ re-review, or the already-authorized commit preparation route. The projection is
 requested workflow and reciprocal explicit linked lineage, and normal text contains semantic
 outcomes rather than raw workflow/plan IDs, phases, actions, audits, capabilities, or receipts.
 
+The operator question is decision-first and asks for a semantic choice. The projection is read-only and not authorization; before
+asking for a mutation, Orchestrator combines it with an exact `workflow_parent_get` read to resolve
+one concrete safe proposal. It presents the consequence and exact repository-relative visible paths
+when deterministic, or bounded semantic alternatives when the paths/objective/recovery choice
+differs. It asks for only the user's genuine choice, never for known IDs, versions, capabilities,
+finding IDs, lineage, contracts, internal action/phase names, or an exact payload. Internal Workflow
+MCP names and phases are not ordinary labels, while existing semantic values such as
+`approve_recovery`, `retry_commit`, `approve_bounded_continuation`, `no_user_action`, `route: review`,
+and `route: re_review` remain valid.
+
+An unambiguous contextual natural-language answer is sufficient: `yes`, `continue`, `go ahead`, and
+`commit it` are examples, not a required incantation, `Reply ...` incantation, or magic phrase.
+Negative, ambiguous, unrelated, changed, or
+stale responses fail closed without mutation. After affirmative input, Orchestrator re-reads
+authoritative state and verifies proposal, scope, findings, lineage, plan binding, permitted action,
+capability, and version before encoding exactly the existing mutation. Conversation memory is never
+a proposal or authority, and no durable proposal state or parser is added. No durable proposal state is
+created by the operator exchange.
+
 Exact repair, concern/context/review recovery, bounded linked continuation, scope expansion and
 changed-intent classification, final reconciliation, and commit authorization remain explicit.
 Orchestrator compares a newly supplied objective, outcome, criteria, and logical-change scope at its
@@ -51,9 +70,12 @@ There are two supported ways to begin implementation:
 2. **Plan -> Orchestrator.** A user runs `/plan <request>` in the built-in Plan primary. Plan
    delegates to `planner`, retrieves the exact plan artifact, renders its `full_plan` verbatim, and
    waits for explicit approval of the exact plan ID/revision. Plan does not create an implementation
-   workflow. The user then switches to Orchestrator, names that exact identity, and says `implement
-   the plan` (or equivalent). Orchestrator parent-verifies it, performs policy preflight, calls
-   `workflow_create_from_plan`, and dispatches the plan-derived workflow to the implementer.
+   workflow. The user then switches to Orchestrator and says `implement the approved plan` (or
+   equivalent). Orchestrator consumes the one exact identity from the immediately preceding approved
+   Native Plan handoff without redundant identity reconfirmation, parent-verifies current approval,
+   performs policy preflight, calls `workflow_create_from_plan`, and dispatches the plan-derived
+   workflow to the implementer. If no single exact identity is bound, Orchestrator asks which
+   semantic plan is intended and never selects historical, stale, or unrelated plan state.
 
 In both paths, the custom Orchestrator primary is the workflow control plane rather than Build.
 OpenCode's built-in Build agent remains available for deliberate ordinary direct coding and receives
@@ -240,8 +262,8 @@ sequenceDiagram
         User->>Plan: Approve exact plan ID/revision
         Plan->>workflow_state: Parent-read and approve exact revision
         Plan-->>User: Exact approved plan ID/revision
-        User->>Orchestrator: implement exact plan ID/revision
-        Note over Plan,Orchestrator: Planning is pre-workflow; Orchestrator does not re-plan or approve.
+        User->>Orchestrator: implement the approved plan
+        Note over Plan,Orchestrator: The immediately preceding exact approved handoff supplies identity; Orchestrator still parent-verifies it and does not re-plan or approve.
     end
     Orchestrator->>GitWorkingTree: Read-only preflight: status and HEAD
     Orchestrator->>workflow_state: Parent-read exact approved plan and policy preflight

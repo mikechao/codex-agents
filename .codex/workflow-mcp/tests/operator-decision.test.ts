@@ -138,10 +138,88 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
     assert.equal(JSON.stringify(first).includes("permitted_next_actions"), false);
+    const serialized = JSON.stringify(first);
+    for (const internal of [
+      id ?? "",
+      "workflow_authorize_commit",
+      "workflow_retry_commit",
+      "STOPPED_APPROVED",
+      "REPAIR_REQUIRED",
+      "capability",
+      "receipt",
+      "audit",
+      "plan_id",
+    ]) {
+      assert.equal(serialized.includes(internal), false, `projection leaked ${internal}`);
+    }
     assert.equal(store.parentGet(id).version, before.version);
     assert.deepEqual(
       store.audit(id, created.capability).map((event) => event.version),
       [0],
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("operator projection preserves semantic decision enums across explicit boundaries", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-semantic-enums.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const created = create(store, git);
+    const base = structuredClone(created.workflow) as any;
+    const repair = structuredClone(base) as any;
+    repair.phase = "REPAIR_REQUIRED";
+    repair.blocking_findings = [finding("BLOCKER-ENUM")];
+    assert.equal(
+      deriveOperatorDecision(repair, [
+        { state: repair, actions: { parent: ["workflow_authorize_repair"] } },
+      ]).primary.kind,
+      "approve_exact_repairs",
+    );
+
+    const concern = structuredClone(base) as any;
+    concern.phase = "STOPPED_CONCERNS";
+    assert.deepEqual(
+      deriveOperatorDecision(concern, [
+        { state: concern, actions: { parent: ["workflow_accept_concerns"] } },
+      ]).primary,
+      { kind: "approve_recovery", recovery: "accept_concerns", authorization_required: true },
+    );
+
+    const retry = structuredClone(base) as any;
+    retry.phase = "STOPPED_NOT_COMMITTED";
+    retry.commit_result = { outcome: "not_committed", failure_summary: "retry" };
+    assert.deepEqual(
+      deriveOperatorDecision(retry, [
+        { state: retry, actions: { parent: ["workflow_retry_commit"] } },
+      ]).primary,
+      { kind: "approve_recovery", recovery: "retry_commit", authorization_required: true },
+    );
+
+    const approved = structuredClone(base) as any;
+    approved.phase = "STOPPED_APPROVED";
+    approved.validation_results = [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }];
+    assert.deepEqual(
+      deriveOperatorDecision(approved, [
+        { state: approved, actions: { parent: ["workflow_authorize_commit"] } },
+      ]).primary,
+      { kind: "approve_commit", authorization_required: true },
+    );
+
+    const exhausted = structuredClone(base) as any;
+    exhausted.phase = "STOPPED_REPAIR_EXHAUSTED";
+    assert.deepEqual(
+      deriveOperatorDecision(exhausted, [
+        { state: exhausted, actions: { parent: ["workflow_create_linked_followup"] } },
+      ]).primary,
+      {
+        kind: "approve_bounded_continuation",
+        reason: "the bounded linked continuation is supported",
+        authorization_required: true,
+      },
     );
   } finally {
     store.close();

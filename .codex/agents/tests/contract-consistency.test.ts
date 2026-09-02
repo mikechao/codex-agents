@@ -508,9 +508,47 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.ok(!content.includes("workflow_state_plan_approve"));
   assert.match(content, /workflow_create_from_plan/);
   assert.match(content, /workflow_create_linked_followup_from_plan/);
-  assert.match(content, /exact `plan_id` and revision/);
+  assert.match(content, /immediately preceding Native Plan handoff/);
+  assert.match(content, /without asking the user to repeat/);
+  assert.match(content, /generic.*pasted prose.*not authority/u);
   assert.match(content, /do not pass pasted plan text/);
   assert.match(content, /never pass or retranscribe its full plan/);
+});
+
+test("orchestrator presents semantic proposals before natural-language authorization", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  const contracts = [orchestrator, workflow, guide];
+
+  for (const contract of contracts) {
+    assert.match(contract, /semantic (?:decisions|choice|user choice)/u);
+    assert.match(contract, /concrete safe proposal/u);
+    assert.match(contract, /exact `workflow_parent_get`/u);
+    assert.match(contract, /consequence/u);
+    assert.match(contract, /exact repository-relative/u);
+    assert.match(contract, /not authorization/u);
+    assert.match(contract, /internal (?:action\/phase|action\/tool) names/u);
+    assert.match(contract, /contextual `yes`|`yes`, `continue`, `go ahead`, and `commit it`/u);
+    assert.match(contract, /`Reply \.\.\.` incantation|magic phrase/u);
+    assert.match(contract, /ambiguous.*fail(?:s)? closed/u);
+    assert.match(contract, /After affirmative input.*re-read/u);
+    assert.match(contract, /[Vv]erif(?:y|ies).*proposal.*scope.*findings.*lineage.*plan binding/u);
+    assert.match(contract, /No durable proposal state/u);
+  }
+
+  const proposal = orchestrator.indexOf("resolve one concrete safe proposal");
+  const question = orchestrator.indexOf("Ask only for the genuine user-owned choice", proposal);
+  const affirmative = orchestrator.indexOf("After affirmative input", question);
+  assert.ok(proposal >= 0 && proposal < question && question < affirmative);
+  assert.match(orchestrator, /negative, ambiguous, unrelated, changed, or stale response/u);
+  assert.match(orchestrator, /without asking the user to repeat its identity or revision/u);
+  assert.match(orchestrator, /generic.*pasted prose.*not authority/u);
+  assert.match(orchestrator, /never choose a historical or unrelated plan/u);
+  assert.match(orchestrator, /workflow_create_from_plan` by identity and supported options only/u);
 });
 
 test("the checked-in native Plan override is canonical and isolated from generated agents", () => {

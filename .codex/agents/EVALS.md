@@ -239,6 +239,30 @@ Workflow MCP state. Restart host sessions after changing policy.
 - Operator intent boundary: an ID-only projection never classifies a newly supplied changed request;
   Orchestrator requires explicit new bounded objective/scope authorization and does not substitute
   repair, path membership, adjudication, or a generic follow-up.
+- Decision-first operator questions: for implementation, fresh review, exact repair, concern/recovery,
+  exhausted continuation, scope expansion, changed intent, reconciliation, and commit decisions,
+  confirm the parent resolves the mechanical mutation inputs from the semantic projection plus an
+  exact parent read, shows the consequence and exact visible repository-relative paths, and asks only
+  for the genuine semantic choice. It must not ask the operator to restate IDs, versions, capabilities,
+  finding IDs, lineage, contracts, internal action/phase names, or exact payloads.
+- Natural-language authorization: answer a displayed concern with casual contextual wording such as
+  “yes, accept it,” answer a commit question with “commit it,” and answer a recovery question with
+  “continue.” Confirm equivalent wording works without a `Reply ...` incantation or canonical sentence;
+  ambiguous, unrelated, negative, changed, or stale answers fail closed and perform no mutation.
+- Exact proposal binding: after affirmative input, confirm the parent re-reads state and verifies the
+  displayed proposal, scope, current findings, lineage, plan binding, permitted action, capability,
+  and version before encoding exactly one existing mutation. Confirm the projection remains read-only,
+  repeated reads are idempotent, and no durable proposal/parser state is introduced.
+- Immediate approved-plan handoff: approve one Native Plan, switch to Orchestrator, and say “implement
+  the approved plan” without repeating the plan ID or revision. Confirm Orchestrator re-reads and
+  verifies the current approval, performs policy preflight, and creates from that exact identity only.
+  Then exercise absent, generic, stale, historical, malformed, or conflicting handoffs and confirm it
+  asks bounded semantic clarification or stops without choosing a plan or creating a workflow.
+- Semantic vocabulary boundary: confirm ordinary summaries do not expose internal Workflow MCP action
+  or phase names, while sanitized values `approve_recovery`, `retry_commit`,
+  `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review` remain
+  unchanged. Exercise deterministic exhaustion, multiple semantic recovery/scope choices, exact repair,
+  recovery retry, and separate commit authorization; optional findings never trigger remediation.
 
 ## Receipt utility
 

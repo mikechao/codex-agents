@@ -109,8 +109,10 @@ current architecture and handoff sequence. Use the normal primary-agent switcher
 to select the built-in Plan mediator or Build for deliberate ordinary direct coding. For a persisted
 non-trivial plan, Plan delegates to generated `planner`, retrieves and renders the exact authoritative
 `full_plan` verbatim, and explicitly approves only after user confirmation; it never creates a
-workflow. Then switch to Orchestrator and name the exact `plan_id` and revision with `implement the
-plan`. Orchestrator performs bounded read-only preflight, parent-verifies the current approved plan,
+workflow. Then switch to Orchestrator and say `implement the approved plan` (or equivalent).
+Orchestrator may consume the one exact identity from the immediately preceding approved Native Plan
+handoff without asking the user to repeat its `plan_id` and revision; it still performs bounded
+read-only preflight and parent-verifies the current approved plan,
 calls `workflow_create_from_plan`, and automatically dispatches `implementer`, `code_reviewer`, and—after
 explicit user commit authorization—`committer`. Worker handoffs contain only the `workflow_id`; each
 role reads authoritative state and its `expected_version` through its dedicated getter. The single
