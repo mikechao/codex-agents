@@ -285,6 +285,10 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
   const planner = opencode("planner.md");
   assert.match(planner, /^mode: subagent$/m);
   assert.match(planner, /^  task:\n    "\*": deny\n    "explorer": allow$/m);
+  assert.deepEqual(
+    [...planner.matchAll(/^  workflow_state_([^:]+): allow$/gmu)].map((match) => match[1]),
+    ["plan_create", "plan_get", "plan_revise"],
+  );
   for (const tool of ["plan_create", "plan_get", "plan_revise"]) {
     assert.match(planner, new RegExp(`^  workflow_state_${tool}: allow$`, "m"));
   }

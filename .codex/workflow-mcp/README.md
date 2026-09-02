@@ -11,8 +11,12 @@ while implementer and reviewer views omit it. It cannot broaden scope, criteria,
 review, or commit authorization. Schema v7 and earlier state requires a clean reset rather than
 implicit migration.
 
-Planning is a separate pre-workflow domain. `plan_create` and `plan_revise` persist complete,
-insert-only PlanArtifact revisions; reads and revisions require exact optimistic revision numbers.
+Planning is a separate pre-workflow domain. The planner surface is exactly `plan_create`, `plan_get`,
+and `plan_revise`. `plan_create` accepts all six complete plan fields; material `plan_revise` calls
+carry exact `plan_id`, `base_revision`, and a required non-empty `replacements` object. The server
+copies omitted fields only from the exact verified base, replaces supplied arrays wholesale, and
+normalizes one complete candidate before persisting an immutable insert-only PlanArtifact revision.
+Reads and revisions require exact optimistic revision numbers; invalid replacement values fail closed.
 The generated planner uses those planner-side operations as the sole plan writer/refiner. Built-in
 OpenCode Plan retrieves exact revisions through the parent `plan_parent_get` surface, presents the
 authoritative `full_plan` verbatim, and explicitly approves with parent-only `plan_approve`. Orchestrator

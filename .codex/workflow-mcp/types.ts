@@ -241,6 +241,16 @@ export interface PlanRevisionArtifact {
   created_at: IsoTimestamp;
 }
 
+/** Caller-selected fields for a bounded copy-forward plan revision. */
+export interface PlanRevisionReplacements {
+  full_plan?: string;
+  execution_brief?: string;
+  objective?: string;
+  approved_paths?: string[];
+  acceptance_criteria?: string[];
+  validation_requirements?: Array<string | { description: string; argv: string[] | null }>;
+}
+
 export interface PlanApproval {
   plan_id: PlanId;
   revision: PlanRevision;

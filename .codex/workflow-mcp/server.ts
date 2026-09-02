@@ -218,6 +218,14 @@ const planRevisionProperties: Record<string, JSONValue> = {
   },
 };
 
+const planRevisionReplacementsSchema: JsonSchema = {
+  type: "object",
+  properties: planRevisionProperties,
+  required: [],
+  additionalProperties: false,
+  minProperties: 1,
+};
+
 const planIdentityProperties: Record<string, JSONValue> = {
   plan_id: {
     type: "string",
@@ -309,9 +317,9 @@ export const toolDefinitions = [
       {
         plan_id: planIdentityProperties.plan_id,
         base_revision: { type: "integer", minimum: 1 },
-        ...planRevisionProperties,
+        replacements: planRevisionReplacementsSchema,
       },
-      ["plan_id", "base_revision", ...Object.keys(planRevisionProperties)],
+      ["plan_id", "base_revision", "replacements"],
     ),
     annotations: {
       title: "Revise plan",

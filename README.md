@@ -45,6 +45,10 @@ paths, acceptance criteria, and validation requirements remain the enforceable w
 plan is visible to the parent and implementer only. Legacy linked follow-ups retain their explicit
 direct contract; plan-native linked follow-ups pass only the exact child plan identity and let the
 server resolve the approved artifact rather than retranscribing or inheriting the source plan.
+Planner refinement uses the existing `plan_revise` operation with only the exact plan identity,
+optimistic base revision, and a non-empty bounded `replacements` object. Omitted fields copy forward
+only from that verified base, arrays are replaced wholesale, and the server persists a complete
+normalized artifact; there is no second complete-replacement revision operation.
 Approved paths are an append-only narrow mutation scope. Linked follow-ups retain that remediation
 allowlist, then require a fresh independent combined review over the inherited logical-change paths
 before commit eligibility; the source is superseded so only the active leaf can commit. In an active

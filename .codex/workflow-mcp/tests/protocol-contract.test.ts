@@ -178,6 +178,27 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     new Set([...PLANNER_PLANNING_OPERATIONS, ...PARENT_PLANNING_OPERATIONS]).size,
     PLANNER_PLANNING_OPERATIONS.length + PARENT_PLANNING_OPERATIONS.length,
   );
+  const revise = tools.find((tool) => tool.name === "plan_revise");
+  assert.ok(revise);
+  const reviseSchema = revise.inputSchema as any;
+  assert.deepEqual(Object.keys(reviseSchema.properties).sort(), [
+    "base_revision",
+    "plan_id",
+    "replacements",
+  ]);
+  assert.deepEqual(reviseSchema.required, ["plan_id", "base_revision", "replacements"]);
+  assert.equal(reviseSchema.additionalProperties, false);
+  assert.equal(reviseSchema.properties.replacements.type, "object");
+  assert.equal(reviseSchema.properties.replacements.additionalProperties, false);
+  assert.equal(reviseSchema.properties.replacements.minProperties, 1);
+  assert.deepEqual(Object.keys(reviseSchema.properties.replacements.properties).sort(), [
+    "acceptance_criteria",
+    "approved_paths",
+    "execution_brief",
+    "full_plan",
+    "objective",
+    "validation_requirements",
+  ]);
   const reconciliationSchema = reconciliation.inputSchema as any;
   assert.deepEqual(Object.keys(reconciliationSchema.properties).sort(), [
     "attempt_id",

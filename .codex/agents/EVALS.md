@@ -363,8 +363,10 @@ contract.
   exact current revision. Confirm stale, historical, malformed, conflicting, and `needs_input` results
   stop without workflow creation, while a revision request follows the planner refinement path.
 - Plan refinement: issue a material refinement and confirm the planner receives the immutable plan ID,
-  exact base revision, and bounded feedback without pasted old plan text, calls `plan_get` before one
-  complete `plan_revise`, and returns a bounded handoff.
+  exact base revision, and bounded feedback without pasted old plan text, calls `plan_get` before the
+  existing `plan_revise` with only a non-empty bounded `replacements` object, and returns a bounded
+  handoff. Confirm omitted fields copy only from the exact base, arrays replace wholesale, and reads
+  show one complete immutable normalized artifact.
 - Plan -> Orchestrator execution: after Plan explicitly approves, switch to Orchestrator and name the
   exact plan ID/revision as a separate, explicitly named execution step. Confirm Plan does not create a
   workflow, while Orchestrator parent-reads the exact current approved revision, performs policy

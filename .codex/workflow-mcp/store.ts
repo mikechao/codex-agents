@@ -114,6 +114,8 @@ import {
   planId,
   planRevision,
   planRevisionInput,
+  planRevisionInputFromArtifact,
+  planRevisionReplacements,
   repairCycle,
   userAuthorization,
   workItems,
@@ -1223,33 +1225,10 @@ export class WorkflowStore {
   planRevise(input: unknown): PlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
-    exactKeys(
-      args,
-      [
-        "plan_id",
-        "base_revision",
-        "full_plan",
-        "execution_brief",
-        "objective",
-        "approved_paths",
-        "acceptance_criteria",
-        "validation_requirements",
-      ],
-      "plan revise",
-    );
+    exactKeys(args, ["plan_id", "base_revision", "replacements"], "plan revise");
     const base = planRevision(args.base_revision, "base_revision");
     const id = planId(args.plan_id);
-    const normalized = planRevisionInput(
-      {
-        full_plan: args.full_plan,
-        execution_brief: args.execution_brief,
-        objective: args.objective,
-        approved_paths: args.approved_paths,
-        acceptance_criteria: args.acceptance_criteria,
-        validation_requirements: args.validation_requirements,
-      },
-      this.root,
-    );
+    const replacements = planRevisionReplacements(args.replacements);
     return this.db
       .transaction(() => {
         const plan = this.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
@@ -1259,6 +1238,10 @@ export class WorkflowStore {
         if (plan.current_revision !== base)
           fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
         const current = this.#planRevision(id, base);
+        const normalized = planRevisionInput(
+          { ...planRevisionInputFromArtifact(current.artifact), ...replacements },
+          this.root,
+        );
         if (
           canonicalJson(planRevisionContent(current.artifact)) ===
           canonicalJson(planRevisionContent(normalized))

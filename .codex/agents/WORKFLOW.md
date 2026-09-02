@@ -85,7 +85,10 @@ only to the generated `planner`. The planner never dispatches an `explorer` dire
 zero to four disposable read-only explorers, with no recursive fan-out. Explorer findings, transcripts,
 counts, retries, and lifecycle bookkeeping remain in planner context and are never persisted in
 Workflow MCP or plan artifacts. The planner is the sole complete plan writer/refiner through exactly
-`plan_create`, `plan_get`, and `plan_revise`. Built-in Plan uses the parent surface `plan_parent_get`
+`plan_create`, `plan_get`, and `plan_revise`. Material refinement uses the exact plan identity and
+base revision plus a required non-empty bounded `replacements` object; the server copies omissions
+only from the verified base and replaces arrays wholesale before normalizing one complete candidate.
+Built-in Plan uses the parent surface `plan_parent_get`
 to retrieve the exact revision, renders authoritative `full_plan` verbatim, and calls `plan_approve`
 only after explicit user approval. Orchestrator is execution-only: it parent-reads an already-approved
 exact plan identity and calls `workflow_create_from_plan`; it has no plan approval or planner dispatch

@@ -94,6 +94,12 @@ scope, or validation authority. Before `ready_for_approval`, each executable val
 match `.codex/reviewer-validation.json` by exact array equality. A missing or mismatched policy stops
 planning rather than guessing.
 
+Material plan refinement uses the existing `plan_revise` operation with exactly the plan ID, exact
+optimistic base revision, and a required non-empty bounded `replacements` object. The server copies
+omitted fields only from the exact verified base artifact, replaces each supplied array wholesale,
+and validates/normalizes a complete candidate before inserting one immutable revision. Invalid,
+unknown, null, or empty replacements fail closed; no second complete-replacement operation exists.
+
 For Plan -> Orchestrator execution, `workflow_create_from_plan` receives only the exact approved
 plan ID/revision and supported creation options; the server copies immutable `approved_plan` and
 provenance from the authoritative artifact. Orchestrator must not summarize or reconstruct it.

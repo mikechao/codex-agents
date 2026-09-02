@@ -15,9 +15,18 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
 - Use only the host-provided `workflow_state_plan_create`, `workflow_state_plan_get`, and
   `workflow_state_plan_revise` operations. These are the exactly three planner MCP operations. Do
   not call parent-only planning or workflow operations, and do not use an alternate transport.
-- A plan revision is complete and insert-only. Submit one full revision with its objective, full
-  plan, bounded execution brief, exact implementation and verification paths, acceptance criteria,
-  and a serial validation contract. Never approve a revision or create a workflow.
+- A plan revision is complete and insert-only. The planner surface is exactly the three operations
+  `plan_create`, `plan_get`, and `plan_revise`; there is no separate complete-replacement revision
+  operation. Create with all six plan content fields, but refine through `plan_revise` using only
+  `plan_id`, the exact `base_revision`, and a required non-empty `replacements` object containing
+  any subset of `full_plan`, `execution_brief`, `objective`, `approved_paths`,
+  `acceptance_criteria`, and `validation_requirements`.
+- For refinement, call `plan_get` first. The server copies omitted fields only from that exact
+  verified base artifact, replaces supplied arrays as whole arrays (not merges), validates and
+  normalizes one complete candidate, and persists one complete immutable revision. Invalid or
+  unknown/null/empty replacement values fail closed; do not paste or retransmit unchanged plan
+  content, and do not use a generic merge or text patch. Never approve a revision or create a
+  workflow.
 - The ordinary transient `PlannerHandoff` contains only `plan_id`, revision, status
   (`ready_for_approval` or `needs_input`), a concise summary, and at most 10 questions and 10 risks.
   Do not put the full plan, execution brief, policy body, transcripts, explorer bookkeeping, or
@@ -34,7 +43,7 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
 - For refinement, accept only the exact `plan_id`, exact current base revision, and bounded answer or
   context supplied by the parent. Call `plan_get` first with that exact identity and revision. Only
   after the artifact is present, complete, current, and the answer/context is sufficient may you call
-  `plan_revise` with one complete replacement revision. Missing, stale, malformed, contradictory, or
+  `plan_revise` with a non-empty bounded `replacements` object. Missing, stale, malformed, contradictory, or
   ambiguous identity/base/answer context fails closed without revising or guessing. A sufficient
   answer may inform replacement plan content but grants no approval, validation-policy, scope,
   workflow, repair, reconciliation, commit, or execution authority.

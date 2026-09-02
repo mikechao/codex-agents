@@ -23,6 +23,7 @@ import type {
   PlanId,
   PlanRevision,
   PlanRevisionArtifact,
+  PlanRevisionReplacements,
   ReviewFinding,
   Role,
   StateDigest,
@@ -229,6 +230,51 @@ export function planRevisionInput(
     approved_paths: approvedPaths,
     acceptance_criteria: acceptanceCriteria,
     validation_requirements: validationRequirements,
+  };
+}
+
+const PLAN_REVISION_REPLACEMENT_KEYS = [
+  "full_plan",
+  "execution_brief",
+  "objective",
+  "approved_paths",
+  "acceptance_criteria",
+  "validation_requirements",
+] as const satisfies readonly (keyof PlanRevisionReplacements)[];
+
+/** Validate the closed, non-empty shallow replacement envelope before a transaction starts. */
+export function planRevisionReplacements(value: unknown): PlanRevisionReplacements {
+  const record = exactKeys(value, [], "plan revision replacements", PLAN_REVISION_REPLACEMENT_KEYS);
+  if (Object.keys(record).length === 0) {
+    fail("ERROR_INVALID_SHAPE", "plan revision replacements must not be empty");
+  }
+  for (const key of PLAN_REVISION_REPLACEMENT_KEYS) {
+    if (Object.hasOwn(record, key) && (record[key] === null || record[key] === undefined)) {
+      fail("ERROR_INVALID_SHAPE", `${key} replacement is invalid`);
+    }
+  }
+  return record as PlanRevisionReplacements;
+}
+
+/** Convert a normalized persisted artifact into the complete raw input shape used by validation. */
+export function planRevisionInputFromArtifact(artifact: PlanRevisionArtifact): {
+  full_plan: string;
+  execution_brief: string;
+  objective: string;
+  approved_paths: ExactRepoPath[];
+  acceptance_criteria: string[];
+  validation_requirements: Array<{ description: string; argv: string[] | null }>;
+} {
+  return {
+    full_plan: artifact.full_plan,
+    execution_brief: artifact.execution_brief,
+    objective: artifact.objective,
+    approved_paths: artifact.approved_paths,
+    acceptance_criteria: artifact.acceptance_criteria.map((item) => item.description),
+    validation_requirements: artifact.validation_requirements.map((item) => ({
+      description: item.description,
+      argv: item.argv,
+    })),
   };
 }
 

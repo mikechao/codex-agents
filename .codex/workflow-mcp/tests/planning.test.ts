@@ -131,17 +131,25 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   disposeFixture(target.root);
 });
 
-test("plan revisions are complete replacements and stale revisions fail closed", () => {
+test("plan revisions copy forward omitted fields and stale revisions fail closed", () => {
   const target = fixture();
   const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
   const draft = store.planCreate(revisionInput());
   const revised = store.planRevise({
     plan_id: draft.plan_id,
     base_revision: 1,
-    ...revisionInput(),
-    full_plan: "replacement plan",
+    replacements: { full_plan: "replacement plan" },
   });
   assert.equal(revised.revision, 2);
+  assert.equal(revised.execution_brief, revisionInput().execution_brief);
+  assert.equal(revised.objective, revisionInput().objective);
+  assert.deepEqual(revised.approved_paths, ["note.txt"]);
+  assert.deepEqual(revised.acceptance_criteria, [
+    { criterion_id: "AC-001", description: "the plan is preserved" },
+  ]);
+  assert.deepEqual(revised.validation_requirements, [
+    { validation_id: "VAL-001", description: "bun run check", argv: null },
+  ]);
   assert.equal(
     store.planGet({ plan_id: draft.plan_id, revision: 1 }).full_plan,
     revisionInput().full_plan,
@@ -154,7 +162,11 @@ test("plan revisions are complete replacements and stale revisions fail closed",
   );
   assert.equal(
     category(() =>
-      store.planRevise({ plan_id: draft.plan_id, base_revision: 1, ...revisionInput() }),
+      store.planRevise({
+        plan_id: draft.plan_id,
+        base_revision: 1,
+        replacements: { full_plan: revisionInput().full_plan },
+      }),
     ),
     "ERROR_VERSION_CONFLICT",
   );
@@ -164,6 +176,73 @@ test("plan revisions are complete replacements and stale revisions fail closed",
   );
   store.close();
   disposeFixture(target.root);
+});
+
+test("bounded revisions replace arrays wholesale and reject invalid envelopes atomically", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    const revised = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: 1,
+      replacements: {
+        full_plan: "all fields",
+        execution_brief: "all fields brief",
+        objective: "all fields objective",
+        approved_paths: ["z.txt", "a.txt"],
+        acceptance_criteria: ["first", "second"],
+        validation_requirements: [{ description: "executable", argv: ["bun", "run", "check"] }],
+      },
+    });
+    assert.deepEqual(revised.approved_paths, ["a.txt", "z.txt"]);
+    assert.deepEqual(revised.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "first" },
+      { criterion_id: "AC-002", description: "second" },
+    ]);
+    assert.deepEqual(revised.validation_requirements, [
+      { validation_id: "VAL-001", description: "executable", argv: ["bun", "run", "check"] },
+    ]);
+
+    const before = store.db
+      .prepare("SELECT current_revision FROM plans WHERE plan_id = ?")
+      .get(draft.plan_id).current_revision;
+    const invalidReplacements: Array<[Record<string, unknown>, string]> = [
+      [{ unknown: "value" }, "ERROR_INVALID_SHAPE"],
+      [{}, "ERROR_INVALID_SHAPE"],
+      [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
+      [{ objective: undefined }, "ERROR_INVALID_SHAPE"],
+      [{ approved_paths: [] }, "ERROR_INVALID_PATHS"],
+      [{ validation_requirements: [{ description: "bad argv", argv: [] }] }, "ERROR_INVALID_SHAPE"],
+    ];
+    for (const [replacements, expectedCategory] of invalidReplacements) {
+      assert.equal(
+        category(() =>
+          store.planRevise({
+            plan_id: draft.plan_id,
+            base_revision: before,
+            replacements,
+          }),
+        ),
+        expectedCategory,
+      );
+      assert.equal(
+        store.db.prepare("SELECT current_revision FROM plans WHERE plan_id = ?").get(draft.plan_id)
+          .current_revision,
+        before,
+      );
+    }
+    const corrected = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: before,
+      replacements: { full_plan: "corrected" },
+    });
+    assert.equal(corrected.revision, before + 1);
+    assert.equal(corrected.execution_brief, revised.execution_brief);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
 });
 
 test("identical current plan revisions are persisted no-ops", () => {
@@ -182,7 +261,7 @@ test("identical current plan revisions are persisted no-ops", () => {
     const unchanged = store.planRevise({
       plan_id: draft.plan_id,
       base_revision: 1,
-      ...revisionInput(),
+      replacements: { full_plan: revisionInput().full_plan },
     });
 
     assert.equal(unchanged.revision, 1);
@@ -230,7 +309,7 @@ test("identical approved current revisions preserve approval and plan provenance
     const unchanged = store.planRevise({
       plan_id: draft.plan_id,
       base_revision: 1,
-      ...revisionInput(),
+      replacements: { full_plan: revisionInput().full_plan },
     });
 
     assert.equal(unchanged.revision, 1);
@@ -289,8 +368,7 @@ test("material revisions advance once and identical stale revisions fail without
     const revised = store.planRevise({
       plan_id: draft.plan_id,
       base_revision: 1,
-      ...revisionInput(),
-      full_plan: "replacement plan",
+      replacements: { full_plan: "replacement plan" },
     });
     assert.equal(revised.revision, 2);
     assert.equal(revised.metadata.current_revision, 2);
@@ -324,8 +402,7 @@ test("material revisions advance once and identical stale revisions fail without
         store.planRevise({
           plan_id: draft.plan_id,
           base_revision: 1,
-          ...revisionInput(),
-          full_plan: "replacement plan",
+          replacements: { full_plan: "replacement plan" },
         }),
       ),
       "ERROR_VERSION_CONFLICT",

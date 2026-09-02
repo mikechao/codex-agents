@@ -216,14 +216,45 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
     const revised = await call("plan_revise", {
       plan_id: draft.plan_id,
       base_revision: 1,
-      full_plan: "replacement full plan",
-      execution_brief: "replacement brief",
-      objective: "stdio planning revised",
-      approved_paths: ["note.txt"],
-      acceptance_criteria: ["replacement survives"],
-      validation_requirements: ["manual replacement"],
+      replacements: {
+        full_plan: "replacement full plan",
+        execution_brief: "replacement brief",
+        objective: "stdio planning revised",
+        approved_paths: ["note.txt"],
+        acceptance_criteria: ["replacement survives"],
+        validation_requirements: ["manual replacement"],
+      },
     });
     assert.equal(revised.revision, 2);
+    for (const [replacements, category] of [
+      [{}, "ERROR_INVALID_SHAPE"],
+      [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
+      [{ unknown: "value" }, "ERROR_INVALID_SHAPE"],
+    ] as const) {
+      const invalid = await client.callTool({
+        name: "plan_revise",
+        arguments: { plan_id: draft.plan_id, base_revision: 2, replacements },
+      });
+      assert.equal(invalid.isError, true);
+      assert.equal(JSON.parse((invalid.content[0] as { text: string }).text).category, category);
+    }
+    const staleNoop = await client.callTool({
+      name: "plan_revise",
+      arguments: {
+        plan_id: draft.plan_id,
+        base_revision: 1,
+        replacements: { full_plan: "full plan text" },
+      },
+    });
+    assert.equal(staleNoop.isError, true);
+    assert.equal(
+      JSON.parse((staleNoop.content[0] as { text: string }).text).category,
+      "ERROR_VERSION_CONFLICT",
+    );
+    assert.equal(
+      (await call("plan_get", { plan_id: draft.plan_id, revision: 2 })).full_plan,
+      "replacement full plan",
+    );
     assert.equal(
       (await call("plan_get", { plan_id: draft.plan_id, revision: 1 })).full_plan,
       "full plan text",
