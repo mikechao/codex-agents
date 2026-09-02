@@ -41,6 +41,12 @@ async function start(root: string, diagnostics = false) {
     const result = await client.callTool({ name, arguments: arguments_ });
     const body = JSON.parse((result.content[0] as { text: string }).text);
     if (result.isError) throw new Error(`${name}: ${body.category}`);
+    if (
+      name === "workflow_create" ||
+      name === "workflow_create_from_plan" ||
+      name.startsWith("workflow_create_linked")
+    )
+      Object.defineProperty(body, "workflow", { value: body, enumerable: false });
     return body;
   };
   return { client, transport, call };
@@ -99,7 +105,7 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
     }
     const created = await call("workflow_create", createArgs(git));
     const id = created.workflow.workflow_id;
-    assert.equal(typeof created.capability, "string");
+    assert.equal("capability" in created, false);
     assert.equal("capabilities" in created, false);
     assert.equal(
       (await call("workflow_implementer_get", { workflow_id: id })).phase,
@@ -270,7 +276,7 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       revision: 2,
       work_items: [],
     });
-    assert.equal(created.workflow.approved_plan, "replacement full plan");
+    assert.equal(created.approved_plan, "replacement full plan");
     assert.equal(created.workflow.execution_brief, "replacement brief");
     assert.equal(created.workflow.objective, "stdio planning revised");
     assert.equal(created.workflow.plan_provenance.revision, 2);
@@ -308,11 +314,11 @@ test("STDIO role routing is exact and parent authorization remains protected", a
     assert.equal(denied.isError, true);
     assert.equal(
       JSON.parse((denied.content[0] as { text: string }).text).category,
-      "ERROR_CAPABILITY_DENIED",
+      "ERROR_INVALID_SHAPE",
     );
     const malformed = await client.callTool({
       name: "workflow_submit_implementation",
-      arguments: { ...implementation(first.workflow.workflow_id, 0), capability: first.capability },
+      arguments: { ...implementation(first.workflow.workflow_id, 0), capability: "legacy-bearer" },
     });
     assert.equal(malformed.isError, true);
     assert.equal(

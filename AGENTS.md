@@ -75,7 +75,7 @@ for scenarios actually executed.
 
 The local STDIO server under `.codex/workflow-mcp/` is developer tooling. It must remain
 repository-local, emit no non-protocol output on stdout, preserve append-only workflow audit
-history, and keep parent capability authentication and optimistic version checks intact. Runtime SQLite state
+history, and keep runtime-bound parent authority and optimistic version checks intact. Runtime SQLite state
 belongs outside the repository by default; tests may override its location explicitly.
 
 `.codex/reviewer-validation.json` is authoritative for executable validation: every command must

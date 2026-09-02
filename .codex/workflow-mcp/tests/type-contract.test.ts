@@ -144,11 +144,6 @@ function _compileBrandedCorrelation(): void {
   const unvalidatedWorkflowVersion: WorkflowVersion = parentMutation.expected_version;
   void unvalidatedWorkflowId;
   void unvalidatedWorkflowVersion;
-  const parentCapability: unknown = parentMutation.capability;
-  void parentCapability;
-  // @ts-expect-error raw parent capability requires authoritative validation
-  const unvalidatedCapability: string = parentMutation.capability;
-  void unvalidatedCapability;
   // @ts-expect-error worker mutations intentionally carry no parent capability
   workerMutation.capability;
 

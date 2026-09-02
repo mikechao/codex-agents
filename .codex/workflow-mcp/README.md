@@ -129,10 +129,9 @@ cache publication. The supervisor persists the returned `runtime_id` plus commit
 revision on every new workflow. A provider commit never hot-swaps an already running child; after a
 host restart the new default artifact is promoted for new workflows while affinity routes existing
 workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
-with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as capability or receipt errors.
+with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as receipt errors.
 
-The store is the runtime-ownership enforcement boundary. After parent capability authentication for
-control-plane operations, an
+The store is the runtime-ownership enforcement boundary. Parent control-plane operations are
 affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
 and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner and which has a valid ephemeral
 `WORKFLOW_MCP_RUNTIME_ATTESTATION`/nonce pair signed with the private key stored in the immutable
@@ -166,12 +165,13 @@ they invoke the provider server directly and do not persist runtime affinity.
 
 ## Authoritative role views
 
-The parent creates a workflow and receives one parent capability. Delegation passes workers only the
-exact `workflow_id`; each worker first calls its dedicated capability-free getter
+The parent creates a workflow without receiving a bearer. Delegation passes workers only the exact
+`workflow_id`; each worker first calls its dedicated capability-free getter
 (`workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`). The returned view
 is the authoritative least-authority projection for that role and carries the role's full handoff and
 its sorted `permitted_next_actions`; prompts carry no duplicated objective, criteria, evidence, finding,
-receipt, or repair state. Only the parent capability is stored as a SHA-256 hash. If the server is
+receipt, or repair state. Parent authority is supplied by exact runtime ownership and launch
+attestation. If the server is
 unavailable for non-trivial work, the parent must ask the user before using the documented prompt-only
 degraded mode.
 
@@ -263,6 +263,9 @@ Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
 startup never performs implicit schema upgrades or row rewrites. Current workflows always use
 `workflow_prepare_commit` plus `workflow_submit_commit_result` after commit authorization.
+The parent bearer capability column from pre-change databases is intentionally absent from the
+current table; such databases are an incompatible clean break and require reset rather than
+backfill or row rewriting.
 
 The current state stores `approved_plan` exactly in the JSON state: Plan-mode execution supplies the
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
@@ -291,5 +294,5 @@ Before reload, fail closed for non-trivial work and ask whether the user wants p
 degraded mode. After reload, the parent may use MCP as authoritative only when the tools and
 instructions are visible. `default_tools_approval_mode = "prompt"` keeps workflow tool calls
 approval-sensitive in Codex; OpenCode agents instead gate the same tools per role through
-permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces the parent capability
+permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces the runtime boundary
 and versions for both hosts.

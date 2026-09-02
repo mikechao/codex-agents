@@ -79,7 +79,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
       manualValidation &&
       linkedFromPlan,
   );
-  assert.match(create.description ?? "", /one parent capability/u);
+  assert.match(create.description ?? "", /return the parent view/u);
   assert.equal((create.description ?? "").includes("role capabilities"), false);
   assert.equal(protocolInstructions.includes("workflow_get"), false);
   assert.equal(protocolInstructions.includes("role capability"), false);
@@ -87,7 +87,6 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.match(protocolInstructions, /exact child plan identity only/);
   const adjudicationSchema = adjudication.inputSchema as any;
   assert.deepEqual(Object.keys(adjudicationSchema.properties).sort(), [
-    "capability",
     "expected_version",
     "findings",
     "user_authorization",
@@ -128,7 +127,6 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   ]);
   assert.deepEqual(Object.keys(beginSchema.properties).sort(), ["expected_version", "workflow_id"]);
   assert.deepEqual(Object.keys(manualValidationSchema.properties).sort(), [
-    "capability",
     "evidence",
     "expected_version",
     "status",
@@ -150,7 +148,6 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const expansionSchema = expansion.inputSchema as any;
   assert.deepEqual(Object.keys(expansionSchema.properties).sort(), [
     "added_paths",
-    "capability",
     "expected_version",
     "reason",
     "user_authorization",
@@ -160,7 +157,6 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.deepEqual(Object.keys(adoptionSchema.properties).sort(), [
     "added_paths",
     "adopted_paths",
-    "capability",
     "expected_version",
     "reason",
     "user_authorization",
@@ -202,13 +198,11 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   const reconciliationSchema = reconciliation.inputSchema as any;
   assert.deepEqual(Object.keys(reconciliationSchema.properties).sort(), [
     "attempt_id",
-    "capability",
     "expected_version",
     "workflow_id",
   ]);
   const linkedFromPlanSchema = linkedFromPlan.inputSchema as any;
   assert.deepEqual(Object.keys(linkedFromPlanSchema.properties).sort(), [
-    "capability",
     "expected_version",
     "finding_ids",
     "plan_id",

@@ -43,7 +43,7 @@ test("operator projection requests parent-owned manual evidence before review", 
       { description: "executable", argv: ["bun", "run", "check"] },
       { description: "manual inspection", argv: null },
     ]);
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     store.submitImplementation({
       workflow_id: id,
       expected_version: 0,
@@ -65,7 +65,6 @@ test("operator projection requests parent-owned manual evidence before review", 
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
     store.recordManualValidation({
       workflow_id: id,
-      capability: created.capability,
       expected_version: 1,
       validation_id: "VAL-002",
       status: "passed",
@@ -94,7 +93,7 @@ test("operator projection never offers commit for incomplete or failed validatio
       [{ validation_id: "VAL-001", status: "not_run", evidence: "pending" }],
       [{ validation_id: "VAL-001", status: "failed", evidence: "failed" }],
     ]) {
-      const approved = structuredClone(created.workflow) as any;
+      const approved = structuredClone(created) as any;
       approved.phase = "STOPPED_APPROVED";
       approved.validation_results = validationResults;
       const decision = deriveOperatorDecision(approved, [
@@ -129,7 +128,7 @@ test("operator projection routes implementation and is read-only and sanitized",
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const before = store.parentGet(id);
     const first = store.operatorDecisionGet(id);
     const second = store.operatorDecisionGet(id);
@@ -154,7 +153,7 @@ test("operator projection routes implementation and is read-only and sanitized",
     }
     assert.equal(store.parentGet(id).version, before.version);
     assert.deepEqual(
-      store.audit(id, created.capability).map((event) => event.version),
+      store.audit(id).map((event) => event.version),
       [0],
     );
   } finally {
@@ -169,7 +168,7 @@ test("operator projection preserves semantic decision enums across explicit boun
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const base = structuredClone(created.workflow) as any;
+    const base = structuredClone(created) as any;
     const repair = structuredClone(base) as any;
     repair.phase = "REPAIR_REQUIRED";
     repair.blocking_findings = [finding("BLOCKER-ENUM")];
@@ -233,7 +232,7 @@ test("operator projection routes a fresh review without treating retained blocke
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     store.submitImplementation({
       workflow_id: id,
       expected_version: 0,
@@ -260,12 +259,12 @@ test("operator projection distinguishes review-only and completed review refresh
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const reviewOnly = create(store, git, "review_only");
-    assert.deepEqual(store.operatorDecisionGet(reviewOnly.workflow.workflow_id).primary, {
+    assert.deepEqual(store.operatorDecisionGet(reviewOnly.workflow_id).primary, {
       kind: "no_user_action",
       route: "review",
     });
 
-    const reviewed = structuredClone(reviewOnly.workflow) as any;
+    const reviewed = structuredClone(reviewOnly) as any;
     reviewed.review_result_version = 1;
     reviewed.review_start_receipt = null;
     reviewed.phase = "REVIEWING";
@@ -288,7 +287,7 @@ test("operator projection finalizes rather than authorizes repair at the cycle l
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const exhaustedReview = structuredClone(created.workflow) as any;
+    const exhaustedReview = structuredClone(created) as any;
     exhaustedReview.phase = "REPAIR_REQUIRED";
     exhaustedReview.repair_cycle = 1;
     exhaustedReview.max_repair_cycles = 1;
@@ -326,7 +325,7 @@ test("operator projection includes sanitized optional findings and recovery summ
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const approved = structuredClone(created.workflow) as any;
+    const approved = structuredClone(created) as any;
     approved.phase = "STOPPED_APPROVED";
     approved.optional_findings = [
       {
@@ -345,7 +344,7 @@ test("operator projection includes sanitized optional findings and recovery summ
     assert.ok(approvalDecision.optional_findings[0].summary.length <= 240);
     assert.equal(JSON.stringify(approvalDecision).includes("OPTIONAL-1"), false);
 
-    const stopped = structuredClone(created.workflow) as any;
+    const stopped = structuredClone(created) as any;
     stopped.phase = "STOPPED_INCONCLUSIVE";
     stopped.stop_context = {
       status: "INCONCLUSIVE",
@@ -377,7 +376,7 @@ test("operator projection summarizes commit failure and keeps verification misma
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git);
-    const notCommitted = structuredClone(created.workflow) as any;
+    const notCommitted = structuredClone(created) as any;
     notCommitted.phase = "STOPPED_NOT_COMMITTED";
     notCommitted.commit_result = {
       outcome: "not_committed",
@@ -397,7 +396,7 @@ test("operator projection summarizes commit failure and keeps verification misma
     assert.ok((failureDecision.recovery_summary.stop_reason?.length ?? 0) <= 240);
     assert.equal(failureDecision.recovery_summary.stop_reason?.includes("  "), false);
 
-    const mismatch = structuredClone(created.workflow) as any;
+    const mismatch = structuredClone(created) as any;
     mismatch.phase = "STOPPED_COMMIT_MISMATCH";
     mismatch.commit_result = {
       outcome: "mismatch",
@@ -422,7 +421,7 @@ test("operator projection summarizes commit failure and keeps verification misma
 
 function linkedStates(store: WorkflowStore, git: (...args: string[]) => string) {
   const created = create(store, git);
-  const root = structuredClone(created.workflow) as any;
+  const root = structuredClone(created) as any;
   const child = structuredClone(root) as any;
   const rootId = root.workflow_id;
   const childId = "child-workflow";

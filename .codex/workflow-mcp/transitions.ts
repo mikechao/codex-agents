@@ -216,14 +216,7 @@ function scopeExpansion(
   }
   const args = exactKeys(
     input,
-    [
-      "workflow_id",
-      "capability",
-      "expected_version",
-      "added_paths",
-      "reason",
-      "user_authorization",
-    ],
+    ["workflow_id", "expected_version", "added_paths", "reason", "user_authorization"],
     "scope expansion",
   );
   ensurePhase(
@@ -1183,7 +1176,7 @@ export function adoptDirtyScope(
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "reason", "user_authorization"],
+    ["workflow_id", "expected_version", "reason", "user_authorization"],
     "dirty scope adoption",
     ["added_paths", "adopted_paths"],
   );
@@ -1233,7 +1226,7 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "resume_context"],
+    ["workflow_id", "expected_version", "resume_context"],
     "implementation resume",
   );
   ensurePhase(state, "STOPPED_NEEDS_CONTEXT", "STOPPED_IMPLEMENTATION_BLOCKED");
@@ -1258,7 +1251,7 @@ export function acceptConcerns(state: WorkflowState, input: unknown): WorkflowSt
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "user_authorization"],
+    ["workflow_id", "expected_version", "user_authorization"],
     "concern acceptance",
   );
   ensurePhase(state, "STOPPED_CONCERNS");
@@ -1509,7 +1502,7 @@ export function adjudicateFindings(state: WorkflowState, input: unknown): Workfl
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "findings", "user_authorization"],
+    ["workflow_id", "expected_version", "findings", "user_authorization"],
     "finding adjudication",
   );
   ensurePhase(state, "REPAIR_REQUIRED");
@@ -1574,7 +1567,7 @@ export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowS
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "finding_ids"],
+    ["workflow_id", "expected_version", "finding_ids"],
     "repair authorization",
   );
   ensurePhase(state, "REPAIR_REQUIRED");
@@ -1602,7 +1595,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "resume_context"],
+    ["workflow_id", "expected_version", "resume_context"],
     "review resume",
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
@@ -1618,7 +1611,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
 }
 
 export function finalizeRepairExhausted(state: WorkflowState, input: unknown): WorkflowState {
-  exactKeys(input, ["workflow_id", "capability", "expected_version"], "repair exhaustion");
+  exactKeys(input, ["workflow_id", "expected_version"], "repair exhaustion");
   ensurePhase(state, "REPAIR_REQUIRED");
   if (effectiveBlockingFindings(state).length === 0)
     fail("ERROR_INVALID_REPAIR", "no effective blockers remain");
@@ -1635,7 +1628,7 @@ export function authorizeCommit(state: WorkflowState, authorization: unknown): W
   }
   const args = exactKeys(
     authorization,
-    ["workflow_id", "capability", "expected_version", "user_authorization"],
+    ["workflow_id", "expected_version", "user_authorization"],
     "commit authorization",
   );
   ensurePhase(state, "STOPPED_APPROVED");
@@ -1658,7 +1651,7 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     fail("ERROR_INVALID_SHAPE", "manual validation input is invalid");
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "validation_id", "status", "evidence"],
+    ["workflow_id", "expected_version", "validation_id", "status", "evidence"],
     "manual validation",
   );
   ensurePhase(state, "REVIEWING");
@@ -1766,7 +1759,7 @@ export function retryCommitPreparation(state: WorkflowState, input: unknown): Wo
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "retry_context"],
+    ["workflow_id", "expected_version", "retry_context"],
     "commit preparation retry",
   );
   ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
@@ -1793,7 +1786,7 @@ export function returnCommitToReview(state: WorkflowState, input: unknown): Work
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "review_context"],
+    ["workflow_id", "expected_version", "review_context"],
     "commit review recovery",
   );
   ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
@@ -1885,7 +1878,7 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "capability", "expected_version", "retry_context"],
+    ["workflow_id", "expected_version", "retry_context"],
     "commit retry",
   );
   ensurePhase(state, "STOPPED_NOT_COMMITTED");
@@ -1937,7 +1930,6 @@ export function linkedFollowupInput(
     input,
     [
       "workflow_id",
-      "capability",
       "expected_version",
       "objective",
       "approved_plan",
@@ -1978,15 +1970,7 @@ export function linkedFollowupInputFromPlan(
   }
   const args = exactKeys(
     input,
-    [
-      "workflow_id",
-      "capability",
-      "expected_version",
-      "plan_id",
-      "revision",
-      "finding_ids",
-      "user_authorization",
-    ],
+    ["workflow_id", "expected_version", "plan_id", "revision", "finding_ids", "user_authorization"],
     "plan linked follow-up",
   );
   if (args.plan_id !== artifact.plan_id || args.revision !== artifact.revision) {

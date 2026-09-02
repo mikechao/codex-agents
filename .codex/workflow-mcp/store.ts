@@ -81,7 +81,6 @@ import type {
   GitCommitSha,
   IsoTimestamp,
   OperatorDecision,
-  ParentCapability,
   ParentView,
   PlanApproval,
   PlanId,
@@ -101,13 +100,10 @@ import type {
 } from "./types.js";
 import {
   canonicalJson,
-  compareCapability,
   exactKeys,
   exactPaths,
   expectedVersion,
-  hashCapability,
   isoNow,
-  issueCapability,
   objectDigest,
   planApproval,
   planArtifact,
@@ -231,7 +227,6 @@ function mutationInput(value: unknown): Record<string, unknown> {
 /** Raw pre-routing envelopes. Runtime validation remains at the established mutation/transition boundary. */
 export interface RawParentMutation {
   workflow_id?: unknown;
-  capability?: unknown;
   expected_version?: unknown;
 }
 
@@ -304,7 +299,22 @@ type ReviewFields = RawMutationRecord & RawReviewSubmissionMutation;
 type CommitResultFields = RawMutationRecord & RawCommitResultMutation;
 
 function parentMutation(value: unknown): ParentFields {
-  return mutationInput(value);
+  const input = mutationInput(value);
+  // Do not accept a model-authored bearer. Undefined is tolerated only for older in-process
+  // callers that included an omitted optional property; transport schemas reject the field before
+  // dispatch and any supplied value fails closed here.
+  if ("capability" in input) {
+    if (input.capability !== undefined && input.capability !== null)
+      fail("ERROR_INVALID_SHAPE", "capability is not supported");
+    const { capability: _omitted, ...withoutCapability } = input;
+    return withoutCapability;
+  }
+  return input;
+}
+
+function parentViewResult(view: ParentView): ParentView {
+  Object.defineProperty(view, "workflow", { value: view, enumerable: false });
+  return view;
 }
 
 function workerMutation(value: unknown): WorkerFields {
@@ -448,7 +458,6 @@ function createCurrentSchema(db: Database): void {
       version INTEGER NOT NULL,
       state_json TEXT NOT NULL,
       state_digest TEXT,
-      parent_capability_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -848,12 +857,6 @@ export class WorkflowStore {
     if (this.closed) fail("ERROR_STORE_CLOSED", "workflow store is closed");
   }
 
-  #assertParentAuth(row: WorkflowRow, token: unknown): void {
-    if (!compareCapability(row.parent_capability_hash, token)) {
-      fail("ERROR_CAPABILITY_DENIED", "parent capability is not valid");
-    }
-  }
-
   #assertRuntimeOwnership(row: WorkflowRow): void {
     const state = parseState(row);
     const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
@@ -1014,7 +1017,7 @@ export class WorkflowStore {
       );
   }
 
-  create(input: unknown): { workflow: ParentView; capability: ParentCapability } {
+  create(input: unknown): ParentView {
     this.#ensureOpen();
     const head = currentHead(this.root);
     const workflowId = randomUUID() as WorkflowId;
@@ -1032,21 +1035,19 @@ export class WorkflowStore {
       state.dirty_baseline_paths = rangeDirtyBaselinePaths(range);
     }
     state.workflow_id = workflowId;
-    const capability = issueCapability();
-    const capabilityHash = hashCapability(capability);
     const now = isoNow();
     const created = this.db
       .transaction(() => {
         this.db
           .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?)",
           )
-          .run(workflowId, JSON.stringify(state), objectDigest(state), capabilityHash, now, now);
+          .run(workflowId, JSON.stringify(state), objectDigest(state), now, now);
         this.#audit(workflowId, 0, "WORKFLOW_CREATED", "parent", auditEnvelope(null, state, null));
         return state;
       })
       .immediate();
-    return { workflow: roleView(created, "parent"), capability };
+    return parentViewResult(roleView(created, "parent") as ParentView);
   }
 
   #get(workflowIdValue: unknown, actorRole: Role): RoleView {
@@ -1299,7 +1300,7 @@ export class WorkflowStore {
       .immediate();
   }
 
-  createFromPlan(input: unknown): { workflow: ParentView; capability: ParentCapability } {
+  createFromPlan(input: unknown): ParentView {
     this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision"], "workflow create from plan", [
@@ -1329,20 +1330,12 @@ export class WorkflowStore {
         state.initial_receipt = receipt;
         state.dirty_baseline_paths = dirtyBaselinePaths(receipt);
         validateWorkflowStateV8(state);
-        const capability = issueCapability();
         const now = isoNow();
         this.db
           .prepare(
-            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO workflows (workflow_id, version, state_json, state_digest, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?)",
           )
-          .run(
-            state.workflow_id,
-            JSON.stringify(state),
-            objectDigest(state),
-            hashCapability(capability),
-            now,
-            now,
-          );
+          .run(state.workflow_id, JSON.stringify(state), objectDigest(state), now, now);
         this.#audit(
           state.workflow_id,
           0,
@@ -1350,7 +1343,7 @@ export class WorkflowStore {
           "parent",
           auditEnvelope(null, state, null),
         );
-        return { workflow: roleView(state, "parent"), capability };
+        return parentViewResult(roleView(state, "parent") as ParentView);
       })
       .immediate();
   }
@@ -1431,7 +1424,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "SCOPE_EXPANDED",
       (state) => {
@@ -1480,7 +1472,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "DIRTY_SCOPE_ADOPTED",
       (state) => {
@@ -1599,11 +1590,10 @@ export class WorkflowStore {
       .immediate();
   }
 
-  audit(workflowIdValue: unknown, token: unknown): AuditEvent[] {
+  audit(workflowIdValue: unknown): AuditEvent[] {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
     const id = row.workflow_id as WorkflowId;
-    this.#assertParentAuth(row, token);
     this.#assertRuntimeOwnership(row);
     const state = parseState(row);
     return (
@@ -1655,7 +1645,7 @@ export class WorkflowStore {
 
   #pendingDirtyAdoptions(
     state: WorkflowState,
-    options: { crossRuntime: boolean | "any" },
+    options: { crossRuntime: boolean | "any" | "historical-owner" },
   ): DirtyScopeAdoptionAudit[] {
     const id = state.workflow_id;
     if (!id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
@@ -1749,7 +1739,11 @@ export class WorkflowStore {
       ) {
         fail("ERROR_STALE_ADOPTION", "dirty scope adoption runtime evidence is inconsistent");
       }
-      if (options.crossRuntime !== "any" && options.crossRuntime !== detail.cross_runtime) {
+      if (
+        options.crossRuntime !== "any" &&
+        options.crossRuntime !== "historical-owner" &&
+        options.crossRuntime !== detail.cross_runtime
+      ) {
         fail(
           "ERROR_STALE_ADOPTION",
           "dirty scope adoption is not authorized for this runtime path",
@@ -1761,8 +1755,13 @@ export class WorkflowStore {
       const executingCurrent =
         detail.executing_runtime_id === this.runtimeId &&
         detail.executing_runtime_revision === this.runtimeRevision;
+      const historicalOwnerEvidence =
+        options.crossRuntime === "historical-owner" && detail.cross_runtime && !executingCurrent;
       const expectedExecutingRuntime =
-        options.crossRuntime === "any" && !detail.cross_runtime ? executingOwner : executingCurrent;
+        historicalOwnerEvidence ||
+        (options.crossRuntime === "any" && !detail.cross_runtime
+          ? executingOwner
+          : executingCurrent);
       if (!expectedExecutingRuntime) {
         fail("ERROR_STALE_ADOPTION", "dirty scope adoption executing runtime is unavailable");
       }
@@ -1800,7 +1799,7 @@ export class WorkflowStore {
   #verifyPendingDirtyAdoptions(
     state: WorkflowState,
     currentReceipt: ChangeReceipt,
-    options: { crossRuntime: boolean },
+    options: { crossRuntime: boolean | "any" | "historical-owner" },
   ): void {
     if (currentReceipt.base_head !== state.base_head) {
       fail("ERROR_STALE_ADOPTION", "current HEAD changed after dirty scope adoption");
@@ -1865,7 +1864,7 @@ export class WorkflowStore {
       .transaction(() => {
         const row = this.#row(args.workflow_id);
         const id = row.workflow_id as WorkflowId;
-        this.#assertParentAuth(row, args.capability);
+        this.#assertRuntimeAttestation();
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);
@@ -1978,6 +1977,7 @@ export class WorkflowStore {
       .transaction(() => {
         const row = this.#row(args.workflow_id);
         const id = row.workflow_id as WorkflowId;
+        this.#assertRuntimeAttestation();
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);
@@ -2034,7 +2034,6 @@ export class WorkflowStore {
   #mutate(
     workflowIdValue: unknown,
     actorRole: Role,
-    token: unknown,
     expected: unknown,
     eventType: AuditEventType | ((next: WorkflowState) => AuditEventType),
     action: (state: WorkflowState) => WorkflowState,
@@ -2054,7 +2053,6 @@ export class WorkflowStore {
       .transaction(() => {
         const row = this.#row(workflowIdValue);
         const id = row.workflow_id as WorkflowId;
-        if (actorRole === "parent") this.#assertParentAuth(row, token);
         if (ownership === "reconciliation") this.#assertReconciliationRuntime(row);
         else this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
@@ -2146,7 +2144,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "implementer",
-      undefined,
       args.expected_version,
       eventType,
       (state) => {
@@ -2165,7 +2162,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "reviewer",
-      undefined,
       args.expected_version,
       "REVIEW_STARTED",
       (state) => {
@@ -2190,7 +2186,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "IMPLEMENTATION_RESUMED",
       (state) => resumeImplementation(state, args),
@@ -2202,7 +2197,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "CONCERNS_ACCEPTED",
       (state) => acceptConcerns(state, args),
@@ -2214,7 +2208,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "reviewer",
-      undefined,
       args.expected_version,
       "REVIEW_SUBMITTED",
       (state) => {
@@ -2268,7 +2261,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "REPAIR_AUTHORIZED",
       (state) => authorizeRepair(state, args),
@@ -2280,7 +2272,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "FINDINGS_ADJUDICATED",
       (state) => adjudicateFindings(state, args),
@@ -2298,13 +2289,14 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "REVIEW_RESUMED",
       (state) => {
         if (state.review_target.review_mode !== "working_tree") return resumeReview(state, args);
         const currentReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
-        this.#verifyPendingDirtyAdoptions(state, currentReceipt, { crossRuntime: false });
+        this.#verifyPendingDirtyAdoptions(state, currentReceipt, {
+          crossRuntime: "historical-owner",
+        });
         return resumeReview(state, args);
       },
     );
@@ -2315,7 +2307,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "REPAIR_EXHAUSTED",
       (state) => finalizeRepairExhausted(state, args),
@@ -2328,7 +2319,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "COMMIT_AUTHORIZED",
       (state) => {
@@ -2361,7 +2351,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "MANUAL_VALIDATION_RECORDED",
       (state) => recordManualValidation(state, args),
@@ -2374,7 +2363,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "committer",
-      undefined,
       args.expected_version,
       (next) =>
         next.phase === "STOPPED_COMMIT_PREPARATION"
@@ -2398,7 +2386,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "COMMIT_PREPARATION_RETRY_AUTHORIZED",
       (state) => retryCommitPreparation(state, args),
@@ -2411,7 +2398,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "COMMIT_PREPARATION_REVIEW_AUTHORIZED",
       (state) => {
@@ -2456,7 +2442,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "committer",
-      undefined,
       args.expected_version,
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
@@ -2471,11 +2456,7 @@ export class WorkflowStore {
 
   reconcileCommitResult(input: unknown): RoleView {
     const args = parentMutation(input);
-    exactKeys(
-      args,
-      ["workflow_id", "capability", "expected_version", "attempt_id"],
-      "commit reconciliation",
-    );
+    exactKeys(args, ["workflow_id", "expected_version", "attempt_id"], "commit reconciliation");
     const result = {
       workflow_id: args.workflow_id,
       expected_version: args.expected_version,
@@ -2486,7 +2467,6 @@ export class WorkflowStore {
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
@@ -2503,15 +2483,10 @@ export class WorkflowStore {
 
   retryCommit(input: unknown): RoleView {
     const args = parentRetryContextMutation(input);
-    exactKeys(
-      args,
-      ["workflow_id", "capability", "expected_version", "retry_context"],
-      "commit retry",
-    );
+    exactKeys(args, ["workflow_id", "expected_version", "retry_context"], "commit retry");
     return this.#mutate(
       args.workflow_id,
       "parent",
-      args.capability,
       args.expected_version,
       "COMMIT_RETRY_AUTHORIZED",
       (state) => retryCommit(state, args),
@@ -2524,7 +2499,7 @@ export class WorkflowStore {
     state: WorkflowState,
     expectedVersionNumber: number,
     followup: LinkedFollowupPlan,
-  ): { childState: WorkflowState; childCapability: ParentCapability } {
+  ): WorkflowState {
     const id = row.workflow_id as WorkflowId;
     const childId = randomUUID() as WorkflowId;
     const childState = linkedFollowupChildState(followup);
@@ -2538,14 +2513,12 @@ export class WorkflowStore {
     childState.initial_receipt = childReceipt;
     childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
     validateWorkflowStateV8(childState);
-    const childCapability = issueCapability();
-    const childHash = hashCapability(childCapability);
     const now = isoNow();
     this.db
       .prepare(
-        "INSERT INTO workflows (workflow_id, version, state_json, state_digest, parent_capability_hash, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?, ?)",
+        "INSERT INTO workflows (workflow_id, version, state_json, state_digest, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?)",
       )
-      .run(childId, JSON.stringify(childState), objectDigest(childState), childHash, now, now);
+      .run(childId, JSON.stringify(childState), objectDigest(childState), now, now);
     this.#audit(
       childId,
       0,
@@ -2577,20 +2550,16 @@ export class WorkflowStore {
     );
     if (this.faultAfterLinkedChildInsert)
       fail("ERROR_INJECTED_FAILURE", "injected transaction failure");
-    return { childState, childCapability };
+    return childState;
   }
 
-  createLinkedFollowup(input: unknown): {
-    workflow: ParentView;
-    capability: ParentCapability;
-  } {
+  createLinkedFollowup(input: unknown): ParentView {
     this.#ensureOpen();
     const args = parentMutation(input);
     const expectedVersionNumber = expectedVersion(args.expected_version);
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -2599,23 +2568,16 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return {
-      workflow: roleView(result.childState, "parent"),
-      capability: result.childCapability,
-    };
+    return parentViewResult(roleView(result, "parent") as ParentView);
   }
 
-  createLinkedFollowupFromPlan(input: unknown): {
-    workflow: ParentView;
-    capability: ParentCapability;
-  } {
+  createLinkedFollowupFromPlan(input: unknown): ParentView {
     this.#ensureOpen();
     const args = parentMutation(input);
     exactKeys(
       args,
       [
         "workflow_id",
-        "capability",
         "expected_version",
         "plan_id",
         "revision",
@@ -2628,7 +2590,6 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        this.#assertParentAuth(row, args.capability);
         this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -2646,10 +2607,7 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return {
-      workflow: roleView(result.childState, "parent"),
-      capability: result.childCapability,
-    };
+    return parentViewResult(roleView(result, "parent") as ParentView);
   }
 }
 

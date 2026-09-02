@@ -236,6 +236,24 @@ export class RuntimeSupervisor {
       ...options,
       providerRoot: this.providerRoot,
     });
+    let supervisorAttestation: string;
+    let supervisorAttestationNonce: string;
+    let supervisorAttestationKey: Buffer;
+    try {
+      supervisorAttestationKey = readFileSync(this.defaultRuntime.attestationKeyPath);
+      supervisorAttestationNonce = randomBytes(32).toString("hex");
+      supervisorAttestation = createRuntimeAttestation(
+        this.defaultRuntime.runtime_id,
+        this.defaultRuntime.revision,
+        supervisorAttestationNonce,
+        supervisorAttestationKey,
+      );
+    } catch (error) {
+      throw runtimeFailure(
+        "ERROR_RUNTIME_RECOVERY",
+        error instanceof Error ? error.message : "runtime attestation could not be created",
+      );
+    }
     this.diagnostics =
       options.diagnostics ??
       createDiagnosticRecorder("supervisor", this.root, {
@@ -247,6 +265,11 @@ export class RuntimeSupervisor {
         options.databasePath ?? process.env.WORKFLOW_MCP_DB_PATH ?? resolveStatePath(this.root),
       runtimeId: this.defaultRuntime.runtime_id,
       runtimeRevision: this.defaultRuntime.revision,
+      runtimeAttestation: supervisorAttestation,
+      runtimeAttestationNonce: supervisorAttestationNonce,
+      // WorkflowStore's test-only override is backed by Buffer.from at runtime; preserve the
+      // immutable artifact key bytes rather than converting this binary key through UTF-8.
+      runtimeAttestationKey: supervisorAttestationKey as unknown as string,
       diagnostics: createDiagnosticRecorder("supervisor-store", this.root, {
         directory: options.diagnosticsDirectory,
       }),

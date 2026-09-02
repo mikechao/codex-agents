@@ -42,8 +42,6 @@ export type ExactRepoPath = Brand<string, "ExactRepoPath">;
 export type FindingId = Brand<string, "FindingId">;
 export type StateDigest = Brand<string, "StateDigest">;
 export type ContentDigest = Brand<string, "ContentDigest">;
-export type CapabilityToken = Brand<string, "CapabilityToken">;
-export type CapabilityHash = Brand<string, "CapabilityHash">;
 export type IsoTimestamp = Brand<string, "IsoTimestamp">;
 export type CommitAttemptId = Brand<string, "CommitAttemptId">;
 export type PlanId = Brand<string, "PlanId">;
@@ -288,7 +286,6 @@ export type ErrorCategory =
   | "ERROR_INVALID_SHAPE"
   | "ERROR_INVALID_PATHS"
   | "ERROR_INVALID_ROLE"
-  | "ERROR_CAPABILITY_DENIED"
   | "ERROR_INVALID_VERSION"
   | "ERROR_INVALID_FINDING"
   | "ERROR_INVALID_IMPLEMENTATION"
@@ -767,7 +764,6 @@ export interface CommitterView extends RoleViewCommon {
 }
 
 export type RoleView = ParentView | ImplementerView | ReviewerView | CommitterView;
-export type ParentCapability = CapabilityToken;
 
 // ---------------------------------------------------------------------------
 // 10. Persistence rows (distinct from parsed domain types)
@@ -778,7 +774,6 @@ export interface WorkflowRow {
   version: number;
   state_json: string;
   state_digest: string | null;
-  parent_capability_hash: string;
   created_at: string;
   updated_at: string;
 }

@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fail, WorkflowError } from "./errors.js";
 import type {
@@ -7,8 +7,6 @@ import type {
   AcceptanceResult,
   AcceptanceStatus,
   BlockingFinding,
-  CapabilityHash,
-  CapabilityToken,
   ErrorCategory,
   ExactRepoPath,
   Finding,
@@ -457,13 +455,6 @@ export function role(value: unknown): Role {
   return value as Role;
 }
 
-export function capability(value: unknown): CapabilityToken {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
-    fail("ERROR_CAPABILITY_DENIED", "capability is invalid");
-  }
-  return value as CapabilityToken;
-}
-
 export function expectedVersion(value: unknown): WorkflowVersion {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
     fail("ERROR_INVALID_VERSION", "expected version is invalid");
@@ -659,21 +650,6 @@ export function findingIdList(
     fail(errorCategory, "finding IDs are invalid");
   }
   return value as FindingId[];
-}
-
-export function issueCapability(): CapabilityToken {
-  return randomBytes(32).toString("hex") as CapabilityToken;
-}
-
-export function hashCapability(value: CapabilityToken): CapabilityHash {
-  return createHash("sha256").update(value, "utf8").digest("hex") as CapabilityHash;
-}
-
-export function compareCapability(storedHash: string, value: unknown): boolean {
-  const token = capability(value);
-  const expected = Buffer.from(storedHash, "hex");
-  const actual = Buffer.from(hashCapability(token), "hex");
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 export function canonicalJson(value: unknown): string {

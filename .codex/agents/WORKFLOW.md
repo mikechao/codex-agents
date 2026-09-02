@@ -2,7 +2,8 @@
 
 This file defines the authoritative MCP-based workflow and routing. The workflow-state server's role
 views carry all handoff state; worker prompts carry only the workflow ID, while parent control-plane
-prompts carry the parent capability and expected version. Detailed role behavior remains in
+prompts carry the expected version. Parent authority is supplied by the executing runtime's exact
+persisted ownership and launch attestation. Detailed role behavior remains in
 the role contracts beside this file. All paths are repository-relative exact file paths; directories
 and globs are not valid. The parent agent owns scope, review decisions, repair-loop counting, commit
 authorization, and linked follow-up creation.
@@ -42,7 +43,7 @@ Host permission syntax differs and must not be treated as equivalent:
   pushing, resetting, rebasing, checking out, switching, and the other mutating Git/history
   commands. Every OpenCode agent only exposes its own role's `workflow_state` tools
   (`workflow_state_*` deny plus role-specific allows). These are host-level defense in depth for
-context size and isolation; the server-side parent capability, `expected_version`, and transition
+context size and isolation; the server-side runtime boundary, `expected_version`, and transition
   checks remain authoritative and are unchanged between hosts.
 - Model/reasoning identity is host metadata, not contract prose: each generated definition
   announces its own identity line (resolved model plus reasoning effort in both hosts), injected by
@@ -61,18 +62,18 @@ context size and isolation; the server-side parent capability, `expected_version
 ## Authoritative MCP state
 
 For non-trivial work, the project-scoped `workflow_state` MCP server is authoritative. The parent
-creates one workflow and receives one parent capability. Delegation passes workers only the exact
+creates one workflow. Delegation passes workers only the exact
 `workflow_id`; each worker calls its dedicated capability-free getter
 (`workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`) before mutation.
 The returned role view is authoritative and complete: it carries that role's objective, contracts,
 semantic evidence, findings, repair state, and sorted `permitted_next_actions`, so prompts never
 duplicate objective, criteria, evidence, finding, receipt, or repair state. Worker mutations pass
-`workflow_id` and `expected_version`; parent control-plane mutations and audit pass the parent
-capability and `expected_version`.
+`workflow_id` and `expected_version`; parent control-plane mutations and audit pass `expected_version`,
+while the server authenticates the executing runtime against persisted ownership and launch attestation.
 
-Each role must not call tools owned by another role, and capabilities must not be included in
-inherited conversation history. Capabilities are defense-in-depth orchestration controls, not a
-security boundary against a process with equivalent host filesystem access. If the server is
+Each role must not call tools owned by another role. Runtime identity and attestation are
+defense-in-depth orchestration controls, not a security boundary against a process with equivalent
+host filesystem access. If the server is
 unavailable, stop and ask the user whether to use the documented prompt-only degraded mode below; do
 not silently downgrade. In degraded mode the parent tracks the version and audit state manually and
 records the decision.
@@ -117,7 +118,7 @@ payload or context limit fails closed with bounded input or clarification rather
 compressing or truncating an authoritative source. This documents the existing planning boundary only:
 it adds no workflow phases, persistence, transport bookkeeping, or planner mechanics.
 Planning policy is optional, repository-relative, advisory guidance only; malformed or authority-bearing
-policy is bounded input risk and cannot grant capability, approval, scope, or validation authority.
+policy is bounded input risk and cannot grant authority, approval, scope, or validation authority.
 
 Before a planner marks a revision ready for approval, every executable validation requirement must
 match `.codex/reviewer-validation.json` by exact argv array equality, including length, ordering, and
@@ -172,7 +173,7 @@ After every terminal worker handoff and every parent mutation, the parent refres
 `workflow_operator_decision_get` projection, summarizes only its bounded semantic result, and routes
 from its state-provable decision. Worker prose, earlier summaries, dirty-path inference, and stale
 state never grant authority. The parent reads `workflow_parent_get` only for exact mutation inputs
-and version/capability or an explicit debug/status request. This routing distinction adds no
+and version or an explicit debug/status request. This routing distinction adds no
 Workflow MCP phase, schema, persistence, or authority change.
 
 The read-only `workflow_operator_decision_get` projection is the normal semantic refresh above the
@@ -181,7 +182,7 @@ state-provable decisions and existing permitted actions, and never writes, autho
 routing state, or creates a second state machine. It reports automatic `no_user_action` routes for
 implementation, review, re-review, and commit preparation; exact repair, recovery, bounded linked
 continuation, scope/new-intent, final reconciliation, and commit authorization remain explicit
-boundaries. Raw IDs, phases, actions, audits, capabilities, receipts, and PlanArtifact identity
+boundaries. Raw IDs, phases, actions, audits, receipts, and PlanArtifact identity
 remain available only through explicit debug/status reads or exact mutation-input reads. The projection
 is not authorization and does not create a proposal: the parent resolves a concrete safe proposal from
 the projection plus an exact `workflow_parent_get`, presents its consequence and deterministic exact
@@ -189,7 +190,7 @@ repository-relative visible paths, and asks only for a genuine semantic user cho
 responses such as contextual `yes`, `continue`, `go ahead`, and `commit it` are acceptable without a
 magic phrase or `Reply ...` syntax. Negative, ambiguous, unrelated, changed, or stale responses fail
 closed. After affirmative input, the parent re-reads authoritative state, verifies proposal, scope,
-findings, lineage, plan binding, permitted action, capability, and version, then encodes exactly that
+findings, lineage, plan binding, permitted action, runtime authority, and version, then encodes exactly that
 proposal in the existing mutation. No durable proposal state, natural-language parser, or replacement
 authority is added. Ordinary summaries do not expose internal action/phase names or raw action/tool names;
 preserved semantic enum values include `approve_recovery`, `retry_commit`,
@@ -203,7 +204,7 @@ matching work items, paths, branches, or conversational history. Missing or cont
 fails closed and requires an authoritative repository-owned relationship design.
 
 For an already-affined workflow, the store also requires the complete current `runtime_id` and
-`runtime_revision` to match the persisted owner after capability authentication, plus the ephemeral
+`runtime_revision` to match the persisted owner, plus the ephemeral
 supervisor launch attestation signed with the private key belonging to the immutable child artifact
 that contains the executing `store.ts`/`server.ts`. Verification derives that artifact from the
 executing module location and validates its external completion marker, manifest, closure digests,
@@ -280,7 +281,7 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
 
 ### Role views and dispatch
 
-- Parent view: the full persisted workflow (minus capabilities, hashes, audits, internal fields,
+- Parent view: the full persisted workflow (minus hashes, audits, internal fields,
   and all receipt structures/digests). `approved_plan` is immutable execution intent exposed only
   to the parent and implementer; structured objective, scope, and contracts remain enforceable
   boundaries. The parent owns user and commit authorization, repair and
@@ -483,7 +484,7 @@ still retain an earlier blocker such as `REV-X-001`. Retained blockers are histo
 context only; a non-empty retained list is not a fresh review result and never authorizes, requests,
 or invokes repair by itself. Only a fresh review whose projection reports `approve_exact_repairs`
 with its authority boundary available may lead to an exact-ID repair-authorization prompt. The
-parent then reads the full view for the current exact blocking finding IDs, capability, version, and
+parent then reads the full view for the current exact blocking finding IDs, version, and
 permitted mutation action. If that action is absent, fail closed without prompting or invoking
 repair. This convention changes neither Workflow MCP authority nor phases, schema, persistence,
 transition semantics, repair-cycle policy, or attempt bookkeeping.

@@ -36,6 +36,8 @@ async function connect(root: string) {
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args });
     const body = JSON.parse((result.content[0] as { text: string }).text);
+    if (name === "workflow_create" || name.startsWith("workflow_create_linked"))
+      Object.defineProperty(body, "workflow", { value: body, enumerable: false });
     return { result, body };
   };
   const version = async (id: string) =>
@@ -188,7 +190,7 @@ test("fresh linked follow-up routes exact child IDs and preserves parent audit a
       })
     ).body;
     assert.notEqual(linked.workflow.workflow_id, id);
-    assert.notEqual(linked.capability, source.capability);
+    assert.equal("capability" in linked, false);
     assert.equal("capabilities" in linked, false);
     assert.equal(
       (await call("workflow_implementer_get", { workflow_id: linked.workflow.workflow_id })).body
@@ -271,7 +273,7 @@ test("raw STDIO remains JSON-RPC clean and does not expose generic getter or wor
       arguments: create(git),
     });
     const body = JSON.parse(created.result.content[0].text);
-    assert.equal(typeof body.capability, "string");
+    assert.equal("capability" in body, false);
     assert.equal("capabilities" in body, false);
     assert.deepEqual(invalid, []);
     assert.equal(output.endsWith("\n"), true);
@@ -595,7 +597,7 @@ test("STDIO rejects legacy role fields, stale versions, invalid phases, and malf
     const role = await failed("workflow_prepare_commit", {
       workflow_id: id,
       expected_version: await currentVersion(),
-      capability: created.capability,
+      capability: "legacy-bearer",
     });
     assert.equal(role.category, "ERROR_INVALID_SHAPE");
     const malformed = await failed("workflow_submit_commit_result", {

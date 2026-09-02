@@ -42,7 +42,7 @@ An unambiguous contextual natural-language answer is sufficient: `yes`, `continu
 Negative, ambiguous, unrelated, changed, or
 stale responses fail closed without mutation. After affirmative input, Orchestrator re-reads
 authoritative state and verifies proposal, scope, findings, lineage, plan binding, permitted action,
-capability, and version before encoding exactly the existing mutation. Conversation memory is never
+runtime authority, and version before encoding exactly the existing mutation. Conversation memory is never
 a proposal or authority, and no durable proposal state or parser is added. No durable proposal state is
 created by the operator exchange.
 
@@ -128,7 +128,8 @@ workers obtain their role view and current version from a dedicated getter:
 
 - `workflow_id`: the exact workflow identifier created or reused by Orchestrator;
 - workers call `workflow_implementer_get`, `workflow_reviewer_get`, or `workflow_committer_get`;
-- only parent control-plane mutations carry the single parent capability.
+- parent control-plane mutations carry only semantic inputs and expected version; runtime authority is
+  supplied by the executing host and launch attestation.
 
 For this repository's self-host registration, the MCP command first materializes the bootstrap
 supervisor from the provider repository's committed `HEAD`, rather than executing the mutable
@@ -144,7 +145,7 @@ provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does
 bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-affinity
 lifecycle; its direct server uses the target repository's Git and durable state.
 
-The parent capability is never guessed, regenerated, or replaced. Before dispatching
+Runtime authority is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the operator projection and uses its semantic decision. It
 reads the parent view only when exact mutation inputs/version are needed. Each worker's first authoritative action is its dedicated capability-free getter. The
 returned role view supplies that worker's objective, scope, criteria, evidence, receipts,
@@ -274,7 +275,7 @@ sequenceDiagram
     Orchestrator->>GitWorkingTree: Read-only preflight: status and HEAD
     Orchestrator->>workflow_state: Parent-read exact approved plan and policy preflight
     Orchestrator->>workflow_state: workflow_create_from_plan (identity/options/work items only)
-    workflow_state-->>Orchestrator: Exact workflow_id + one parent capability
+    workflow_state-->>Orchestrator: Exact workflow_id + parent view
     Orchestrator->>workflow_state: workflow_operator_decision_get refresh
     workflow_state-->>Orchestrator: Semantic implementation decision
     Orchestrator->>implementer: Exact workflow_id
@@ -320,7 +321,7 @@ complete repair-cycle limit and transition semantics are defined in
 
 Only a fresh reviewer result whose projection reports `approve_exact_repairs` with its authority
 boundary available can request repair authorization. The parent then reads the full view for the
-current exact blocker IDs, capability, version, and permitted mutation action. The prompt uses only
+current exact blocker IDs, version, and permitted mutation action. The prompt uses only
 those current exact blocker IDs and bounded reasons. A fresh review that reconfirms the same ID may
 request that ID again; if the old ID is resolved and a different blocker is current, only the
 different current ID is requested. A retained non-empty blocker list alone never prompts for repair,

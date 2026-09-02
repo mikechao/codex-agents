@@ -33,7 +33,7 @@ const _instructions =
   "Authoritative local workflow state for custom agents. The parent creates a workflow and passes each role only its workflow_id, capability, expected_version, and the instruction to read its own authoritative view with workflow_get; that view carries the role's full handoff and permitted next actions, so prompts carry no duplicated objective, approved plan, criteria, evidence, finding, receipt, or repair state. approved_plan is immutable authoritative execution intent, while approved_paths is an append-only narrow mutation scope: only the parent may expand it with fresh user authorization naming exact paths in permitted active states. Linked follow-ups retain that narrow remediation scope and require a fresh independent combined review over inherited logical-change paths before approval or commit. Plan-mode workflows must provide the exact non-empty approved text, while direct workflows explicitly provide null. Structured objective, paths, acceptance criteria, validation requirements, and remediation/findings remain enforceable workflow contracts. Workflow MCP owns receipt capture, comparison, persistence, and commit freshness checks; managed workers submit semantic evidence only. Validation IDs are workflow-local result correlation IDs, never repository command selectors; executable requirements carry exact argv and manual requirements carry argv null. Working-tree reviewers begin a review before inspection, while commit-range reviewers submit directly and never authorize commits. The parent owns user and commit authorization; only combined APPROVED stops a linked logical change; review-only workflows skip the implementer. Committers verify and prepare the fully staged index, then submit the external commit result whether it succeeded or failed. Incompatible persisted databases fail closed with an actionable reset-required diagnostic. If this server is unavailable for non-trivial work, ask the user before using documented prompt-only degraded mode. Capabilities are defense-in-depth, not a filesystem security boundary.";
 */
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. The parent receives one parent capability; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. Parent control-plane mutations and audit retain parent-capability authentication. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -44,10 +44,9 @@ const common: {
   type: "object",
   properties: {
     workflow_id: { type: "string" },
-    capability: { type: "string" },
     expected_version: { type: "integer", minimum: 0 },
   },
-  required: ["workflow_id", "capability", "expected_version"],
+  required: ["workflow_id", "expected_version"],
   additionalProperties: false,
 };
 
@@ -427,8 +426,7 @@ export const toolDefinitions = [
   },
   {
     name: "workflow_create",
-    description:
-      "Create a change or review-only workflow and return the parent view plus one parent capability.",
+    description: "Create a change or review-only workflow and return the parent view.",
     inputSchema: schema(
       {
         workflow_type: { type: "string", enum: [...WORKFLOW_TYPE_VALUES] },
@@ -534,13 +532,13 @@ export const toolDefinitions = [
   },
   {
     name: "workflow_get_audit",
-    description: "Read append-only workflow audit events with the parent capability.",
+    description:
+      "Read append-only workflow audit events through the executing parent runtime boundary.",
     inputSchema: schema(
       {
         workflow_id: { type: "string" },
-        capability: { type: "string" },
       },
-      ["workflow_id", "capability"],
+      ["workflow_id"],
     ),
     annotations: {
       title: "Get workflow audit",
@@ -1061,7 +1059,7 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
     workflow_reviewer_get: (args) => store.reviewerGet(args.workflow_id),
     workflow_committer_get: (args) => store.committerGet(args.workflow_id),
-    workflow_get_audit: (args) => store.audit(args.workflow_id, args.capability),
+    workflow_get_audit: (args) => store.audit(args.workflow_id),
     workflow_submit_implementation: (args) => store.submitImplementation(args),
     workflow_record_manual_validation: (args) => store.recordManualValidation(args),
     workflow_resume_implementation: (args) => store.resumeImplementation(args),

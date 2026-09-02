@@ -156,7 +156,7 @@ test("fresh store API persists singular parent capability and role-specific view
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const created = store.create(input(git, { approved_plan: "immutable plan" }));
     const id = created.workflow.workflow_id;
-    assert.equal(typeof created.capability, "string");
+    assert.equal("capability" in created, false);
     assert.equal("capabilities" in created, false);
     assert.equal(store.implementerGet(id).approved_plan, "immutable plan");
     assert.equal("approved_plan" in store.reviewerGet(id), false);
@@ -172,7 +172,7 @@ test("fresh store API persists singular parent capability and role-specific view
           user_authorization: "no",
         }),
       ),
-      "ERROR_CAPABILITY_DENIED",
+      "ERROR_INVALID_SHAPE",
     );
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
@@ -592,8 +592,7 @@ test("linked follow-up inherits findings and gets its own singular parent capabi
       finding_ids: ["OPTIONAL-1"],
       user_authorization: "authorized remediation",
     });
-    assert.equal(typeof child.capability, "string");
-    assert.notEqual(child.capability, source.capability);
+    assert.equal("capability" in child, false);
     assert.equal("capabilities" in child, false);
     assert.deepEqual(store.implementerGet(child.workflow.workflow_id).linked_findings, [optional]);
     assert.equal(store.parentGet(child.workflow.workflow_id).version, 0);
@@ -1265,10 +1264,7 @@ test("parent audit envelopes are sanitized and append-only across accepted and r
       "ERROR_VERSION_CONFLICT",
     );
     assert.deepEqual(readAudit(), auditBeforeRejectedMutation);
-    assert.equal(
-      category(() => store.audit(id, "not-the-parent-capability")),
-      "ERROR_CAPABILITY_DENIED",
-    );
+    assert.equal(store.audit(id).length, auditBeforeRejectedMutation.length);
 
     const serialized = JSON.stringify(readAudit());
     for (const prohibited of [

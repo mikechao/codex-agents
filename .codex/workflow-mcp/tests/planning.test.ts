@@ -112,9 +112,9 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   });
   assert.equal(approved.metadata.status, "approved");
   const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: 1 });
-  assert.equal(workflow.workflow.approved_plan, revisionInput().full_plan);
-  assert.equal(workflow.workflow.execution_brief, revisionInput().execution_brief);
-  assert.deepEqual(workflow.workflow.plan_provenance, {
+  assert.equal(workflow.approved_plan, revisionInput().full_plan);
+  assert.equal(workflow.execution_brief, revisionInput().execution_brief);
+  assert.deepEqual(workflow.plan_provenance, {
     plan_id: draft.plan_id,
     revision: 1,
     artifact_digest: approved.artifact_digest,

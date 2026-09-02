@@ -2161,7 +2161,7 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
           expected_version: 0,
           resume_context: null,
         }),
-      (error: any) => error.category === "ERROR_CAPABILITY_DENIED",
+      (error: any) => error.category === "ERROR_INVALID_SHAPE",
     );
     assertUnchanged(beforeInvalidCapability, "invalid parent capability");
 

@@ -87,7 +87,7 @@ genuine user-owned choice: whether to repair these blockers, accept this concern
 context, continue this bounded linked remediation, expand to these exact paths, choose a changed
 objective, reconcile this complete dirty logical change, or authorize this commit.
 
-Do not ask the user to provide known workflow or Plan identifiers, versions, capabilities, finding
+Do not ask the user to provide known workflow or Plan identifiers, versions, finding
 identifiers, repair cycles, lineage, contracts, internal action/phase names, or exact mutation
 payloads. Do not label ordinary choices with internal MCP action/tool names or phases. Raw internal
 names are reserved for normative documentation, diagnostics, and tests—not operator summaries.
@@ -101,7 +101,7 @@ mutation. Never auto-authorize repair, recovery, continuation, scope expansion, 
 reconciliation, optional remediation, or commit.
 
 After affirmative input, re-read current authoritative state before mutating. Verify proposal, exact
-scope, current findings, lineage, plan binding, permitted action, capability, and
+scope, current findings, lineage, plan binding, permitted action, runtime authority, and
 optimistic version, then encode exactly that proposal into the existing MCP mutation. If any part is
 stale, ambiguous, unavailable, or changed, stop and ask a bounded clarification; never broaden the
 scope or substitute conversation memory. `workflow_parent_get` is used at this exact mutation-input
@@ -179,7 +179,8 @@ the bounded policy preflight and semantic proposal checks above.
 Pass only explicit work-item metadata that the user approved to creation, preserving provider, ID, exact
 display reference, and optional URL; use `work_items: []` when absent. Never infer or discover identifiers; do not discover identifiers externally, and do not retranscribe them when creating linked follow-ups.
 Create the authoritative workflow before implementation mutation or reuse the supplied workflow ID.
-Capture the parent capability and current expected version without guessing or replacing them.
+Capture the current expected version without guessing or replacing it; runtime authority is supplied
+by the executing host and is never model-authored.
 
 ## Delegation lifecycle
 
@@ -202,7 +203,7 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
     until the bounded proposal is accepted. Only a
      fresh reviewer handoff whose projection reports `approve_exact_repairs` with its authority boundary
     available may lead to an exact-ID repair prompt. Read the full parent view then for exact current
-    finding IDs, capability, version, and permitted action. The current exact blocker IDs are read here; obtain current exact blocking finding IDs from this authoritative read. A same-ID blocker may be requested again only when freshly reported; after authorization, state the current repair
+     finding IDs, version, and permitted action. The current exact blocker IDs are read here; obtain current exact blocking finding IDs from this authoritative read. A same-ID blocker may be requested again only when freshly reported; after authorization, state the current repair
      cycle and that the next role is the implementer, then dispatch implementer, refresh, and re-review. If an old ID is resolved and a different current blocker appears, request only that different current blocker. Respect the repair limit;
     exhaustion is terminal and forbids another cycle. Adjudication requires separate explicit
    authorization and never dispatches implementer. Linked follow-ups are narrow remediation first,
@@ -252,8 +253,8 @@ next explicit mutation needs exact inputs/version or the user requests debug/sta
 
 ## Intent, permissions, and invariants
 
-The Orchestrator is the parent control plane, not a worker. It must preserve capability
-authentication, optimistic versions, exact findings, scope and lineage, approved PlanArtifact
+The Orchestrator is the parent control plane, not a worker. It must preserve runtime-bound authority,
+optimistic versions, exact findings, scope and lineage, approved PlanArtifact
 authority, repair limits, receipt freshness, commit verification, refresh-after-handoff/mutation,
 worker isolation, automatic safe dispatch, and the execution-local incomplete-attempt guard. It
 must never add a generic intent mutation, natural-language parser, durable proposal field, second

@@ -380,6 +380,76 @@ describe("Workflow MCP runtime supervision", () => {
     }
   }, 30_000);
 
+  test("requires launch attestation before cross-runtime review start", () => {
+    const { root } = fixture();
+    const path = join(root, "cross-runtime-review.sqlite");
+    const revision = currentHead(root);
+    const ownerId = "a".repeat(64);
+    const foreignId = "b".repeat(64);
+    const nonce = "1".repeat(64);
+    const ownerKey = "2".repeat(64);
+    try {
+      const owner: any = new WorkflowStore({
+        repositoryRoot: root,
+        databasePath: path,
+        runtimeId: ownerId,
+        runtimeRevision: revision,
+        ...attestation(ownerId, revision),
+      });
+      const created = create(owner, root, revision, "cross-runtime review attestation");
+      owner.close();
+
+      const cases = [
+        { name: "missing", options: { runtimeId: foreignId, runtimeRevision: revision } },
+        {
+          name: "mismatched",
+          options: {
+            runtimeId: foreignId,
+            runtimeRevision: revision,
+            runtimeAttestation: "0".repeat(64),
+            runtimeAttestationNonce: nonce,
+            runtimeAttestationKey: ownerKey,
+          },
+        },
+        {
+          name: "borrowed",
+          options: {
+            runtimeId: foreignId,
+            runtimeRevision: revision,
+            runtimeAttestation: createRuntimeAttestation(
+              foreignId,
+              revision,
+              nonce,
+              "3".repeat(64),
+            ),
+            runtimeAttestationNonce: nonce,
+            runtimeAttestationKey: ownerKey,
+          },
+        },
+      ];
+      for (const candidate of cases) {
+        const store: any = new WorkflowStore({
+          repositoryRoot: root,
+          databasePath: path,
+          ...candidate.options,
+        });
+        assert.throws(
+          () =>
+            store.beginReviewCrossRuntime({
+              workflow_id: created.workflow_id,
+              expected_version: 0,
+            }),
+          (error: unknown) =>
+            error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
+          candidate.name,
+        );
+        store.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("routes workflows to their immutable runtime after promotion and restart", async () => {
     const target = fixture();
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-routing-cache-"));
@@ -680,7 +750,7 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
-  test("forwards ordinary dirty-adoption recovery to the historical owner after promotion", async () => {
+  test("recovers dirty adoption through a real historical owner after promotion", async () => {
     const target = fixture();
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-adoption-cache-"));
     const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-adoption-db-"));
@@ -688,17 +758,54 @@ describe("Workflow MCP runtime supervision", () => {
     const runtimeModule = pathToFileURL(
       join(process.cwd(), ".codex/workflow-mcp/runtime-supervisor.ts"),
     ).href;
-    const fakeServer = `
+    const ownerServer = `
       import { createInterface } from "node:readline";
+      import { openStore } from "./store.js";
+      const store = openStore();
+      const tools = ["workflow_parent_get", "workflow_resume_review", "workflow_begin_review", "workflow_implementer_get"];
+      const handlers = {
+        workflow_parent_get: (args) => store.parentGet(args.workflow_id),
+        workflow_resume_review: (args) => store.resumeReview(args),
+        workflow_begin_review: (args) => store.beginReview(args),
+        workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
+      };
       createInterface({ input: process.stdin }).on("line", (line) => {
         const request = JSON.parse(line);
         if (request.id === undefined) return;
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+        if (request.method === "initialize") {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+            runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
+            runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
+          } }) + "\\n");
+          return;
+        }
+        if (request.method === "tools/list") {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { tools: tools.map((name) => ({ name })) } }) + "\\n");
+          return;
+        }
+        const handler = handlers[request.params?.name];
+        if (!handler) {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -1, message: "ERROR_UNKNOWN_TOOL" } }) + "\\n");
+          return;
+        }
+        let value;
+        try {
+          value = handler(request.params?.arguments ?? {});
+        } catch (error) {
+          const category = error?.category ?? "ERROR_RUNTIME_RECOVERY";
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -1, message: category, data: { category, detail: error?.detail ?? category } } }) + "\\n");
+          return;
+        }
+        const content = {
+          content: [{ type: "text", text: JSON.stringify(value) }],
+          tools: tools.map((name) => ({ name })),
           runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
           runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
           expected_version: request.params?.arguments?.expected_version,
           tool: request.params?.name,
-        } }) + "\\n");
+        };
+        const result = content;
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
       });
     `;
     const git = (...args: string[]) =>
@@ -710,11 +817,15 @@ describe("Workflow MCP runtime supervision", () => {
           providerRoot: target.root,
           databasePath,
           cacheRoot,
-          installDependencies: false,
+          installDependencies: true,
         },
       )}).run();`;
       const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
         stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr!.on("data", (chunk) => {
+        stderr += chunk.toString();
       });
       const reader = createInterface({ input: child.stdout! });
       const pending = new Map<string | number, (value: any) => void>();
@@ -761,15 +872,23 @@ describe("Workflow MCP runtime supervision", () => {
         child.stdin!.end();
         await once(child, "close");
       };
-      return { child, initialize, request, stop };
+      return {
+        child,
+        initialize,
+        request,
+        stop,
+        get stderr() {
+          return stderr;
+        },
+      };
     };
     let active: ReturnType<typeof start> | undefined;
     let owner: any;
     try {
       const workflowRoot = join(target.root, ".codex", "workflow-mcp");
-      mkdirSync(workflowRoot, { recursive: true });
+      cpSync(join(process.cwd(), ".codex/workflow-mcp"), workflowRoot, { recursive: true });
       mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
-      writeFileSync(join(workflowRoot, "server.ts"), fakeServer);
+      writeFileSync(join(workflowRoot, "server.ts"), ownerServer);
       cpSync(
         join(process.cwd(), ".codex/agents/change-receipt.ts"),
         join(target.root, ".codex/agents/change-receipt.ts"),
@@ -778,29 +897,35 @@ describe("Workflow MCP runtime supervision", () => {
         join(process.cwd(), ".codex/agents/receipt.ts"),
         join(target.root, ".codex/agents/receipt.ts"),
       );
-      writeFileSync(
-        join(target.root, "package.json"),
-        '{"name":"runtime-adoption-routing-fixture","type":"module","dependencies":{}}\n',
-      );
-      writeFileSync(join(target.root, "bun.lock"), "{}\n");
+      cpSync(join(process.cwd(), "package.json"), join(target.root, "package.json"));
+      cpSync(join(process.cwd(), "bun.lock"), join(target.root, "bun.lock"));
       git("add", ".");
       git("commit", "-qm", "runtime A");
       const revisionA = currentHead(target.root);
       const artifactA = materializeRuntimeArtifact(target.root, revisionA, {
         cacheRoot,
-        installDependencies: false,
+        installDependencies: true,
       });
 
       writeFileSync(join(target.root, "runtime-b.txt"), "B\n");
       git("add", "runtime-b.txt");
       git("commit", "-qm", "runtime B");
       const revisionB = currentHead(target.root);
+      const ownerNonce = "1".repeat(64);
+      const ownerKey = readFileSync(artifactA.attestationKeyPath);
       owner = new WorkflowStore({
         repositoryRoot: target.root,
         databasePath,
         runtimeId: artifactA.runtime_id,
         runtimeRevision: revisionA,
-        ...attestation(artifactA.runtime_id, revisionA),
+        runtimeAttestation: createRuntimeAttestation(
+          artifactA.runtime_id,
+          revisionA,
+          ownerNonce,
+          ownerKey,
+        ),
+        runtimeAttestationNonce: ownerNonce,
+        runtimeAttestationKey: ownerKey as any,
       });
       const created = owner.create({
         workflow_type: "change",
@@ -822,7 +947,6 @@ describe("Workflow MCP runtime supervision", () => {
       const id = created.workflow.workflow_id;
       owner.expandScope({
         workflow_id: id,
-        capability: created.capability,
         expected_version: 0,
         added_paths: ["dirty.txt"],
         reason: "planned path",
@@ -849,49 +973,71 @@ describe("Workflow MCP runtime supervision", () => {
         prior_finding_classifications: {},
       });
       writeFileSync(join(target.root, "dirty.txt"), "authorized\n");
-      owner.adoptDirtyScope({
+      owner.close();
+      owner = undefined;
+
+      active = start();
+      const initialized = await active.initialize();
+      assert.ok(initialized.result, `${JSON.stringify(initialized)}\n${active.stderr}`);
+      assert.equal(initialized.result.runtime_revision, revisionB);
+      active.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const routedHistorical = await active.request(2, "workflow_parent_get", {
         workflow_id: id,
-        capability: created.capability,
+      });
+      assert.equal(routedHistorical.result.runtime_revision, revisionA);
+      assert.equal(routedHistorical.result.tool, "workflow_parent_get");
+      assert.equal(
+        routedHistorical.result.tools.some(
+          (tool: { name: string }) => tool.name === "workflow_adopt_dirty_scope",
+        ),
+        false,
+      );
+      const adopted = await active.request(3, "workflow_adopt_dirty_scope", {
+        workflow_id: id,
         expected_version: 4,
         adopted_paths: ["dirty.txt"],
         reason: "recover dirty path",
         user_authorization: "explicit recovery",
       });
-      owner.close();
-      owner = undefined;
-
-      active = start();
-      assert.equal((await active.initialize()).result.runtime_revision, revisionB);
-      active.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
-      const forwardedResume = await active.request(2, "workflow_resume_review", {
+      const adoptedView = JSON.parse(adopted.result.content[0].text);
+      assert.equal(adoptedView.version, 5);
+      assert.equal(adoptedView.phase, "STOPPED_INCONCLUSIVE");
+      const forwardedResume = await active.request(5, "workflow_resume_review", {
         workflow_id: id,
-        capability: created.capability,
         expected_version: 5,
-        resume_context: "resume",
+        resume_context: "resume after adoption",
       });
+      assert.ok(forwardedResume.result, `${JSON.stringify(forwardedResume)}\n${active.stderr}`);
       assert.equal(forwardedResume.result.runtime_revision, revisionA);
       assert.equal(forwardedResume.result.tool, "workflow_resume_review");
-      const forwardedBegin = await active.request(3, "workflow_begin_review", {
+      const resumedView = JSON.parse(forwardedResume.result.content[0].text);
+      assert.equal(resumedView.version, 6);
+      assert.equal(resumedView.phase, "REVIEWING");
+      const beganReview = await active.request(6, "workflow_begin_review", {
         workflow_id: id,
-        expected_version: 5,
+        expected_version: 6,
       });
-      assert.equal(forwardedBegin.result.runtime_revision, revisionA);
-      assert.equal(forwardedBegin.result.tool, "workflow_begin_review");
+      const reviewView = JSON.parse(beganReview.result.content[0].text);
+      assert.equal(reviewView.version, 7);
+      assert.equal(reviewView.phase, "REVIEWING");
 
       owner = new WorkflowStore({
         repositoryRoot: target.root,
         databasePath,
         runtimeId: artifactA.runtime_id,
         runtimeRevision: revisionA,
-        ...attestation(artifactA.runtime_id, revisionA),
+        runtimeAttestation: createRuntimeAttestation(
+          artifactA.runtime_id,
+          revisionA,
+          ownerNonce,
+          ownerKey,
+        ),
+        runtimeAttestationNonce: ownerNonce,
+        runtimeAttestationKey: ownerKey as any,
       });
-      owner.resumeReview({
-        workflow_id: id,
-        capability: created.capability,
-        expected_version: 5,
-        resume_context: "resume",
-      });
-      owner.beginReview({ workflow_id: id, expected_version: 6 });
+      const recovered = owner.parentGet(id);
+      assert.equal(recovered.phase, "REVIEWING");
+      assert.equal(recovered.version, 7);
       assert.deepEqual(owner.runtimeAffinity(id), {
         runtime_id: artifactA.runtime_id,
         runtime_revision: revisionA,
@@ -903,7 +1049,7 @@ describe("Workflow MCP runtime supervision", () => {
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(databaseRoot, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("bootstrap executes committed supervisor source despite dirty checkout launchers", async () => {
     const target = fixture();
