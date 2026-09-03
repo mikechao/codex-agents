@@ -57,13 +57,15 @@ registration that `install-into.ts` writes into the project's `opencode.json`/`o
 bun run start
 ```
 
-When this repository hosts itself, both host registrations materialize `bootstrap.ts` from the
-provider checkout's committed `HEAD` before starting it; a dirty checkout copy cannot replace the
-launcher. The bootstrap requires the supervised and provider paths to resolve to the same canonical
-Git root, then the supervisor resolves the provider's committed runtime and launches only its
-immutable artifact. It proxies requests for older unfinished workflows to the artifact that owns
-them. The hosts share repository-hash-partitioned durable state, so workflows are interchangeable
-between hosts.
+When this repository hosts itself, the launcher (`bun run start` or either host registration) must
+export `WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT` before materializing `bootstrap.ts` from the provider
+checkout's committed `HEAD`; a dirty checkout copy cannot replace the launcher. Direct bootstrap
+invocation without that variable fails before protocol output, and bootstrap no longer derives a
+provider root from its module location. The bootstrap requires the supervised and provider paths to
+resolve to the same canonical Git root, then the supervisor resolves the provider's committed
+runtime and launches only its immutable artifact. It proxies requests for older unfinished workflows
+to the artifact that owns them. The hosts share repository-hash-partitioned durable state, so
+workflows are interchangeable between hosts.
 
 Installed repositories use a different boundary: their Codex and OpenCode registrations invoke the
 provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does not copy the

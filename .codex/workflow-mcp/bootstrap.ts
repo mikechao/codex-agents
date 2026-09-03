@@ -3,7 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const TRUSTED_PATHS = [
@@ -109,10 +109,13 @@ function launchCommittedSupervisor(providerRoot: string): number {
 if (import.meta.main) {
   try {
     // The target checkout remains the workflow repository, while this provider checkout supplies
-    // committed runtime revisions. The host command supplies the trusted provider root; the
-    // legacy direct-entry fallback derives it from this module's committed location.
-    const providerRoot =
-      process.env.WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT ?? resolve(import.meta.dir, "../..");
+    // committed runtime revisions. The host command supplies the trusted provider root.
+    const providerRoot = process.env.WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT;
+    if (providerRoot === undefined || providerRoot === "") {
+      throw new Error(
+        "WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT is required as the trusted provider root",
+      );
+    }
     process.exitCode = launchCommittedSupervisor(providerRoot);
   } catch (error) {
     process.stderr.write(

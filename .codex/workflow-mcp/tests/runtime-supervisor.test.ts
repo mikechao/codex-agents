@@ -211,6 +211,42 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
+  test("bootstrap rejects a missing trusted provider root before launch", () => {
+    const target = fixture();
+    try {
+      const workflowRoot = join(target.root, ".codex", "workflow-mcp");
+      mkdirSync(workflowRoot, { recursive: true });
+      cpSync(
+        join(process.cwd(), ".codex/workflow-mcp/bootstrap.ts"),
+        join(workflowRoot, "bootstrap.ts"),
+      );
+
+      let error: unknown;
+      try {
+        const env = { ...process.env };
+        delete env.WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT;
+        execFileSync(process.execPath, ["--no-warnings", join(workflowRoot, "bootstrap.ts")], {
+          cwd: target.root,
+          env,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        assert.fail("expected bootstrap to require a trusted provider root");
+      } catch (caught) {
+        error = caught;
+      }
+
+      assert.equal((error as { status?: number }).status, 1);
+      assert.equal(String((error as { stdout?: string | Buffer }).stdout ?? ""), "");
+      assert.match(
+        String((error as { stderr?: string | Buffer }).stderr ?? ""),
+        /WORKFLOW_MCP_TRUSTED_PROVIDER_ROOT is required as the trusted provider root/u,
+      );
+    } finally {
+      rmSync(target.root, { recursive: true, force: true });
+    }
+  });
+
   test("bootstrap rejects a provider from a different canonical repository", () => {
     const target = fixture();
     const provider = fixture();
