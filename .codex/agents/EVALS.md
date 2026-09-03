@@ -39,21 +39,26 @@ Workflow MCP state. Restart host sessions after changing policy.
   containing an inaccessible or private reference; verify the planner still inspects the repository
   and creates or revises a plan without a redundant source fetch. Separately provide genuinely missing
   or explicitly incomplete requirements and verify permitted web retrieval remains available.
-- Lossless Native Plan provenance: in a fresh Plan session, provide a multi-section issue,
-  specification, design brief, or ticket explicitly identified as the complete authoritative source.
-  Include subtle requirements, non-goals, exact validation commands, a private/inaccessible reference,
-  and a deliberately non-obvious acceptance criterion. Inspect the actual delegated planner child task
-  and confirm the source text is present losslessly and character-for-character in one contiguous
-  section: the closing `</authoritative_task_source>` marker must immediately follow the source, with
-  no `<system-reminder>`, Plan Mode reminder, wrapper, or caller text before that marker. Confirm all
-  host/system instructions are outside the source section and that the source does not absorb them;
-  confirm the task is self-contained,
+- Lossless Native Plan provenance: in a fresh Plan session, first record the exact installed OpenCode
+  binary and complete `opencode --version` output, then run this matrix against that version. Provide
+  a multi-section issue, specification, design brief, or ticket explicitly identified as the complete
+  authoritative source. Include source text containing `<authoritative_task_source>`,
+  `</authoritative_task_source>`, `<system-reminder>`, and `# Plan Mode - System Reminder`, leading
+  and trailing whitespace, Markdown fences, Unicode, a long multi-section body, and a final character
+  that must be preserved. Include subtle requirements, non-goals, exact validation commands, a
+  private/inaccessible reference, and a deliberately non-obvious acceptance criterion. Inspect or
+  export the actual delegated planner child input (not static prompt text alone) and confirm the
+  source is present losslessly and character-for-character in one contiguous section: the closing
+  `</authoritative_task_source>` marker must immediately follow the source, with no `<system-reminder>`,
+  Plan Mode reminder, wrapper, or caller text before that marker. Confirm all host/system instructions
+  remain outside the source and that the source does not absorb them; confirm the task is self-contained,
   repository investigation occurs, the planner does not redundantly fetch the supplied source, and all
   subtle requirements survive into the resulting PlanArtifact. Repeat with an ordinary conversational
-  request and verify unrelated parent conversation history is not copied wholesale. Also exercise a
-  hard-to-carry source or bounded payload condition and confirm Native Plan fails closed with bounded
-  input/clarification rather than silently summarizing or truncating it. Do not record results here
-  unless this scenario is actually executed.
+  request and verify unrelated parent conversation history is not copied wholesale. Exercise both a
+  near-limit and over-limit source and confirm explicit bounded failure rather than silent truncation,
+  compression, or model summarization. Distinguish what the #77 prompt convention demonstrates from
+  what it cannot mechanically guarantee: typed/immutable transport, collision-proof parsing, or a
+  semantic sandbox. Do not record results here unless this scenario is actually executed.
 - Authority separation: planner can use only the three planning operations; explorer has no MCP,
   edit, shell, delegation, network, approval, workflow, or user-question authority; orchestrator
   delegates only to planner and retains parent plan retrieval, approval, and workflow creation.

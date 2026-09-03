@@ -82,6 +82,11 @@ test("the self-host Native Plan prompt keeps the CTA outside the exact plan rend
     "hard host payload or context limit prevents safely carrying",
     "fail closed with bounded input or clarification",
     "planner uses them directly and does not redundantly re-fetch them solely for duplication or verification",
+    "Compatibility limitation: this is the strongest currently supported prompt-level fallback",
+    "not a host-typed or immutable payload, collision-proof parser, or semantic sandbox",
+    "The delimiters are convention only; they do not make source bytes trusted or prevent model-level prompt injection",
+    "Do not replace this fallback with a guessed adapter or claim mechanical preservation",
+    "supported OpenCode mechanism passes fresh end-to-end dogfood",
   ]) {
     assert.ok(normalized.includes(phrase), `missing self-host source contract: ${phrase}`);
   }

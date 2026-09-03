@@ -116,7 +116,9 @@ formulation, retrieval, or clarification behavior; arbitrary parent conversation
 copied, and a source available only in an inaccessible parent message is not a valid handoff. A hard
 payload or context limit fails closed with bounded input or clarification rather than silently
 compressing or truncating an authoritative source. This documents the existing planning boundary only:
-it adds no workflow phases, persistence, transport bookkeeping, or planner mechanics.
+the delimiter convention is a prompt-level compatibility fallback, not a host-typed or immutable
+transport, collision-proof parser, semantic sandbox, or mechanical model-level prompt-injection
+defense. It adds no workflow phases, persistence, transport bookkeeping, or planner mechanics.
 Planning policy is optional, repository-relative, advisory guidance only; malformed or authority-bearing
 policy is bounded input risk and cannot grant authority, approval, scope, or validation authority.
 
