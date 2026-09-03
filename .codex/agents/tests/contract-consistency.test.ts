@@ -1272,3 +1272,35 @@ test("role contracts require native workflow transport and forbid alternate acce
     }
   }
 });
+
+test("README documents the current runtime authority boundary", () => {
+  const readme = readFileSync(resolve(import.meta.dir, "../../../README.md"), "utf8").replace(
+    /\s+/gu,
+    " ",
+  );
+  const directAuthority = readme.slice(
+    readme.indexOf("Opening `codex-agents` itself"),
+    readme.indexOf("Planning is a separate pre-workflow path"),
+  );
+  const installedAuthority = readme.slice(readme.indexOf("OpenCode permissions are host-level"));
+  const activeAuthority = `${directAuthority} ${installedAuthority}`;
+
+  for (const anchor of [
+    /persisted runtime ownership/u,
+    /launch attestation/u,
+    /optimistic version(?: checks|ing)/u,
+    /role-specific tool exposure/u,
+    /Workflow MCP[^.]*invariant checks/u,
+  ]) {
+    assert.match(activeAuthority, anchor);
+  }
+  assert.doesNotMatch(
+    activeAuthority,
+    /(?:single|parent) capability remains? parent-only|server-side capability and version checks/u,
+  );
+  assert.doesNotMatch(
+    activeAuthority,
+    /(?:returned|retained|carried by the model|model-carried)[^.]*parent bearer|parent bearer[^.]*returned/u,
+  );
+  assert.doesNotMatch(activeAuthority, /\bbearer\b/u);
+});

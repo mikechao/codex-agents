@@ -119,9 +119,10 @@ handoff without asking the user to repeat its `plan_id` and revision; it still p
 read-only preflight and parent-verifies the current approved plan,
 calls `workflow_create_from_plan`, and automatically dispatches `implementer`, `code_reviewer`, and—after
 explicit user commit authorization—`committer`. Worker handoffs contain only the `workflow_id`; each
-role reads authoritative state and its `expected_version` through its dedicated getter. The single
-capability remains parent-only for privileged transitions, with separation enforced by role-specific
-tool exposure and Workflow MCP workflow, phase, version, and invariant checks. Orchestrator cannot
+role reads authoritative state and its `expected_version` through its dedicated getter. Parent
+control-plane authority comes from persisted runtime ownership and launch attestation, with
+optimistic version checks; separation remains enforced by role-specific tool exposure and Workflow
+MCP workflow, phase, version, and invariant checks. Orchestrator cannot
 edit, stage, or commit itself. Build remains an
 independent direct-coding option rather than the workflow control plane.
 
@@ -220,8 +221,9 @@ bash allowlist for the documented commit flow (status/diff/log/show/rev-parse/ls
 inspection, approved `git add`/`git commit`, and the receipt command) that denies
 push/amend/rebase/reset/checkout/switch and filesystem mutation; the implementer keeps broad bash
 for validation with explicit denies for staging, committing, and history-rewriting commands; and
-each agent only exposes its own role's workflow tools. The server-side capability and version
-checks remain authoritative for both hosts.
+each agent only exposes its own role's workflow tools. Persisted runtime ownership and launch
+attestation, optimistic versioning, and Workflow MCP phase and invariant checks remain authoritative
+for both hosts.
 
 The target repository should also incorporate the custom-subagent policy from
 `.codex/agents/WORKFLOW.md` into its root `AGENTS.md`. The installer deliberately does not rewrite

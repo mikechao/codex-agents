@@ -1,5 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   DISPATCH_TOOL_NAMES,
   PARENT_PLANNING_OPERATIONS,
@@ -8,6 +10,8 @@ import {
   SERVER_TOOL_NAMES,
   tools,
 } from "../server.js";
+
+const serverSource = readFileSync(resolve(import.meta.dir, "../server.ts"), "utf8");
 
 test("protocol tool contract exposes the workflow actions with stable annotations", () => {
   const names = tools.map((tool) => tool.name).sort();
@@ -228,4 +232,19 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.equal("acceptance_criteria" in linkedFromPlanSchema.properties, false);
   assert.equal("validation_requirements" in linkedFromPlanSchema.properties, false);
   assert.match(linkedFromPlan.description ?? "", /resolv.*approved.*PlanArtifact server-side/u);
+});
+
+test("server source retains only the live protocol instructions", () => {
+  assert.equal((serverSource.match(/export const protocolInstructions\s*=/gu) ?? []).length, 1);
+  assert.doesNotMatch(serverSource, /\b_instructions\b/u);
+  assert.doesNotMatch(serverSource, /Legacy instructions were intentionally removed/u);
+  assert.doesNotMatch(
+    serverSource,
+    /parent capability|workflow_id, capability, expected_version|authoritative view with workflow_get/u,
+  );
+  assert.doesNotMatch(serverSource, /Capabilities are defense-in-depth/u);
+  assert.doesNotMatch(serverSource, /\bworkflow_get\b|\bbearer\b/u);
+  assert.equal(protocolInstructions.includes("workflow_get"), false);
+  assert.equal(protocolInstructions.includes("role capability"), false);
+  assert.match(protocolInstructions, /PlanArtifact/);
 });
