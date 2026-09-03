@@ -14,7 +14,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { TOML } from "bun";
 import {
-  commitStaged,
   hasWorkflowStateRegistration,
   materializeAgentDefinitions,
 } from "../../../install-into.js";
@@ -386,57 +385,6 @@ test("hasWorkflowStateRegistration is presence-based", () => {
     assert.equal(hasWorkflowStateRegistration(config), true);
     write(".codex/config.toml", 'workflow_state = "top-level"\n');
     assert.equal(hasWorkflowStateRegistration(config), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("commitStaged installs both paths on success", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "install-into-"))) as string;
-  try {
-    const agentsStaging = join(root, ".agents.install.");
-    const agentsTarget = join(root, ".codex/agents");
-    const stagedConfig = join(root, ".config.install.");
-    const config = join(root, ".codex/config.toml");
-    mkdirSync(agentsStaging, { recursive: true });
-    mkdirSync(dirname(config), { recursive: true });
-    writeFileSync(join(agentsStaging, "implementer.toml"), "[agent]\n");
-    writeFileSync(stagedConfig, "[mcp_servers.workflow_state]\n");
-    commitStaged(agentsStaging, agentsTarget, stagedConfig, config);
-    assert.ok(existsSync(join(agentsTarget, "implementer.toml")));
-    assert.equal(readFileSync(config, "utf8"), "[mcp_servers.workflow_state]\n");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("commitStaged rolls back the agents directory when the config rename fails", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "install-into-"))) as string;
-  try {
-    const agentsStaging = join(root, ".agents.install.");
-    const agentsTarget = join(root, ".codex/agents");
-    const stagedConfig = join(root, ".config.install.");
-    const config = join(root, ".codex/config.toml");
-    mkdirSync(agentsStaging, { recursive: true });
-    mkdirSync(dirname(config), { recursive: true });
-    writeFileSync(join(agentsStaging, "implementer.toml"), "[agent]\n");
-    writeFileSync(stagedConfig, "[mcp_servers.workflow_state]\n");
-    writeFileSync(config, "keep me\n");
-    const rename = (from: string, to: string) => {
-      if (to === config) throw new Error("injected rename failure");
-      execFileSync("mv", [from, to], { stdio: "ignore" });
-    };
-    assert.throws(
-      () => commitStaged(agentsStaging, agentsTarget, stagedConfig, config, rename),
-      /injected rename failure/,
-    );
-    assert.ok(!existsSync(agentsTarget), "agents directory must be rolled back");
-    assert.equal(
-      readFileSync(config, "utf8"),
-      "keep me\n",
-      "pre-existing config must be untouched",
-    );
-    assert.ok(existsSync(stagedConfig), "staged config must remain staged");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -183,22 +183,6 @@ export function hasWorkflowStateRegistration(configPath: string): boolean {
   return section !== undefined && section !== null;
 }
 
-export function commitStaged(
-  agentsStaging: string,
-  agentsTarget: string,
-  stagedConfig: string,
-  config: string,
-  rename: (from: string, to: string) => void = renameSync,
-): void {
-  rename(agentsStaging, agentsTarget);
-  try {
-    rename(stagedConfig, config);
-  } catch (cause) {
-    rmSync(agentsTarget, { recursive: true, force: true });
-    throw cause;
-  }
-}
-
 interface CommitStep {
   staging: string;
   target: string;
