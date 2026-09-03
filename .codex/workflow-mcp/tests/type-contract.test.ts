@@ -27,6 +27,7 @@ import type {
   ImplementationStatus,
   ImplementerHandoffView,
   ImplementerView,
+  ParentView,
   PlanAuthoringContent,
   PlannerPlanRead,
   PlanRead,
@@ -193,6 +194,14 @@ function _compileBrandedCorrelation(): void {
   void reviewValidationResults;
   void manualStatus;
   void manualId;
+}
+
+function _compileDirectParentView(): void {
+  const parent = undefined as unknown as ParentView;
+  const workflowId: WorkflowId | null = parent.workflow_id;
+  void workflowId;
+  // @ts-expect-error Parent views no longer expose the obsolete compatibility wrapper
+  parent.workflow;
 }
 
 function _compilePlannerAuthoringView(): void {

@@ -41,12 +41,6 @@ async function start(root: string, diagnostics = false) {
     const result = await client.callTool({ name, arguments: arguments_ });
     const body = JSON.parse((result.content[0] as { text: string }).text);
     if (result.isError) throw new Error(`${name}: ${body.category}`);
-    if (
-      name === "workflow_create" ||
-      name === "workflow_create_from_plan" ||
-      name.startsWith("workflow_create_linked")
-    )
-      Object.defineProperty(body, "workflow", { value: body, enumerable: false });
     return body;
   };
   return { client, transport, call };
@@ -104,7 +98,7 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
       assert.ok(listed.tools.some((tool) => tool.name === name));
     }
     const created = await call("workflow_create", createArgs(git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     assert.equal("capability" in created, false);
     assert.equal("capabilities" in created, false);
     assert.equal(
@@ -153,7 +147,6 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
       (
         await call("workflow_authorize_commit", {
           workflow_id: id,
-          capability: created.capability,
           expected_version: await version(id),
           user_authorization: "protocol commit",
         })
@@ -180,7 +173,6 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
     );
     const audit = await call("workflow_get_audit", {
       workflow_id: id,
-      capability: created.capability,
     });
     assert.deepEqual(
       audit.map((event: any) => event.event_type),
@@ -291,10 +283,11 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       revision: 2,
       work_items: [],
     });
+    assert.equal("workflow" in created, false);
     assert.equal(created.approved_plan, "replacement full plan");
-    assert.equal(created.workflow.execution_brief, "replacement brief");
-    assert.equal(created.workflow.objective, "stdio planning revised");
-    assert.equal(created.workflow.plan_provenance.revision, 2);
+    assert.equal(created.execution_brief, "replacement brief");
+    assert.equal(created.objective, "stdio planning revised");
+    assert.equal(created.plan_provenance.revision, 2);
   } finally {
     await client.close();
     await transport.close();
@@ -387,8 +380,9 @@ test("STDIO planner views round-trip without IDs and preserve parent artifact co
       plan_id: draft.plan_id,
       revision: combined.revision,
     });
-    assert.deepEqual(created.workflow.acceptance_criteria, parent.acceptance_criteria);
-    assert.deepEqual(created.workflow.validation_requirements, parent.validation_requirements);
+    assert.equal("workflow" in created, false);
+    assert.deepEqual(created.acceptance_criteria, parent.acceptance_criteria);
+    assert.deepEqual(created.validation_requirements, parent.validation_requirements);
   } finally {
     await client.close();
     await transport.close();
@@ -403,18 +397,17 @@ test("STDIO role routing is exact and parent authorization remains protected", a
     const first = await call("workflow_create", createArgs(git, { objective: "first workflow" }));
     const second = await call("workflow_create", createArgs(git, { objective: "second workflow" }));
     assert.equal(
-      (await call("workflow_reviewer_get", { workflow_id: first.workflow.workflow_id })).objective,
+      (await call("workflow_reviewer_get", { workflow_id: first.workflow_id })).objective,
       "first workflow",
     );
     assert.equal(
-      (await call("workflow_committer_get", { workflow_id: second.workflow.workflow_id }))
-        .objective,
+      (await call("workflow_committer_get", { workflow_id: second.workflow_id })).objective,
       "second workflow",
     );
     const denied = await client.callTool({
       name: "workflow_authorize_commit",
       arguments: {
-        workflow_id: first.workflow.workflow_id,
+        workflow_id: first.workflow_id,
         capability: "wrong",
         expected_version: 0,
         user_authorization: "denied",
@@ -427,7 +420,7 @@ test("STDIO role routing is exact and parent authorization remains protected", a
     );
     const malformed = await client.callTool({
       name: "workflow_submit_implementation",
-      arguments: { ...implementation(first.workflow.workflow_id, 0), capability: "legacy-bearer" },
+      arguments: { ...implementation(first.workflow_id, 0), capability: "legacy-bearer" },
     });
     assert.equal(malformed.isError, true);
     assert.equal(
@@ -476,13 +469,13 @@ test("receipt capture stays server-owned for worker submissions", async () => {
     const created = await call("workflow_create", createArgs(git));
     const result = await call(
       "workflow_submit_implementation",
-      implementation(created.workflow.workflow_id, 0),
+      implementation(created.workflow_id, 0),
     );
     assert.equal(result.phase, "REVIEWING");
     assert.equal("initial_receipt" in result, false);
     assert.equal("implementation_receipt" in result, false);
     assert.equal(
-      (await call("workflow_reviewer_get", { workflow_id: created.workflow.workflow_id })).phase,
+      (await call("workflow_reviewer_get", { workflow_id: created.workflow_id })).phase,
       "REVIEWING",
     );
   } finally {
@@ -507,7 +500,7 @@ test("opt-in child diagnostics correlate tool receipt and result without touchin
   const { client, transport, call } = await start(root, true);
   try {
     const created = await call("workflow_create", createArgs(git));
-    await call("workflow_parent_get", { workflow_id: created.workflow.workflow_id });
+    await call("workflow_parent_get", { workflow_id: created.workflow_id });
     const directory = diagnosticsDirectory(root);
     const files = readdirSync(directory).filter((entry) => /^runtime-\d+\.jsonl$/u.test(entry));
     assert.equal(files.length, 1);

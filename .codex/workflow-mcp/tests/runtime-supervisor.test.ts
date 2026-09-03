@@ -59,13 +59,13 @@ describe("Workflow MCP runtime supervision", () => {
         runtimeRevision: revision,
       });
       const created = create(first, root, revision, "runtime affinity");
-      expect(first.runtimeAffinity(created.workflow.workflow_id)).toEqual({
+      expect(first.runtimeAffinity(created.workflow_id)).toEqual({
         runtime_id: runtimeId,
         runtime_revision: revision,
       });
       first.close();
       const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-      expect(reopened.runtimeAffinity(created.workflow.workflow_id)).toEqual({
+      expect(reopened.runtimeAffinity(created.workflow_id)).toEqual({
         runtime_id: runtimeId,
         runtime_revision: revision,
       });
@@ -99,16 +99,14 @@ describe("Workflow MCP runtime supervision", () => {
       const created = create(owner, root, revision, "same WAL owner");
       for (let index = 0; index < 20; index += 1) {
         create(owner, root, revision, `same WAL write ${index}`);
-        expect(supervisor.runtimeAffinity(created.workflow.workflow_id)).toEqual({
+        expect(supervisor.runtimeAffinity(created.workflow_id)).toEqual({
           runtime_id: runtimeId,
           runtime_revision: revision,
         });
-        expect(owner.parentGet(created.workflow.workflow_id).workflow_id).toBe(
-          created.workflow.workflow_id,
-        );
+        expect(owner.parentGet(created.workflow_id).workflow_id).toBe(created.workflow_id);
       }
       expect(owner.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
-      const audit = owner.audit(created.workflow.workflow_id, created.capability);
+      const audit = owner.audit(created.workflow_id);
       expect(audit).toHaveLength(1);
       expect(audit[0].event_type).toBe("WORKFLOW_CREATED");
     } finally {
@@ -126,13 +124,13 @@ describe("Workflow MCP runtime supervision", () => {
       const created = create(store, root, currentHead(root), "incomplete runtime");
       const row = store.db
         .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
-        .get(created.workflow.workflow_id) as { state_json: string };
+        .get(created.workflow_id) as { state_json: string };
       const state = JSON.parse(row.state_json);
       state.runtime_id = "a".repeat(64);
       state.runtime_revision = null;
       store.db
         .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
-        .run(JSON.stringify(state), objectDigest(state), created.workflow.workflow_id);
+        .run(JSON.stringify(state), objectDigest(state), created.workflow_id);
       store.close();
       assert.throws(
         () => new WorkflowStore({ repositoryRoot: root, databasePath: path }),
@@ -167,12 +165,12 @@ describe("Workflow MCP runtime supervision", () => {
         runtimeRevision: revision,
       });
       assert.throws(
-        () => foreign.parentGet(created.workflow.workflow_id),
+        () => foreign.parentGet(created.workflow_id),
         (error: unknown) =>
           error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
       );
       assert.throws(
-        () => foreign.implementerGet(created.workflow.workflow_id),
+        () => foreign.implementerGet(created.workflow_id),
         (error: unknown) =>
           error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
       );
@@ -345,7 +343,7 @@ describe("Workflow MCP runtime supervision", () => {
           ...candidate.options,
         });
         assert.throws(
-          () => store.parentGet(created.workflow.workflow_id),
+          () => store.parentGet(created.workflow_id),
           (error: unknown) =>
             error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
           candidate.name,
@@ -591,7 +589,7 @@ describe("Workflow MCP runtime supervision", () => {
         ...attestation(artifactA.runtime_id, revisionA),
       });
       const workflowA = create(firstStore, target.root, revisionA, "runtime A");
-      const workflowIdA = workflowA.workflow.workflow_id;
+      const workflowIdA = workflowA.workflow_id;
       writeFileSync(join(target.root, "note.txt"), "prepared on historical runtime\n");
       firstStore.submitImplementation({
         workflow_id: workflowIdA,
@@ -615,7 +613,6 @@ describe("Workflow MCP runtime supervision", () => {
       });
       firstStore.authorizeCommit({
         workflow_id: workflowIdA,
-        capability: workflowA.capability,
         expected_version: 3,
         user_authorization: "authorize historical preparation",
       });
@@ -628,7 +625,7 @@ describe("Workflow MCP runtime supervision", () => {
       const routedA = await active.request(
         2,
         "tools/call",
-        workflowA.workflow.workflow_id,
+        workflowA.workflow_id,
         {},
         "workflow_parent_get",
       );
@@ -669,7 +666,7 @@ describe("Workflow MCP runtime supervision", () => {
       const routedB = await restarted.request(
         4,
         "tools/call",
-        workflowB.workflow.workflow_id,
+        workflowB.workflow_id,
         {},
         "workflow_implementer_get",
       );
@@ -678,7 +675,7 @@ describe("Workflow MCP runtime supervision", () => {
       const routedAAfterRestart = await restarted.request(
         5,
         "tools/call",
-        workflowA.workflow.workflow_id,
+        workflowA.workflow_id,
         {},
         "workflow_parent_get",
       );
@@ -689,14 +686,13 @@ describe("Workflow MCP runtime supervision", () => {
       assert.deepEqual(historicalView.permitted_next_actions, ["workflow_reconcile_commit_result"]);
       secondStore.reconcileCommitResult({
         workflow_id: workflowIdA,
-        capability: workflowA.capability,
         expected_version: preparedA.version,
         attempt_id: preparedA.commit_preparation.attempt_id,
       });
       const routedRecovery = await restarted.request(
         6,
         "tools/call",
-        workflowA.workflow.workflow_id,
+        workflowA.workflow_id,
         {},
         "workflow_reconcile_commit_result",
       );
@@ -944,7 +940,7 @@ describe("Workflow MCP runtime supervision", () => {
           include_untracked: true,
         },
       });
-      const id = created.workflow.workflow_id;
+      const id = created.workflow_id;
       owner.expandScope({
         workflow_id: id,
         expected_version: 0,

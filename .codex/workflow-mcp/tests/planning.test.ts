@@ -49,7 +49,7 @@ function sourceInput(git: (...args: string[]) => string) {
 
 function approvedSource(store: any, git: (...args: string[]) => string) {
   const source = store.create(sourceInput(git));
-  const id = source.workflow.workflow_id;
+  const id = source.workflow_id;
   store.submitImplementation({
     workflow_id: id,
     expected_version: 0,
@@ -428,7 +428,7 @@ test("identical approved current revisions preserve approval and plan provenance
     );
 
     const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: 1 });
-    assert.deepEqual(workflow.workflow.plan_provenance, {
+    assert.deepEqual(workflow.plan_provenance, {
       plan_id: draft.plan_id,
       revision: 1,
       artifact_digest: approved.artifact_digest,
@@ -518,7 +518,7 @@ test("plan-native linked follow-up binds only the exact current approved child a
   const target = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
   try {
-    const { source, id, optional } = approvedSource(store, target.git);
+    const { id, optional } = approvedSource(store, target.git);
     const draft = store.planCreate(planInput());
     const approved = store.planApprove({
       plan_id: draft.plan_id,
@@ -527,14 +527,14 @@ test("plan-native linked follow-up binds only the exact current approved child a
     });
     const child = store.createLinkedFollowupFromPlan({
       workflow_id: id,
-      capability: source.capability,
       expected_version: 3,
       plan_id: draft.plan_id,
       revision: 1,
       finding_ids: [optional.finding_id],
       user_authorization: "authorize exact child plan remediation",
     });
-    const childView = store.parentGet(child.workflow.workflow_id);
+    const childView = store.parentGet(child.workflow_id);
+    assert.equal("workflow" in child, false);
     assert.equal(childView.objective, planInput().objective);
     assert.equal(childView.approved_plan, planInput().full_plan);
     assert.equal(childView.execution_brief, planInput().execution_brief);
@@ -558,7 +558,7 @@ test("plan-native linked follow-up binds only the exact current approved child a
     assert.deepEqual(childView.linked_findings, [optional]);
     assert.equal(childView.repair_cycle, 0);
     assert.equal(childView.remediation_context.authorized_finding_ids[0], optional.finding_id);
-    assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow.workflow_id);
+    assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow_id);
   } finally {
     store.close();
     disposeFixture(target.root);
@@ -569,15 +569,14 @@ test("plan-native linked follow-up rejects raw artifact fields and fails atomica
   const target = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
   try {
-    const { source, id, optional } = approvedSource(store, target.git);
+    const { id, optional } = approvedSource(store, target.git);
     const draft = store.planCreate(planInput());
     const beforeVersion = store.parentGet(id).version;
-    const beforeAudit = store.audit(id, source.capability).length;
+    const beforeAudit = store.audit(id).length;
     assert.equal(
       category(() =>
         store.createLinkedFollowupFromPlan({
           workflow_id: id,
-          capability: source.capability,
           expected_version: beforeVersion,
           plan_id: draft.plan_id,
           revision: 1,
@@ -589,12 +588,11 @@ test("plan-native linked follow-up rejects raw artifact fields and fails atomica
       "ERROR_INVALID_SHAPE",
     );
     assert.equal(store.parentGet(id).version, beforeVersion);
-    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+    assert.equal(store.audit(id).length, beforeAudit);
     assert.equal(
       category(() =>
         store.createLinkedFollowupFromPlan({
           workflow_id: id,
-          capability: source.capability,
           expected_version: beforeVersion,
           plan_id: "00000000-0000-4000-8000-000000000000",
           revision: 1,
@@ -605,12 +603,11 @@ test("plan-native linked follow-up rejects raw artifact fields and fails atomica
       "ERROR_PLAN_NOT_FOUND",
     );
     assert.equal(store.parentGet(id).version, beforeVersion);
-    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+    assert.equal(store.audit(id).length, beforeAudit);
     assert.equal(
       category(() =>
         store.createLinkedFollowupFromPlan({
           workflow_id: id,
-          capability: source.capability,
           expected_version: beforeVersion,
           plan_id: draft.plan_id,
           revision: 1,
@@ -621,7 +618,7 @@ test("plan-native linked follow-up rejects raw artifact fields and fails atomica
       "ERROR_PLAN_UNAPPROVED",
     );
     assert.equal(store.parentGet(id).version, beforeVersion);
-    assert.equal(store.audit(id, source.capability).length, beforeAudit);
+    assert.equal(store.audit(id).length, beforeAudit);
   } finally {
     store.close();
     disposeFixture(target.root);
@@ -636,7 +633,7 @@ test("plan-native linked follow-up rolls back child and source succession after 
     faultAfterLinkedChildInsert: true,
   });
   try {
-    const { source, id, optional } = approvedSource(store, target.git);
+    const { id, optional } = approvedSource(store, target.git);
     const draft = store.planCreate(planInput());
     const approved = store.planApprove({
       plan_id: draft.plan_id,
@@ -647,7 +644,7 @@ test("plan-native linked follow-up rolls back child and source succession after 
     const beforeSourceRow = store.db
       .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
       .get(id);
-    const beforeSourceAudit = store.audit(id, source.capability);
+    const beforeSourceAudit = store.audit(id);
     const beforeWorkflowCount = store.db
       .prepare("SELECT COUNT(*) AS count FROM workflows")
       .get().count;
@@ -664,7 +661,6 @@ test("plan-native linked follow-up rolls back child and source succession after 
       () =>
         store.createLinkedFollowupFromPlan({
           workflow_id: id,
-          capability: source.capability,
           expected_version: beforeVersion,
           plan_id: draft.plan_id,
           revision: 1,
@@ -681,7 +677,7 @@ test("plan-native linked follow-up rolls back child and source succession after 
         .get(id),
       beforeSourceRow,
     );
-    assert.deepEqual(store.audit(id, source.capability), beforeSourceAudit);
+    assert.deepEqual(store.audit(id), beforeSourceAudit);
     assert.equal(
       store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count,
       beforeWorkflowCount,

@@ -42,17 +42,17 @@ function implementation(
   touched: string[] = [],
 ) {
   return store.submitImplementation({
-    workflow_id: workflow.workflow.workflow_id,
-    expected_version: version ?? store.parentGet(workflow.workflow.workflow_id).version,
+    workflow_id: workflow.workflow_id,
+    expected_version: version ?? store.parentGet(workflow.workflow_id).version,
     status,
     summary: "implementation evidence",
     agent_touched_paths: touched,
-    acceptance_results: workflow.workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
+    acceptance_results: workflow.acceptance_criteria.map(({ criterion_id }: any) => ({
       criterion_id,
       status: "satisfied",
       evidence: "accepted",
     })),
-    validation_results: workflow.workflow.validation_requirements.map(({ validation_id }: any) => ({
+    validation_results: workflow.validation_requirements.map(({ validation_id }: any) => ({
       validation_id,
       status: "passed",
       evidence: "validated",
@@ -71,8 +71,8 @@ function review(
   optional: any[] = [],
   prior = {},
 ) {
-  const id = workflow.workflow.workflow_id;
-  if (workflow.workflow.review_target.review_mode === "working_tree") {
+  const id = workflow.workflow_id;
+  if (workflow.review_target.review_mode === "working_tree") {
     store.beginReview({ workflow_id: id, expected_version: store.parentGet(id).version });
   }
   return store.submitReview({
@@ -130,7 +130,7 @@ function authorized(
       approved_paths: approvedPaths,
     }),
   );
-  const id = created.workflow.workflow_id;
+  const id = created.workflow_id;
   implementation(store, created);
   for (const path of approvedPaths) {
     writeFileSync(
@@ -142,27 +142,29 @@ function authorized(
   review(store, created);
   store.authorizeCommit({
     workflow_id: id,
-    capability: created.capability,
     expected_version: store.parentGet(id).version,
     user_authorization: "authorized",
   });
   return { created, id };
 }
 
-test("fresh store API persists singular parent capability and role-specific views", () => {
+test("fresh store API exposes direct parent views and role-specific views", () => {
   const { root, git } = fixture();
   try {
     const path = join(root, "state.sqlite");
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const created = store.create(input(git, { approved_plan: "immutable plan" }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
+    assert.equal(Object.hasOwn(created, "workflow"), false);
+    assert.equal("workflow" in created, false);
     assert.equal("capability" in created, false);
+    assert.equal("workflow" in store.parentGet(id), false);
     assert.equal("capabilities" in created, false);
     assert.equal(store.implementerGet(id).approved_plan, "immutable plan");
     assert.equal("approved_plan" in store.reviewerGet(id), false);
     assert.equal("commit_authorization" in store.committerGet(id), true);
     assert.equal(store.parentGet(id).version, 0);
-    assert.equal(store.audit(id, created.capability).length, 1);
+    assert.equal(store.audit(id).length, 1);
     assert.equal(
       category(() =>
         store.authorizeCommit({
@@ -188,7 +190,7 @@ test("incomplete implementation attempts stay active and preserve repair authori
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git, { max_repair_cycles: 1 }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const submit = (options: {
       status: string;
       criterion?: "satisfied" | "not_satisfied";
@@ -201,14 +203,14 @@ test("incomplete implementation attempts stay active and preserve repair authori
         status: options.status,
         summary: `${options.status.toLowerCase()} attempt`,
         agent_touched_paths: [],
-        acceptance_results: created.workflow.acceptance_criteria.map(
+        acceptance_results: created.acceptance_criteria.map(
           ({ criterion_id }: { criterion_id: string }) => ({
             criterion_id,
             status: options.criterion ?? "satisfied",
             evidence: "acceptance evidence",
           }),
         ),
-        validation_results: created.workflow.validation_requirements.map(
+        validation_results: created.validation_requirements.map(
           ({ validation_id }: { validation_id: string }) => ({
             validation_id,
             status: options.validation ?? "passed",
@@ -233,10 +235,10 @@ test("incomplete implementation attempts stay active and preserve repair authori
     ]);
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
     assert.deepEqual(
-      store.audit(id, created.capability).map((event: any) => event.event_type),
+      store.audit(id).map((event: any) => event.event_type),
       ["WORKFLOW_CREATED", "IMPLEMENTATION_INCOMPLETE"],
     );
-    assert.equal(store.audit(id, created.capability).at(-1).summary.outcome, "IMPLEMENTING");
+    assert.equal(store.audit(id).at(-1).summary.outcome, "IMPLEMENTING");
     const persisted = rawState(store, id);
     assert.equal(persisted.phase, "IMPLEMENTING");
     assert.equal(persisted.stop_context, null);
@@ -251,7 +253,6 @@ test("incomplete implementation attempts stay active and preserve repair authori
     );
     store.authorizeRepair({
       workflow_id: id,
-      capability: created.capability,
       expected_version: store.parentGet(id).version,
       finding_ids: ["REPAIR-1"],
     });
@@ -285,7 +286,7 @@ test("complete implementation statuses require satisfied acceptance criteria", (
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const concern = (criterion: "satisfied" | "not_satisfied") =>
       store.submitImplementation({
         workflow_id: id,
@@ -293,14 +294,14 @@ test("complete implementation statuses require satisfied acceptance criteria", (
         status: "DONE_WITH_CONCERNS",
         summary: "approved work complete with external validation exception",
         agent_touched_paths: [],
-        acceptance_results: created.workflow.acceptance_criteria.map(
+        acceptance_results: created.acceptance_criteria.map(
           ({ criterion_id }: { criterion_id: string }) => ({
             criterion_id,
             status: criterion,
             evidence: "acceptance evidence",
           }),
         ),
-        validation_results: created.workflow.validation_requirements.map(
+        validation_results: created.validation_requirements.map(
           ({ validation_id }: { validation_id: string }) => ({
             validation_id,
             status: "not_run",
@@ -329,7 +330,7 @@ test("worker mutations are capability-free and retain optimistic version checks"
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const implemented = implementation(store, created);
     assert.equal(implemented.phase, "REVIEWING");
     assert.equal(
@@ -341,7 +342,6 @@ test("worker mutations are capability-free and retain optimistic version checks"
     assert.equal(approved.phase, "STOPPED_APPROVED");
     store.authorizeCommit({
       workflow_id: id,
-      capability: created.capability,
       expected_version: store.parentGet(id).version,
       user_authorization: "authorize",
     });
@@ -361,7 +361,7 @@ test("worker mutations are capability-free and retain optimistic version checks"
     });
     assert.equal(committed.phase, "COMMITTED");
     assert.deepEqual(
-      store.audit(id, created.capability).map((event: any) => event.event_type),
+      store.audit(id).map((event: any) => event.event_type),
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
@@ -383,7 +383,7 @@ test("repair and re-review use authoritative expected versions", () => {
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git, { max_repair_cycles: 1 }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     implementation(store, created);
     const blocker = finding("REPAIR-1");
     assert.equal(
@@ -393,7 +393,6 @@ test("repair and re-review use authoritative expected versions", () => {
     assert.equal(
       store.authorizeRepair({
         workflow_id: id,
-        capability: created.capability,
         expected_version: store.parentGet(id).version,
         finding_ids: ["REPAIR-1"],
       }).phase,
@@ -424,7 +423,7 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git, { max_repair_cycles: 1 }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     implementation(store, created);
     writeFileSync(join(root, "note.txt"), "reviewed\n");
     const repaired = finding("REPAIR-1");
@@ -435,7 +434,6 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
     );
     const adjudicated = store.adjudicateFindings({
       workflow_id: id,
-      capability: created.capability,
       expected_version: store.parentGet(id).version,
       findings: [
         {
@@ -462,7 +460,6 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
     ]);
     store.authorizeRepair({
       workflow_id: id,
-      capability: created.capability,
       expected_version: store.parentGet(id).version,
       finding_ids: ["REPAIR-1"],
     });
@@ -478,7 +475,7 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
       }).phase,
       "STOPPED_APPROVED",
     );
-    const audit = store.audit(id, created.capability);
+    const audit = store.audit(id);
     const event = audit.find((item: any) => item.event_type === "FINDINGS_ADJUDICATED");
     assert.ok(event);
     assert.equal(
@@ -496,7 +493,7 @@ test("all blockers can be adjudicated directly into a fresh review", () => {
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     implementation(store, created);
     writeFileSync(join(root, "note.txt"), "reviewed\n");
     const blocker = finding("PLAN-ONLY");
@@ -504,7 +501,6 @@ test("all blockers can be adjudicated directly into a fresh review", () => {
     assert.equal(
       store.adjudicateFindings({
         workflow_id: id,
-        capability: created.capability,
         expected_version: store.parentGet(id).version,
         findings: [
           {
@@ -534,17 +530,16 @@ test("mixed or reused adjudication IDs fail atomically", () => {
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     implementation(store, created);
     writeFileSync(join(root, "note.txt"), "reviewed\n");
     review(store, created, undefined, "CHANGES_REQUESTED", [finding("VALID"), finding("OTHER")]);
     const version = store.parentGet(id).version;
-    const events = store.audit(id, created.capability).length;
+    const events = store.audit(id).length;
     assert.equal(
       category(() =>
         store.adjudicateFindings({
           workflow_id: id,
-          capability: created.capability,
           expected_version: version,
           findings: [
             {
@@ -564,14 +559,14 @@ test("mixed or reused adjudication IDs fail atomically", () => {
       "ERROR_INVALID_FINDING",
     );
     assert.equal(store.parentGet(id).version, version);
-    assert.equal(store.audit(id, created.capability).length, events);
+    assert.equal(store.audit(id).length, events);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("linked follow-up inherits findings and gets its own singular parent capability", () => {
+test("linked follow-up inherits findings and gets a direct parent view", () => {
   const { root, git } = fixture();
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
@@ -581,9 +576,8 @@ test("linked follow-up inherits findings and gets its own singular parent capabi
     const optional = finding("OPTIONAL-1", "P3", false);
     review(store, source, undefined, "APPROVED", [], [optional]);
     const child = store.createLinkedFollowup({
-      workflow_id: source.workflow.workflow_id,
-      capability: source.capability,
-      expected_version: store.parentGet(source.workflow.workflow_id).version,
+      workflow_id: source.workflow_id,
+      expected_version: store.parentGet(source.workflow_id).version,
       objective: "authorized child",
       approved_plan: null,
       approved_paths: ["note.txt"],
@@ -594,12 +588,9 @@ test("linked follow-up inherits findings and gets its own singular parent capabi
     });
     assert.equal("capability" in child, false);
     assert.equal("capabilities" in child, false);
-    assert.deepEqual(store.implementerGet(child.workflow.workflow_id).linked_findings, [optional]);
-    assert.equal(store.parentGet(child.workflow.workflow_id).version, 0);
-    assert.equal(
-      store.audit(source.workflow.workflow_id, source.capability).at(-1).event_type,
-      "LINKED_FOLLOWUP_CREATED",
-    );
+    assert.deepEqual(store.implementerGet(child.workflow_id).linked_findings, [optional]);
+    assert.equal(store.parentGet(child.workflow_id).version, 0);
+    assert.equal(store.audit(source.workflow_id).at(-1).event_type, "LINKED_FOLLOWUP_CREATED");
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -627,22 +618,20 @@ test("reconciles an existing commit from a different owning runtime without a se
     writeFileSync(join(root, "note.txt"), "committed once\n");
     review(oldStore, created);
     oldStore.authorizeCommit({
-      workflow_id: created.workflow.workflow_id,
-      capability: created.capability,
-      expected_version: oldStore.parentGet(created.workflow.workflow_id).version,
+      workflow_id: created.workflow_id,
+      expected_version: oldStore.parentGet(created.workflow_id).version,
       user_authorization: "authorize",
     });
     git("add", "note.txt");
     const prepared = oldStore.prepareCommit({
-      workflow_id: created.workflow.workflow_id,
-      expected_version: oldStore.parentGet(created.workflow.workflow_id).version,
+      workflow_id: created.workflow_id,
+      expected_version: oldStore.parentGet(created.workflow_id).version,
     });
-    assert.deepEqual(oldStore.parentGet(created.workflow.workflow_id).permitted_next_actions, []);
+    assert.deepEqual(oldStore.parentGet(created.workflow_id).permitted_next_actions, []);
     assert.equal(
       category(() =>
         oldStore.reconcileCommitResult({
-          workflow_id: created.workflow.workflow_id,
-          capability: created.capability,
+          workflow_id: created.workflow_id,
           expected_version: prepared.version,
           attempt_id: prepared.commit_preparation.attempt_id,
         }),
@@ -668,29 +657,26 @@ test("reconciles an existing commit from a different owning runtime without a se
       ...runtimeAttestation(newRuntimeId, current, newKey),
     });
     assert.equal(
-      category(() => preReconciliationReader.parentGet(created.workflow.workflow_id)),
+      category(() => preReconciliationReader.parentGet(created.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",
     );
     preReconciliationReader.close();
     const reconciled = currentStore.reconcileCommitResult({
-      workflow_id: created.workflow.workflow_id,
-      capability: created.capability,
+      workflow_id: created.workflow_id,
       expected_version: prepared.version,
       attempt_id: prepared.commit_preparation.attempt_id,
     });
     assert.equal(reconciled.phase, "COMMITTED");
-    assert.equal(currentStore.parentGet(created.workflow.workflow_id).phase, "COMMITTED");
-    const stateBeforeAuditCorruption = rawState(currentStore, created.workflow.workflow_id);
+    assert.equal(currentStore.parentGet(created.workflow_id).phase, "COMMITTED");
+    const stateBeforeAuditCorruption = rawState(currentStore, created.workflow_id);
     const stateRowBeforeAuditCorruption = currentStore.db
       .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
-      .get(created.workflow.workflow_id);
+      .get(created.workflow_id);
     const reconciliationAudit = currentStore.db
       .prepare(
         "SELECT summary_json FROM audit_events WHERE workflow_id = ? AND version = ? AND event_type = 'COMMIT_RESULT_SUBMITTED'",
       )
-      .get(created.workflow.workflow_id, reconciled.version) as
-      | { summary_json: string }
-      | undefined;
+      .get(created.workflow_id, reconciled.version) as { summary_json: string } | undefined;
     assert.ok(reconciliationAudit);
     const corruptedSummary = {
       ...JSON.parse(reconciliationAudit.summary_json),
@@ -704,26 +690,23 @@ test("reconciles an existing commit from a different owning runtime without a se
       .prepare(
         "UPDATE audit_events SET summary_json = ? WHERE workflow_id = ? AND version = ? AND event_type = 'COMMIT_RESULT_SUBMITTED'",
       )
-      .run(JSON.stringify(corruptedSummary), created.workflow.workflow_id, reconciled.version);
+      .run(JSON.stringify(corruptedSummary), created.workflow_id, reconciled.version);
     assert.equal(corruption.changes, 1);
     assert.equal(
-      category(() => currentStore.parentGet(created.workflow.workflow_id)),
+      category(() => currentStore.parentGet(created.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",
     );
     const stateRowAfterAuditCorruption = currentStore.db
       .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
-      .get(created.workflow.workflow_id);
-    assert.deepEqual(
-      rawState(currentStore, created.workflow.workflow_id),
-      stateBeforeAuditCorruption,
-    );
+      .get(created.workflow_id);
+    assert.deepEqual(rawState(currentStore, created.workflow_id), stateBeforeAuditCorruption);
     assert.deepEqual(stateRowAfterAuditCorruption, stateRowBeforeAuditCorruption);
     assert.equal(
-      category(() => currentStore.implementerGet(created.workflow.workflow_id)),
+      category(() => currentStore.implementerGet(created.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",
     );
     assert.equal(
-      category(() => currentStore.audit(created.workflow.workflow_id, created.capability)),
+      category(() => currentStore.audit(created.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",
     );
     assert.equal(git("rev-list", "--count", "HEAD"), "2");
@@ -735,9 +718,7 @@ test("reconciles an existing commit from a different owning runtime without a se
       ...runtimeAttestation(oldRuntimeId, base, oldKey),
     });
     assert.deepEqual(
-      oldReader
-        .audit(created.workflow.workflow_id, created.capability)
-        .map((event: any) => event.event_type),
+      oldReader.audit(created.workflow_id).map((event: any) => event.event_type),
       [
         "WORKFLOW_CREATED",
         "IMPLEMENTATION_SUBMITTED",
@@ -751,15 +732,14 @@ test("reconciles an existing commit from a different owning runtime without a se
     assert.equal(
       category(() =>
         currentStore.reconcileCommitResult({
-          workflow_id: created.workflow.workflow_id,
-          capability: created.capability,
+          workflow_id: created.workflow_id,
           expected_version: reconciled.version,
           attempt_id: prepared.commit_preparation.attempt_id,
         }),
       ),
       "ERROR_INVALID_TRANSITION",
     );
-    assert.equal(oldReader.audit(created.workflow.workflow_id, created.capability).length, 7);
+    assert.equal(oldReader.audit(created.workflow_id).length, 7);
     oldReader.close();
     currentStore.close();
   } finally {
@@ -776,9 +756,8 @@ test("linked remediation and combined review retain receipts through a committed
     writeFileSync(join(root, "note.txt"), "source change\n");
     review(store, source, undefined, "APPROVED", [], [finding("LINKED-OPTIONAL", "P3", false)]);
     const child = store.createLinkedFollowup({
-      workflow_id: source.workflow.workflow_id,
-      capability: source.capability,
-      expected_version: store.parentGet(source.workflow.workflow_id).version,
+      workflow_id: source.workflow_id,
+      expected_version: store.parentGet(source.workflow_id).version,
       objective: "linked remediation",
       approved_plan: null,
       approved_paths: ["note.txt"],
@@ -794,10 +773,9 @@ test("linked remediation and combined review retain receipts through a committed
       "REVIEWING",
     );
     assert.equal(review(store, child, undefined, "APPROVED", [], [], {}).phase, "STOPPED_APPROVED");
-    const id = child.workflow.workflow_id;
+    const id = child.workflow_id;
     store.authorizeCommit({
       workflow_id: id,
-      capability: child.capability,
       expected_version: store.parentGet(id).version,
       user_authorization: "authorize linked commit",
     });
@@ -817,7 +795,7 @@ test("linked remediation and combined review retain receipts through a committed
     assert.equal(committed.phase, "COMMITTED");
     assert.equal(rawState(store, id).linked_continuation.remediation_review_receipt !== null, true);
     assert.equal(rawState(store, id).review_receipt !== null, true);
-    assert.equal(store.audit(id, child.capability).at(-1).event_type, "COMMIT_RESULT_SUBMITTED");
+    assert.equal(store.audit(id).at(-1).event_type, "COMMIT_RESULT_SUBMITTED");
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -834,7 +812,7 @@ test("scope expansion and audit integrity remain append-only", () => {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
     const created = store.create(input(git, { approved_paths: ["note.txt"] }));
     const incomplete = store.submitImplementation({
-      workflow_id: created.workflow.workflow_id,
+      workflow_id: created.workflow_id,
       expected_version: 0,
       status: "INCOMPLETE",
       summary: "companion.txt and extra.txt are outside the approved scope",
@@ -848,18 +826,15 @@ test("scope expansion and audit integrity remain append-only", () => {
       known_failures: ["companion.txt is outside scope", "extra.txt is outside scope"],
       finding_resolution_map: {},
     });
-    const incompleteAudit = store.audit(created.workflow.workflow_id, created.capability)[1];
+    const incompleteAudit = store.audit(created.workflow_id)[1];
     assert.equal(incomplete.phase, "IMPLEMENTING");
     assert.equal(incomplete.version, 1);
     assert.equal(
-      store
-        .implementerGet(created.workflow.workflow_id)
-        .implementation_summary.includes("extra.txt"),
+      store.implementerGet(created.workflow_id).implementation_summary.includes("extra.txt"),
       true,
     );
     const expanded = store.expandScope({
-      workflow_id: created.workflow.workflow_id,
-      capability: created.capability,
+      workflow_id: created.workflow_id,
       expected_version: 1,
       added_paths: ["companion.txt", "extra.txt"],
       reason: "needed",
@@ -872,10 +847,10 @@ test("scope expansion and audit integrity remain append-only", () => {
       "note.txt",
     ]);
     for (const view of [
-      store.parentGet(created.workflow.workflow_id),
+      store.parentGet(created.workflow_id),
       expanded,
-      store.reviewerGet(created.workflow.workflow_id),
-      rawState(store, created.workflow.workflow_id),
+      store.reviewerGet(created.workflow_id),
+      rawState(store, created.workflow_id),
     ]) {
       assert.equal(view.implementation_summary, null);
       assert.equal(view.implementation_status, null);
@@ -886,7 +861,7 @@ test("scope expansion and audit integrity remain append-only", () => {
       assert.deepEqual(view.validation_results, []);
       assert.deepEqual(view.finding_resolution_map, {});
     }
-    assert.equal(rawState(store, created.workflow.workflow_id).implementation_receipt, null);
+    assert.equal(rawState(store, created.workflow_id).implementation_receipt, null);
     assert.deepEqual(expanded.approved_path_baselines, [
       {
         path: "companion.txt",
@@ -904,31 +879,23 @@ test("scope expansion and audit integrity remain append-only", () => {
         baseline: { path: "extra.txt", state: "absent", kind: "missing" },
       },
     ]);
-    assert.equal(
-      "approved_path_baselines" in store.implementerGet(created.workflow.workflow_id),
-      false,
-    );
+    assert.equal("approved_path_baselines" in store.implementerGet(created.workflow_id), false);
     assert.equal(expanded.implementation_receipt, undefined);
     assert.equal(expanded.phase, "IMPLEMENTING");
     assert.equal(expanded.version, 2);
-    assert.equal(expanded.workflow_id, created.workflow.workflow_id);
-    assert.equal(store.reviewerGet(created.workflow.workflow_id).implementation_summary, null);
-    assert.equal(store.reviewerGet(created.workflow.workflow_id).implementation_status, null);
-    assert.deepEqual(
-      store.audit(created.workflow.workflow_id, created.capability)[1],
-      incompleteAudit,
-    );
+    assert.equal(expanded.workflow_id, created.workflow_id);
+    assert.equal(store.reviewerGet(created.workflow_id).implementation_summary, null);
+    assert.equal(store.reviewerGet(created.workflow_id).implementation_status, null);
+    assert.deepEqual(store.audit(created.workflow_id)[1], incompleteAudit);
     writeFileSync(join(root, "companion.txt"), "expanded companion\n");
-    const implemented = implementation(store, { workflow: expanded }, undefined, "DONE", {}, [
-      "companion.txt",
-    ]);
+    const implemented = implementation(store, expanded, undefined, "DONE", {}, ["companion.txt"]);
     assert.equal(implemented.phase, "REVIEWING");
-    assert.ok(rawState(store, created.workflow.workflow_id).implementation_receipt);
+    assert.ok(rawState(store, created.workflow_id).implementation_receipt);
     const row: any = store.db
       .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
-      .get(created.workflow.workflow_id);
+      .get(created.workflow_id);
     assert.equal(row.state_digest, objectDigest(JSON.parse(row.state_json)));
-    const audit = store.audit(created.workflow.workflow_id, created.capability);
+    const audit = store.audit(created.workflow_id);
     assert.equal(audit.at(-2)?.event_type, "SCOPE_EXPANDED");
     assert.deepEqual(audit.at(-2)?.scope_expansion?.baselines, [
       {
@@ -949,7 +916,7 @@ test("scope expansion and audit integrity remain append-only", () => {
     ]);
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath });
-    assert.deepEqual(reopened.parentGet(created.workflow.workflow_id).approved_path_baselines, [
+    assert.deepEqual(reopened.parentGet(created.workflow_id).approved_path_baselines, [
       {
         path: "companion.txt",
         approved_at_version: 2,
@@ -966,19 +933,10 @@ test("scope expansion and audit integrity remain append-only", () => {
         baseline: { path: "extra.txt", state: "absent", kind: "missing" },
       },
     ]);
-    assert.equal(reopened.parentGet(created.workflow.workflow_id).version, 3);
-    assert.equal(
-      reopened.implementerGet(created.workflow.workflow_id).implementation_status,
-      "DONE",
-    );
-    assert.deepEqual(
-      reopened.audit(created.workflow.workflow_id, created.capability)[1].summary,
-      incompleteAudit.summary,
-    );
-    assert.equal(
-      reopened.audit(created.workflow.workflow_id, created.capability).at(-2)?.event_type,
-      "SCOPE_EXPANDED",
-    );
+    assert.equal(reopened.parentGet(created.workflow_id).version, 3);
+    assert.equal(reopened.implementerGet(created.workflow_id).implementation_status, "DONE");
+    assert.deepEqual(reopened.audit(created.workflow_id)[1].summary, incompleteAudit.summary);
+    assert.equal(reopened.audit(created.workflow_id).at(-2)?.event_type, "SCOPE_EXPANDED");
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1008,13 +966,13 @@ test("runtime ownership rejects role getters and worker mutations before state c
       runtimeRevision: revision,
     });
     assert.equal(
-      category(() => foreign.parentGet(created.workflow.workflow_id)),
+      category(() => foreign.parentGet(created.workflow_id)),
       "ERROR_RUNTIME_ISOLATION",
     );
     assert.equal(
       category(() =>
         foreign.submitImplementation({
-          workflow_id: created.workflow.workflow_id,
+          workflow_id: created.workflow_id,
           expected_version: 0,
           status: "DONE",
           summary: "no",
@@ -1052,15 +1010,15 @@ test("approved plan, contracts, and dirty baselines survive restart with least-a
         ],
       }),
     );
-    const id = created.workflow.workflow_id;
-    assert.equal(created.workflow.approved_plan, plan);
-    assert.deepEqual(created.workflow.dirty_baseline_paths, ["note.txt", "planned.txt"]);
+    const id = created.workflow_id;
+    assert.equal(created.approved_plan, plan);
+    assert.deepEqual(created.dirty_baseline_paths, ["note.txt", "planned.txt"]);
     assert.deepEqual(
-      created.workflow.acceptance_criteria.map(({ criterion_id }: any) => criterion_id),
+      created.acceptance_criteria.map(({ criterion_id }: any) => criterion_id),
       ["AC-001", "AC-002"],
     );
     assert.deepEqual(
-      created.workflow.validation_requirements.map(({ validation_id }: any) => validation_id),
+      created.validation_requirements.map(({ validation_id }: any) => validation_id),
       ["VAL-001", "VAL-002"],
     );
     assert.equal(store.implementerGet(id).approved_plan, plan);
@@ -1097,8 +1055,7 @@ test("scope expansion requires a clean baseline and preserves state on rejection
     assert.equal(
       category(() =>
         store.expandScope({
-          workflow_id: created.workflow.workflow_id,
-          capability: created.capability,
+          workflow_id: created.workflow_id,
           expected_version: 0,
           added_paths: ["note.txt"],
           reason: "tracked companion file",
@@ -1107,8 +1064,8 @@ test("scope expansion requires a clean baseline and preserves state on rejection
       ),
       "ERROR_SCOPE_EXPANSION_DIRTY",
     );
-    assert.equal(store.parentGet(created.workflow.workflow_id).version, 0);
-    assert.equal(store.audit(created.workflow.workflow_id, created.capability).length, 1);
+    assert.equal(store.parentGet(created.workflow_id).version, 0);
+    assert.equal(store.audit(created.workflow_id).length, 1);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1130,7 +1087,7 @@ test("initial and review receipts classify absent, deleted, and symlink paths", 
         approved_paths: ["link.txt", "missing.txt", "note.txt"],
       }),
     );
-    const initial = rawState(store, created.workflow.workflow_id).initial_receipt;
+    const initial = rawState(store, created.workflow_id).initial_receipt;
     assert.deepEqual(
       initial.paths.map(({ path, state, kind }: any) => ({ path, state, kind })),
       [
@@ -1142,7 +1099,7 @@ test("initial and review receipts classify absent, deleted, and symlink paths", 
     implementation(store, created);
     const reviewed = review(store, created);
     assert.equal(reviewed.phase, "STOPPED_APPROVED");
-    const reviewReceipt = rawState(store, created.workflow.workflow_id).review_receipt;
+    const reviewReceipt = rawState(store, created.workflow_id).review_receipt;
     assert.deepEqual(
       reviewReceipt.paths.map(({ path, state, kind }: any) => ({ path, state, kind })),
       initial.paths.map(({ path, state, kind }: any) => ({ path, state, kind })),
@@ -1159,7 +1116,7 @@ test("state and audit digests remain chained and tampering fails closed", () => 
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
     const created = store.create(input(git, { objective: "integrity" }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const row = () =>
       store.db
         .prepare("SELECT state_json, state_digest FROM workflows WHERE workflow_id = ?")
@@ -1169,7 +1126,7 @@ test("state and audit digests remain chained and tampering fails closed", () => 
     implementation(store, created);
     const original = row();
     assert.equal(original.state_digest, objectDigest(JSON.parse(original.state_json)));
-    const events = store.audit(id, created.capability);
+    const events = store.audit(id);
     assert.equal(events[0].summary.state_digest_before, null);
     for (let index = 1; index < events.length; index += 1) {
       assert.equal(
@@ -1202,7 +1159,7 @@ test("digest-consistent rows that violate state validation still fail closed", (
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
     const created = store.create(input(git, { objective: "runtime validation" }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const original = rawState(store, id);
     const invalid = { ...original, phase: "NOT_A_PHASE" };
     store.db
@@ -1227,8 +1184,8 @@ test("parent audit envelopes are sanitized and append-only across accepted and r
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const created = store.create(input(git, { objective: "SECRET-AUDIT-OBJECTIVE" }));
-    const id = created.workflow.workflow_id;
-    const readAudit = () => store.audit(id, created.capability);
+    const id = created.workflow_id;
+    const readAudit = () => store.audit(id);
     const envelopeKeys = [
       "changed_fields",
       "linked_workflow_id",
@@ -1267,12 +1224,7 @@ test("parent audit envelopes are sanitized and append-only across accepted and r
     assert.equal(store.audit(id).length, auditBeforeRejectedMutation.length);
 
     const serialized = JSON.stringify(readAudit());
-    for (const prohibited of [
-      "SECRET-AUDIT-OBJECTIVE",
-      "note.txt",
-      created.capability,
-      "implementation evidence",
-    ]) {
+    for (const prohibited of ["SECRET-AUDIT-OBJECTIVE", "note.txt", "implementation evidence"]) {
       assert.equal(serialized.includes(prohibited), false, `audit envelope contains ${prohibited}`);
     }
     const eventIds = store.db
@@ -1308,7 +1260,6 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     git("add", "note.txt");
     const retried = store.retryCommitPreparation({
       workflow_id: first.id,
-      capability: first.created.capability,
       expected_version: store.parentGet(first.id).version,
       retry_context: "stage the reviewed path",
     });
@@ -1333,7 +1284,6 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     ]);
     const returned = store.returnCommitToReview({
       workflow_id: second.id,
-      capability: second.created.capability,
       expected_version: store.parentGet(second.id).version,
       review_context: "review changed worktree",
     });
@@ -1402,14 +1352,10 @@ test("commit preparation store matrix preserves Git state and routes every failu
           databasePath: join(root, "matrix.sqlite"),
         });
         assert.equal(store.parentGet(id).version, version);
-        assert.equal(
-          store.audit(id, workflow.created.capability).at(-1).event_type,
-          "COMMIT_PREPARATION_FAILED",
-        );
+        assert.equal(store.audit(id).at(-1).event_type, "COMMIT_PREPARATION_FAILED");
       }
       const retried = store.retryCommitPreparation({
         workflow_id: id,
-        capability: workflow.created.capability,
         expected_version: store.parentGet(id).version,
         retry_context: `repair ${candidate.name}`,
       });
@@ -1492,7 +1438,6 @@ test("commit preparation store matrix preserves Git state and routes every failu
       ]);
       const returned = store.returnCommitToReview({
         workflow_id: workflow.id,
-        capability: workflow.created.capability,
         expected_version: store.parentGet(workflow.id).version,
         review_context: `refresh ${candidate.name}`,
       });
@@ -1529,7 +1474,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
         },
       }),
     );
-    const rangeId = range.workflow.workflow_id;
+    const rangeId = range.workflow_id;
     store.submitReview({
       workflow_id: rangeId,
       expected_version: store.parentGet(rangeId).version,
@@ -1539,7 +1484,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       prior_finding_classifications: {},
     });
     const beforeVersion = store.parentGet(rangeId).version;
-    const beforeAudit = store.audit(rangeId, range.capability);
+    const beforeAudit = store.audit(rangeId);
     assert.equal(
       category(() =>
         store.prepareCommit({
@@ -1550,7 +1495,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       "ERROR_COMMIT_NOT_ALLOWED",
     );
     assert.equal(store.parentGet(rangeId).version, beforeVersion);
-    assert.deepEqual(store.audit(rangeId, range.capability), beforeAudit);
+    assert.deepEqual(store.audit(rangeId), beforeAudit);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1601,7 +1546,6 @@ test("commit result rejects malformed claims and records terminal verification m
       category(() =>
         store.retryCommit({
           workflow_id: first.id,
-          capability: first.created.capability,
           expected_version: store.parentGet(first.id).version,
           retry_context: "cannot retry terminal mismatch",
         }),
@@ -1679,7 +1623,6 @@ test("commit verification distinguishes every prepared-result mismatch and prese
         category(() =>
           store.retryCommit({
             workflow_id: authorizedWorkflow.id,
-            capability: authorizedWorkflow.created.capability,
             expected_version: store.parentGet(authorizedWorkflow.id).version,
             retry_context: "terminal mismatch cannot retry",
           }),
@@ -1737,7 +1680,7 @@ test("commit preparation binds exact modify, add, delete, and mode paths", () =>
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const approvedPaths = ["add.txt", "del.txt", "mod.txt", "mode.txt"];
     const created = store.create(input(git, { approved_paths: approvedPaths }));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     implementation(store, created);
     writeFileSync(join(root, "mod.txt"), "after\n");
     writeFileSync(join(root, "add.txt"), "added\n");
@@ -1746,7 +1689,6 @@ test("commit preparation binds exact modify, add, delete, and mode paths", () =>
     review(store, created);
     store.authorizeCommit({
       workflow_id: id,
-      capability: created.capability,
       expected_version: store.parentGet(id).version,
       user_authorization: "exact preparation",
     });
@@ -1759,7 +1701,7 @@ test("commit preparation binds exact modify, add, delete, and mode paths", () =>
     assert.equal(prepared.phase, "COMMIT_PREPARED");
     assert.deepEqual(prepared.commit_preparation.expected_paths, approvedPaths);
     assert.equal(prepared.commit_preparation.prepared_tree, tree);
-    assert.equal(git("rev-parse", "HEAD"), created.workflow.base_head);
+    assert.equal(git("rev-parse", "HEAD"), created.base_head);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

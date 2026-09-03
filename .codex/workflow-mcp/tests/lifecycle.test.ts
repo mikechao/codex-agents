@@ -333,7 +333,7 @@ function doCreate(ctx: any, options: any = {}) {
 }
 
 function doImplementation(ctx: any, _version: number, options: any = {}) {
-  const { workflow } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
@@ -356,10 +356,9 @@ function doImplementation(ctx: any, _version: number, options: any = {}) {
 }
 
 function doExpandScope(ctx: any, _version: number, addedPaths: string[]) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.expandScope({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     added_paths: addedPaths,
     reason: "authorize the remaining implementation scope",
@@ -368,7 +367,7 @@ function doExpandScope(ctx: any, _version: number, addedPaths: string[]) {
 }
 
 function doReview(ctx: any, _version: number, options: any = {}) {
-  const { workflow } = ctx.created;
+  const workflow = ctx.created;
   const status = options.status ?? "APPROVED";
   const expectedVersion = ctx.store.parentGet(workflow.workflow_id).version;
   if (workflow.review_target?.review_mode !== "commit_range") {
@@ -388,57 +387,52 @@ function doReview(ctx: any, _version: number, options: any = {}) {
 }
 
 function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.authorizeRepair({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     finding_ids: ids,
   });
 }
 
 function doResumeImplementation(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.resumeImplementation({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     resume_context: "resumed",
   });
 }
 
 function doResumeReview(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.resumeReview({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     resume_context: "resumed",
   });
 }
 
 function doAcceptConcerns(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.acceptConcerns({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     user_authorization: "user accepted concerns",
   });
 }
 
 function doAuthorizeCommit(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.authorizeCommit({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     user_authorization: "user authorized commit",
   });
 }
 
 function doPrepareCommit(ctx: any, _version: number) {
-  const { workflow } = ctx.created;
+  const workflow = ctx.created;
   ctx.prepared = ctx.store.prepareCommit({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
@@ -446,7 +440,7 @@ function doPrepareCommit(ctx: any, _version: number) {
 }
 
 function doSubmitCommitResult(ctx: any, _version: number, options: any) {
-  const { workflow } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.submitCommitResult({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
@@ -457,29 +451,26 @@ function doSubmitCommitResult(ctx: any, _version: number, options: any) {
 }
 
 function doRetryCommit(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.retryCommit({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     retry_context: "retrying",
   });
 }
 
 function doFinalize(ctx: any, _version: number) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.store.finalizeRepairExhausted({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
   });
 }
 
 function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.child = ctx.store.createLinkedFollowup({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     objective: "linked child",
     approved_plan: null,
@@ -510,10 +501,9 @@ function doCreateChildPlan(ctx: any) {
 }
 
 function doLinkedFollowupFromPlan(ctx: any, findingIds: string[]) {
-  const { workflow, capability } = ctx.created;
+  const workflow = ctx.created;
   ctx.child = ctx.store.createLinkedFollowupFromPlan({
     workflow_id: workflow.workflow_id,
-    capability,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     plan_id: ctx.plan.plan_id,
     revision: ctx.plan.revision,
@@ -523,7 +513,7 @@ function doLinkedFollowupFromPlan(ctx: any, findingIds: string[]) {
 }
 
 function doChildImplementation(ctx: any, options: any = {}) {
-  const { workflow } = ctx.child;
+  const workflow = ctx.child;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
@@ -546,7 +536,7 @@ function doChildImplementation(ctx: any, options: any = {}) {
 }
 
 function doChildReview(ctx: any, prior: any = {}) {
-  const { workflow } = ctx.child;
+  const workflow = ctx.child;
   const id = workflow.workflow_id;
   ctx.store.beginReview({
     workflow_id: id,
@@ -577,7 +567,7 @@ function snap(wf: string, phase: string, version: number, actions: any, events: 
 function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   const entry = snap.wf === "child" ? ctx.child : ctx.created;
   assert.ok(entry, `${label}: workflow exists`);
-  const { workflow, capability } = entry;
+  const workflow = entry;
   const id = workflow.workflow_id;
   const expectedVersion = store.parentGet(id).version;
   for (const role of ROLES) {
@@ -606,7 +596,7 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   assert.equal(parsed.version, expectedVersion, `${label}: persisted state version`);
   assert.equal(parsed.phase, snap.phase, `${label}: persisted state phase`);
   assert.equal(row.state_digest, objectDigest(parsed), `${label}: stored digest matches state`);
-  const audit = store.audit(id, capability);
+  const audit = store.audit(id);
   assert.deepEqual(
     audit.map((event: any) => event.event_type),
     snap.events.flatMap((event: string) =>
@@ -653,7 +643,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
   ];
   try {
     doCreate(ctx);
-    const changeReviewer = store.reviewerGet(ctx.created.workflow.workflow_id);
+    const changeReviewer = store.reviewerGet(ctx.created.workflow_id);
     for (const field of handoffFields) {
       assert.equal(field in changeReviewer, true, `change reviewer handoff includes ${field}`);
     }
@@ -661,7 +651,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     assert.equal("implementation_receipt" in changeReviewer, false);
 
     doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] });
-    const reviewOnlyReviewer = store.reviewerGet(ctx.created.workflow.workflow_id);
+    const reviewOnlyReviewer = store.reviewerGet(ctx.created.workflow_id);
     for (const field of handoffFields) {
       assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
     }
@@ -685,14 +675,13 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
         ],
       }),
     );
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     assert.throws(
       () => store.beginReview({ workflow_id: id, expected_version: 0 }),
       (error: any) => error.category === "ERROR_INVALID_REVIEW",
     );
     store.recordManualValidation({
       workflow_id: id,
-      capability: created.capability,
       expected_version: 0,
       validation_id: "VAL-002",
       status: "passed",
@@ -700,7 +689,7 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
     });
     store.beginReview({ workflow_id: id, expected_version: 1 });
     const beforeRejectedSubmission = store.parentGet(id);
-    const beforeRejectedAudit = store.audit(id, created.capability);
+    const beforeRejectedAudit = store.audit(id);
     assert.throws(
       () =>
         store.submitReview({
@@ -714,7 +703,7 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
       (error: any) => error.category === "ERROR_INVALID_REVIEW",
     );
     assert.equal(store.parentGet(id).version, beforeRejectedSubmission.version);
-    assert.deepEqual(store.audit(id, created.capability), beforeRejectedAudit);
+    assert.deepEqual(store.audit(id), beforeRejectedAudit);
     assert.throws(
       () =>
         store.submitReview({
@@ -748,7 +737,6 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
     ]);
     store.authorizeCommit({
       workflow_id: id,
-      capability: created.capability,
       expected_version: 3,
       user_authorization: "authorize reviewed change",
     });
@@ -764,7 +752,7 @@ test("change reviewer validation results cannot overwrite implementer evidence",
   const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
   try {
     const created = store.create(createInput(root, git));
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     store.submitImplementation({
       workflow_id: id,
       expected_version: 0,
@@ -778,7 +766,7 @@ test("change reviewer validation results cannot overwrite implementer evidence",
     });
     store.beginReview({ workflow_id: id, expected_version: 1 });
     const beforeRejectedSubmission = store.parentGet(id);
-    const beforeRejectedAudit = store.audit(id, created.capability);
+    const beforeRejectedAudit = store.audit(id);
     assert.throws(
       () =>
         store.submitReview({
@@ -798,7 +786,7 @@ test("change reviewer validation results cannot overwrite implementer evidence",
     assert.deepEqual(store.parentGet(id).validation_results, [
       { validation_id: "VAL-001", status: "passed", evidence: "implementer" },
     ]);
-    assert.deepEqual(store.audit(id, created.capability), beforeRejectedAudit);
+    assert.deepEqual(store.audit(id), beforeRejectedAudit);
     store.submitReview({
       workflow_id: id,
       expected_version: beforeRejectedSubmission.version,
@@ -826,7 +814,7 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
         ],
       }),
     );
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     store.submitImplementation({
       workflow_id: id,
       expected_version: 0,
@@ -851,7 +839,6 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
     );
     store.recordManualValidation({
       workflow_id: id,
-      capability: created.capability,
       expected_version: 1,
       validation_id: "VAL-002",
       status: "passed",
@@ -861,14 +848,8 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
       { validation_id: "VAL-001", status: "passed", evidence: "checked" },
       { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
     ]);
-    assert.equal(
-      store.audit(id, created.capability).at(-1).event_type,
-      "MANUAL_VALIDATION_RECORDED",
-    );
-    assert.equal(
-      JSON.stringify(store.audit(id, created.capability)).includes("operator inspected"),
-      false,
-    );
+    assert.equal(store.audit(id).at(-1).event_type, "MANUAL_VALIDATION_RECORDED");
+    assert.equal(JSON.stringify(store.audit(id)).includes("operator inspected"), false);
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, ["workflow_begin_review"]);
   } finally {
     store.close();
@@ -992,8 +973,8 @@ scenario("incomplete implementation resumes after explicit scope expansion", [
   {
     name: "expand scope and preserve incomplete audit envelope",
     run: (ctx: any) => {
-      const id = ctx.created.workflow.workflow_id;
-      ctx.incompleteAudit = ctx.store.audit(id, ctx.created.capability)[1];
+      const id = ctx.created.workflow_id;
+      ctx.incompleteAudit = ctx.store.audit(id)[1];
       doExpandScope(ctx, 1, ["extra.txt"]);
       const implementer = ctx.store.implementerGet(id);
       assert.deepEqual(implementer.approved_paths, ["extra.txt", "note.txt"]);
@@ -1010,12 +991,12 @@ scenario("incomplete implementation resumes after explicit scope expansion", [
   {
     name: "reopen and continue under expanded scope",
     run: (ctx: any) => {
-      const id = ctx.created.workflow.workflow_id;
+      const id = ctx.created.workflow_id;
       assert.deepEqual(ctx.store.parentGet(id).review_target.approved_paths, [
         "extra.txt",
         "note.txt",
       ]);
-      assert.deepEqual(ctx.store.audit(id, ctx.created.capability)[1], ctx.incompleteAudit);
+      assert.deepEqual(ctx.store.audit(id)[1], ctx.incompleteAudit);
       writeFileSync(join(ctx.root, "extra.txt"), "expanded work\n");
       doImplementation(ctx, 2, { touched: ["extra.txt"] });
     },
@@ -1049,7 +1030,7 @@ scenario("#34 absent working-tree path is reviewed and approved in one pass", [
       const state = JSON.parse(
         ctx.store.db
           .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
-          .get(ctx.created.workflow.workflow_id).state_json,
+          .get(ctx.created.workflow_id).state_json,
       );
       assert.deepEqual(
         state.review_receipt.paths.map(({ path, state: pathState, kind }: any) => ({
@@ -1095,7 +1076,7 @@ scenario("repair cycle and approval lifecycle", [
     name: "implement repair done",
     run: (ctx: any) => {
       doImplementation(ctx, 3, { resolution: { "F-1": "resolved" } });
-      const view = ctx.store.parentGet(ctx.created.workflow.workflow_id);
+      const view = ctx.store.parentGet(ctx.created.workflow_id);
       assert.equal(view.phase, "REVIEWING");
       assert.ok(
         view.blocking_findings.some(({ finding_id }: any) => finding_id === "F-1"),
@@ -1293,8 +1274,7 @@ scenario(
     },
     {
       name: "commit-range review-only: approve",
-      run: (ctx: any) =>
-        doReview(ctx, 0, { target: ctx.created.workflow.review_target, receipt: null }),
+      run: (ctx: any) => doReview(ctx, 0, { target: ctx.created.review_target, receipt: null }),
       snapshots: [
         snap("parent", "STOPPED_APPROVED", 1, ACTIONS.approvedRange, EVENTS.reviewOnlyReview),
       ],
@@ -1350,7 +1330,7 @@ test("review-only inconclusive review may omit unavailable executable evidence",
         ],
       }),
     );
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
 
     store.beginReview({ workflow_id: id, expected_version: 0 });
     store.submitReview({
@@ -1366,7 +1346,6 @@ test("review-only inconclusive review may omit unavailable executable evidence",
 
     store.resumeReview({
       workflow_id: id,
-      capability: created.capability,
       expected_version: 2,
       resume_context: "validation runner is available",
     });
@@ -1487,7 +1466,7 @@ test("legacy linked follow-up rolls back child and source succession after injec
   });
   try {
     const source = store.create(createInput(root, git));
-    const id = source.workflow.workflow_id;
+    const id = source.workflow_id;
     store.submitImplementation({
       workflow_id: id,
       expected_version: 0,
@@ -1514,7 +1493,7 @@ test("legacy linked follow-up rolls back child and source succession after injec
     const beforeSourceRow = store.db
       .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
       .get(id);
-    const beforeSourceAudit = store.audit(id, source.capability);
+    const beforeSourceAudit = store.audit(id);
     const beforeWorkflowCount = store.db
       .prepare("SELECT COUNT(*) AS count FROM workflows")
       .get().count;
@@ -1528,7 +1507,6 @@ test("legacy linked follow-up rolls back child and source succession after injec
       () =>
         store.createLinkedFollowup({
           workflow_id: id,
-          capability: source.capability,
           expected_version: beforeVersion,
           objective: "linked child",
           approved_plan: null,
@@ -1550,7 +1528,7 @@ test("legacy linked follow-up rolls back child and source succession after injec
         .get(id),
       beforeSourceRow,
     );
-    assert.deepEqual(store.audit(id, source.capability), beforeSourceAudit);
+    assert.deepEqual(store.audit(id), beforeSourceAudit);
     assert.equal(
       store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count,
       beforeWorkflowCount,
@@ -1905,11 +1883,9 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
         include_untracked: true,
       },
     });
-    const id = created.workflow.workflow_id;
-    const capability = created.capability;
+    const id = created.workflow_id;
     store.expandScope({
       workflow_id: id,
-      capability,
       expected_version: 0,
       added_paths: ["dirty.txt"],
       reason: "planned path",
@@ -1938,13 +1914,12 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
     writeFileSync(join(root, "dirty.txt"), "authorized\n");
     store.adoptDirtyScope({
       workflow_id: id,
-      capability,
       expected_version: 4,
       adopted_paths: ["dirty.txt"],
       reason: "recover dirty path",
       user_authorization: "explicit recovery",
     });
-    const adoptionAudit = store.audit(id, capability);
+    const adoptionAudit = store.audit(id);
     assert.equal(adoptionAudit.at(-1).event_type, "DIRTY_SCOPE_ADOPTED");
     assert.ok(adoptionAudit.at(-1).dirty_scope_adoption.current_state_commitment);
     const beforeResume = store.parentGet(id);
@@ -1953,19 +1928,17 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
       () =>
         store.resumeReview({
           workflow_id: id,
-          capability,
           expected_version: beforeResume.version,
           resume_context: "resume",
         }),
       (error: any) => error.category === "ERROR_STALE_ADOPTION",
     );
     assert.equal(store.parentGet(id).version, beforeResume.version);
-    assert.equal(store.audit(id, capability).length, adoptionAudit.length);
+    assert.equal(store.audit(id).length, adoptionAudit.length);
 
     writeFileSync(join(root, "dirty.txt"), "authorized\n");
     store.resumeReview({
       workflow_id: id,
-      capability,
       expected_version: beforeResume.version,
       resume_context: "resume",
     });
@@ -1976,7 +1949,7 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
       (error: any) => error.category === "ERROR_STALE_ADOPTION",
     );
     assert.equal(store.parentGet(id).version, beforeBegin.version);
-    assert.equal(store.audit(id, capability).length, adoptionAudit.length + 1);
+    assert.equal(store.audit(id).length, adoptionAudit.length + 1);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -2006,11 +1979,9 @@ test("dirty scope adoption binds staged-only index state", () => {
         include_untracked: true,
       },
     });
-    const id = created.workflow.workflow_id;
-    const capability = created.capability;
+    const id = created.workflow_id;
     store.expandScope({
       workflow_id: id,
-      capability,
       expected_version: 0,
       added_paths: ["staged.txt"],
       reason: "planned path",
@@ -2042,13 +2013,12 @@ test("dirty scope adoption binds staged-only index state", () => {
     git("restore", "--worktree", "--source=HEAD", "--", "staged.txt");
     store.adoptDirtyScope({
       workflow_id: id,
-      capability,
       expected_version: 4,
       adopted_paths: ["staged.txt"],
       reason: "recover staged path",
       user_authorization: "explicit recovery",
     });
-    const adoptionAudit = store.audit(id, capability);
+    const adoptionAudit = store.audit(id);
     assert.equal(adoptionAudit.at(-1).event_type, "DIRTY_SCOPE_ADOPTED");
     assert.equal(adoptionAudit.at(-1).dirty_scope_adoption.index_states[0].state, "added");
     const beforeResume = store.parentGet(id);
@@ -2060,14 +2030,13 @@ test("dirty scope adoption binds staged-only index state", () => {
       () =>
         store.resumeReview({
           workflow_id: id,
-          capability,
           expected_version: beforeResume.version,
           resume_context: "resume",
         }),
       (error: any) => error.category === "ERROR_STALE_ADOPTION",
     );
     assert.equal(store.parentGet(id).version, beforeResume.version);
-    assert.equal(store.audit(id, capability).length, adoptionAudit.length);
+    assert.equal(store.audit(id).length, adoptionAudit.length);
 
     git("reset", "-q", "HEAD", "--", "staged.txt");
     writeFileSync(join(root, "staged.txt"), "indexed\n");
@@ -2075,7 +2044,6 @@ test("dirty scope adoption binds staged-only index state", () => {
     git("restore", "--worktree", "--source=HEAD", "--", "staged.txt");
     store.resumeReview({
       workflow_id: id,
-      capability,
       expected_version: beforeResume.version,
       resume_context: "resume",
     });
@@ -2086,7 +2054,7 @@ test("dirty scope adoption binds staged-only index state", () => {
       (error: any) => error.category === "ERROR_STALE_ADOPTION",
     );
     assert.equal(store.parentGet(id).version, beforeBegin.version);
-    assert.equal(store.audit(id, capability).length, adoptionAudit.length + 1);
+    assert.equal(store.audit(id).length, adoptionAudit.length + 1);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -2098,8 +2066,7 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
   const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
   try {
     const created = store.create(createInput(root, git));
-    const id = created.workflow.workflow_id;
-    const capability = created.capability;
+    const id = created.workflow_id;
     const snapshot = () => {
       const row = store.db
         .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
@@ -2118,7 +2085,6 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
       () =>
         store.resumeImplementation({
           workflow_id: "malformed-id",
-          capability: null,
           expected_version: -1,
           resume_context: null,
         }),
@@ -2131,7 +2097,6 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
       () =>
         store.resumeImplementation({
           workflow_id: "malformed-id",
-          capability: null,
           expected_version: 0,
           resume_context: null,
         }),
@@ -2144,7 +2109,6 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
       () =>
         store.resumeImplementation({
           workflow_id: "00000000-0000-0000-0000-000000000000",
-          capability: null,
           expected_version: 0,
           resume_context: null,
         }),
@@ -2152,25 +2116,30 @@ test("raw mutation fields do not change lookup, auth, or version precedence", ()
     );
     assertUnchanged(beforeMissingParent, "missing parent ID");
 
-    const beforeInvalidCapability = snapshot();
-    assert.throws(
-      () =>
-        store.resumeImplementation({
-          workflow_id: id,
-          capability: "invalid-capability",
-          expected_version: 0,
-          resume_context: null,
-        }),
-      (error: any) => error.category === "ERROR_INVALID_SHAPE",
-    );
-    assertUnchanged(beforeInvalidCapability, "invalid parent capability");
+    for (const [label, capability] of [
+      ["undefined parent capability", undefined],
+      ["null parent capability", null],
+      ["non-null parent capability", "invalid-capability"],
+    ] as const) {
+      const beforeCapability = snapshot();
+      assert.throws(
+        () =>
+          store.resumeImplementation({
+            workflow_id: id,
+            capability,
+            expected_version: 0,
+            resume_context: null,
+          }),
+        (error: any) => error.category === "ERROR_INVALID_SHAPE",
+      );
+      assertUnchanged(beforeCapability, label);
+    }
 
     const beforeStaleParent = snapshot();
     assert.throws(
       () =>
         store.resumeImplementation({
           workflow_id: id,
-          capability,
           expected_version: 1,
           resume_context: null,
         }),

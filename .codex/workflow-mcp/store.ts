@@ -301,21 +301,10 @@ type CommitResultFields = RawMutationRecord & RawCommitResultMutation;
 
 function parentMutation(value: unknown): ParentFields {
   const input = mutationInput(value);
-  // Do not accept a model-authored bearer. Undefined is tolerated only for older in-process
-  // callers that included an omitted optional property; transport schemas reject the field before
-  // dispatch and any supplied value fails closed here.
   if ("capability" in input) {
-    if (input.capability !== undefined && input.capability !== null)
-      fail("ERROR_INVALID_SHAPE", "capability is not supported");
-    const { capability: _omitted, ...withoutCapability } = input;
-    return withoutCapability;
+    fail("ERROR_INVALID_SHAPE", "capability is not supported");
   }
   return input;
-}
-
-function parentViewResult(view: ParentView): ParentView {
-  Object.defineProperty(view, "workflow", { value: view, enumerable: false });
-  return view;
 }
 
 function workerMutation(value: unknown): WorkerFields {
@@ -1048,7 +1037,7 @@ export class WorkflowStore {
         return state;
       })
       .immediate();
-    return parentViewResult(roleView(created, "parent") as ParentView);
+    return roleView(created, "parent") as ParentView;
   }
 
   #get(workflowIdValue: unknown, actorRole: Role): RoleView {
@@ -1363,7 +1352,7 @@ export class WorkflowStore {
           "parent",
           auditEnvelope(null, state, null),
         );
-        return parentViewResult(roleView(state, "parent") as ParentView);
+        return roleView(state, "parent") as ParentView;
       })
       .immediate();
   }
@@ -2588,7 +2577,7 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return parentViewResult(roleView(result, "parent") as ParentView);
+    return roleView(result, "parent") as ParentView;
   }
 
   createLinkedFollowupFromPlan(input: unknown): ParentView {
@@ -2627,7 +2616,7 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return parentViewResult(roleView(result, "parent") as ParentView);
+    return roleView(result, "parent") as ParentView;
   }
 }
 

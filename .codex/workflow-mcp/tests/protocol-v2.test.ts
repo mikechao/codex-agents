@@ -36,8 +36,6 @@ async function connect(root: string) {
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args });
     const body = JSON.parse((result.content[0] as { text: string }).text);
-    if (name === "workflow_create" || name.startsWith("workflow_create_linked"))
-      Object.defineProperty(body, "workflow", { value: body, enumerable: false });
     return { result, body };
   };
   const version = async (id: string) =>
@@ -99,7 +97,7 @@ test("fresh STDIO repair and re-review uses exact role getters and worker IDs on
   const { client, transport, call, version } = await connect(root);
   try {
     const created = (await call("workflow_create", create(git, { max_repair_cycles: 1 }))).body;
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     assert.equal(
       (await call("workflow_submit_implementation", implement(id, await version(id)))).body.phase,
       "REVIEWING",
@@ -119,7 +117,6 @@ test("fresh STDIO repair and re-review uses exact role getters and worker IDs on
     const repairing = (
       await call("workflow_authorize_repair", {
         workflow_id: id,
-        capability: created.capability,
         expected_version: await version(id),
         finding_ids: ["BLOCKER-1"],
       })
@@ -161,7 +158,7 @@ test("fresh linked follow-up routes exact child IDs and preserves parent audit a
   const { client, transport, call, version } = await connect(root);
   try {
     const source = (await call("workflow_create", create(git, { objective: "source" }))).body;
-    const id = source.workflow.workflow_id;
+    const id = source.workflow_id;
     await call("workflow_submit_implementation", implement(id, await version(id)));
     writeFileSync(join(root, "note.txt"), "source\n");
     await call("workflow_begin_review", { workflow_id: id, expected_version: await version(id) });
@@ -176,7 +173,6 @@ test("fresh linked follow-up routes exact child IDs and preserves parent audit a
     const linked = (
       await call("workflow_create_linked_followup", {
         workflow_id: id,
-        capability: source.capability,
         expected_version: await version(id),
         objective: "child",
         approved_plan: null,
@@ -189,17 +185,16 @@ test("fresh linked follow-up routes exact child IDs and preserves parent audit a
         user_authorization: "authorized child",
       })
     ).body;
-    assert.notEqual(linked.workflow.workflow_id, id);
+    assert.notEqual(linked.workflow_id, id);
+    assert.equal("workflow" in linked, false);
     assert.equal("capability" in linked, false);
     assert.equal("capabilities" in linked, false);
     assert.equal(
-      (await call("workflow_implementer_get", { workflow_id: linked.workflow.workflow_id })).body
+      (await call("workflow_implementer_get", { workflow_id: linked.workflow_id })).body
         .workflow_id,
-      linked.workflow.workflow_id,
+      linked.workflow_id,
     );
-    const audit = (
-      await call("workflow_get_audit", { workflow_id: id, capability: source.capability })
-    ).body;
+    const audit = (await call("workflow_get_audit", { workflow_id: id })).body;
     assert.equal(audit.at(-1).event_type, "LINKED_FOLLOWUP_CREATED");
     assert.equal(JSON.stringify(audit).includes("OPTIONAL-1"), false);
   } finally {
@@ -290,13 +285,10 @@ test("direct store can reopen the exact schema after protocol activity", () => {
     const path = join(root, "state.sqlite");
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
     const created = store.create(create(git));
-    assert.equal(store.parentGet(created.workflow.workflow_id).version, 0);
+    assert.equal(store.parentGet(created.workflow_id).version, 0);
     store.close();
     const reopened: any = new WorkflowStore({ repositoryRoot: root, databasePath: path });
-    assert.equal(
-      reopened.parentGet(created.workflow.workflow_id).workflow_id,
-      created.workflow.workflow_id,
-    );
+    assert.equal(reopened.parentGet(created.workflow_id).workflow_id, created.workflow_id);
     reopened.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -331,9 +323,9 @@ test("STDIO commit-range review remains receipt-free and cannot authorize a comm
         }),
       )
     ).body;
-    const id = created.workflow.workflow_id;
-    assert.equal(created.workflow.phase, "REVIEWING");
-    assert.equal("initial_receipt" in created.workflow, false);
+    const id = created.workflow_id;
+    assert.equal(created.phase, "REVIEWING");
+    assert.equal("initial_receipt" in created, false);
     const approved = (
       await call("workflow_submit_review", {
         workflow_id: id,
@@ -353,7 +345,6 @@ test("STDIO commit-range review remains receipt-free and cannot authorize a comm
       name: "workflow_authorize_commit",
       arguments: {
         workflow_id: id,
-        capability: created.capability,
         expected_version: await version(id),
         user_authorization: "range commit must be denied",
       },
@@ -375,7 +366,7 @@ test("STDIO unchanged-head commit failure is retryable through parent authorizat
   const { client, transport, call, version } = await connect(root);
   try {
     const created = (await call("workflow_create", create(git))).body;
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     await call("workflow_submit_implementation", implement(id, await version(id)));
     writeFileSync(join(root, "note.txt"), "retryable\n");
     await call("workflow_begin_review", { workflow_id: id, expected_version: await version(id) });
@@ -389,7 +380,6 @@ test("STDIO unchanged-head commit failure is retryable through parent authorizat
     });
     await call("workflow_authorize_commit", {
       workflow_id: id,
-      capability: created.capability,
       expected_version: await version(id),
       user_authorization: "retryable protocol commit",
     });
@@ -418,7 +408,6 @@ test("STDIO unchanged-head commit failure is retryable through parent authorizat
     const retried = (
       await call("workflow_retry_commit", {
         workflow_id: id,
-        capability: created.capability,
         expected_version: await version(id),
         retry_context: "external command fixed",
       })
@@ -449,7 +438,7 @@ test("STDIO commit verification covers head, tree, and not-committed mismatch ma
   };
   const prepare = async (objective: string) => {
     const created = (await call("workflow_create", create(git, { objective }))).body;
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     await call("workflow_submit_implementation", implement(id, await version(id)));
     writeFileSync(join(root, "note.txt"), `${objective}\n`);
     await call("workflow_begin_review", { workflow_id: id, expected_version: await version(id) });
@@ -463,7 +452,6 @@ test("STDIO commit verification covers head, tree, and not-committed mismatch ma
     });
     await call("workflow_authorize_commit", {
       workflow_id: id,
-      capability: created.capability,
       expected_version: await version(id),
       user_authorization: "matrix test",
     });
@@ -526,7 +514,6 @@ test("STDIO commit verification covers head, tree, and not-committed mismatch ma
     );
     const terminal = await failed("workflow_retry_commit", {
       workflow_id: notCommitted.id,
-      capability: notCommitted.created.capability,
       expected_version: await version(notCommitted.id),
       retry_context: "terminal mismatch cannot retry",
     });
@@ -548,12 +535,11 @@ test("STDIO rejects legacy role fields, stale versions, invalid phases, and malf
   };
   try {
     const created = (await call("workflow_create", create(git))).body;
-    const id = created.workflow.workflow_id;
+    const id = created.workflow_id;
     const currentVersion = async () =>
       (await call("workflow_parent_get", { workflow_id: id })).body.version;
     const legacy = await failed("workflow_submit_implementation", {
       ...implement(id, await currentVersion()),
-      capability: created.capability,
       implementation_receipt: null,
     });
     assert.equal(legacy.category, "ERROR_INVALID_SHAPE");
@@ -583,7 +569,6 @@ test("STDIO rejects legacy role fields, stale versions, invalid phases, and malf
     });
     await call("workflow_authorize_commit", {
       workflow_id: id,
-      capability: created.capability,
       expected_version: await currentVersion(),
       user_authorization: "malformed claim test",
     });
