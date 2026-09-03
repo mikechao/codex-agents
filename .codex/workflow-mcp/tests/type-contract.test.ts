@@ -27,6 +27,10 @@ import type {
   ImplementationStatus,
   ImplementerHandoffView,
   ImplementerView,
+  PlanAuthoringContent,
+  PlannerPlanRead,
+  PlanRead,
+  PlanRevisionReplacements,
   ReviewerViewBase,
   ReviewRangePath,
   ReviewStatus,
@@ -73,6 +77,14 @@ type NoDuplicates<
     ? false
     : NoDuplicates<Tail, Seen | Head>
   : true;
+
+type PlannerContentKeys =
+  | "full_plan"
+  | "execution_brief"
+  | "objective"
+  | "approved_paths"
+  | "acceptance_criteria"
+  | "validation_requirements";
 
 const _canonicalValues = [
   ROLE_VALUES,
@@ -183,6 +195,26 @@ function _compileBrandedCorrelation(): void {
   void manualId;
 }
 
+function _compilePlannerAuthoringView(): void {
+  const planner = undefined as unknown as PlannerPlanRead;
+  const replacements: PlanRevisionReplacements = {
+    full_plan: planner.full_plan,
+    execution_brief: planner.execution_brief,
+    objective: planner.objective,
+    approved_paths: planner.approved_paths,
+    acceptance_criteria: planner.acceptance_criteria,
+    validation_requirements: planner.validation_requirements,
+  };
+  void replacements;
+  // Planner content intentionally has no persisted contract IDs.
+  // @ts-expect-error planner acceptance criteria are authoring strings, not persisted records
+  const persistedAcceptance = planner.acceptance_criteria[0].criterion_id;
+  // @ts-expect-error planner validation requirements are authoring entries, not persisted records
+  const persistedValidation = planner.validation_requirements[0].validation_id;
+  void persistedAcceptance;
+  void persistedValidation;
+}
+
 type _StateKeysAreExhaustive = Expect<Equal<(typeof V8_STATE_KEYS)[number], keyof WorkflowState>>;
 type _RoleValuesAreCanonical = Expect<Equal<Role, (typeof ROLE_VALUES)[number]>>;
 type _PhaseValuesAreCanonical = Expect<
@@ -220,6 +252,19 @@ type _CommitterRegistryHasNoDuplicates = Expect<
   NoDuplicates<(typeof ROLE_VIEW_EXTRA)["committer"]>
 >;
 type _HandoffRegistryHasNoDuplicates = Expect<NoDuplicates<typeof REVIEWER_IMPLEMENTER_HANDOFF>>;
+type _PlannerContentIsCanonicalWriteShape = Expect<
+  Equal<PlanAuthoringContent, Required<PlanRevisionReplacements>>
+>;
+type _PlannerContentKeysAreComplete = Expect<Equal<keyof PlanAuthoringContent, PlannerContentKeys>>;
+type _PlannerEnvelopeKeysAreBounded = Expect<
+  Equal<
+    keyof PlannerPlanRead,
+    PlannerContentKeys | "plan_id" | "revision" | "artifact_digest" | "created_at" | "metadata"
+  >
+>;
+type _ParentPlanReadRetainsPersistedShape = Expect<
+  Equal<PlanRead["acceptance_criteria"][number], AcceptanceCriterion>
+>;
 type _PlanningNamesAreNotActions = Expect<
   Equal<Exclude<ServerToolName, WorkflowAction> extends never ? true : false, false>
 >;

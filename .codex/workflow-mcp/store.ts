@@ -84,6 +84,7 @@ import type {
   ParentView,
   PlanApproval,
   PlanId,
+  PlannerPlanRead,
   PlanProvenance,
   PlanRead,
   PlanRevision,
@@ -1142,7 +1143,26 @@ export class WorkflowStore {
     };
   }
 
-  #planRead(planValue: unknown, revisionValue: unknown, includeApproval: boolean): PlanRead {
+  #plannerPlanRead(planValue: unknown, revisionValue: unknown): PlannerPlanRead {
+    this.#ensureOpen();
+    const resolved = this.#planRevision(planValue, revisionValue);
+    const current = resolved.plan.current_revision === resolved.revision.revision;
+    const metadata = {
+      current_revision: resolved.plan.current_revision as PlanRevision,
+      status: resolved.approval ? "approved" : "draft",
+      is_current: current,
+    } as const;
+    return {
+      ...planRevisionInputFromArtifact(resolved.artifact),
+      plan_id: resolved.artifact.plan_id,
+      revision: resolved.artifact.revision,
+      artifact_digest: resolved.revision.artifact_digest as PlannerPlanRead["artifact_digest"],
+      created_at: resolved.artifact.created_at,
+      metadata,
+    };
+  }
+
+  #parentPlanRead(planValue: unknown, revisionValue: unknown): PlanRead {
     this.#ensureOpen();
     const resolved = this.#planRevision(planValue, revisionValue);
     const current = resolved.plan.current_revision === resolved.revision.revision;
@@ -1153,12 +1173,12 @@ export class WorkflowStore {
         current_revision: resolved.plan.current_revision as PlanRevision,
         status: resolved.approval ? "approved" : "draft",
         is_current: current,
-        approval: includeApproval ? resolved.approval : null,
+        approval: resolved.approval,
       },
     };
   }
 
-  planCreate(input: unknown): PlanRead {
+  planCreate(input: unknown): PlannerPlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(
@@ -1208,22 +1228,22 @@ export class WorkflowStore {
           .run(id, revision, JSON.stringify(artifact), digest, artifact.created_at);
       })
       .immediate();
-    return this.#planRead(id, revision, false);
+    return this.#plannerPlanRead(id, revision);
   }
 
-  planGet(input: unknown): PlanRead {
+  planGet(input: unknown): PlannerPlanRead {
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision"], "plan get");
-    return this.#planRead(args.plan_id, args.revision, false);
+    return this.#plannerPlanRead(args.plan_id, args.revision);
   }
 
   planParentGet(input: unknown): PlanRead {
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision"], "plan parent get");
-    return this.#planRead(args.plan_id, args.revision, true);
+    return this.#parentPlanRead(args.plan_id, args.revision);
   }
 
-  planRevise(input: unknown): PlanRead {
+  planRevise(input: unknown): PlannerPlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "base_revision", "replacements"], "plan revise");
@@ -1247,7 +1267,7 @@ export class WorkflowStore {
           canonicalJson(planRevisionContent(current.artifact)) ===
           canonicalJson(planRevisionContent(normalized))
         ) {
-          return this.#planRead(id, base, false);
+          return this.#plannerPlanRead(id, base);
         }
         const nextRevision = (base + 1) as PlanRevision;
         const artifact: PlanRevisionArtifact = {
@@ -1268,7 +1288,7 @@ export class WorkflowStore {
           )
           .run(nextRevision, isoNow(), id, base);
         if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
-        return this.#planRead(id, nextRevision, false);
+        return this.#plannerPlanRead(id, nextRevision);
       })
       .immediate();
   }
@@ -1295,7 +1315,7 @@ export class WorkflowStore {
             "INSERT INTO plan_approvals (plan_id, revision, artifact_digest, user_authorization, approved_at) VALUES (?, ?, ?, ?, ?)",
           )
           .run(id, requested, resolved.revision.artifact_digest, normalizedAuth, approvedAt);
-        return this.#planRead(id, requested, true);
+        return this.#parentPlanRead(id, requested);
       })
       .immediate();
   }

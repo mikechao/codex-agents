@@ -216,9 +216,8 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       validation_requirements: [{ description: "manual check", argv: null }],
     });
     assert.equal(draft.metadata.status, "draft");
-    assert.deepEqual(draft.validation_requirements, [
-      { validation_id: "VAL-001", description: "manual check", argv: null },
-    ]);
+    assert.deepEqual(draft.validation_requirements, [{ description: "manual check", argv: null }]);
+    assert.deepEqual(draft.acceptance_criteria, ["plan survives"]);
     const revised = await call("plan_revise", {
       plan_id: draft.plan_id,
       base_revision: 1,
@@ -232,6 +231,10 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       },
     });
     assert.equal(revised.revision, 2);
+    assert.deepEqual(revised.acceptance_criteria, ["replacement survives"]);
+    assert.deepEqual(revised.validation_requirements, [
+      { description: "manual replacement", argv: null },
+    ]);
     for (const [replacements, category] of [
       [{}, "ERROR_INVALID_SHAPE"],
       [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
@@ -271,6 +274,18 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       user_authorization: "approve current exact revision",
     });
     assert.equal(approved.metadata.status, "approved");
+    assert.equal(
+      "approval" in (await call("plan_get", { plan_id: draft.plan_id, revision: 2 })).metadata,
+      false,
+    );
+    const parent = await call("plan_parent_get", { plan_id: draft.plan_id, revision: 2 });
+    assert.deepEqual(parent.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "replacement survives" },
+    ]);
+    assert.deepEqual(parent.validation_requirements, [
+      { validation_id: "VAL-001", description: "manual replacement", argv: null },
+    ]);
+    assert.ok(parent.metadata.approval);
     const created = await call("workflow_create_from_plan", {
       plan_id: draft.plan_id,
       revision: 2,
@@ -280,6 +295,100 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
     assert.equal(created.workflow.execution_brief, "replacement brief");
     assert.equal(created.workflow.objective, "stdio planning revised");
     assert.equal(created.workflow.plan_provenance.revision, 2);
+  } finally {
+    await client.close();
+    await transport.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("STDIO planner views round-trip without IDs and preserve parent artifact correlation", async () => {
+  const targetFixture = fixture();
+  const { root } = targetFixture;
+  const { transport, client, call } = await start(root);
+  try {
+    const draft = await call("plan_create", {
+      full_plan: "stdio round-trip plan",
+      execution_brief: "stdio round-trip brief",
+      objective: "stdio round-trip objective",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["first", "second"],
+      validation_requirements: [
+        "manual inspection",
+        { description: "exact check", argv: ["bun", "run", "check"] },
+      ],
+    });
+    const content = (view: any) => ({
+      full_plan: view.full_plan,
+      execution_brief: view.execution_brief,
+      objective: view.objective,
+      approved_paths: view.approved_paths,
+      acceptance_criteria: view.acceptance_criteria,
+      validation_requirements: view.validation_requirements,
+    });
+    assert.deepEqual(draft.acceptance_criteria, ["first", "second"]);
+    assert.deepEqual(draft.validation_requirements, [
+      { description: "manual inspection", argv: null },
+      { description: "exact check", argv: ["bun", "run", "check"] },
+    ]);
+    assert.equal("approval" in draft.metadata, false);
+
+    const noOp = await call("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: content(draft),
+    });
+    assert.equal(noOp.revision, 1);
+    const acceptance = await call("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: noOp.revision,
+      replacements: { acceptance_criteria: ["first", "refined"] },
+    });
+    assert.equal(acceptance.revision, 2);
+    const validation = await call("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: acceptance.revision,
+      replacements: {
+        validation_requirements: [
+          { description: "manual inspection", argv: null },
+          { description: "refined check", argv: ["bun", "run", "test:workflow-mcp"] },
+        ],
+      },
+    });
+    assert.equal(validation.revision, 3);
+    const combined = await call("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: validation.revision,
+      replacements: {
+        acceptance_criteria: ["combined"],
+        validation_requirements: [{ description: "combined check", argv: null }],
+      },
+    });
+    assert.equal(combined.revision, 4);
+    assert.equal("approval" in combined.metadata, false);
+
+    await call("plan_approve", {
+      plan_id: draft.plan_id,
+      revision: combined.revision,
+      user_authorization: "approve stdio round-trip",
+    });
+    const parent = await call("plan_parent_get", {
+      plan_id: draft.plan_id,
+      revision: combined.revision,
+    });
+    assert.deepEqual(parent.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "combined" },
+    ]);
+    assert.deepEqual(parent.validation_requirements, [
+      { validation_id: "VAL-001", description: "combined check", argv: null },
+    ]);
+    assert.ok(parent.metadata.approval);
+    const created = await call("workflow_create_from_plan", {
+      plan_id: draft.plan_id,
+      revision: combined.revision,
+    });
+    assert.deepEqual(created.workflow.acceptance_criteria, parent.acceptance_criteria);
+    assert.deepEqual(created.workflow.validation_requirements, parent.validation_requirements);
   } finally {
     await client.close();
     await transport.close();

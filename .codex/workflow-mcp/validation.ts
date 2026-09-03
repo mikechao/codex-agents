@@ -18,6 +18,7 @@ import type {
   IsoTimestamp,
   OptionalFinding,
   PlanApproval,
+  PlanAuthoringContent,
   PlanId,
   PlanRevision,
   PlanRevisionArtifact,
@@ -255,14 +256,9 @@ export function planRevisionReplacements(value: unknown): PlanRevisionReplacemen
 }
 
 /** Convert a normalized persisted artifact into the complete raw input shape used by validation. */
-export function planRevisionInputFromArtifact(artifact: PlanRevisionArtifact): {
-  full_plan: string;
-  execution_brief: string;
-  objective: string;
-  approved_paths: ExactRepoPath[];
-  acceptance_criteria: string[];
-  validation_requirements: Array<{ description: string; argv: string[] | null }>;
-} {
+export function planRevisionInputFromArtifact(
+  artifact: PlanRevisionArtifact,
+): PlanAuthoringContent {
   return {
     full_plan: artifact.full_plan,
     execution_brief: artifact.execution_brief,

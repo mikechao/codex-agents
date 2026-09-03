@@ -131,6 +131,98 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   disposeFixture(target.root);
 });
 
+test("planner reads round-trip directly while parent reads retain persisted contract IDs", () => {
+  const target = fixture();
+  const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      full_plan: "round-trip plan",
+      execution_brief: "round-trip brief",
+      objective: "round-trip objective",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["first criterion", "second criterion"],
+      validation_requirements: [
+        "manual inspection",
+        { description: "exact check", argv: ["bun", "run", "check"] },
+      ],
+    });
+    const content = {
+      full_plan: draft.full_plan,
+      execution_brief: draft.execution_brief,
+      objective: draft.objective,
+      approved_paths: draft.approved_paths,
+      acceptance_criteria: draft.acceptance_criteria,
+      validation_requirements: draft.validation_requirements,
+    };
+    assert.equal("approval" in draft.metadata, false);
+    const unchanged = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: content,
+    });
+    assert.equal(unchanged.revision, 1);
+    assert.deepEqual(unchanged.acceptance_criteria, ["first criterion", "second criterion"]);
+    assert.deepEqual(unchanged.validation_requirements, [
+      { description: "manual inspection", argv: null },
+      { description: "exact check", argv: ["bun", "run", "check"] },
+    ]);
+
+    const acceptanceEdit = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: unchanged.revision,
+      replacements: {
+        acceptance_criteria: [...unchanged.acceptance_criteria.slice(0, 1), "refined criterion"],
+      },
+    });
+    assert.equal(acceptanceEdit.revision, 2);
+    assert.deepEqual(acceptanceEdit.acceptance_criteria, ["first criterion", "refined criterion"]);
+
+    const validationEdit = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: acceptanceEdit.revision,
+      replacements: {
+        validation_requirements: [
+          ...acceptanceEdit.validation_requirements.slice(0, 1),
+          { description: "refined exact check", argv: ["bun", "run", "test:workflow-mcp"] },
+        ],
+      },
+    });
+    assert.equal(validationEdit.revision, 3);
+
+    const combined = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: validationEdit.revision,
+      replacements: {
+        acceptance_criteria: ["combined criterion"],
+        validation_requirements: [{ description: "combined check", argv: null }],
+      },
+    });
+    assert.equal(combined.revision, 4);
+
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: combined.revision,
+      user_authorization: "approve round-trip plan",
+    });
+    const parent = store.planParentGet({ plan_id: draft.plan_id, revision: combined.revision });
+    assert.deepEqual(parent.acceptance_criteria, [
+      { criterion_id: "AC-001", description: "combined criterion" },
+    ]);
+    assert.deepEqual(parent.validation_requirements, [
+      { validation_id: "VAL-001", description: "combined check", argv: null },
+    ]);
+    assert.equal(parent.artifact_digest, approved.artifact_digest);
+    assert.ok(parent.metadata.approval);
+
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: combined.revision });
+    assert.deepEqual(workflow.acceptance_criteria, parent.acceptance_criteria);
+    assert.deepEqual(workflow.validation_requirements, parent.validation_requirements);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
 test("plan revisions copy forward omitted fields and stale revisions fail closed", () => {
   const target = fixture();
   const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
@@ -144,12 +236,8 @@ test("plan revisions copy forward omitted fields and stale revisions fail closed
   assert.equal(revised.execution_brief, revisionInput().execution_brief);
   assert.equal(revised.objective, revisionInput().objective);
   assert.deepEqual(revised.approved_paths, ["note.txt"]);
-  assert.deepEqual(revised.acceptance_criteria, [
-    { criterion_id: "AC-001", description: "the plan is preserved" },
-  ]);
-  assert.deepEqual(revised.validation_requirements, [
-    { validation_id: "VAL-001", description: "bun run check", argv: null },
-  ]);
+  assert.deepEqual(revised.acceptance_criteria, ["the plan is preserved"]);
+  assert.deepEqual(revised.validation_requirements, [{ description: "bun run check", argv: null }]);
   assert.equal(
     store.planGet({ plan_id: draft.plan_id, revision: 1 }).full_plan,
     revisionInput().full_plan,
@@ -196,12 +284,9 @@ test("bounded revisions replace arrays wholesale and reject invalid envelopes at
       },
     });
     assert.deepEqual(revised.approved_paths, ["a.txt", "z.txt"]);
-    assert.deepEqual(revised.acceptance_criteria, [
-      { criterion_id: "AC-001", description: "first" },
-      { criterion_id: "AC-002", description: "second" },
-    ]);
+    assert.deepEqual(revised.acceptance_criteria, ["first", "second"]);
     assert.deepEqual(revised.validation_requirements, [
-      { validation_id: "VAL-001", description: "executable", argv: ["bun", "run", "check"] },
+      { description: "executable", argv: ["bun", "run", "check"] },
     ]);
 
     const before = store.db
@@ -314,7 +399,7 @@ test("identical approved current revisions preserve approval and plan provenance
 
     assert.equal(unchanged.revision, 1);
     assert.equal(unchanged.metadata.status, "approved");
-    assert.equal(unchanged.metadata.approval, null);
+    assert.equal("approval" in unchanged.metadata, false);
     assert.deepEqual(
       store.planParentGet({ plan_id: draft.plan_id, revision: 1 }).metadata.approval,
       approved.metadata.approval,

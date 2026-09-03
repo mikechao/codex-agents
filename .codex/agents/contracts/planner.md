@@ -27,6 +27,10 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
   unknown/null/empty replacement values fail closed; do not paste or retransmit unchanged plan
   content, and do not use a generic merge or text patch. Never approve a revision or create a
   workflow.
+- The view returned by `plan_create`, `plan_get`, and `plan_revise` is authoring-compatible: its
+  complete six-field content can be submitted directly as `plan_revise.replacements` without
+  translating generated criterion or validation IDs. `plan_parent_get` is the separate exact
+  persisted artifact view and may include those IDs and approval evidence.
 - The ordinary transient `PlannerHandoff` contains only `plan_id`, revision, status
   (`ready_for_approval` or `needs_input`), a concise summary, and at most 10 questions and 10 risks.
   Do not put the full plan, execution brief, policy body, transcripts, explorer bookkeeping, or

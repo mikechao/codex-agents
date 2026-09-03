@@ -249,6 +249,9 @@ export interface PlanRevisionReplacements {
   validation_requirements?: Array<string | { description: string; argv: string[] | null }>;
 }
 
+/** Complete authoring content accepted by plan_create and plan_revise replacements. */
+export type PlanAuthoringContent = Required<PlanRevisionReplacements>;
+
 export interface PlanApproval {
   plan_id: PlanId;
   revision: PlanRevision;
@@ -267,6 +270,21 @@ export interface PlanReadMetadata {
 export type PlanRead = PlanRevisionArtifact & {
   artifact_digest: ContentDigest;
   metadata: PlanReadMetadata;
+};
+
+export interface PlannerPlanReadMetadata {
+  current_revision: PlanRevision;
+  status: "draft" | "approved";
+  is_current: boolean;
+}
+
+/** Planner-facing projection; persisted contract IDs and parent approval evidence stay hidden. */
+export type PlannerPlanRead = PlanAuthoringContent & {
+  plan_id: PlanId;
+  revision: PlanRevision;
+  artifact_digest: ContentDigest;
+  created_at: IsoTimestamp;
+  metadata: PlannerPlanReadMetadata;
 };
 
 export interface PlanProvenance {

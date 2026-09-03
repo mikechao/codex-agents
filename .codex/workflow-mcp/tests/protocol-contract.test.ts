@@ -195,6 +195,17 @@ test("protocol tool contract exposes the workflow actions with stable annotation
     "objective",
     "validation_requirements",
   ]);
+  for (const name of PLANNER_PLANNING_OPERATIONS) {
+    const plannerTool = tools.find((tool) => tool.name === name);
+    assert.ok(plannerTool);
+    assert.match(plannerTool.description ?? "", /authoring-compatible planner view/u);
+  }
+  const parentPlanGet = tools.find((tool) => tool.name === "plan_parent_get");
+  assert.ok(parentPlanGet);
+  assert.match(
+    parentPlanGet.description ?? "",
+    /exact persisted.*generated IDs.*approval evidence/u,
+  );
   const reconciliationSchema = reconciliation.inputSchema as any;
   assert.deepEqual(Object.keys(reconciliationSchema.properties).sort(), [
     "attempt_id",

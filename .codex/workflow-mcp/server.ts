@@ -286,7 +286,8 @@ type ServerToolDefinition = Omit<Tool, "name"> & { name: ServerToolName };
 export const toolDefinitions = [
   {
     name: "plan_create",
-    description: "Create a complete immutable draft plan revision.",
+    description:
+      "Create a complete immutable draft plan revision and return its authoring-compatible planner view.",
     inputSchema: schema(planRevisionProperties, Object.keys(planRevisionProperties)),
     annotations: {
       title: "Create plan",
@@ -298,7 +299,8 @@ export const toolDefinitions = [
   },
   {
     name: "plan_get",
-    description: "Read one exact plan revision without workflow binding.",
+    description:
+      "Read one exact plan revision as an authoring-compatible planner view without workflow binding.",
     inputSchema: schema(planIdentityProperties, ["plan_id", "revision"]),
     annotations: {
       title: "Get plan",
@@ -311,7 +313,7 @@ export const toolDefinitions = [
   {
     name: "plan_revise",
     description:
-      "Create a complete replacement plan revision using optimistic base revision semantics.",
+      "Create a complete replacement plan revision and return its authoring-compatible planner view using optimistic base revision semantics.",
     inputSchema: schema(
       {
         plan_id: planIdentityProperties.plan_id,
@@ -330,7 +332,8 @@ export const toolDefinitions = [
   },
   {
     name: "plan_parent_get",
-    description: "Parent-facing exact plan revision read including approval evidence.",
+    description:
+      "Parent-facing exact persisted plan revision read including generated IDs and approval evidence.",
     inputSchema: schema(planIdentityProperties, ["plan_id", "revision"]),
     annotations: {
       title: "Get plan for parent",
