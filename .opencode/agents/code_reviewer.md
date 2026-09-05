@@ -19,6 +19,7 @@ permission:
     "git grep *": allow
     "bun .codex/agents/change-receipt.ts *": allow
     "bun .codex/agents/reviewer-validation.ts *": allow
+  runEvidence: deny
   task:
     "*": deny
   workflow_state_*: deny

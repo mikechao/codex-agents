@@ -25,6 +25,7 @@ permission:
     "git ls-files *": allow
     "git grep": allow
     "git grep *": allow
+  runEvidence: deny
   external_directory: deny
   webfetch: allow
   websearch: allow

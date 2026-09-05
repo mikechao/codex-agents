@@ -357,7 +357,7 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
     '"git rev-parse --is-inside-work-tree": allow',
     '"git ls-files": allow',
     '"git grep": allow',
-    '"bun .codex/agents/reviewer-validation.ts --evidence-id * --argv-json *": allow',
+    "runEvidence: allow",
   ]) {
     assert.ok(explorer.includes(allowed), `explorer bash allowlist must include ${allowed}`);
   }
@@ -377,6 +377,8 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
   assert.match(explorer, /^  task: deny$/m);
   assert.match(explorer, /^  workflow_state_\*: deny$/m);
   assert.ok(!explorer.includes("workflow_state_plan_create"));
+  for (const role of ["implementer", "code_reviewer", "committer", "planner"])
+    assert.match(opencode(`${role}.md`), /^  runEvidence: deny$/m);
 });
 
 test("planning contracts enforce bounded synthesis and disposable context", () => {
@@ -440,29 +442,17 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
   }
 });
 
-test("explorer evidence permission rejects shell syntax appended to the runner", () => {
+test("explorer exposes only the structured evidence capability", () => {
   const explorer = opencode("explorer.md");
-  const allowedCommand =
-    'bun .codex/agents/reviewer-validation.ts --evidence-id EVIDENCE-1 --argv-json ["git","status"]';
-  assert.equal(opencodeBashPermission(explorer, allowedCommand), "allow");
-  for (const unsafeCommand of [
-    `${allowedCommand}; touch explorer-owned.txt`,
-    `${allowedCommand} && touch explorer-owned.txt`,
-    `${allowedCommand} | touch explorer-owned.txt`,
-    `${allowedCommand} \`touch explorer-owned.txt\``,
-    `${allowedCommand} $(touch explorer-owned.txt)`,
-    `${allowedCommand} > explorer-owned.txt`,
-    `${allowedCommand} < /etc/hosts`,
-    `${allowedCommand}\ntouch explorer-owned.txt`,
-    `${allowedCommand}\rtouch explorer-owned.txt`,
-    `${allowedCommand}\\touch explorer-owned.txt`,
-  ]) {
-    assert.equal(
-      opencodeBashPermission(explorer, unsafeCommand),
-      "deny",
-      `unsafe evidence command must be denied: ${JSON.stringify(unsafeCommand)}`,
-    );
-  }
+  assert.match(explorer, /^  runEvidence: allow$/m);
+  assert.ok(!explorer.includes("reviewer-validation.ts --evidence-id"));
+  assert.equal(
+    opencodeBashPermission(
+      explorer,
+      "bun .codex/agents/reviewer-validation.ts --evidence-id EVIDENCE-1 --argv-json []",
+    ),
+    "deny",
+  );
 });
 
 test("planner clarification and native Plan refinement remain portable and fail closed", () => {
@@ -695,6 +685,7 @@ test("the checked-in native Plan override is canonical and isolated from generat
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",
+    runEvidence: "deny",
     question: "deny",
     task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",

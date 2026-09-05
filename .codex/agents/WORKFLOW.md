@@ -46,8 +46,9 @@ Host permission syntax differs and must not be treated as equivalent:
 context size and isolation; the server-side runtime boundary, `expected_version`, and transition
   checks remain authoritative and are unchanged between hosts.
 - Command authorization is exact and shell-free but is not an OS-level sandbox. Explorer executable
-  evidence is limited to an explicitly authorized `purpose: evidence` policy command through the
-  existing bounded runner; evidence is not workflow validation, approval, or persisted state.
+  evidence is available only through the structured OpenCode `runEvidence({ evidenceId, argv })`
+  custom capability, which requires an explicitly authorized `purpose: evidence` policy command and
+  uses the existing bounded runner. Evidence is not workflow validation, approval, or persisted state.
 - Model/reasoning identity is host metadata, not contract prose: each generated definition
   announces its own identity line (resolved model plus reasoning effort in both hosts), injected by
   the generator in place of the contract's `__HOST_IDENTITY__` marker. Edit

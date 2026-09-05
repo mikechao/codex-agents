@@ -1,7 +1,15 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +18,7 @@ import {
   type ReviewerValidationPolicy,
   runReviewerEvidence,
   runReviewerValidation,
+  runStructuredReviewerEvidence,
 } from "../reviewer-validation.js";
 
 function policy(argv: string[]): ReviewerValidationPolicy {
@@ -52,6 +61,26 @@ function workflowValidationFixture() {
   );
   return fixture;
 }
+
+test("legacy CLI rejects evidence mode before parsing or execution", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(import.meta.dir, "../reviewer-validation.ts"),
+      "--evidence-id",
+      "EVIDENCE-CLI",
+      "--argv-json",
+      "not-json",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Usage: bun .codex/agents/reviewer-validation.ts --validation-id ID --argv-json JSON\n",
+  );
+});
 
 test("policy accepts exact argv and rejects duplicates, policy IDs, shell syntax, and malformed limits", () => {
   const parsed = policy(["bun", "-e", "process.stdout.write('ok')"]);
@@ -150,6 +179,47 @@ test("evidence mode selects only explicit evidence commands", () => {
     );
     assert.equal(unavailable.status, "unavailable");
     assert.equal(unavailable.working_tree_changed, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("structured evidence returns bounded outcomes without an alternate execution path", () => {
+  const { root } = gitFixture();
+  try {
+    const argv = ["git", "status", "--porcelain"];
+    mkdirSync(join(root, ".codex"));
+    writeFileSync(
+      join(root, ".codex/reviewer-validation.json"),
+      JSON.stringify({
+        version: 1,
+        commands: [{ argv, purpose: "evidence", timeout_ms: 10_000, max_output_bytes: 4096 }],
+      }),
+    );
+    const positive = runStructuredReviewerEvidence(
+      { evidenceId: "EVIDENCE-STRUCTURED", argv },
+      root,
+    );
+    assert.equal(positive.status, "passed");
+    assert.deepEqual(positive.requested_argv, argv);
+    assert.deepEqual(positive.executed_argv, argv);
+    assert.equal(positive.validation_id, "EVIDENCE-STRUCTURED");
+
+    const denied = runStructuredReviewerEvidence(
+      { evidenceId: "EVIDENCE-DENIED", argv: ["git", "status", "--short"] },
+      root,
+    );
+    assert.equal(denied.status, "failed");
+    assert.deepEqual(denied.executed_argv, []);
+    assert.equal(denied.working_tree_changed, false);
+
+    const shellData = runStructuredReviewerEvidence(
+      { evidenceId: "EVIDENCE-SHELL", argv: ["git", "status;touch escaped"] },
+      root,
+    );
+    assert.equal(shellData.status, "failed");
+    assert.deepEqual(shellData.executed_argv, []);
+    assert.equal(existsSync(join(root, "escaped")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

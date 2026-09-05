@@ -47,6 +47,30 @@ test("the repository's own opencode.json registers the supervised self-host serv
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
 });
 
+test("self-host OpenCode exposes structured evidence only to explorer", () => {
+  const customTool = resolve(repoRoot, ".opencode/tools/runEvidence.ts");
+  assert.ok(existsSync(customTool));
+  assert.equal(customTool.split("/").pop()?.replace(/\.ts$/u, ""), "runEvidence");
+  assert.ok(!existsSync(resolve(repoRoot, ".opencode/plugins/run-evidence.ts")));
+  const source = readFileSync(customTool, "utf8");
+  assert.match(source, /export default tool\(/u);
+  assert.doesNotMatch(source, /Plugin/u);
+  assert.match(source, /context\.agent !== "explorer"/);
+  assert.match(source, /context\.worktree/);
+  assert.ok(!source.includes("Bun.$"));
+  assert.ok(!source.includes("spawnSync"));
+  const explorer = readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8");
+  assert.match(explorer, /^  runEvidence: allow$/m);
+  for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
+    assert.match(
+      readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
+      /^  runEvidence: deny$/m,
+    );
+  }
+  const permission = openCodePlanAgent().permission as Record<string, unknown>;
+  assert.equal(permission.runEvidence, "deny");
+});
+
 test("the self-host Native Plan prompt keeps the CTA outside the exact plan rendering", () => {
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     agent: { plan: { prompt: string } };

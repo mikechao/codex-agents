@@ -35,6 +35,7 @@ permission:
     "git clean *": deny
     "git stash": deny
     "git stash *": deny
+  runEvidence: deny
   task:
     "*": deny
   workflow_state_*: deny

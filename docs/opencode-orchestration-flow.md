@@ -56,7 +56,7 @@ The host boundary is therefore:
 | --- | --- | --- |
 | Native `task` | One model-authored textual `prompt` plus task metadata | No independent typed/opaque source field; source and wrapper share one text value |
 | Agent configuration | Static prompt, permissions, mode, and task allowlist | No per-request source channel or deterministic child assembly |
-| Plugin hooks | Generic tool-argument mutation and custom tools | Can inspect/mutate the resulting task call, but cannot establish source authority independently or guarantee context placement |
+| Plugin hooks and project-local custom tools | Generic tool-argument mutation and custom tools, including auto-discovered `.opencode/tools/*.ts` definitions | Can inspect/mutate the resulting task call or expose a bounded custom capability, but cannot establish source authority independently or guarantee context placement |
 | Server/SDK | Session creation and ordinary text/file message parts | No documented Plan-specific pre-dispatch source interception |
 
 The native Plan delegation path therefore retains the #77 compatibility fallback: wrapper first, a
@@ -425,9 +425,17 @@ the target repository.
 ## Boundary summary
 
 OpenCode command authorization is exact and shell-free, but it is host-level defense in depth rather
-than an OS-level sandbox. Evidence commands run only through the existing bounded policy runner with
-an explicit `purpose: evidence` entry; no report, explorer transcript, or investigation workflow is
-persisted.
+than an OS-level sandbox. Explorer evidence is available only through the structured
+`runEvidence({ evidenceId, argv })` custom tool, which uses the existing bounded policy runner with
+an explicit `purpose: evidence` entry and the target worktree. The custom tool rejects non-explorer
+callers, returns bounded provenance for success and failure, and never provides a Bash fallback; no
+report, explorer transcript, or investigation workflow is persisted. The project-owned source is the
+auto-discovered `.opencode/tools/runEvidence.ts` file; the obsolete `.opencode/plugins/run-evidence.ts`
+implementation and plugin registration are not used. OpenCode owns dependency synchronization in its
+writable configuration directory: it creates or updates `package.json`, lockfiles,
+`node_modules/@opencode-ai/plugin`, and its generated `.gitignore` to the running InstallationVersion.
+The installer does not create, validate, pin, or otherwise mutate those ignored host artifacts, and
+they are not repository authority or workflow persistence.
 
 - **Orchestrator:** primary execution control plane; exact approved-plan parent read, bounded
   policy/Git preflight, workflow creation, and routing only; no plan approval or planner dispatch.

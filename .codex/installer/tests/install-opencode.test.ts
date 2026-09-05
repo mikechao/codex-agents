@@ -8,8 +8,10 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,6 +143,55 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     );
     assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
+    const installedTool = join(root, ".opencode/tools/runEvidence.ts");
+    assert.ok(existsSync(installedTool));
+    assert.equal(
+      readFileSync(installedTool, "utf8"),
+      readFileSync(resolve(import.meta.dir, "../../../.opencode/tools/runEvidence.ts"), "utf8"),
+    );
+    assert.ok(!existsSync(join(root, ".opencode/plugins/run-evidence.ts")));
+    assert.ok(!existsSync(join(root, ".opencode/plugins")));
+    assert.equal(installedTool.split("/").pop()?.replace(/\.ts$/u, ""), "runEvidence");
+    assert.match(readFileSync(installedTool, "utf8"), /export default tool\(/u);
+    assert.doesNotMatch(readFileSync(installedTool, "utf8"), /Plugin/u);
+    for (const artifact of [
+      ".opencode/package.json",
+      ".opencode/package-lock.json",
+      ".opencode/bun.lock",
+      ".opencode/node_modules",
+      ".opencode/.gitignore",
+    ]) {
+      assert.ok(!existsSync(join(root, artifact)), `installer must not create ${artifact}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts preserves arbitrary OpenCode host artifacts byte-for-byte", () => {
+  const { root, write } = fixture();
+  try {
+    const artifacts = {
+      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"},"custom":true}\n',
+      ".opencode/package-lock.json": '{"lockfileVersion":99,"custom":"keep"}\n',
+      ".opencode/bun.lock": "# host-generated lock\ncustom-entry\n",
+      ".opencode/.gitignore": "package.json\nnode_modules/\n",
+      ".opencode/node_modules/@opencode-ai/plugin/package.json":
+        '{"name":"@opencode-ai/plugin","version":"9.9.9"}\n',
+      ".opencode/node_modules/@opencode-ai/plugin/host-state.txt": "keep this entry\n",
+      ".opencode/plugins/pre-existing.ts": "// target-owned plugin\n",
+    } as const;
+    for (const [path, content] of Object.entries(artifacts)) write(path, content);
+    const originalEntries = readdirSync(join(root, ".opencode")).sort();
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    for (const [path, content] of Object.entries(artifacts)) {
+      assert.equal(readFileSync(join(root, path), "utf8"), content, `${path} must be unchanged`);
+    }
+    assert.deepEqual(
+      readdirSync(join(root, ".opencode")).sort(),
+      [...originalEntries, "agents", "tools"].sort(),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -249,6 +300,7 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",
+    runEvidence: "deny",
     question: "deny",
     task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",
@@ -509,6 +561,69 @@ test("install-into.ts refuses a managed OpenCode agent name collision", () => {
   }
 });
 
+test("install-into.ts refuses a managed OpenCode custom-tool collision before mutation", () => {
+  const { root, write } = fixture();
+  try {
+    const original = "// target-owned custom tool\n";
+    write(".opencode/tools/runEvidence.ts", original);
+    const hostArtifacts = {
+      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+      ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
+      ".opencode/.gitignore": "node_modules/\n",
+    } as const;
+    for (const [path, content] of Object.entries(hostArtifacts)) write(path, content);
+    const result = runInstaller(root);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
+    assert.equal(readFileSync(join(root, ".opencode/tools/runEvidence.ts"), "utf8"), original);
+    for (const [path, content] of Object.entries(hostArtifacts)) {
+      assert.equal(readFileSync(join(root, path), "utf8"), content);
+    }
+    assert.ok(!existsSync(join(root, ".codex/agents")));
+    assert.ok(!existsSync(join(root, "opencode.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts refuses a dangling managed OpenCode custom-tool collision", () => {
+  const { root } = fixture();
+  try {
+    const tools = join(root, ".opencode/tools");
+    mkdirSync(tools, { recursive: true });
+    const managedTool = join(tools, "runEvidence.ts");
+    symlinkSync("missing-runEvidence.ts", managedTool);
+    const hostArtifacts = {
+      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+      ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
+      ".opencode/.gitignore": "node_modules/\n",
+      ".opencode/node_modules/@opencode-ai/plugin/package.json": '{"version":"9.9.9"}\n',
+    } as const;
+    for (const [path, content] of Object.entries(hostArtifacts)) {
+      const directory = dirname(join(root, path));
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(root, path), content);
+    }
+    const rootEntries = readdirSync(root).sort();
+    const openCodeEntries = readdirSync(join(root, ".opencode")).sort();
+    const toolEntries = readdirSync(tools).sort();
+    const result = runInstaller(root);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
+    assert.equal(readlinkSync(managedTool), "missing-runEvidence.ts");
+    assert.deepEqual(readdirSync(root).sort(), rootEntries);
+    assert.deepEqual(readdirSync(join(root, ".opencode")).sort(), openCodeEntries);
+    assert.deepEqual(readdirSync(tools).sort(), toolEntries);
+    for (const [path, content] of Object.entries(hostArtifacts)) {
+      assert.equal(readFileSync(join(root, path), "utf8"), content);
+    }
+    assert.ok(!existsSync(join(root, ".codex/agents")));
+    assert.ok(!existsSync(join(root, "opencode.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("install-into.ts refuses a second run without overwriting either host adapter", () => {
   const { root } = fixture();
   try {
@@ -670,6 +785,76 @@ test("commitBothHosts removes created config files when they did not exist befor
     assert.ok(!existsSync(codexConfigTarget));
     assert.ok(!existsSync(opencodeAgentsTarget));
     assert.ok(!existsSync(opencodeConfigTarget));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("commitBothHosts rolls back a newly installed custom tool after a later failure", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexAgentsTarget = join(root, ".codex/agents");
+    const codexConfigTarget = join(root, ".codex/config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    const customToolTarget = join(root, ".opencode/tools/runEvidence.ts");
+    const laterTarget = join(root, ".opencode/tools/later.txt");
+    mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
+    mkdirSync(dirname(customToolTarget), { recursive: true });
+    const hostPackage = '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n';
+    writeFileSync(join(root, ".opencode/package.json"), hostPackage);
+    const codexAgents = agentsDir("codex-agents-tool-rollback");
+    const codexConfig = staging("codex-config-tool-rollback");
+    const opencodeAgents = agentsDir("opencode-agents-tool-rollback");
+    const opencodeConfig = staging("opencode-config-tool-rollback");
+    const customTool = staging("custom-tool-tool-rollback");
+    const later = staging("later-tool-rollback");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    writeFileSync(join(customTool, "runEvidence.ts"), "// installed tool\n");
+    writeFileSync(join(later, "later.txt"), "later file\n");
+    const rename = (from: string, to: string) => {
+      if (to === laterTarget) throw new Error("injected later project-file failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          null,
+          null,
+          null,
+          rename,
+          writeFileSync,
+          undefined,
+          undefined,
+          [
+            {
+              staging: join(customTool, "runEvidence.ts"),
+              target: customToolTarget,
+              original: null,
+            },
+            { staging: join(later, "later.txt"), target: laterTarget, original: null },
+          ],
+        ),
+      /injected later project-file failure/,
+    );
+    assert.ok(!existsSync(customToolTarget), "new custom tool must be rolled back");
+    assert.ok(!existsSync(laterTarget), "failed later project file must not remain");
+    assert.ok(!existsSync(codexAgentsTarget));
+    assert.ok(!existsSync(opencodeAgentsTarget));
+    assert.ok(!existsSync(opencodeConfigTarget));
+    assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), hostPackage);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

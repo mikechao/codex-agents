@@ -18,6 +18,8 @@ const PROJECT_ROOT = resolve(import.meta.dir, "../..");
 const DEFAULT_POLICY_PATH = resolve(PROJECT_ROOT, ".codex/reviewer-validation.json");
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 1_048_576;
+const MAX_ARGUMENT_LENGTH = 4096;
+const MAX_EVIDENCE_ID_LENGTH = 200;
 const SHELL_SYNTAX = /[;&|`$<>\n\r\\]/u;
 const SHELL_EXECUTABLES = new Set([
   "sh",
@@ -63,9 +65,21 @@ function objectRecord(value: unknown, context: string): Record<string, unknown> 
 }
 
 function stringValue(value: unknown, context: string): string {
-  if (typeof value !== "string" || value.length === 0)
-    throw new Error(`${context} must be non-empty`);
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_ARGUMENT_LENGTH)
+    throw new Error(
+      `${context} must be a non-empty string of at most ${MAX_ARGUMENT_LENGTH} characters`,
+    );
   if (SHELL_SYNTAX.test(value)) throw new Error(`${context} contains shell syntax`);
+  return value;
+}
+
+function evidenceIdValue(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_EVIDENCE_ID_LENGTH) {
+    throw new Error(
+      `evidence ID must be a non-empty string of at most ${MAX_EVIDENCE_ID_LENGTH} characters`,
+    );
+  }
+  if (SHELL_SYNTAX.test(value)) throw new Error("evidence ID contains shell syntax");
   return value;
 }
 
@@ -291,17 +305,69 @@ export function runReviewerEvidence(
   requestedArgv: readonly string[],
   projectRoot = PROJECT_ROOT,
 ): ValidationEvidence {
-  return runAuthorizedCommand(policy, evidenceId, requestedArgv, "evidence", projectRoot);
+  return runAuthorizedCommand(
+    policy,
+    evidenceIdValue(evidenceId),
+    requestedArgv,
+    "evidence",
+    projectRoot,
+  );
+}
+
+export interface StructuredReviewerEvidenceRequest {
+  evidenceId: unknown;
+  argv: unknown;
+}
+
+function boundedRequestArgv(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 50)
+    .filter((argument): argument is string => typeof argument === "string")
+    .map((argument) => argument.slice(0, MAX_ARGUMENT_LENGTH));
+}
+
+/**
+ * Host adapters use this seam so malformed or unauthorized structured requests
+ * become bounded evidence instead of an exception or a suggestion to use a
+ * shell. The exact policy/argv check remains in runAuthorizedCommand and is
+ * performed before fingerprinting or process launch.
+ */
+export function runStructuredReviewerEvidence(
+  request: StructuredReviewerEvidenceRequest,
+  projectRoot = PROJECT_ROOT,
+): ValidationEvidence {
+  const requestedArgv = boundedRequestArgv(request.argv);
+  const evidenceId =
+    typeof request.evidenceId === "string"
+      ? request.evidenceId.slice(0, MAX_EVIDENCE_ID_LENGTH)
+      : "unknown-evidence";
+  try {
+    const validatedEvidenceId = evidenceIdValue(request.evidenceId);
+    const validatedArgv = argvValue(request.argv, "requested argv");
+    const policy = loadReviewerValidationPolicy(
+      resolve(projectRoot, ".codex/reviewer-validation.json"),
+    );
+    return runReviewerEvidence(policy, validatedEvidenceId, validatedArgv, projectRoot);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return {
+      validation_id: evidenceId,
+      requested_argv: requestedArgv,
+      executed_argv: [],
+      status: "failed",
+      exit_code: null,
+      timed_out: false,
+      output: boundedOutput(message, 512),
+      working_tree_changed: false,
+    };
+  }
 }
 
 function main(args: readonly string[]): number {
-  if (
-    args.length !== 4 ||
-    (args[0] !== "--validation-id" && args[0] !== "--evidence-id") ||
-    args[2] !== "--argv-json"
-  ) {
+  if (args.length !== 4 || args[0] !== "--validation-id" || args[2] !== "--argv-json") {
     process.stderr.write(
-      "Usage: bun .codex/agents/reviewer-validation.ts (--validation-id|--evidence-id) ID --argv-json JSON\n",
+      "Usage: bun .codex/agents/reviewer-validation.ts --validation-id ID --argv-json JSON\n",
     );
     return 2;
   }
@@ -312,8 +378,7 @@ function main(args: readonly string[]): number {
     } catch {
       throw new Error("requested argv JSON is invalid");
     }
-    const run = args[0] === "--evidence-id" ? runReviewerEvidence : runReviewerValidation;
-    const evidence = run(
+    const evidence = runReviewerValidation(
       loadReviewerValidationPolicy(),
       args[1],
       argvValue(requestedArgv, "requested argv"),

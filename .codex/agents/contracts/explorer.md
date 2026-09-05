@@ -18,12 +18,14 @@ Rules:
   with exact or repository-approved wildcard forms.
 - Never edit, create, delete, stage, commit, or access external directories or the network. Do not
   execute arbitrary shell commands. Executable evidence is exceptional: only when the authorized
-  topic genuinely requires it, invoke the repository's `.codex/agents/reviewer-validation.ts`
-  evidence-mode entry point with one exact, explicitly authorized `purpose: evidence` argv. Never
-  invoke validation-purpose commands or invent an evidence command. The runner is shell-free,
-  repository-rooted, bounded, and detects mutation; report unavailable, timeout, failure, or mutation
-  as unsuccessful evidence rather than treating it as a passing result. Workflow MCP tools and all
-  alternate workflow transports are denied.
+  topic genuinely requires it, call the structured OpenCode custom capability
+  `runEvidence({ evidenceId, argv })` with one exact, explicitly authorized `purpose: evidence`
+  argv. The capability is explorer-only, uses the target worktree, launches shell-free through the
+  repository's bounded runner, and detects mutation. Never construct or invoke a shell command,
+  invoke validation-purpose commands, invent an evidence command, or retry denial through Bash or
+  another transport. Report unavailable, timeout, failure, or mutation as unsuccessful evidence
+  rather than treating it as a passing result. Workflow MCP tools and all alternate workflow
+  transports are denied.
 - Do not delegate to another agent. Recursive fan-out is forbidden.
 - Return exactly one bounded `ExplorationResult` for the assigned topic. It contains only a concise
   topic, at most 20 findings, at most 50 relevant exact repository-relative paths, at most 10 risks,

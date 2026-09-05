@@ -3,11 +3,13 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -35,6 +37,7 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/contracts/explorer.md",
   ".codex/agents/WORKFLOW.md",
   ".opencode/agents/orchestrator.md",
+  ".opencode/tools/runEvidence.ts",
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
@@ -98,6 +101,7 @@ Wait for an explicit user instruction approving that exact plan ID and revision.
 export const OPENCODE_PLAN_PERMISSION = {
   edit: "deny",
   bash: "deny",
+  runEvidence: "deny",
   question: "deny",
   task: { "*": "deny", planner: "allow", explorer: "allow" },
   "workflow_state_*": "deny",
@@ -111,6 +115,7 @@ export function openCodePlanAgent(): Record<string, unknown> {
     permission: {
       edit: OPENCODE_PLAN_PERMISSION.edit,
       bash: OPENCODE_PLAN_PERMISSION.bash,
+      runEvidence: OPENCODE_PLAN_PERMISSION.runEvidence,
       question: OPENCODE_PLAN_PERMISSION.question,
       task: { ...OPENCODE_PLAN_PERMISSION.task },
       "workflow_state_*": OPENCODE_PLAN_PERMISSION["workflow_state_*"],
@@ -316,6 +321,7 @@ export function commitBothHosts(
   writeFile: (path: string, content: string) => void = writeFileSync,
   recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" },
   projectFile?: OptionalProjectFile,
+  projectFiles: readonly OptionalProjectFile[] = [],
 ): void {
   const steps: readonly CommitStep[] = [
     { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
@@ -347,6 +353,12 @@ export function commitBothHosts(
             originalDir: null,
           },
         ]),
+    ...projectFiles.map((file) => ({
+      staging: file.staging,
+      target: file.target,
+      original: file.original,
+      originalDir: null,
+    })),
   ];
   const committed: CommitStep[] = [];
   try {
@@ -428,6 +440,28 @@ function parseJsoncConfig(configPath: string, text: string): unknown {
     );
   }
   return parsed;
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (cause) {
+    if (cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT") {
+      return false;
+    }
+    throw cause;
+  }
+}
+
+function removeCreatedDirectory(path: string, existed: boolean): void {
+  if (existed) return;
+  try {
+    rmdirSync(path);
+  } catch {
+    // Preserve any content that may have been supplied concurrently or left
+    // behind by a failed recovery; only an empty directory is ours to remove.
+  }
 }
 
 function objectValue(value: unknown, context: string): Record<string, unknown> | null {
@@ -706,6 +740,16 @@ export function main(args: readonly string[]): number {
     error(`Refusing to replace existing workflow_state registration: ${config}`);
   }
   const opencodeAgentsTarget = resolve(target, ".opencode/agents");
+  const opencodeCustomToolTarget = resolve(target, ".opencode/tools/runEvidence.ts");
+  const codexDirectory = resolve(target, ".codex");
+  const opencodeDirectory = resolve(target, ".opencode");
+  const opencodeToolsDirectory = resolve(opencodeDirectory, "tools");
+  const codexDirectoryExisting = pathEntryExists(codexDirectory);
+  const opencodeDirectoryExisting = pathEntryExists(opencodeDirectory);
+  const opencodeToolsDirectoryExisting = pathEntryExists(opencodeToolsDirectory);
+  if (pathEntryExists(opencodeCustomToolTarget)) {
+    error(`Refusing to replace existing OpenCode custom tool: ${opencodeCustomToolTarget}`);
+  }
   const opencodeAgentsExisting = existsSync(opencodeAgentsTarget);
   const opencodeConfig = findOpenCodeConfig(target);
   if (opencodeConfig !== null && hasOpenCodeWorkflowStateRegistration(opencodeConfig)) {
@@ -775,12 +819,14 @@ export function main(args: readonly string[]): number {
     serverPath,
   );
 
-  mkdirSync(resolve(target, ".codex"), { recursive: true });
-  mkdirSync(resolve(target, ".opencode"), { recursive: true });
+  mkdirSync(codexDirectory, { recursive: true });
+  mkdirSync(opencodeDirectory, { recursive: true });
+  mkdirSync(opencodeToolsDirectory, { recursive: true });
   const agentsStaging = mkdtempSync(resolve(target, ".codex/.agents.install."));
   const configStaging = mkdtempSync(resolve(target, ".codex/.config.install."));
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
+  const opencodeCustomToolStaging = mkdtempSync(resolve(target, ".opencode-custom-tool.install."));
   const reviewerPolicyStaging = mkdtempSync(
     resolve(target, ".codex/.reviewer-validation.install."),
   );
@@ -801,6 +847,8 @@ export function main(args: readonly string[]): number {
       opencodeAgentsStaging,
       generatedManifest,
     );
+    const stagedCustomTool = resolve(opencodeCustomToolStaging, "runEvidence.ts");
+    cpSync(resolve(projectRoot, ".opencode/tools/runEvidence.ts"), stagedCustomTool);
     if (reviewerPolicyOriginal === null) {
       cpSync(
         resolve(projectRoot, ".codex/reviewer-validation.json"),
@@ -846,18 +894,30 @@ export function main(args: readonly string[]): number {
             original: null,
           }
         : undefined,
+      [
+        {
+          staging: stagedCustomTool,
+          target: opencodeCustomToolTarget,
+          original: null,
+        },
+      ],
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
+    rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
     rmSync(reviewerPolicyStaging, { recursive: true, force: true });
     cleanupOpenCodeAgentsBackup(opencodeAgentsBackup, recoveryState);
+    removeCreatedDirectory(opencodeToolsDirectory, opencodeToolsDirectoryExisting);
+    removeCreatedDirectory(opencodeDirectory, opencodeDirectoryExisting);
+    removeCreatedDirectory(codexDirectory, codexDirectoryExisting);
     throw cause;
   }
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
+  rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
   rmSync(reviewerPolicyStaging, { recursive: true, force: true });
   if (opencodeAgentsBackup !== null) {
     rmSync(opencodeAgentsBackup, { recursive: true, force: true });

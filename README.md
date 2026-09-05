@@ -178,6 +178,13 @@ one all-or-nothing step:
   unauthorized argv, malformed policy, shell syntax, timeouts, unavailable commands, and working-tree
   mutations fail closed. Manual validation requirements are represented with `argv: null` and are
   never executed.
+- OpenCode also installs the structured, explorer-only `runEvidence({ evidenceId, argv })` project-local
+  custom tool at `.opencode/tools/runEvidence.ts`, which OpenCode auto-discovers by filename. OpenCode
+  creates and synchronizes its writable `.opencode/package.json`, lockfiles, `.opencode/node_modules`,
+  and generated `.opencode/.gitignore` at startup to the running InstallationVersion. These ignored
+  host artifacts are not pinned by this repository and are not installer mutation targets; existing
+  host state is left untouched. Evidence remains exact-policy-authorized, shell-free, bounded, and
+  non-authoritative; explorers never fall back to Bash.
 
 Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
 sources. Their direct provider-server registration has no runtime-artifact affinity lifecycle; the
