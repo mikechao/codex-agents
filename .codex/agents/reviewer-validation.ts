@@ -4,10 +4,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  constants,
   fstatSync,
   lstatSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   readSync,
@@ -25,6 +27,9 @@ const MAX_OUTPUT_BYTES = 1_048_576;
 const MAX_ARGUMENT_LENGTH = 4096;
 const MAX_EVIDENCE_ID_LENGTH = 200;
 const MAX_IGNORED_FINGERPRINT_BYTES = 512 * 1024 * 1024;
+const MAX_OPERATION_STATE_BYTES = 4 * 1024 * 1024;
+const MAX_OPERATION_STATE_ENTRIES = 512;
+const MAX_OPERATION_STATE_DEPTH = 8;
 const SHELL_SYNTAX = /[;&|`$<>\n\r\\]/u;
 const SHELL_EXECUTABLES = new Set([
   "sh",
@@ -318,10 +323,15 @@ function stableStat(value: {
   return [value.mode, value.size, value.mtimeMs, value.ino, value.dev].join(":");
 }
 
-function readBoundedFile(path: string, budget: FingerprintBudget, context: string): Buffer {
+function readBoundedFile(
+  path: string,
+  budget: FingerprintBudget,
+  context: string,
+  expectedIdentity?: string,
+): Buffer {
   let descriptor: number;
   try {
-    descriptor = openSync(path, "r");
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (cause) {
     throw fingerprintError(`unable to open ${context}`, cause);
   }
@@ -333,6 +343,9 @@ function readBoundedFile(path: string, budget: FingerprintBudget, context: strin
       throw fingerprintError(`unable to stat ${context}`, cause);
     }
     if (!initial.isFile()) throw fingerprintError(`${context} is not a regular file`);
+    if (expectedIdentity !== undefined && stableStat(initial) !== expectedIdentity) {
+      throw fingerprintError(`${context} changed before opening`);
+    }
     consumeBudget(budget, initial.size, context);
     const output = Buffer.alloc(initial.size);
     let offset = 0;
@@ -354,6 +367,15 @@ function readBoundedFile(path: string, budget: FingerprintBudget, context: strin
     }
     if (stableStat(initial) !== stableStat(final))
       throw fingerprintError(`${context} changed while reading`);
+    let pathValue: ReturnType<typeof lstatSync>;
+    try {
+      pathValue = lstatSync(path);
+    } catch (cause) {
+      throw fingerprintError(`${context} disappeared after reading`, cause);
+    }
+    if (!pathValue.isFile() || stableStat(pathValue) !== stableStat(initial)) {
+      throw fingerprintError(`${context} changed while reading`);
+    }
     return output;
   } finally {
     closeSync(descriptor);
@@ -401,7 +423,7 @@ function addRepositoryFile(
     consumeBudget(budget, Buffer.byteLength(target, "utf8"), context);
     frame(hash, `${context}:target`, text(target));
   } else if (initial.isFile()) {
-    const bytes = readBoundedFile(absolutePath, budget, context);
+    const bytes = readBoundedFile(absolutePath, budget, context, stableStat(initial));
     frame(hash, `${context}:bytes`, bytes);
   } else {
     throw fingerprintError(`${context} has unsupported file type`);
@@ -436,7 +458,7 @@ function addOptionalGitFile(
     throw fingerprintError(`unable to inspect ${label}`, cause);
   }
   if (!value.isFile()) throw fingerprintError(`${label} is not a regular file`);
-  const bytes = readBoundedFile(path, budget, label);
+  const bytes = readBoundedFile(path, budget, label, stableStat(value));
   frame(hash, `${label}:present`, bytes);
   let final: ReturnType<typeof lstatSync>;
   try {
@@ -446,6 +468,158 @@ function addOptionalGitFile(
   }
   if (stableStat(value) !== stableStat(final))
     throw fingerprintError(`${label} changed while reading`);
+}
+
+interface OperationStateEntry {
+  relativePath: string;
+  kind: "directory" | "file";
+  mode: number;
+  path: string;
+  identity: string;
+}
+
+function collectOperationStateEntries(
+  root: string,
+  relativePath: string,
+  depth: number,
+  entries: OperationStateEntry[],
+): void {
+  if (depth > MAX_OPERATION_STATE_DEPTH) {
+    throw fingerprintError(`operation state exceeds bounded depth: ${relativePath}`);
+  }
+  let names: string[];
+  try {
+    names = readdirSync(join(root, relativePath)).sort(compareStrings);
+  } catch (cause) {
+    throw fingerprintError(`unable to enumerate operation state directory ${relativePath}`, cause);
+  }
+  for (const name of names) {
+    if (name.length === 0 || name === "." || name === ".." || name.includes("/")) {
+      throw fingerprintError(
+        `operation state contains an unsafe entry name: ${relativePath}/${name}`,
+      );
+    }
+    if (entries.length >= MAX_OPERATION_STATE_ENTRIES) {
+      throw fingerprintError("operation state entry limit exceeded");
+    }
+    const childRelativePath = relativePath === "." ? name : `${relativePath}/${name}`;
+    const childPath = join(root, childRelativePath);
+    let value: ReturnType<typeof lstatSync>;
+    try {
+      value = lstatSync(childPath);
+    } catch (cause) {
+      throw fingerprintError(`unable to inspect operation state entry ${childRelativePath}`, cause);
+    }
+    if (value.isSymbolicLink()) {
+      throw fingerprintError(`operation state entry ${childRelativePath} is a symlink`);
+    }
+    const kind = value.isDirectory() ? "directory" : value.isFile() ? "file" : "other";
+    if (kind === "other") {
+      throw fingerprintError(`operation state entry ${childRelativePath} has unsupported type`);
+    }
+    entries.push({
+      relativePath: childRelativePath,
+      kind,
+      mode: value.mode & 0o111,
+      path: childPath,
+      identity: stableStat(value),
+    });
+    if (kind === "directory") {
+      collectOperationStateEntries(root, childRelativePath, depth + 1, entries);
+      let final: ReturnType<typeof lstatSync>;
+      try {
+        final = lstatSync(childPath);
+      } catch (cause) {
+        throw fingerprintError(
+          `operation state directory ${childRelativePath} disappeared while traversing`,
+          cause,
+        );
+      }
+      if (!final.isDirectory() || stableStat(value) !== stableStat(final)) {
+        throw fingerprintError(
+          `operation state directory ${childRelativePath} changed while traversing`,
+        );
+      }
+    }
+  }
+}
+
+function addOptionalGitDirectory(
+  hash: ReturnType<typeof createHash>,
+  path: string,
+  label: string,
+  budget: FingerprintBudget,
+): void {
+  let value: ReturnType<typeof lstatSync>;
+  try {
+    value = lstatSync(path);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+      frame(hash, `${label}:absent`, Buffer.alloc(0));
+      return;
+    }
+    throw fingerprintError(`unable to inspect ${label}`, cause);
+  }
+  if (value.isSymbolicLink() || !value.isDirectory()) {
+    throw fingerprintError(`${label} is not a regular directory`);
+  }
+  frame(hash, `${label}:present`, text("directory"));
+  const entries: OperationStateEntry[] = [];
+  collectOperationStateEntries(path, ".", 0, entries);
+  entries.sort((left, right) => compareStrings(left.relativePath, right.relativePath));
+  frame(hash, `${label}:count`, text(String(entries.length)));
+  for (const entry of entries) {
+    consumeBudget(
+      budget,
+      Buffer.byteLength(entry.relativePath, "utf8"),
+      `${label}/${entry.relativePath}`,
+    );
+    frame(hash, `${label}:entry`, text(`${entry.relativePath}\0${entry.kind}\0${entry.mode}`));
+    if (entry.kind === "file") {
+      frame(
+        hash,
+        `${label}:content:${entry.relativePath}`,
+        readBoundedFile(entry.path, budget, `${label}/${entry.relativePath}`, entry.identity),
+      );
+    }
+  }
+  let final: ReturnType<typeof lstatSync>;
+  try {
+    final = lstatSync(path);
+  } catch (cause) {
+    throw fingerprintError(`${label} disappeared after reading`, cause);
+  }
+  if (stableStat(value) !== stableStat(final)) {
+    throw fingerprintError(`${label} changed while fingerprinting`);
+  }
+}
+
+function addOperationState(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+  const budget = { remaining: MAX_OPERATION_STATE_BYTES };
+  for (const marker of [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_START",
+    "BISECT_TERMS",
+    "BISECT_EXPECTED_REV",
+    "BISECT_LOG",
+  ]) {
+    const path = decodeGitPath(
+      projectRoot,
+      gitOutput(projectRoot, ["rev-parse", "--git-path", marker]),
+      `operation-state path ${marker}`,
+    );
+    addOptionalGitFile(hash, path, `operation-state:${marker}`, budget);
+  }
+  for (const directory of ["sequencer", "rebase-merge", "rebase-apply"]) {
+    const path = decodeGitPath(
+      projectRoot,
+      gitOutput(projectRoot, ["rev-parse", "--git-path", directory]),
+      `operation-state path ${directory}`,
+    );
+    addOptionalGitDirectory(hash, path, `operation-state:${directory}`, budget);
+  }
 }
 
 function addIgnoredFiles(hash: ReturnType<typeof createHash>, projectRoot: string): void {
@@ -661,6 +835,7 @@ export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
   addIndex(hash, projectRoot);
   addHead(hash, projectRoot);
   addRefs(hash, projectRoot);
+  addOperationState(hash, projectRoot);
   const controlBudget = { remaining: MAX_IGNORED_FINGERPRINT_BYTES };
   addLocalConfig(hash, projectRoot, controlBudget);
   addIgnoreControl(hash, projectRoot, controlBudget);

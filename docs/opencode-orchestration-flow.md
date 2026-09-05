@@ -431,11 +431,16 @@ an explicit `purpose: evidence` entry and the target worktree. The custom tool r
 callers, returns bounded provenance for success and failure, and never provides a Bash fallback; no
 report, explorer transcript, or investigation workflow is persisted. The project-owned source is the
 auto-discovered `.opencode/tools/runEvidence.ts` file; the obsolete `.opencode/plugins/run-evidence.ts`
-implementation and plugin registration are not used. OpenCode owns dependency synchronization in its
-writable configuration directory: it creates or updates `package.json`, lockfiles,
-`node_modules/@opencode-ai/plugin`, and its generated `.gitignore` to the running InstallationVersion.
-The installer does not create, validate, pin, or otherwise mutate those ignored host artifacts, and
-they are not repository authority or workflow persistence.
+  implementation and plugin registration are not used. OpenCode owns dependency synchronization in its
+  writable configuration directory: it creates or updates `package.json`, lockfiles,
+  `node_modules/@opencode-ai/plugin`, and its generated `.gitignore` to the running InstallationVersion.
+  The installer does not create, validate, pin, or otherwise mutate those ignored host artifacts, and
+  they are not repository authority or workflow persistence.
+
+Revision-range inspection is a separate structured `inspectGitRange({ base, head })` custom tool.
+It is Explorer-only, bounded, read-only, and shell-free: revisions are resolved independently to
+commit IDs before fixed diff operations. It is not executable evidence, Workflow state, or a generic
+Git command interface, and it never replaces `runEvidence`'s exact policy authorization.
 
 - **Orchestrator:** primary execution control plane; exact approved-plan parent read, bounded
   policy/Git preflight, workflow creation, and routing only; no plan approval or planner dispatch.

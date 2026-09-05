@@ -379,6 +379,9 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
   assert.ok(!explorer.includes("workflow_state_plan_create"));
   for (const role of ["implementer", "code_reviewer", "committer", "planner"])
     assert.match(opencode(`${role}.md`), /^  runEvidence: deny$/m);
+  assert.match(explorer, /^  inspectGitRange: allow$/m);
+  for (const role of ["implementer", "code_reviewer", "committer", "planner"])
+    assert.match(opencode(`${role}.md`), /^  inspectGitRange: deny$/m);
 });
 
 test("planning contracts enforce bounded synthesis and disposable context", () => {
@@ -453,6 +456,24 @@ test("explorer exposes only the structured evidence capability", () => {
     ),
     "deny",
   );
+});
+
+test("Explorer revision inspection is structured, isolated, and shell-free", () => {
+  const explorer = opencode("explorer.md");
+  const source = readFileSync(
+    resolve(import.meta.dir, "../../../.opencode/tools/inspectGitRange.ts"),
+    "utf8",
+  );
+  assert.match(explorer, /^  inspectGitRange: allow$/m);
+  assert.match(source, /base: tool\.schema\.string\(\)/u);
+  assert.match(source, /head: tool\.schema\.string\(\)/u);
+  assert.match(source, /context\.agent !== "explorer"/u);
+  assert.match(source, /shell: false/u);
+  assert.match(source, /--end-of-options/u);
+  assert.match(source, /--no-renames/u);
+  assert.match(source, /, "--"\]/u);
+  for (const forbidden of ["Bun.$", "runEvidence", "workflow_state", "--output", "--no-index"])
+    assert.ok(!source.includes(forbidden), `range tool must not expose ${forbidden}`);
 });
 
 test("planner clarification and native Plan refinement remain portable and fail closed", () => {
@@ -686,6 +707,7 @@ test("the checked-in native Plan override is canonical and isolated from generat
     edit: "deny",
     bash: "deny",
     runEvidence: "deny",
+    inspectGitRange: "deny",
     question: "deny",
     task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",

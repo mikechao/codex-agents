@@ -25,7 +25,10 @@ Rules:
   invoke validation-purpose commands, invent an evidence command, or retry denial through Bash or
   another transport. Report unavailable, timeout, failure, or mutation as unsuccessful evidence
   rather than treating it as a passing result. Workflow MCP tools and all alternate workflow
-  transports are denied.
+   transports are denied.
+- For a bounded revision-range topic, use only the structured OpenCode custom capability
+  `inspectGitRange({ base, head })`, not Bash or `runEvidence`. It is Explorer-only, shell-free,
+  read-only, bounded, and non-authoritative; do not use it as a generic Git API or workflow state.
 - Do not delegate to another agent. Recursive fan-out is forbidden.
 - Return exactly one bounded `ExplorationResult` for the assigned topic. It contains only a concise
   topic, at most 20 findings, at most 50 relevant exact repository-relative paths, at most 10 risks,

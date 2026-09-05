@@ -185,6 +185,10 @@ one all-or-nothing step:
   host artifacts are not pinned by this repository and are not installer mutation targets; existing
   host state is left untouched. Evidence remains exact-policy-authorized, shell-free, bounded, and
   non-authoritative; explorers never fall back to Bash.
+- OpenCode separately installs the structured, Explorer-only `inspectGitRange({ base, head })`
+  project-local tool at `.opencode/tools/inspectGitRange.ts`. It performs bounded, read-only,
+  shell-free revision-range inspection using resolved commit IDs; it is not executable evidence,
+  Workflow state, or a generic Git API.
 
 Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
 sources. Their direct provider-server registration has no runtime-artifact affinity lifecycle; the

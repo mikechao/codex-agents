@@ -8,10 +8,11 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   loadReviewerValidationPolicy,
   parseReviewerValidationPolicy,
@@ -65,6 +66,15 @@ function workflowValidationFixture() {
 
 function runFixtureCommand(root: string, argv: string[]) {
   return runReviewerValidation(policy(argv), "VAL-FIXTURE", argv, root);
+}
+
+function gitPath(root: string, name: string): string {
+  return resolve(
+    root,
+    execFileSync("git", ["-C", root, "rev-parse", "--git-path", name], {
+      encoding: "utf8",
+    }).trim(),
+  );
 }
 
 test("legacy CLI rejects evidence mode before parsing or execution", () => {
@@ -392,6 +402,95 @@ test("fingerprint detects local config, refs, and symbolic or detached HEAD stat
     const detachedBefore = reviewTargetFingerprint(fixture.root);
     fixture.git("checkout", "-q", "--detach", "HEAD");
     assert.notEqual(reviewTargetFingerprint(fixture.root), detachedBefore);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("fingerprint detects every fixed Git operation marker and bounded directory state", () => {
+  const fixture = gitFixture();
+  try {
+    for (const marker of [
+      "MERGE_HEAD",
+      "CHERRY_PICK_HEAD",
+      "REVERT_HEAD",
+      "BISECT_START",
+      "BISECT_TERMS",
+      "BISECT_EXPECTED_REV",
+      "BISECT_LOG",
+    ]) {
+      const path = gitPath(fixture.root, marker);
+      const before = reviewTargetFingerprint(fixture.root);
+      writeFileSync(path, `${marker}-one\n`);
+      const created = reviewTargetFingerprint(fixture.root);
+      assert.notEqual(created, before, `${marker} creation must be fingerprinted`);
+      writeFileSync(path, `${marker}-two\n`);
+      assert.notEqual(
+        reviewTargetFingerprint(fixture.root),
+        created,
+        `${marker} content must vary`,
+      );
+      rmSync(path);
+      assert.notEqual(
+        reviewTargetFingerprint(fixture.root),
+        created,
+        `${marker} removal must vary`,
+      );
+    }
+
+    for (const directory of ["sequencer", "rebase-merge", "rebase-apply"]) {
+      const path = gitPath(fixture.root, directory);
+      mkdirSync(join(path, "nested"), { recursive: true });
+      writeFileSync(join(path, "state"), "one\n");
+      writeFileSync(join(path, "nested", "todo"), "first\n");
+      const first = reviewTargetFingerprint(fixture.root);
+      writeFileSync(join(path, "nested", "todo"), "second\n");
+      assert.notEqual(
+        reviewTargetFingerprint(fixture.root),
+        first,
+        `${directory} content must vary`,
+      );
+      rmSync(path, { recursive: true, force: true });
+      assert.notEqual(
+        reviewTargetFingerprint(fixture.root),
+        first,
+        `${directory} removal must vary`,
+      );
+    }
+
+    writeFileSync(join(fixture.root, ".git", "unrelated-operation-state"), "one\n");
+    const arbitrary = reviewTargetFingerprint(fixture.root);
+    writeFileSync(join(fixture.root, ".git", "unrelated-operation-state"), "two\n");
+    assert.equal(
+      reviewTargetFingerprint(fixture.root),
+      arbitrary,
+      "arbitrary Git metadata must not affect operation-state fingerprinting",
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("operation-state traversal is deterministic and fails closed for unsupported bounded state", () => {
+  const fixture = gitFixture();
+  try {
+    const sequencer = gitPath(fixture.root, "sequencer");
+    mkdirSync(join(sequencer, "z"), { recursive: true });
+    mkdirSync(join(sequencer, "a"), { recursive: true });
+    writeFileSync(join(sequencer, "z", "state"), "z\n");
+    writeFileSync(join(sequencer, "a", "state"), "a\n");
+    const first = reviewTargetFingerprint(fixture.root);
+    rmSync(sequencer, { recursive: true, force: true });
+    mkdirSync(join(sequencer, "a"), { recursive: true });
+    mkdirSync(join(sequencer, "z"), { recursive: true });
+    writeFileSync(join(sequencer, "a", "state"), "a\n");
+    writeFileSync(join(sequencer, "z", "state"), "z\n");
+    assert.equal(reviewTargetFingerprint(fixture.root), first, "entry ordering must be stable");
+
+    rmSync(sequencer, { recursive: true, force: true });
+    mkdirSync(sequencer, { recursive: true });
+    symlinkSync("outside", join(sequencer, "link"));
+    assert.throws(() => reviewTargetFingerprint(fixture.root), /symlink/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -143,17 +143,20 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     );
     assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
+    for (const toolName of ["runEvidence.ts", "inspectGitRange.ts"]) {
+      const installedTool = join(root, ".opencode/tools", toolName);
+      assert.ok(existsSync(installedTool));
+      assert.equal(
+        readFileSync(installedTool, "utf8"),
+        readFileSync(resolve(import.meta.dir, "../../../.opencode/tools", toolName), "utf8"),
+      );
+      assert.match(readFileSync(installedTool, "utf8"), /export default tool\(/u);
+      assert.doesNotMatch(readFileSync(installedTool, "utf8"), /Plugin/u);
+    }
     const installedTool = join(root, ".opencode/tools/runEvidence.ts");
-    assert.ok(existsSync(installedTool));
-    assert.equal(
-      readFileSync(installedTool, "utf8"),
-      readFileSync(resolve(import.meta.dir, "../../../.opencode/tools/runEvidence.ts"), "utf8"),
-    );
     assert.ok(!existsSync(join(root, ".opencode/plugins/run-evidence.ts")));
     assert.ok(!existsSync(join(root, ".opencode/plugins")));
     assert.equal(installedTool.split("/").pop()?.replace(/\.ts$/u, ""), "runEvidence");
-    assert.match(readFileSync(installedTool, "utf8"), /export default tool\(/u);
-    assert.doesNotMatch(readFileSync(installedTool, "utf8"), /Plugin/u);
     for (const artifact of [
       ".opencode/package.json",
       ".opencode/package-lock.json",
@@ -301,6 +304,7 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
     edit: "deny",
     bash: "deny",
     runEvidence: "deny",
+    inspectGitRange: "deny",
     question: "deny",
     task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",
@@ -562,65 +566,69 @@ test("install-into.ts refuses a managed OpenCode agent name collision", () => {
 });
 
 test("install-into.ts refuses a managed OpenCode custom-tool collision before mutation", () => {
-  const { root, write } = fixture();
-  try {
-    const original = "// target-owned custom tool\n";
-    write(".opencode/tools/runEvidence.ts", original);
-    const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
-      ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
-      ".opencode/.gitignore": "node_modules/\n",
-    } as const;
-    for (const [path, content] of Object.entries(hostArtifacts)) write(path, content);
-    const result = runInstaller(root);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
-    assert.equal(readFileSync(join(root, ".opencode/tools/runEvidence.ts"), "utf8"), original);
-    for (const [path, content] of Object.entries(hostArtifacts)) {
-      assert.equal(readFileSync(join(root, path), "utf8"), content);
+  for (const toolName of ["runEvidence.ts", "inspectGitRange.ts"]) {
+    const { root, write } = fixture();
+    try {
+      const original = "// target-owned custom tool\n";
+      write(`.opencode/tools/${toolName}`, original);
+      const hostArtifacts = {
+        ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+        ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
+        ".opencode/.gitignore": "node_modules/\n",
+      } as const;
+      for (const [path, content] of Object.entries(hostArtifacts)) write(path, content);
+      const result = runInstaller(root);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
+      assert.equal(readFileSync(join(root, ".opencode/tools", toolName), "utf8"), original);
+      for (const [path, content] of Object.entries(hostArtifacts)) {
+        assert.equal(readFileSync(join(root, path), "utf8"), content);
+      }
+      assert.ok(!existsSync(join(root, ".codex/agents")));
+      assert.ok(!existsSync(join(root, "opencode.json")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    assert.ok(!existsSync(join(root, ".codex/agents")));
-    assert.ok(!existsSync(join(root, "opencode.json")));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("install-into.ts refuses a dangling managed OpenCode custom-tool collision", () => {
-  const { root } = fixture();
-  try {
-    const tools = join(root, ".opencode/tools");
-    mkdirSync(tools, { recursive: true });
-    const managedTool = join(tools, "runEvidence.ts");
-    symlinkSync("missing-runEvidence.ts", managedTool);
-    const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
-      ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
-      ".opencode/.gitignore": "node_modules/\n",
-      ".opencode/node_modules/@opencode-ai/plugin/package.json": '{"version":"9.9.9"}\n',
-    } as const;
-    for (const [path, content] of Object.entries(hostArtifacts)) {
-      const directory = dirname(join(root, path));
-      mkdirSync(directory, { recursive: true });
-      writeFileSync(join(root, path), content);
+  for (const toolName of ["runEvidence.ts", "inspectGitRange.ts"]) {
+    const { root } = fixture();
+    try {
+      const tools = join(root, ".opencode/tools");
+      mkdirSync(tools, { recursive: true });
+      const managedTool = join(tools, toolName);
+      symlinkSync(`missing-${toolName}`, managedTool);
+      const hostArtifacts = {
+        ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+        ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
+        ".opencode/.gitignore": "node_modules/\n",
+        ".opencode/node_modules/@opencode-ai/plugin/package.json": '{"version":"9.9.9"}\n',
+      } as const;
+      for (const [path, content] of Object.entries(hostArtifacts)) {
+        const directory = dirname(join(root, path));
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(root, path), content);
+      }
+      const rootEntries = readdirSync(root).sort();
+      const openCodeEntries = readdirSync(join(root, ".opencode")).sort();
+      const toolEntries = readdirSync(tools).sort();
+      const result = runInstaller(root);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
+      assert.equal(readlinkSync(managedTool), `missing-${toolName}`);
+      assert.deepEqual(readdirSync(root).sort(), rootEntries);
+      assert.deepEqual(readdirSync(join(root, ".opencode")).sort(), openCodeEntries);
+      assert.deepEqual(readdirSync(tools).sort(), toolEntries);
+      for (const [path, content] of Object.entries(hostArtifacts)) {
+        assert.equal(readFileSync(join(root, path), "utf8"), content);
+      }
+      assert.ok(!existsSync(join(root, ".codex/agents")));
+      assert.ok(!existsSync(join(root, "opencode.json")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    const rootEntries = readdirSync(root).sort();
-    const openCodeEntries = readdirSync(join(root, ".opencode")).sort();
-    const toolEntries = readdirSync(tools).sort();
-    const result = runInstaller(root);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Refusing to replace existing OpenCode custom tool/);
-    assert.equal(readlinkSync(managedTool), "missing-runEvidence.ts");
-    assert.deepEqual(readdirSync(root).sort(), rootEntries);
-    assert.deepEqual(readdirSync(join(root, ".opencode")).sort(), openCodeEntries);
-    assert.deepEqual(readdirSync(tools).sort(), toolEntries);
-    for (const [path, content] of Object.entries(hostArtifacts)) {
-      assert.equal(readFileSync(join(root, path), "utf8"), content);
-    }
-    assert.ok(!existsSync(join(root, ".codex/agents")));
-    assert.ok(!existsSync(join(root, "opencode.json")));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 

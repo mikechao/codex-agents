@@ -38,6 +38,7 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/WORKFLOW.md",
   ".opencode/agents/orchestrator.md",
   ".opencode/tools/runEvidence.ts",
+  ".opencode/tools/inspectGitRange.ts",
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
@@ -47,6 +48,7 @@ const COPY_SOURCE_FILES = [
   ".codex/agents/EVAL_RESULTS.md",
 ];
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
+const OPENCODE_CUSTOM_TOOL_FILES = ["runEvidence.ts", "inspectGitRange.ts"] as const;
 
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
@@ -102,6 +104,7 @@ export const OPENCODE_PLAN_PERMISSION = {
   edit: "deny",
   bash: "deny",
   runEvidence: "deny",
+  inspectGitRange: "deny",
   question: "deny",
   task: { "*": "deny", planner: "allow", explorer: "allow" },
   "workflow_state_*": "deny",
@@ -116,6 +119,7 @@ export function openCodePlanAgent(): Record<string, unknown> {
       edit: OPENCODE_PLAN_PERMISSION.edit,
       bash: OPENCODE_PLAN_PERMISSION.bash,
       runEvidence: OPENCODE_PLAN_PERMISSION.runEvidence,
+      inspectGitRange: OPENCODE_PLAN_PERMISSION.inspectGitRange,
       question: OPENCODE_PLAN_PERMISSION.question,
       task: { ...OPENCODE_PLAN_PERMISSION.task },
       "workflow_state_*": OPENCODE_PLAN_PERMISSION["workflow_state_*"],
@@ -740,15 +744,19 @@ export function main(args: readonly string[]): number {
     error(`Refusing to replace existing workflow_state registration: ${config}`);
   }
   const opencodeAgentsTarget = resolve(target, ".opencode/agents");
-  const opencodeCustomToolTarget = resolve(target, ".opencode/tools/runEvidence.ts");
+  const opencodeCustomToolTargets = OPENCODE_CUSTOM_TOOL_FILES.map((file) =>
+    resolve(target, ".opencode/tools", file),
+  );
   const codexDirectory = resolve(target, ".codex");
   const opencodeDirectory = resolve(target, ".opencode");
   const opencodeToolsDirectory = resolve(opencodeDirectory, "tools");
   const codexDirectoryExisting = pathEntryExists(codexDirectory);
   const opencodeDirectoryExisting = pathEntryExists(opencodeDirectory);
   const opencodeToolsDirectoryExisting = pathEntryExists(opencodeToolsDirectory);
-  if (pathEntryExists(opencodeCustomToolTarget)) {
-    error(`Refusing to replace existing OpenCode custom tool: ${opencodeCustomToolTarget}`);
+  for (const opencodeCustomToolTarget of opencodeCustomToolTargets) {
+    if (pathEntryExists(opencodeCustomToolTarget)) {
+      error(`Refusing to replace existing OpenCode custom tool: ${opencodeCustomToolTarget}`);
+    }
   }
   const opencodeAgentsExisting = existsSync(opencodeAgentsTarget);
   const opencodeConfig = findOpenCodeConfig(target);
@@ -847,8 +855,11 @@ export function main(args: readonly string[]): number {
       opencodeAgentsStaging,
       generatedManifest,
     );
-    const stagedCustomTool = resolve(opencodeCustomToolStaging, "runEvidence.ts");
-    cpSync(resolve(projectRoot, ".opencode/tools/runEvidence.ts"), stagedCustomTool);
+    const stagedCustomTools = OPENCODE_CUSTOM_TOOL_FILES.map((file) => {
+      const staged = resolve(opencodeCustomToolStaging, file);
+      cpSync(resolve(projectRoot, ".opencode/tools", file), staged);
+      return staged;
+    });
     if (reviewerPolicyOriginal === null) {
       cpSync(
         resolve(projectRoot, ".codex/reviewer-validation.json"),
@@ -894,13 +905,11 @@ export function main(args: readonly string[]): number {
             original: null,
           }
         : undefined,
-      [
-        {
-          staging: stagedCustomTool,
-          target: opencodeCustomToolTarget,
-          original: null,
-        },
-      ],
+      stagedCustomTools.map((staging, index) => ({
+        staging,
+        target: opencodeCustomToolTargets[index] as string,
+        original: null,
+      })),
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });

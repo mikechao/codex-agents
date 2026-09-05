@@ -26,6 +26,7 @@ permission:
     "git grep": allow
     "git grep *": allow
   runEvidence: deny
+  inspectGitRange: deny
   external_directory: deny
   webfetch: allow
   websearch: allow

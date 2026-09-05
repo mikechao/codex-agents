@@ -35,6 +35,7 @@ permission:
   question: deny
   workflow_state_*: deny
   runEvidence: deny
+  inspectGitRange: deny
   workflow_state_plan_parent_get: allow
   workflow_state_workflow_create_from_plan: allow
   workflow_state_workflow_create: allow

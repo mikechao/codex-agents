@@ -20,6 +20,7 @@ permission:
     "bun .codex/agents/change-receipt.ts *": allow
     "bun .codex/agents/reviewer-validation.ts *": allow
   runEvidence: deny
+  inspectGitRange: deny
   task:
     "*": deny
   workflow_state_*: deny

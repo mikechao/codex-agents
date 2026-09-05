@@ -36,6 +36,7 @@ permission:
     "git stash": deny
     "git stash *": deny
   runEvidence: deny
+  inspectGitRange: deny
   task:
     "*": deny
   workflow_state_*: deny

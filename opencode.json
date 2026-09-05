@@ -9,6 +9,7 @@
         "edit": "deny",
         "bash": "deny",
         "runEvidence": "deny",
+        "inspectGitRange": "deny",
         "question": "deny",
         "task": {
           "*": "deny",

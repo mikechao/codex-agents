@@ -104,6 +104,14 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
+    for (const file of ["runEvidence.ts", "inspectGitRange.ts"]) {
+      const installed = join(root, ".opencode/tools", file);
+      assert.ok(existsSync(installed), `missing .opencode/tools/${file}`);
+      assert.equal(
+        readFileSync(installed, "utf8"),
+        readFileSync(resolve(import.meta.dir, "../../../.opencode/tools", file), "utf8"),
+      );
+    }
     const installedManifest = generateDefinitionManifest({
       codexWorkflowMcp: enabledCodexWorkflowMcp(
         resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),

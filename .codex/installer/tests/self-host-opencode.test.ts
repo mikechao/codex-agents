@@ -71,6 +71,30 @@ test("self-host OpenCode exposes structured evidence only to explorer", () => {
   assert.equal(permission.runEvidence, "deny");
 });
 
+test("self-host OpenCode isolates structured Git range inspection to explorer", () => {
+  const customTool = resolve(repoRoot, ".opencode/tools/inspectGitRange.ts");
+  assert.ok(existsSync(customTool));
+  const source = readFileSync(customTool, "utf8");
+  assert.match(source, /export default tool\(/u);
+  assert.match(source, /context\.agent !== "explorer"/u);
+  assert.match(source, /shell: false/u);
+  assert.ok(!source.includes("Bun.$"));
+  assert.ok(!source.includes("runEvidence"));
+  assert.ok(!source.includes("workflow_state"));
+  assert.match(
+    readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8"),
+    /^  inspectGitRange: allow$/m,
+  );
+  for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
+    assert.match(
+      readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
+      /^  inspectGitRange: deny$/m,
+    );
+  }
+  const permission = openCodePlanAgent().permission as Record<string, unknown>;
+  assert.equal(permission.inspectGitRange, "deny");
+});
+
 test("the self-host Native Plan prompt keeps the CTA outside the exact plan rendering", () => {
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     agent: { plan: { prompt: string } };
