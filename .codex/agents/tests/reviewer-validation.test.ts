@@ -410,6 +410,7 @@ test("fingerprint detects local config, refs, and symbolic or detached HEAD stat
 test("fingerprint detects every fixed Git operation marker and bounded directory state", () => {
   const fixture = gitFixture();
   try {
+    const clean = reviewTargetFingerprint(fixture.root);
     for (const marker of [
       "MERGE_HEAD",
       "CHERRY_PICK_HEAD",
@@ -420,10 +421,9 @@ test("fingerprint detects every fixed Git operation marker and bounded directory
       "BISECT_LOG",
     ]) {
       const path = gitPath(fixture.root, marker);
-      const before = reviewTargetFingerprint(fixture.root);
       writeFileSync(path, `${marker}-one\n`);
       const created = reviewTargetFingerprint(fixture.root);
-      assert.notEqual(created, before, `${marker} creation must be fingerprinted`);
+      assert.notEqual(created, clean, `${marker} creation must be fingerprinted`);
       writeFileSync(path, `${marker}-two\n`);
       assert.notEqual(
         reviewTargetFingerprint(fixture.root),
@@ -431,10 +431,10 @@ test("fingerprint detects every fixed Git operation marker and bounded directory
         `${marker} content must vary`,
       );
       rmSync(path);
-      assert.notEqual(
+      assert.equal(
         reviewTargetFingerprint(fixture.root),
-        created,
-        `${marker} removal must vary`,
+        clean,
+        `${marker} removal must restore clean fingerprint`,
       );
     }
 
