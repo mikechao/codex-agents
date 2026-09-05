@@ -678,7 +678,10 @@ test("orchestrator presents semantic proposals before natural-language authoriza
     assert.match(contract, /`Reply \.\.\.` incantation|magic phrase/u);
     assert.match(contract, /ambiguous.*fail(?:s)? closed/u);
     assert.match(contract, /After affirmative input.*re-read/u);
-    assert.match(contract, /[Vv]erif(?:y|ies).*proposal.*scope.*findings.*lineage.*plan binding/u);
+    assert.match(
+      contract,
+      /[Vv]erif(?:y|ies) proposal,\s*(?:exact\s+)?scope,\s*(?:current\s+)?findings,\s*lineage,\s*plan binding/u,
+    );
     assert.match(contract, /No durable proposal state/u);
   }
 
