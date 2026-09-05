@@ -45,6 +45,9 @@ Host permission syntax differs and must not be treated as equivalent:
   (`workflow_state_*` deny plus role-specific allows). These are host-level defense in depth for
 context size and isolation; the server-side runtime boundary, `expected_version`, and transition
   checks remain authoritative and are unchanged between hosts.
+- Command authorization is exact and shell-free but is not an OS-level sandbox. Explorer executable
+  evidence is limited to an explicitly authorized `purpose: evidence` policy command through the
+  existing bounded runner; evidence is not workflow validation, approval, or persisted state.
 - Model/reasoning identity is host metadata, not contract prose: each generated definition
   announces its own identity line (resolved model plus reasoning effort in both hosts), injected by
   the generator in place of the contract's `__HOST_IDENTITY__` marker. Edit
@@ -81,9 +84,11 @@ records the decision.
 ### OpenCode planning topology
 
 Planning is a separate pre-workflow activity. OpenCode's native built-in `agent.plan` override is the
-user-facing mediator and presenter; it delegates substantial planning and every material refinement
-only to the generated `planner`. The planner never dispatches an `explorer` directly. It may launch
-zero to four disposable read-only explorers, with no recursive fan-out. Explorer findings, transcripts,
+user-facing mediator and presenter. For standalone audit/research/explain/report requests, Native Plan
+may use ordinary read/search and optionally dispatch the generated `explorer`, then synthesizes a
+report and stops; no PlanArtifact or Workflow is created. For change planning, it delegates material
+planning and every refinement only to the generated `planner`, which may launch zero to four
+disposable read-only explorers, with no recursive fan-out. Explorer findings, transcripts,
 counts, retries, and lifecycle bookkeeping remain in planner context and are never persisted in
 Workflow MCP or plan artifacts. The planner is the sole complete plan writer/refiner through exactly
 `plan_create`, `plan_get`, and `plan_revise`. Material refinement uses the exact plan identity and

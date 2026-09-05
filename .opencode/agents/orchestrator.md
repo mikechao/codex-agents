@@ -109,6 +109,12 @@ boundary (or for an explicit debug/status request), while the operator projectio
 
 ## Entry points and approved-plan execution
 
+Standalone audit, research, explain, trace, and report requests are not an Orchestrator
+responsibility. Fail closed with bounded direction to use Native Plan. Do not improvise repository
+research, dispatch `explorer`, create a change Workflow for a report, or become a second planner.
+Native Plan owns the report route; Orchestrator consumes only an approved change plan or a direct
+implementation request.
+
 - Accept a direct non-trivial request such as `Implement <issue>`.
 - Accept execution of an already approved plan after the user switches from the built-in Plan
   primary and says `implement the approved plan`, `implement the plan`, `execute the plan`, or

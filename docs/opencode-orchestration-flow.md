@@ -5,14 +5,17 @@ This guide describes the current OpenCode architecture in this repository. The c
 MCP workflow and delegates repository work to the shared worker roles. It is not a replacement for
 the normal OpenCode agents, and it does not edit, stage, or commit files.
 
-OpenCode planning is a separate pre-workflow topology. The native built-in `agent.plan` override is
-the user-facing mediator and presenter: it delegates substantial planning and every material
-refinement to the generated `planner`, which may fan out zero to four hidden, read-only `explorer`
-agents. Explorer context is disposable and is never persisted in Workflow MCP or plan artifacts.
-Planner is the sole complete plan writer/refiner and returns one bounded `PlannerHandoff`; Plan uses
-the parent surface to retrieve and render exact `full_plan` text verbatim, then explicitly approves.
-Orchestrator only parent-reads the exact current approved plan and executes it through
-`workflow_create_from_plan`.
+OpenCode planning is a separate pre-workflow topology with two Native Plan routes. A standalone
+audit, research, explain, trace, or report request uses Native Plan's ordinary read/search and may
+fan out bounded topics to hidden, read-only `explorer` agents; Native Plan reconciles evidence,
+synthesizes one provenance-bearing report, and stops without a PlanArtifact, Workflow, or mutation.
+A change request (including investigate-then-change) delegates to the generated `planner`, which may
+fan out zero to four explorers. Explorer context is disposable and is never persisted in Workflow
+MCP or plan artifacts. Planner is the sole complete change-plan writer/refiner and returns one bounded
+`PlannerHandoff`; Plan uses the parent surface to retrieve and render exact `full_plan` text verbatim,
+then explicitly approves. A selected report finding is supporting context only: Native Plan invokes a
+fresh planner for a normal change-only plan and separate approval. Orchestrator only parent-reads the
+exact current approved plan and executes it through `workflow_create_from_plan`.
 
 ## Authoritative-source transport investigation
 
@@ -123,14 +126,18 @@ a reconciliation workflow.
 
 ## Entry paths
 
-There are two supported ways to begin implementation:
+There are three supported Native Plan/implementation entry paths:
 
-1. **Direct Orchestrator.** A user makes a non-trivial implementation request while using the
+1. **Standalone investigation.** A user asks Native Plan for an audit, explanation, research, trace,
+   or report without requesting mutation. Native Plan may delegate bounded evidence topics to
+   `explorer`, synthesizes a report with provenance and uncertainty, and stops. It never invokes
+   `planner`, creates a PlanArtifact or Workflow, or converts report prose into authority.
+2. **Direct Orchestrator.** A user makes a non-trivial implementation request while using the
    `orchestrator` primary. Orchestrator performs bounded, read-only preflight (the current Git
    status and `HEAD`, plus the exact objective, approved paths, acceptance criteria, and validation
    requirements), then creates or reuses the authoritative workflow. It does not investigate the
    implementation in depth or solve it in the primary session.
-2. **Plan -> Orchestrator.** A user runs `/plan <request>` in the built-in Plan primary. Plan
+3. **Plan -> Orchestrator.** A user runs `/plan <request>` in the built-in Plan primary. Plan
    delegates to `planner`, retrieves the exact plan artifact, renders its `full_plan` verbatim, and
    waits for explicit approval of the exact plan ID/revision. Plan does not create an implementation
    workflow. The user then switches to Orchestrator and says `implement the approved plan` (or
@@ -145,12 +152,14 @@ OpenCode's built-in Build agent remains available for deliberate ordinary direct
 no project-global orchestration instructions. Select it explicitly when workflow-backed delegation
 is not wanted.
 
-The generated planner is the sole author of persisted plan revisions. The host-native Plan agent is
-the user-facing mediator, not a second planner implementation: it delegates only to `planner` and
-accepts its bounded handoff before parent retrieval and approval. Orchestrator is not a planning
-entry point and has no plan approval or planner dispatch authority.
+The generated planner is the sole author of persisted change-plan revisions. The host-native Plan agent is
+the user-facing mediator, not a second planner implementation: for change planning it delegates only
+to `planner` and accepts its bounded handoff before parent retrieval and approval; for standalone
+investigation it may delegate bounded topics to `explorer` and stops after report synthesis.
+Orchestrator is not a planning entry point and has no plan approval or planner dispatch authority.
 
-For planning requests, delegate only to `planner`, never directly to `explorer`. The planner may use
+For change planning requests, delegate to `planner`; Native Plan may directly delegate bounded
+standalone evidence topics to `explorer`, while the planner may also use `explorer`. The planner may use
 the optional target-owned `.codex/planner-policy.json` as advisory guidance, but malformed or
 authority-bearing content becomes bounded `needs_input` risk and cannot grant capabilities, approval,
 scope, or validation authority. Before `ready_for_approval`, each executable validation argv must
@@ -414,6 +423,11 @@ promote runtime artifacts or resume runtime affinity; they execute the provider 
 the target repository.
 
 ## Boundary summary
+
+OpenCode command authorization is exact and shell-free, but it is host-level defense in depth rather
+than an OS-level sandbox. Evidence commands run only through the existing bounded policy runner with
+an explicit `purpose: evidence` entry; no report, explorer transcript, or investigation workflow is
+persisted.
 
 - **Orchestrator:** primary execution control plane; exact approved-plan parent read, bounded
   policy/Git preflight, workflow creation, and routing only; no plan approval or planner dispatch.

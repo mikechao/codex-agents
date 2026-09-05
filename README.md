@@ -3,7 +3,9 @@
 Reusable `implementer`, `code_reviewer`, and `committer` agent definitions with a local durable
 workflow-state MCP server, shared between Codex and OpenCode. OpenCode also includes a dedicated
 `orchestrator` primary, the native built-in Plan mediator override, and generated `planner` and
-hidden read-only `explorer` subagents.
+hidden read-only `explorer` subagents. Native Plan owns two pre-workflow routes: standalone
+investigation (`Native Plan -> optional explorer -> report -> stop`) and change planning (`Native Plan
+-> planner -> change-only PlanArtifact -> separate approval -> Orchestrator`).
 
 The execution role contracts live as host-neutral prose in `.codex/agents/contracts/`; planner and
 explorer contracts are OpenCode-only. Codex TOML
@@ -132,13 +134,18 @@ recovery, linked continuation, changed-intent/scope, reconciliation, and commit 
 explicit user boundaries. Normal summaries are semantic; raw workflow/plan/audit details remain an
 explicit debug/status path. Unlinked workflows are never combined from matching paths or work items.
 
-Planning is a separate pre-workflow path: built-in Plan delegates substantial planning and every
-material refinement only to `planner`, which may launch zero through four disposable read-only
-explorers. Explorer context is bounded and never persisted in Workflow MCP or plan artifacts. The
-planner uses only the three planner-side operations, reconciles every executable validation argv
-against the target's exact reviewer policy, and returns a bounded `PlannerHandoff`; Plan performs
-exact parent retrieval, verbatim presentation, and explicit approval, while Orchestrator performs
-exact approved execution only.
+Planning is a separate pre-workflow path. For standalone audit, research, explain, trace, and report
+requests with no mutation, Native Plan may use ordinary read/search and dispatch bounded read-only
+`explorer` topics, synthesizes one provenance-bearing report, and stops without PlanArtifact or
+Workflow persistence. For change planning (including a bounded investigate-then-change request),
+built-in Plan delegates substantial planning and every material refinement only to `planner`, which
+may launch zero through four disposable read-only explorers. A report selected for action is bounded
+supporting context only; Native Plan invokes a fresh planner, which re-inspects the repository and
+creates a normal change-only PlanArtifact requiring separate approval. Explorer context is bounded
+and never persisted in Workflow MCP or plan artifacts. The planner uses only the three planner-side
+operations, reconciles every executable validation argv against the target's exact reviewer policy,
+and returns a bounded `PlannerHandoff`; Plan performs exact parent retrieval, verbatim presentation,
+and explicit approval, while Orchestrator performs exact approved execution only.
 The optional target-owned `.codex/planner-policy.json` supplies advisory repository guidance and is
 not copied by the installer. Only the current approved revision can execute; stale or historical
 revisions stop without workflow creation. Direct Orchestrator implementation remains a deliberate
@@ -208,9 +215,10 @@ other. The generated OpenCode definitions pin the provider/model IDs and reasoni
 `.codex/agents/model-policy.yaml`, so the configured provider must be connected (`/connect`) or the
 per-agent models overridden for the subagent models to resolve.
 
-OpenCode permissions are host-level defense in depth, not a filesystem sandbox: the built-in Plan
-override denies edit, bash, planner-side Workflow MCP operations, workflow creation, and direct
-planner dispatch while allowing only parent plan retrieval/approval; the orchestrator has
+OpenCode permissions are host-level defense in depth, not a filesystem sandbox. Command authorization
+is exact and shell-free but not an OS-level sandbox: the built-in Plan
+override denies edit, bash, planner-side Workflow MCP operations, and workflow creation while
+allowing only bounded `planner`/`explorer` task dispatch plus parent plan retrieval/approval; the orchestrator has
 `edit: deny`, read-only repository inspection, parent-only workflow tools, and Task access only
 to the three workflow subagents; the reviewer
   gets `edit: deny` plus a narrow bash allowlist containing only Git inspection (including `git grep`),
@@ -224,6 +232,12 @@ for validation with explicit denies for staging, committing, and history-rewriti
 each agent only exposes its own role's workflow tools. Persisted runtime ownership and launch
 attestation, optimistic versioning, and Workflow MCP phase and invariant checks remain authoritative
 for both hosts.
+
+The explorer has the same fail-closed read-only Git inspection boundary plus only the evidence-mode
+invocation of the existing exact-policy runner. Target policies must explicitly mark a command
+`purpose: evidence`; omitted purpose remains backward-compatible `validation`, and validation commands
+cannot be selected as evidence. Runner output, timeout, unavailable, failure, and mutation status are
+bounded evidence only, never approval or workflow authority.
 
 The target repository should also incorporate the custom-subagent policy from
 `.codex/agents/WORKFLOW.md` into its root `AGENTS.md`. The installer deliberately does not rewrite

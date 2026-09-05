@@ -8,6 +8,7 @@ import {
   loadReviewerValidationPolicy,
   parseReviewerValidationPolicy,
   type ReviewerValidationPolicy,
+  runReviewerEvidence,
   runReviewerValidation,
 } from "../reviewer-validation.js";
 
@@ -55,6 +56,22 @@ function workflowValidationFixture() {
 test("policy accepts exact argv and rejects duplicates, policy IDs, shell syntax, and malformed limits", () => {
   const parsed = policy(["bun", "-e", "process.stdout.write('ok')"]);
   assert.deepEqual(parsed.commands[0]?.argv, ["bun", "-e", "process.stdout.write('ok')"]);
+  assert.equal(parsed.commands[0]?.purpose, "validation");
+  const evidence = parseReviewerValidationPolicy({
+    version: 1,
+    commands: [
+      { argv: ["git", "status"], purpose: "evidence", timeout_ms: 10, max_output_bytes: 100 },
+    ],
+  });
+  assert.equal(evidence.commands[0]?.purpose, "evidence");
+  assert.throws(
+    () =>
+      parseReviewerValidationPolicy({
+        version: 1,
+        commands: [{ argv: ["bun"], purpose: "other", timeout_ms: 10, max_output_bytes: 100 }],
+      }),
+    /purpose must be validation or evidence/,
+  );
   assert.throws(
     () =>
       parseReviewerValidationPolicy({
@@ -90,8 +107,58 @@ test("policy accepts exact argv and rejects duplicates, policy IDs, shell syntax
   );
 });
 
+test("evidence mode selects only explicit evidence commands", () => {
+  const { root } = gitFixture();
+  const argv = ["git", "status", "--porcelain"];
+  try {
+    const policy = parseReviewerValidationPolicy({
+      version: 1,
+      commands: [
+        { argv, purpose: "evidence", timeout_ms: 10_000, max_output_bytes: 4096 },
+        {
+          argv: ["git", "log", "-1"],
+          purpose: "validation",
+          timeout_ms: 10_000,
+          max_output_bytes: 4096,
+        },
+        {
+          argv: ["command-that-does-not-exist"],
+          purpose: "evidence",
+          timeout_ms: 10_000,
+          max_output_bytes: 4096,
+        },
+      ],
+    });
+    const result = runReviewerEvidence(policy, "EVIDENCE-1", argv, root);
+    assert.equal(result.status, "passed");
+    assert.equal(result.exit_code, 0);
+    assert.deepEqual(result.requested_argv, argv);
+    assert.deepEqual(result.executed_argv, argv);
+    assert.throws(
+      () => runReviewerEvidence(policy, "EVIDENCE-NO", ["git", "log", "-1"], root),
+      /requested evidence argv is not allowlisted/,
+    );
+    assert.throws(
+      () => runReviewerValidation(policy, "VAL-NO", argv, root),
+      /requested validation argv is not allowlisted/,
+    );
+    const unavailable = runReviewerEvidence(
+      policy,
+      "EVIDENCE-UNAVAILABLE",
+      ["command-that-does-not-exist"],
+      root,
+    );
+    assert.equal(unavailable.status, "unavailable");
+    assert.equal(unavailable.working_tree_changed, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("project policy maps every required validation to its authoritative command", () => {
-  const commands = loadReviewerValidationPolicy().commands.map((command) => command.argv);
+  const policy = loadReviewerValidationPolicy();
+  const commands = policy.commands.map((command) => command.argv);
+  assert.ok(policy.commands.every((command) => command.purpose === "validation"));
   assert.deepEqual(commands, [
     ["bun", "run", "generate:agents"],
     ["bun", "run", "test:agents"],

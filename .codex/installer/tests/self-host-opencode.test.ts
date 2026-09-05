@@ -55,7 +55,7 @@ test("the self-host Native Plan prompt keeps the CTA outside the exact plan rend
   const normalized = prompt.replace(/\s+/gu, " ");
   const sourceSection = normalized.indexOf("Authoritative task-source preservation:");
   const delegation = normalized.indexOf(
-    "For every substantial non-trivial planning request, and for every material refinement,",
+    "For every substantial non-trivial change-planning request, and for every material refinement,",
     sourceSection,
   );
   assert.ok(sourceSection >= 0, "self-host Plan must define the task-source boundary");

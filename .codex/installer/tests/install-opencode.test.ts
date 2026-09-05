@@ -124,6 +124,13 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(parsed.$schema, "https://opencode.ai/config.json");
     assert.equal(parsed.default_agent, "orchestrator");
     assert.equal(parsed.subagent_depth, 2);
+    const installedPlan = (
+      parsed as { agent?: { plan?: { permission?: Record<string, unknown> } } }
+    ).agent?.plan;
+    assert.deepEqual(installedPlan?.permission, openCodePlanAgent().permission);
+    const taskPermission = installedPlan?.permission?.task as Record<string, unknown>;
+    assert.equal(taskPermission?.planner, "allow");
+    assert.equal(taskPermission?.explorer, "allow");
     const registration = parsed.mcp.workflow_state;
     assert.equal(registration.type, "local");
     assert.equal(registration.enabled, true);
@@ -188,7 +195,7 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   assert.equal(prompt, openCodePlanAgent().prompt);
   const sourceSection = prompt.indexOf("Authoritative task-source preservation:");
   const delegation = prompt.indexOf(
-    "For every substantial non-trivial planning request, and for every material refinement,",
+    "For every substantial non-trivial change-planning request, and for every material refinement,",
     sourceSection,
   );
   assert.ok(sourceSection >= 0, "Plan must define the authoritative task-source boundary");
@@ -243,7 +250,7 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
     edit: "deny",
     bash: "deny",
     question: "deny",
-    task: { "*": "deny", planner: "allow" },
+    task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",
     workflow_state_plan_parent_get: "allow",
     workflow_state_plan_approve: "allow",

@@ -117,6 +117,14 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `${definition.host}/${definition.role} must be materialized from current policy`,
       );
     }
+    const installedExplorer = readFileSync(join(root, ".opencode/agents/explorer.md"), "utf8");
+    assert.match(installedExplorer, /^hidden: true$/m);
+    assert.match(installedExplorer, /^    "\*": deny$/m);
+    assert.match(
+      installedExplorer,
+      /^    "bun \.codex\/agents\/reviewer-validation\.ts --evidence-id \* --argv-json \*": allow$/m,
+    );
+    assert.ok(!installedExplorer.includes("workflow_state_plan_create"));
     for (const definition of installedManifest.filter(
       (candidate) =>
         candidate.host === "codex" && candidate.role in CODEX_WORKFLOW_MCP_ENABLED_TOOLS,

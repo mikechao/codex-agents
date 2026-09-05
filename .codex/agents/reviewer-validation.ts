@@ -34,6 +34,7 @@ const SHELL_EXECUTABLES = new Set([
 
 export interface ReviewerValidationCommand {
   argv: string[];
+  purpose: "validation" | "evidence";
   timeout_ms: number;
   max_output_bytes: number;
 }
@@ -95,8 +96,19 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
   const parsedCommands: ReviewerValidationCommand[] = [];
   const commands = policy.commands.map((entry, index) => {
     const command = objectRecord(entry, `policy.commands[${index}]`);
-    if (Object.keys(command).sort().join(",") !== "argv,max_output_bytes,timeout_ms") {
+    const keys = Object.keys(command).sort().join(",");
+    if (
+      keys !== "argv,max_output_bytes,purpose,timeout_ms" &&
+      keys !== "argv,max_output_bytes,timeout_ms"
+    ) {
       throw new Error(`policy.commands[${index}] has invalid fields`);
+    }
+    const purpose: ReviewerValidationCommand["purpose"] =
+      command.purpose === undefined
+        ? "validation"
+        : (command.purpose as ReviewerValidationCommand["purpose"]);
+    if (purpose !== "validation" && purpose !== "evidence") {
+      throw new Error(`policy.commands[${index}].purpose must be validation or evidence`);
     }
     const argv = argvValue(command.argv, `policy.commands[${index}].argv`);
     const executable = argv[0].split(/[\\/]/u).pop() ?? argv[0];
@@ -121,6 +133,7 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
     }
     const parsed = {
       argv,
+      purpose,
       timeout_ms: timeout,
       max_output_bytes: maxOutput,
     };
@@ -197,16 +210,19 @@ export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
   return hash.digest("hex");
 }
 
-export function runReviewerValidation(
+function runAuthorizedCommand(
   policy: ReviewerValidationPolicy,
   validationId: string,
   requestedArgv: readonly string[],
+  purpose: ReviewerValidationCommand["purpose"],
   projectRoot = PROJECT_ROOT,
 ): ValidationEvidence {
   const requested = argvValue(requestedArgv, "requested argv");
-  const command = policy.commands.find((candidate) => sameArgv(candidate.argv, requested));
+  const command = policy.commands.find(
+    (candidate) => candidate.purpose === purpose && sameArgv(candidate.argv, requested),
+  );
   if (command === undefined) {
-    throw new Error(`requested validation argv is not allowlisted: ${JSON.stringify(requested)}`);
+    throw new Error(`requested ${purpose} argv is not allowlisted: ${JSON.stringify(requested)}`);
   }
   const before = reviewTargetFingerprint(projectRoot);
   const outputDirectory = mkdtempSync(join(tmpdir(), "reviewer-validation-output-"));
@@ -260,10 +276,32 @@ export function runReviewerValidation(
   }
 }
 
+export function runReviewerValidation(
+  policy: ReviewerValidationPolicy,
+  validationId: string,
+  requestedArgv: readonly string[],
+  projectRoot = PROJECT_ROOT,
+): ValidationEvidence {
+  return runAuthorizedCommand(policy, validationId, requestedArgv, "validation", projectRoot);
+}
+
+export function runReviewerEvidence(
+  policy: ReviewerValidationPolicy,
+  evidenceId: string,
+  requestedArgv: readonly string[],
+  projectRoot = PROJECT_ROOT,
+): ValidationEvidence {
+  return runAuthorizedCommand(policy, evidenceId, requestedArgv, "evidence", projectRoot);
+}
+
 function main(args: readonly string[]): number {
-  if (args.length !== 4 || args[0] !== "--validation-id" || args[2] !== "--argv-json") {
+  if (
+    args.length !== 4 ||
+    (args[0] !== "--validation-id" && args[0] !== "--evidence-id") ||
+    args[2] !== "--argv-json"
+  ) {
     process.stderr.write(
-      "Usage: bun .codex/agents/reviewer-validation.ts --validation-id ID --argv-json JSON\n",
+      "Usage: bun .codex/agents/reviewer-validation.ts (--validation-id|--evidence-id) ID --argv-json JSON\n",
     );
     return 2;
   }
@@ -274,7 +312,8 @@ function main(args: readonly string[]): number {
     } catch {
       throw new Error("requested argv JSON is invalid");
     }
-    const evidence = runReviewerValidation(
+    const run = args[0] === "--evidence-id" ? runReviewerEvidence : runReviewerValidation;
+    const evidence = run(
       loadReviewerValidationPolicy(),
       args[1],
       argvValue(requestedArgv, "requested argv"),

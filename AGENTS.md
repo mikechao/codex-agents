@@ -55,6 +55,10 @@ state.
 - Planner-to-explorer fan-out is disposable OpenCode context: keep explorer findings, transcripts,
   counts, and retries out of Workflow MCP and plan artifacts. Repository-specific planning guidance
   belongs in the optional target-owned `.codex/planner-policy.json`, not reusable contracts.
+- Native Plan also owns standalone investigation: Native Plan -> optional bounded explorer evidence ->
+  provenance-bearing report -> stop. It creates no PlanArtifact, Workflow, report artifact, or
+  transcript state. Acting on a selected finding goes through fresh planner inspection and the normal
+  change-only PlanArtifact and separate approval route; Orchestrator remains execution-only.
 - Built-in OpenCode Plan is the user-facing planning mediator: it delegates persisted planning and
   refinements to generated `planner`, parent-reads and presents exact `full_plan` text, and explicitly
   approves. Orchestrator is execution-only for an exact current approved plan and retains the direct
@@ -85,6 +89,10 @@ receipt/contract checks, `bun run test:installer` for focused installer checks, 
 `bun run test:workflow-mcp` for focused server checks only when their exact commands are currently
 authorized by that policy. Run the full `bun run validate` gate before declaring any change
 complete.
+
+Target policies may explicitly authorize a read-only command with `purpose: evidence`; omitted purpose
+is backward-compatible validation. Evidence remains bounded, shell-free, and separate from workflow
+validation or approval. Command authorization is exact and shell-free but is not an OS-level sandbox.
 
 The workflow-state server and its tests are TypeScript under `.codex/workflow-mcp/` and run
 directly from source with Bun; there is no compiled `dist/` mirror.

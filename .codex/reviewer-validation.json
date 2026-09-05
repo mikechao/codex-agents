@@ -3,31 +3,37 @@
   "commands": [
     {
       "argv": ["bun", "run", "generate:agents"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
       "argv": ["bun", "run", "test:agents"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
       "argv": ["bun", "run", "test:installer"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
       "argv": ["bun", "run", "test:workflow-mcp"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
       "argv": ["bun", "run", "validate"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     },
     {
       "argv": ["bun", "run", "test:coverage"],
+      "purpose": "validation",
       "timeout_ms": 120000,
       "max_output_bytes": 65536
     }

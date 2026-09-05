@@ -91,6 +91,26 @@ test("Workflow MCP isolation stays in typed host metadata, not model policy", ()
 const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");
 
+function opencodeBashPermission(content: string, command: string): string {
+  const rules = [...content.matchAll(/^    "((?:\\.|[^"\\])*)": (allow|ask|deny)$/gmu)].map(
+    (match) => ({
+      pattern: JSON.parse(`"${match[1]}"`) as string,
+      action: match[2] as string,
+    }),
+  );
+  let action = "ask";
+  for (const rule of rules) {
+    let source = "^";
+    for (const character of rule.pattern) {
+      if (character === "*") source += "[\\s\\S]*";
+      else if (character === "?") source += "[\\s\\S]";
+      else source += character.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+    }
+    if (new RegExp(`${source}$`, "u").test(command)) action = rule.action;
+  }
+  return action;
+}
+
 test("reusable agent definitions contain no concrete work-item instances", () => {
   const orchestratorPath = resolve(import.meta.dir, "../../../.opencode/agents/orchestrator.md");
   const definitions = [
@@ -320,7 +340,40 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
   const explorer = opencode("explorer.md");
   assert.match(explorer, /^hidden: true$/m);
   assert.match(explorer, /^  edit: deny$/m);
-  assert.match(explorer, /^  bash: deny$/m);
+  assert.match(explorer, /^  bash:\n    "\*": deny$/m);
+  for (const allowed of [
+    '"git status": allow',
+    '"git status --short": allow',
+    '"git status --porcelain": allow',
+    '"git diff": allow',
+    '"git diff --cached": allow',
+    '"git diff HEAD": allow',
+    '"git log": allow',
+    '"git log -1": allow',
+    '"git log --oneline": allow',
+    '"git show": allow',
+    '"git show HEAD": allow',
+    '"git rev-parse --show-toplevel": allow',
+    '"git rev-parse --is-inside-work-tree": allow',
+    '"git ls-files": allow',
+    '"git grep": allow',
+    '"bun .codex/agents/reviewer-validation.ts --evidence-id * --argv-json *": allow',
+  ]) {
+    assert.ok(explorer.includes(allowed), `explorer bash allowlist must include ${allowed}`);
+  }
+  for (const unsafe of [
+    '"git status *": allow',
+    '"git diff *": allow',
+    '"git log *": allow',
+    '"git show *": allow',
+    '"git rev-parse *": allow',
+    '"git ls-files *": allow',
+    '"git grep *": allow',
+    "git diff --output",
+    "git diff --no-index",
+  ]) {
+    assert.ok(!explorer.includes(unsafe), `explorer must reject unsafe Git pattern ${unsafe}`);
+  }
   assert.match(explorer, /^  task: deny$/m);
   assert.match(explorer, /^  workflow_state_\*: deny$/m);
   assert.ok(!explorer.includes("workflow_state_plan_create"));
@@ -340,9 +393,21 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
     "needs_input",
     "transcripts",
     "Do not implement, edit, review, stage, commit, approve",
+    "Native Plan owns standalone audit, research, explain, trace, and",
+    "change-oriented implementation plan",
+    "freshly inspect the current repository",
+    "Every explorer task payload must explicitly include",
+    "authorized parent: planner",
+    "authorized evidence topic",
+    "scope and boundaries",
   ]) {
     assert.ok(planner.includes(phrase), `planner contract must include: ${phrase}`);
   }
+  assert.match(
+    planner.replace(/\s+/gu, " "),
+    /report selected for action is bounded/u,
+    "planner contract must keep report context bounded",
+  );
   for (const phrase of [
     "at most 20 findings",
     "at most 50 relevant exact repository-relative paths",
@@ -350,11 +415,54 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
     "most 10 questions",
     "Recursive fan-out is forbidden",
     "Workflow MCP tools",
+    "explicitly authorized",
+    "purpose: evidence",
+    "observed",
+    "executable",
+    "documented",
+    "inference",
+    "recommended_change",
+    "InvestigationPlan",
+    "The parent, not explorer,",
   ]) {
     assert.ok(explorer.includes(phrase), `explorer contract must include: ${phrase}`);
   }
   assert.ok(!planner.includes("gpt-5.6"));
   assert.ok(!explorer.includes("gpt-5.6"));
+  const normalizedExplorer = explorer.replace(/\s+/gu, " ");
+  for (const forbidden of [
+    "approved paths",
+    "acceptance criteria",
+    "plan approval fields",
+    "workflow data",
+  ]) {
+    assert.match(normalizedExplorer, new RegExp(`Do not return.*${forbidden}`, "u"));
+  }
+});
+
+test("explorer evidence permission rejects shell syntax appended to the runner", () => {
+  const explorer = opencode("explorer.md");
+  const allowedCommand =
+    'bun .codex/agents/reviewer-validation.ts --evidence-id EVIDENCE-1 --argv-json ["git","status"]';
+  assert.equal(opencodeBashPermission(explorer, allowedCommand), "allow");
+  for (const unsafeCommand of [
+    `${allowedCommand}; touch explorer-owned.txt`,
+    `${allowedCommand} && touch explorer-owned.txt`,
+    `${allowedCommand} | touch explorer-owned.txt`,
+    `${allowedCommand} \`touch explorer-owned.txt\``,
+    `${allowedCommand} $(touch explorer-owned.txt)`,
+    `${allowedCommand} > explorer-owned.txt`,
+    `${allowedCommand} < /etc/hosts`,
+    `${allowedCommand}\ntouch explorer-owned.txt`,
+    `${allowedCommand}\rtouch explorer-owned.txt`,
+    `${allowedCommand}\\touch explorer-owned.txt`,
+  ]) {
+    assert.equal(
+      opencodeBashPermission(explorer, unsafeCommand),
+      "deny",
+      `unsafe evidence command must be denied: ${JSON.stringify(unsafeCommand)}`,
+    );
+  }
 });
 
 test("planner clarification and native Plan refinement remain portable and fail closed", () => {
@@ -405,6 +513,15 @@ test("planner clarification and native Plan refinement remain portable and fail 
 
   for (const prompt of planCopies) {
     const normalized = prompt.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /Every explorer task payload must explicitly include.*authorized parent: Native Plan.*authorized evidence topic: <exactly one bounded topic>.*scope and boundaries:/u,
+      "Native Plan explorer dispatch must carry explicit authorization and bounds",
+    );
+    assert.match(
+      normalized,
+      /Do not dispatch explorer without that explicit parent, exactly one topic, and scope\/boundary context/u,
+    );
     assert.match(normalized, /`needs_input`.*present.*once/u);
     assert.match(normalized, /Do not invoke a question tool.*without new user input/u);
     assert.match(
@@ -517,6 +634,16 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.match(content, /generic.*pasted prose.*not authority/u);
   assert.match(content, /do not pass pasted plan text/);
   assert.match(content, /never pass or retranscribe its full plan/);
+  for (const phrase of [
+    "Standalone audit, research, explain, trace, and report requests",
+    "Fail closed with bounded direction to use Native Plan",
+    "Do not improvise repository",
+    "dispatch `explorer`",
+    "create a change Workflow for a report",
+    "become a second planner",
+  ]) {
+    assert.ok(content.includes(phrase), `missing standalone research boundary: ${phrase}`);
+  }
 });
 
 test("orchestrator presents semantic proposals before natural-language authorization", () => {
@@ -569,7 +696,7 @@ test("the checked-in native Plan override is canonical and isolated from generat
     edit: "deny",
     bash: "deny",
     question: "deny",
-    task: { "*": "deny", planner: "allow" },
+    task: { "*": "deny", planner: "allow", explorer: "allow" },
     "workflow_state_*": "deny",
     workflow_state_plan_parent_get: "allow",
     workflow_state_plan_approve: "allow",
