@@ -4,10 +4,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  fstatSync,
+  lstatSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readlinkSync,
   readSync,
+  realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -20,6 +24,7 @@ const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 1_048_576;
 const MAX_ARGUMENT_LENGTH = 4096;
 const MAX_EVIDENCE_ID_LENGTH = 200;
+const MAX_IGNORED_FINGERPRINT_BYTES = 512 * 1024 * 1024;
 const SHELL_SYNTAX = /[;&|`$<>\n\r\\]/u;
 const SHELL_EXECUTABLES = new Set([
   "sh",
@@ -198,29 +203,467 @@ function readOutputBytes(path: string, maximumBytes: number): Buffer {
   }
 }
 
+class FingerprintCollectionError extends Error {}
+
+function fingerprintError(message: string, cause?: unknown): FingerprintCollectionError {
+  return new FingerprintCollectionError(message, { cause });
+}
+
+function frame(hash: ReturnType<typeof createHash>, label: string, value: Uint8Array): void {
+  const labelBytes = Buffer.from(label, "utf8");
+  const lengths = Buffer.allocUnsafe(16);
+  lengths.writeBigUInt64BE(BigInt(labelBytes.byteLength), 0);
+  lengths.writeBigUInt64BE(BigInt(value.byteLength), 8);
+  hash.update(lengths);
+  hash.update(labelBytes);
+  hash.update(value);
+}
+
+function text(value: string): Buffer {
+  return Buffer.from(value, "utf8");
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function gitOutput(projectRoot: string, args: string[], maxBuffer = 2 * MAX_OUTPUT_BYTES): Buffer {
+  try {
+    return execFileSync("git", ["-C", projectRoot, ...args], {
+      cwd: projectRoot,
+      encoding: "buffer",
+      maxBuffer,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (cause) {
+    throw fingerprintError(`git fingerprint query failed: git ${args.join(" ")}`, cause);
+  }
+}
+
+function decodeUtf8(value: Buffer, context: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(value);
+  } catch (cause) {
+    throw fingerprintError(`${context} is not valid UTF-8`, cause);
+  }
+}
+
+function singleLine(value: Buffer, context: string): string {
+  const decoded = decodeUtf8(value, context);
+  if (!decoded.endsWith("\n") || decoded.slice(0, -1).includes("\n")) {
+    throw fingerprintError(`${context} is malformed`);
+  }
+  return decoded.slice(0, -1);
+}
+
+function nulRecords(value: Buffer, context: string): Buffer[] {
+  if (value.byteLength === 0) return [];
+  if (value[value.byteLength - 1] !== 0) throw fingerprintError(`${context} is not NUL terminated`);
+  const records: Buffer[] = [];
+  let start = 0;
+  for (let index = 0; index < value.byteLength; index += 1) {
+    if (value[index] === 0) {
+      records.push(value.subarray(start, index));
+      start = index + 1;
+    }
+  }
+  return records;
+}
+
+function repositoryRelativePath(projectRoot: string, value: Buffer, context: string): string {
+  const relativePath = decodeUtf8(value, context);
+  if (
+    relativePath.length === 0 ||
+    relativePath.startsWith("/") ||
+    relativePath === "." ||
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.includes("/../") ||
+    relativePath.includes("\\")
+  ) {
+    throw fingerprintError(`${context} contains an unsafe repository-relative path`);
+  }
+  const root = resolve(projectRoot);
+  const absolutePath = resolve(root, relativePath);
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}/`)) {
+    throw fingerprintError(`${context} escapes the repository root`);
+  }
+  return relativePath;
+}
+
+function pathInsideRoot(projectRoot: string, path: string): boolean {
+  const root = realpathSync(resolve(projectRoot));
+  const candidate = realpathSync(resolve(path));
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+interface FingerprintBudget {
+  remaining: number;
+}
+
+function consumeBudget(budget: FingerprintBudget, amount: number, context: string): void {
+  if (!Number.isSafeInteger(amount) || amount < 0 || amount > budget.remaining) {
+    throw fingerprintError(`fingerprint budget exceeded while reading ${context}`);
+  }
+  budget.remaining -= amount;
+}
+
+function stableStat(value: {
+  mode: number;
+  size: number;
+  mtimeMs: number;
+  ino: number;
+  dev: number;
+}): string {
+  return [value.mode, value.size, value.mtimeMs, value.ino, value.dev].join(":");
+}
+
+function readBoundedFile(path: string, budget: FingerprintBudget, context: string): Buffer {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, "r");
+  } catch (cause) {
+    throw fingerprintError(`unable to open ${context}`, cause);
+  }
+  try {
+    let initial: ReturnType<typeof fstatSync>;
+    try {
+      initial = fstatSync(descriptor);
+    } catch (cause) {
+      throw fingerprintError(`unable to stat ${context}`, cause);
+    }
+    if (!initial.isFile()) throw fingerprintError(`${context} is not a regular file`);
+    consumeBudget(budget, initial.size, context);
+    const output = Buffer.alloc(initial.size);
+    let offset = 0;
+    while (offset < output.byteLength) {
+      let bytesRead: number;
+      try {
+        bytesRead = readSync(descriptor, output, offset, output.byteLength - offset, offset);
+      } catch (cause) {
+        throw fingerprintError(`unable to read ${context}`, cause);
+      }
+      if (bytesRead === 0) throw fingerprintError(`${context} disappeared while reading`);
+      offset += bytesRead;
+    }
+    let final: ReturnType<typeof fstatSync>;
+    try {
+      final = fstatSync(descriptor);
+    } catch (cause) {
+      throw fingerprintError(`unable to restat ${context}`, cause);
+    }
+    if (stableStat(initial) !== stableStat(final))
+      throw fingerprintError(`${context} changed while reading`);
+    return output;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function addRepositoryFile(
+  hash: ReturnType<typeof createHash>,
+  projectRoot: string,
+  relativePath: string,
+  budget: FingerprintBudget,
+  context: string,
+): void {
+  const absolutePath = join(projectRoot, relativePath);
+  let initial: ReturnType<typeof lstatSync>;
+  try {
+    initial = lstatSync(absolutePath);
+  } catch (cause) {
+    throw fingerprintError(`${context} disappeared`, cause);
+  }
+  try {
+    if (!pathInsideRoot(projectRoot, realpathSync(resolve(absolutePath, "..")))) {
+      throw fingerprintError(`${context} has an external parent`);
+    }
+  } catch (cause) {
+    if (cause instanceof FingerprintCollectionError) throw cause;
+    throw fingerprintError(`unable to resolve parent of ${context}`, cause);
+  }
+  const kind = initial.isSymbolicLink()
+    ? "symlink"
+    : initial.isFile()
+      ? "file"
+      : initial.isDirectory()
+        ? "directory"
+        : "other";
+  frame(hash, `${context}:kind`, text(kind));
+  frame(hash, `${context}:mode`, text(String(initial.mode & 0o111)));
+  if (initial.isSymbolicLink()) {
+    let target: string;
+    try {
+      target = readlinkSync(absolutePath, "utf8");
+    } catch (cause) {
+      throw fingerprintError(`unable to read ${context} symlink`, cause);
+    }
+    consumeBudget(budget, Buffer.byteLength(target, "utf8"), context);
+    frame(hash, `${context}:target`, text(target));
+  } else if (initial.isFile()) {
+    const bytes = readBoundedFile(absolutePath, budget, context);
+    frame(hash, `${context}:bytes`, bytes);
+  } else {
+    throw fingerprintError(`${context} has unsupported file type`);
+  }
+  let final: ReturnType<typeof lstatSync>;
+  try {
+    final = lstatSync(absolutePath);
+  } catch (cause) {
+    throw fingerprintError(`${context} disappeared after reading`, cause);
+  }
+  if (stableStat(initial) !== stableStat(final)) {
+    throw fingerprintError(`${context} changed while fingerprinting`);
+  }
+}
+
+function addOptionalGitFile(
+  hash: ReturnType<typeof createHash>,
+  path: string,
+  label: string,
+  budget: FingerprintBudget,
+  allowAbsent = true,
+): void {
+  let value: ReturnType<typeof lstatSync>;
+  try {
+    value = lstatSync(path);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+      if (!allowAbsent) throw fingerprintError(`${label} is missing`, cause);
+      frame(hash, `${label}:absent`, Buffer.alloc(0));
+      return;
+    }
+    throw fingerprintError(`unable to inspect ${label}`, cause);
+  }
+  if (!value.isFile()) throw fingerprintError(`${label} is not a regular file`);
+  const bytes = readBoundedFile(path, budget, label);
+  frame(hash, `${label}:present`, bytes);
+  let final: ReturnType<typeof lstatSync>;
+  try {
+    final = lstatSync(path);
+  } catch (cause) {
+    throw fingerprintError(`${label} disappeared after reading`, cause);
+  }
+  if (stableStat(value) !== stableStat(final))
+    throw fingerprintError(`${label} changed while reading`);
+}
+
+function addIgnoredFiles(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+  const records = nulRecords(
+    gitOutput(projectRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
+    "ignored-file listing",
+  );
+  const paths = records
+    .map((record, index) =>
+      repositoryRelativePath(projectRoot, record, `ignored-file listing entry ${index}`),
+    )
+    .sort();
+  const budget = { remaining: MAX_IGNORED_FINGERPRINT_BYTES };
+  frame(hash, "ignored:count", text(String(paths.length)));
+  for (const relativePath of paths) {
+    consumeBudget(budget, Buffer.byteLength(relativePath, "utf8"), `ignored file ${relativePath}`);
+    addRepositoryFile(hash, projectRoot, relativePath, budget, `ignored file ${relativePath}`);
+  }
+}
+
+function addIndex(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+  const records = nulRecords(
+    gitOutput(projectRoot, ["ls-files", "--stage", "-v", "-z"]),
+    "index listing",
+  );
+  const normalized = records.map((record, index) => {
+    const separator = record.indexOf(9);
+    if (separator <= 0 || separator === record.byteLength - 1) {
+      throw fingerprintError(`index listing entry ${index} is malformed`);
+    }
+    const header = decodeUtf8(record.subarray(0, separator), `index listing entry ${index}`);
+    if (!/^[HhSMRCK?U] [0-7]{6} [0-9a-f]{40,64} [0-3]$/u.test(header)) {
+      throw fingerprintError(`index listing entry ${index} has an invalid header`);
+    }
+    const relativePath = repositoryRelativePath(
+      projectRoot,
+      record.subarray(separator + 1),
+      `index listing entry ${index}`,
+    );
+    return { header, relativePath };
+  });
+  normalized.sort((left, right) =>
+    compareStrings(
+      `${left.relativePath}\0${left.header}`,
+      `${right.relativePath}\0${right.header}`,
+    ),
+  );
+  frame(hash, "index:count", text(String(normalized.length)));
+  for (const entry of normalized)
+    frame(hash, "index:entry", text(`${entry.header}\0${entry.relativePath}`));
+}
+
+function addHead(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+  let symbolic = "";
+  try {
+    symbolic = singleLine(
+      gitOutput(projectRoot, ["symbolic-ref", "-q", "HEAD"]),
+      "HEAD symbolic state",
+    );
+  } catch (cause) {
+    const error = cause as FingerprintCollectionError & {
+      cause?: { status?: number; stdout?: Buffer };
+    };
+    const details = error.cause;
+    if (details?.status !== 1 || details.stdout?.byteLength !== 0) throw cause;
+  }
+  if (symbolic !== "" && !/^refs\/[A-Za-z0-9._/-]+$/u.test(symbolic)) {
+    throw fingerprintError("HEAD symbolic state is malformed");
+  }
+  const identity = singleLine(
+    gitOutput(projectRoot, ["rev-parse", "--verify", "HEAD"]),
+    "HEAD identity",
+  );
+  if (!/^[0-9a-f]{40,64}$/u.test(identity)) {
+    throw fingerprintError("verified HEAD identity is malformed");
+  }
+  frame(hash, "HEAD:state", text(symbolic === "" ? "detached" : `symbolic:${symbolic}`));
+  frame(hash, "HEAD:identity", text(identity));
+}
+
+function addRefs(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+  const output = gitOutput(projectRoot, [
+    "for-each-ref",
+    "--format=%(refname)%00%(objectname)%00%(symref)%00",
+  ]);
+  if (output.byteLength === 0) {
+    frame(hash, "refs:count", text("0"));
+    return;
+  }
+  const parts = decodeUtf8(output, "ref listing").split("\0");
+  if (parts.length < 4 || parts[parts.length - 1] !== "\n") {
+    throw fingerprintError("ref listing is malformed");
+  }
+  const refs: Array<{ name: string; object: string; symref: string }> = [];
+  for (let index = 0; index < parts.length - 1; index += 3) {
+    const name = index === 0 ? parts[index] : parts[index].replace(/^\n/u, "");
+    const object = parts[index + 1];
+    const symref = parts[index + 2];
+    if (
+      name === undefined ||
+      object === undefined ||
+      symref === undefined ||
+      index + 3 >= parts.length
+    ) {
+      throw fingerprintError("ref listing is malformed");
+    }
+    if (!/^refs\/[A-Za-z0-9._/-]+$/u.test(name) || !/^[0-9a-f]{40,64}$/u.test(object)) {
+      throw fingerprintError("ref listing contains malformed state");
+    }
+    if (symref !== "" && !/^refs\/[A-Za-z0-9._/-]+$/u.test(symref)) {
+      throw fingerprintError("ref listing contains malformed symbolic state");
+    }
+    refs.push({ name, object, symref });
+  }
+  refs.sort((left, right) =>
+    compareStrings(
+      `${left.name}\0${left.object}\0${left.symref}`,
+      `${right.name}\0${right.object}\0${right.symref}`,
+    ),
+  );
+  frame(hash, "refs:count", text(String(refs.length)));
+  for (const ref of refs)
+    frame(hash, "refs:entry", text(`${ref.name}\0${ref.object}\0${ref.symref}`));
+}
+
+function addLocalConfig(
+  hash: ReturnType<typeof createHash>,
+  projectRoot: string,
+  budget: FingerprintBudget,
+): void {
+  const records = nulRecords(
+    gitOutput(projectRoot, ["config", "--local", "--no-includes", "--null", "--list"]),
+    "local config listing",
+  );
+  const entries = records.map((record, index) => {
+    const separator = record.indexOf(10);
+    if (separator <= 0) throw fingerprintError(`local config entry ${index} is malformed`);
+    return decodeUtf8(record, `local config entry ${index}`);
+  });
+  entries.sort(compareStrings);
+  frame(hash, "local-config:count", text(String(entries.length)));
+  for (const entry of entries) frame(hash, "local-config:entry", text(entry));
+
+  const configPath = decodeGitPath(
+    projectRoot,
+    gitOutput(projectRoot, ["rev-parse", "--git-path", "config"]),
+    "local config path",
+  );
+  const worktreeConfigPath = decodeGitPath(
+    projectRoot,
+    gitOutput(projectRoot, ["rev-parse", "--git-path", "config.worktree"]),
+    "worktree config path",
+  );
+  addOptionalGitFile(hash, configPath, "local-config:file", budget, false);
+  if (worktreeConfigPath !== configPath) {
+    addOptionalGitFile(hash, worktreeConfigPath, "local-config:worktree-file", budget);
+  }
+}
+
+function decodeGitPath(projectRoot: string, value: Buffer, context: string): string {
+  const path = singleLine(value, context);
+  if (path.length === 0 || path.includes("\0")) throw fingerprintError(`${context} is malformed`);
+  return resolve(projectRoot, path);
+}
+
+function addIgnoreControl(
+  hash: ReturnType<typeof createHash>,
+  projectRoot: string,
+  budget: FingerprintBudget,
+): void {
+  const excludePath = decodeGitPath(
+    projectRoot,
+    gitOutput(projectRoot, ["rev-parse", "--git-path", "info/exclude"]),
+    "repository ignore path",
+  );
+  addOptionalGitFile(hash, excludePath, "repository-ignore", budget);
+}
+
 export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
   const hash = createHash("sha256");
-  const status = execFileSync(
-    "git",
-    ["-C", projectRoot, "status", "--porcelain=v1", "--untracked-files=all"],
-    { cwd: projectRoot, encoding: "buffer", maxBuffer: 2 * MAX_OUTPUT_BYTES },
+  frame(
+    hash,
+    "status",
+    gitOutput(projectRoot, ["status", "--porcelain=v1", "--untracked-files=all"]),
   );
-  hash.update(status);
-  const tracked = execFileSync("git", ["-C", projectRoot, "diff", "--binary", "HEAD", "--"], {
-    cwd: projectRoot,
-    encoding: "buffer",
-    maxBuffer: 2 * MAX_OUTPUT_BYTES,
-  });
-  hash.update(tracked);
-  const untracked = execFileSync(
-    "git",
-    ["-C", projectRoot, "ls-files", "--others", "--exclude-standard", "-z"],
-    { cwd: projectRoot, encoding: "utf8", maxBuffer: 2 * MAX_OUTPUT_BYTES },
+  frame(hash, "tracked-diff", gitOutput(projectRoot, ["diff", "--binary", "HEAD", "--"]));
+  const untracked = nulRecords(
+    gitOutput(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    "untracked-file listing",
   );
-  for (const relativePath of untracked.split("\0").filter(Boolean)) {
-    hash.update(relativePath);
-    hash.update(readFileSync(join(projectRoot, relativePath)));
+  const untrackedPaths = untracked
+    .map((record, index) =>
+      repositoryRelativePath(projectRoot, record, `untracked-file listing entry ${index}`),
+    )
+    .sort();
+  frame(hash, "untracked:count", text(String(untrackedPaths.length)));
+  const untrackedBudget = { remaining: MAX_IGNORED_FINGERPRINT_BYTES };
+  for (const relativePath of untrackedPaths) {
+    consumeBudget(
+      untrackedBudget,
+      Buffer.byteLength(relativePath, "utf8"),
+      `untracked file ${relativePath}`,
+    );
+    addRepositoryFile(
+      hash,
+      projectRoot,
+      relativePath,
+      untrackedBudget,
+      `untracked file ${relativePath}`,
+    );
   }
+  addIgnoredFiles(hash, projectRoot);
+  addIndex(hash, projectRoot);
+  addHead(hash, projectRoot);
+  addRefs(hash, projectRoot);
+  const controlBudget = { remaining: MAX_IGNORED_FINGERPRINT_BYTES };
+  addLocalConfig(hash, projectRoot, controlBudget);
+  addIgnoreControl(hash, projectRoot, controlBudget);
   return hash.digest("hex");
 }
 
@@ -238,43 +681,90 @@ function runAuthorizedCommand(
   if (command === undefined) {
     throw new Error(`requested ${purpose} argv is not allowlisted: ${JSON.stringify(requested)}`);
   }
-  const before = reviewTargetFingerprint(projectRoot);
+  let before: string;
+  try {
+    before = reviewTargetFingerprint(projectRoot);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return {
+      validation_id: validationId,
+      requested_argv: requested,
+      executed_argv: [],
+      status: "failed",
+      exit_code: null,
+      timed_out: false,
+      output: boundedOutput(`fingerprint collection failed before launch: ${message}`, 512),
+      working_tree_changed: false,
+    };
+  }
   const outputDirectory = mkdtempSync(join(tmpdir(), "reviewer-validation-output-"));
   const stdoutPath = join(outputDirectory, "stdout");
   const stderrPath = join(outputDirectory, "stderr");
   try {
-    const result = (() => {
-      const stdout = openSync(stdoutPath, "w");
-      const stderr = openSync(stderrPath, "w");
-      try {
-        return spawnSync(command.argv[0], command.argv.slice(1), {
-          cwd: projectRoot,
-          shell: false,
-          timeout: command.timeout_ms,
-          stdio: ["ignore", stdout, stderr],
-        });
-      } finally {
-        closeSync(stdout);
-        closeSync(stderr);
-      }
-    })();
-    const stdoutSize = statSync(stdoutPath).size;
-    const stderrSize = statSync(stderrPath).size;
-    const outputOverflow = stdoutSize + stderrSize > command.max_output_bytes;
-    const capturedOutput = Buffer.concat([
-      readOutputBytes(stdoutPath, command.max_output_bytes),
-      readOutputBytes(stderrPath, command.max_output_bytes),
-    ]).toString("utf8");
-    const output = boundedOutput(capturedOutput, command.max_output_bytes, outputOverflow);
-    const error = result.error as NodeJS.ErrnoException | undefined;
-    const exitCode = typeof result.status === "number" ? result.status : null;
-    const timedOut = error?.code === "ETIMEDOUT";
+    let exitCode: number | null = null;
+    let timedOut = false;
+    let unavailable = false;
+    let output = "";
+    let executionFailure: string | undefined;
+    try {
+      const result = (() => {
+        const stdout = openSync(stdoutPath, "w");
+        const stderr = openSync(stderrPath, "w");
+        try {
+          return spawnSync(command.argv[0], command.argv.slice(1), {
+            cwd: projectRoot,
+            shell: false,
+            timeout: command.timeout_ms,
+            stdio: ["ignore", stdout, stderr],
+          });
+        } finally {
+          closeSync(stdout);
+          closeSync(stderr);
+        }
+      })();
+      const stdoutSize = statSync(stdoutPath).size;
+      const stderrSize = statSync(stderrPath).size;
+      const outputOverflow = stdoutSize + stderrSize > command.max_output_bytes;
+      const capturedOutput = Buffer.concat([
+        readOutputBytes(stdoutPath, command.max_output_bytes),
+        readOutputBytes(stderrPath, command.max_output_bytes),
+      ]).toString("utf8");
+      output = boundedOutput(capturedOutput, command.max_output_bytes, outputOverflow);
+      const error = result.error as NodeJS.ErrnoException | undefined;
+      exitCode = typeof result.status === "number" ? result.status : null;
+      timedOut = error?.code === "ETIMEDOUT";
+      unavailable = error?.code === "ENOENT";
+      if (timedOut || outputOverflow || exitCode !== 0) executionFailure = "command failed";
+    } catch (cause) {
+      executionFailure = cause instanceof Error ? cause.message : String(cause);
+      output = boundedOutput(executionFailure, command.max_output_bytes);
+    }
+
+    let after: string;
+    try {
+      after = reviewTargetFingerprint(projectRoot);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return {
+        validation_id: validationId,
+        requested_argv: requested,
+        executed_argv: command.argv,
+        status: "failed",
+        exit_code: exitCode,
+        timed_out: timedOut,
+        output: boundedOutput(
+          `${output}\nfingerprint collection failed after launch: ${message}`,
+          command.max_output_bytes,
+        ),
+        working_tree_changed: false,
+      };
+    }
+    const changed = after !== before;
     let status: ValidationEvidence["status"];
-    if (error?.code === "ENOENT") status = "unavailable";
-    else if (timedOut || outputOverflow || exitCode !== 0) status = "failed";
-    else status = "passed";
-    const changed = reviewTargetFingerprint(projectRoot) !== before;
     if (changed) status = "mutated";
+    else if (unavailable) status = "unavailable";
+    else if (executionFailure !== undefined) status = "failed";
+    else status = "passed";
     return {
       validation_id: validationId,
       requested_argv: requested,

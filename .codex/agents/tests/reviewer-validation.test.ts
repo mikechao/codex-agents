@@ -16,6 +16,7 @@ import {
   loadReviewerValidationPolicy,
   parseReviewerValidationPolicy,
   type ReviewerValidationPolicy,
+  reviewTargetFingerprint,
   runReviewerEvidence,
   runReviewerValidation,
   runStructuredReviewerEvidence,
@@ -60,6 +61,10 @@ function workflowValidationFixture() {
     }),
   );
   return fixture;
+}
+
+function runFixtureCommand(root: string, argv: string[]) {
+  return runReviewerValidation(policy(argv), "VAL-FIXTURE", argv, root);
 }
 
 test("legacy CLI rejects evidence mode before parsing or execution", () => {
@@ -331,6 +336,109 @@ test("runner rejects approval evidence when validation mutates the review target
     assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "after");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runner detects ignored file creation, modification, and removal", () => {
+  const fixture = gitFixture();
+  const ignoredPath = join(fixture.root, "ignored.txt");
+  try {
+    writeFileSync(join(fixture.root, ".gitignore"), "ignored.txt\n");
+    fixture.git("add", ".gitignore");
+    fixture.git("commit", "-qm", "ignore fixture");
+
+    const createArgv = ["bun", "-e", `Bun.write(${JSON.stringify(ignoredPath)}, "one")`];
+    assert.equal(runFixtureCommand(fixture.root, createArgv).status, "mutated");
+    const modifyArgv = ["bun", "-e", `Bun.write(${JSON.stringify(ignoredPath)}, "two")`];
+    assert.equal(runFixtureCommand(fixture.root, modifyArgv).status, "mutated");
+    const removeArgv = ["bun", "-e", `Bun.spawnSync(["rm", ${JSON.stringify(ignoredPath)}])`];
+    assert.equal(runFixtureCommand(fixture.root, removeArgv).status, "mutated");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner detects index-only flags without working-tree byte changes", () => {
+  const fixture = gitFixture();
+  try {
+    const argv = ["git", "update-index", "--assume-unchanged", "tracked.txt"];
+    const result = runFixtureCommand(fixture.root, argv);
+    assert.equal(result.status, "mutated");
+    assert.equal(result.exit_code, 0);
+    assert.equal(readFileSync(join(fixture.root, "tracked.txt"), "utf8"), "before\n");
+    fixture.git("update-index", "--no-assume-unchanged", "tracked.txt");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("fingerprint detects local config, refs, and symbolic or detached HEAD state", () => {
+  const fixture = gitFixture();
+  try {
+    const configBefore = reviewTargetFingerprint(fixture.root);
+    fixture.git("config", "--local", "reviewer.flag", "one");
+    assert.notEqual(reviewTargetFingerprint(fixture.root), configBefore);
+
+    const refBefore = reviewTargetFingerprint(fixture.root);
+    fixture.git("update-ref", "refs/reviewer/test", "HEAD");
+    assert.notEqual(reviewTargetFingerprint(fixture.root), refBefore);
+
+    const branch = fixture.git("symbolic-ref", "HEAD").trim();
+    fixture.git("update-ref", "refs/heads/reviewer-head-test", "HEAD");
+    const headBefore = reviewTargetFingerprint(fixture.root);
+    fixture.git("symbolic-ref", "HEAD", "refs/heads/reviewer-head-test");
+    assert.notEqual(reviewTargetFingerprint(fixture.root), headBefore);
+    fixture.git("symbolic-ref", "HEAD", branch);
+    const detachedBefore = reviewTargetFingerprint(fixture.root);
+    fixture.git("checkout", "-q", "--detach", "HEAD");
+    assert.notEqual(reviewTargetFingerprint(fixture.root), detachedBefore);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("local include directives are fingerprinted without following external targets", () => {
+  const fixture = gitFixture();
+  const externalDirectory = mkdtempSync(join(tmpdir(), "reviewer-validation-include-"));
+  const externalPath = join(externalDirectory, "external.gitconfig");
+  try {
+    writeFileSync(externalPath, "[reviewer]\n\tvalue = one\n");
+    fixture.git("config", "--local", "include.path", externalPath);
+    const includedBefore = reviewTargetFingerprint(fixture.root);
+    writeFileSync(externalPath, "[reviewer]\n\tvalue = two\n");
+    assert.equal(reviewTargetFingerprint(fixture.root), includedBefore);
+    fixture.git("config", "--local", "include.path", `${externalPath}.changed`);
+    assert.notEqual(reviewTargetFingerprint(fixture.root), includedBefore);
+  } finally {
+    rmSync(externalDirectory, { recursive: true, force: true });
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("fingerprint collection failures fail closed before and after launch", () => {
+  const root = mkdtempSync(join(tmpdir(), "reviewer-validation-not-git-"));
+  const marker = join(root, "launched");
+  const argv = ["bun", "-e", `Bun.write(${JSON.stringify(marker)}, "launched")`];
+  try {
+    const before = runFixtureCommand(root, argv);
+    assert.equal(before.status, "failed");
+    assert.deepEqual(before.executed_argv, []);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  const fixture = gitFixture();
+  const headPath = join(fixture.root, ".git/HEAD");
+  const removeHeadArgv = ["bun", "-e", `Bun.spawnSync(["rm", ${JSON.stringify(headPath)}])`];
+  try {
+    const after = runFixtureCommand(fixture.root, removeHeadArgv);
+    assert.equal(after.status, "failed");
+    assert.equal(after.exit_code, 0);
+    assert.equal(after.working_tree_changed, false);
+    assert.match(after.output, /fingerprint collection failed after launch/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
