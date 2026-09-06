@@ -4,6 +4,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { WorkflowStore } from "../store.js";
+import { permittedNextActions } from "../transitions.js";
 import { fixture } from "./test-fixtures.js";
 
 function create(
@@ -33,6 +34,57 @@ function create(
     },
   });
 }
+
+function assertDirectActionProjection(store: WorkflowStore, state: any) {
+  const comparableState = structuredClone(state);
+  if (comparableState.linked_continuation === undefined) comparableState.linked_continuation = null;
+  const actions = {
+    parent: permittedNextActions(comparableState, "parent"),
+    implementer: permittedNextActions(comparableState, "implementer"),
+    reviewer: permittedNextActions(comparableState, "reviewer"),
+    committer: permittedNextActions(comparableState, "committer"),
+  };
+  const directDecision = deriveOperatorDecision(comparableState, [
+    { state: comparableState, actions },
+  ]);
+  assert.deepEqual(directDecision, store.operatorDecisionGet(state.workflow_id));
+  assert.deepEqual(store.parentGet(state.workflow_id).permitted_next_actions, actions.parent);
+  assert.deepEqual(
+    store.implementerGet(state.workflow_id).permitted_next_actions,
+    actions.implementer,
+  );
+  assert.deepEqual(store.reviewerGet(state.workflow_id).permitted_next_actions, actions.reviewer);
+  assert.deepEqual(store.committerGet(state.workflow_id).permitted_next_actions, actions.committer);
+}
+
+test("operator projection matches direct action derivation across representative states", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-direct-actions.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const implementing = create(store, git);
+    assertDirectActionProjection(store, implementing);
+
+    store.submitImplementation({
+      workflow_id: implementing.workflow_id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    assertDirectActionProjection(store, store.parentGet(implementing.workflow_id));
+
+    const reviewOnly = create(store, git, "review_only");
+    assertDirectActionProjection(store, reviewOnly);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("operator projection requests parent-owned manual evidence before review", () => {
   const { root, git } = fixture();

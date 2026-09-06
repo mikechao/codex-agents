@@ -50,6 +50,7 @@ import {
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
   pendingManualValidations,
+  permittedNextActions,
   prepareCommit,
   rangeDirtyBaselinePaths,
   recordManualValidation,
@@ -1385,14 +1386,10 @@ export class WorkflowStore {
       const relatedRow = id === row.workflow_id ? row : this.#row(id);
       const relatedState = id === row.workflow_id ? state : parseState(relatedRow);
       const actions: Partial<Record<Role, WorkflowAction[]>> = {
-        parent: (roleViewForRole(relatedState, "parent").permitted_next_actions ?? []).slice(),
-        implementer: (
-          roleViewForRole(relatedState, "implementer").permitted_next_actions ?? []
-        ).slice(),
-        reviewer: (roleViewForRole(relatedState, "reviewer").permitted_next_actions ?? []).slice(),
-        committer: (
-          roleViewForRole(relatedState, "committer").permitted_next_actions ?? []
-        ).slice(),
+        parent: permittedNextActions(relatedState, "parent"),
+        implementer: permittedNextActions(relatedState, "implementer"),
+        reviewer: permittedNextActions(relatedState, "reviewer"),
+        committer: permittedNextActions(relatedState, "committer"),
       };
       records.set(id, { state: relatedState, actions });
       const continuation = relatedState.linked_continuation;
