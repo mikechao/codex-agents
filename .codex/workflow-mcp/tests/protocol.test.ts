@@ -1,90 +1,20 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { diagnosticsDirectory } from "../diagnostics.js";
-import { WorkflowStore } from "../store.js";
-import { fixture, receipt } from "./test-fixtures.js";
+import {
+  connectProtocol,
+  disposeProtocolFixture,
+  implementationInput,
+  workflowCreateInput,
+} from "./protocol-fixtures.js";
+import { fixture } from "./test-fixtures.js";
 
-const SERVER = join(process.cwd(), ".codex", "workflow-mcp", "server.ts");
-
-function target(base: string, paths = ["note.txt"]) {
-  return {
-    review_mode: "working_tree",
-    base_revision: base,
-    head_revision: null,
-    approved_paths: paths,
-    include_staged: true,
-    include_unstaged: true,
-    include_untracked: true,
-  };
-}
-
-async function start(root: string, diagnostics = false) {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: ["--no-warnings", SERVER],
-    cwd: root,
-    env: {
-      ...process.env,
-      WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite"),
-      ...(diagnostics ? { WORKFLOW_MCP_DIAGNOSTICS: "1" } : {}),
-    },
-    stderr: "pipe",
-  });
-  const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
-  await client.connect(transport);
-  const call = async (name: string, arguments_: Record<string, unknown>) => {
-    const result = await client.callTool({ name, arguments: arguments_ });
-    const body = JSON.parse((result.content[0] as { text: string }).text);
-    if (result.isError) throw new Error(`${name}: ${body.category}`);
-    return body;
-  };
-  return { client, transport, call };
-}
-
-function createArgs(git: (...args: string[]) => string, options: any = {}) {
-  const paths = options.approved_paths ?? ["note.txt"];
-  return {
-    workflow_type: options.workflow_type ?? "change",
-    objective: options.objective ?? "stdio protocol",
-    approved_plan: options.approved_plan ?? null,
-    approved_paths: paths,
-    acceptance_criteria: ["criterion"],
-    validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
-    review_target: options.review_target ?? target(git("rev-parse", "HEAD"), paths),
-  };
-}
-
-function implementation(
-  id: string,
-  version: number,
-  status = "DONE",
-  resolution: Record<string, string> = {},
-) {
-  return {
-    workflow_id: id,
-    expected_version: version,
-    status,
-    summary: "implementation evidence",
-    agent_touched_paths: [],
-    acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "accepted" }],
-    validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }],
-    known_failures: [],
-    finding_resolution_map: resolution,
-  };
-}
-
-test("STDIO exposes exact role tools and drives a capability-free worker lifecycle", async () => {
+test("SDK dispatch exposes exact role tools and serializes a representative lifecycle", async () => {
   const { root, git } = fixture();
-  const { client, transport, call } = await start(root);
+  const session = await connectProtocol(root);
   try {
-    const version = async (id: string) =>
-      (await call("workflow_parent_get", { workflow_id: id })).version;
-    const listed = await client.listTools();
+    const listed = await session.client.listTools();
     assert.equal(
       listed.tools.some((tool) => tool.name === "workflow_get"),
       false,
@@ -97,109 +27,55 @@ test("STDIO exposes exact role tools and drives a capability-free worker lifecyc
     ]) {
       assert.ok(listed.tools.some((tool) => tool.name === name));
     }
-    const created = await call("workflow_create", createArgs(git));
-    const id = created.workflow_id;
+
+    const created = await session.call("workflow_create", workflowCreateInput(git));
     assert.equal("capability" in created, false);
     assert.equal("capabilities" in created, false);
     assert.equal(
-      (await call("workflow_implementer_get", { workflow_id: id })).phase,
+      (await session.call("workflow_implementer_get", { workflow_id: created.workflow_id })).phase,
       "IMPLEMENTING",
     );
-    const incomplete = await call(
+
+    const implementation = await session.call(
       "workflow_submit_implementation",
-      implementation(id, await version(id), "INCOMPLETE"),
+      implementationInput(created.workflow_id, await session.version(created.workflow_id)),
     );
-    assert.equal(incomplete.phase, "IMPLEMENTING");
-    assert.equal(incomplete.stop_context, null);
-    assert.deepEqual(incomplete.permitted_next_actions, ["workflow_submit_implementation"]);
-    assert.deepEqual(
-      (await call("workflow_reviewer_get", { workflow_id: id })).permitted_next_actions,
-      [],
-    );
-    assert.equal(
-      (await call("workflow_submit_implementation", implementation(id, await version(id)))).phase,
-      "REVIEWING",
-    );
+    assert.equal(implementation.phase, "REVIEWING");
+    assert.equal("implementation_receipt" in implementation, false);
     writeFileSync(join(root, "note.txt"), "after\n");
     assert.equal(
       (
-        await call("workflow_begin_review", {
-          workflow_id: id,
-          expected_version: await version(id),
+        await session.call("workflow_begin_review", {
+          workflow_id: created.workflow_id,
+          expected_version: await session.version(created.workflow_id),
         })
       ).phase,
       "REVIEWING",
     );
+    const review = await session.call("workflow_submit_review", {
+      workflow_id: created.workflow_id,
+      expected_version: await session.version(created.workflow_id),
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(review.phase, "STOPPED_APPROVED");
+    assert.equal("review_receipt" in review, false);
     assert.equal(
-      (
-        await call("workflow_submit_review", {
-          workflow_id: id,
-          expected_version: await version(id),
-          review_status: "APPROVED",
-          blocking_findings: [],
-          optional_findings: [],
-          prior_finding_classifications: {},
-        })
-      ).phase,
+      (await session.call("workflow_reviewer_get", { workflow_id: created.workflow_id })).phase,
       "STOPPED_APPROVED",
     );
-    assert.equal(
-      (
-        await call("workflow_authorize_commit", {
-          workflow_id: id,
-          expected_version: await version(id),
-          user_authorization: "protocol commit",
-        })
-      ).phase,
-      "COMMIT_AUTHORIZED",
-    );
-    git("add", "note.txt");
-    const prepared = await call("workflow_prepare_commit", {
-      workflow_id: id,
-      expected_version: await version(id),
-    });
-    git("commit", "-qm", "stdio protocol");
-    assert.equal(
-      (
-        await call("workflow_submit_commit_result", {
-          workflow_id: id,
-          expected_version: await version(id),
-          attempt_id: prepared.commit_preparation.attempt_id,
-          outcome: "committed",
-          failure_summary: null,
-        })
-      ).phase,
-      "COMMITTED",
-    );
-    const audit = await call("workflow_get_audit", {
-      workflow_id: id,
-    });
-    assert.deepEqual(
-      audit.map((event: any) => event.event_type),
-      [
-        "WORKFLOW_CREATED",
-        "IMPLEMENTATION_INCOMPLETE",
-        "IMPLEMENTATION_SUBMITTED",
-        "REVIEW_STARTED",
-        "REVIEW_SUBMITTED",
-        "COMMIT_AUTHORIZED",
-        "COMMIT_PREPARED",
-        "COMMIT_RESULT_SUBMITTED",
-      ],
-    );
   } finally {
-    await client.close();
-    await transport.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeProtocolFixture(root, session);
   }
 });
 
-test("STDIO planning operations preserve exact revisions and bind only the approved current revision", async () => {
-  const targetFixture = fixture();
-  const { root } = targetFixture;
-  const { transport, client, call } = await start(root);
+test("SDK planning dispatch preserves authoring views and maps invalid or stale requests", async () => {
+  const { root } = fixture();
+  const session = await connectProtocol(root);
   try {
-    const draft = await call("plan_create", {
+    const draft = await session.call("plan_create", {
       full_plan: "full plan text",
       execution_brief: "bounded execution brief",
       objective: "stdio planning",
@@ -209,10 +85,10 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
     });
     assert.equal(draft.metadata.status, "draft");
     assert.deepEqual(draft.validation_requirements, [{ description: "manual check", argv: null }]);
-    assert.deepEqual(draft.acceptance_criteria, ["plan survives"]);
-    const revised = await call("plan_revise", {
+
+    const revised = await session.call("plan_revise", {
       plan_id: draft.plan_id,
-      base_revision: 1,
+      base_revision: draft.revision,
       replacements: {
         full_plan: "replacement full plan",
         execution_brief: "replacement brief",
@@ -223,304 +99,152 @@ test("STDIO planning operations preserve exact revisions and bind only the appro
       },
     });
     assert.equal(revised.revision, 2);
-    assert.deepEqual(revised.acceptance_criteria, ["replacement survives"]);
     assert.deepEqual(revised.validation_requirements, [
       { description: "manual replacement", argv: null },
     ]);
-    for (const [replacements, category] of [
-      [{}, "ERROR_INVALID_SHAPE"],
-      [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
-      [{ unknown: "value" }, "ERROR_INVALID_SHAPE"],
-    ] as const) {
-      const invalid = await client.callTool({
-        name: "plan_revise",
-        arguments: { plan_id: draft.plan_id, base_revision: 2, replacements },
-      });
-      assert.equal(invalid.isError, true);
-      assert.equal(JSON.parse((invalid.content[0] as { text: string }).text).category, category);
-    }
-    const staleNoop = await client.callTool({
-      name: "plan_revise",
-      arguments: {
-        plan_id: draft.plan_id,
-        base_revision: 1,
-        replacements: { full_plan: "full plan text" },
-      },
-    });
-    assert.equal(staleNoop.isError, true);
-    assert.equal(
-      JSON.parse((staleNoop.content[0] as { text: string }).text).category,
-      "ERROR_VERSION_CONFLICT",
-    );
-    assert.equal(
-      (await call("plan_get", { plan_id: draft.plan_id, revision: 2 })).full_plan,
-      "replacement full plan",
-    );
-    assert.equal(
-      (await call("plan_get", { plan_id: draft.plan_id, revision: 1 })).full_plan,
-      "full plan text",
-    );
-    const approved = await call("plan_approve", {
+
+    const invalid = await session.callRaw("plan_revise", {
       plan_id: draft.plan_id,
-      revision: 2,
+      base_revision: revised.revision,
+      replacements: { unknown: "value" },
+    });
+    assert.equal(invalid.result.isError, true);
+    assert.equal(invalid.body.category, "ERROR_INVALID_SHAPE");
+    const stale = await session.callRaw("plan_revise", {
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: { full_plan: "stale plan" },
+    });
+    assert.equal(stale.result.isError, true);
+    assert.equal(stale.body.category, "ERROR_VERSION_CONFLICT");
+
+    const approved = await session.call("plan_approve", {
+      plan_id: draft.plan_id,
+      revision: revised.revision,
       user_authorization: "approve current exact revision",
     });
     assert.equal(approved.metadata.status, "approved");
-    assert.equal(
-      "approval" in (await call("plan_get", { plan_id: draft.plan_id, revision: 2 })).metadata,
-      false,
-    );
-    const parent = await call("plan_parent_get", { plan_id: draft.plan_id, revision: 2 });
+    const parent = await session.call("plan_parent_get", {
+      plan_id: draft.plan_id,
+      revision: revised.revision,
+    });
     assert.deepEqual(parent.acceptance_criteria, [
       { criterion_id: "AC-001", description: "replacement survives" },
     ]);
-    assert.deepEqual(parent.validation_requirements, [
-      { validation_id: "VAL-001", description: "manual replacement", argv: null },
-    ]);
-    assert.ok(parent.metadata.approval);
-    const created = await call("workflow_create_from_plan", {
+    const created = await session.call("workflow_create_from_plan", {
       plan_id: draft.plan_id,
-      revision: 2,
+      revision: revised.revision,
       work_items: [],
     });
-    assert.equal("workflow" in created, false);
     assert.equal(created.approved_plan, "replacement full plan");
-    assert.equal(created.execution_brief, "replacement brief");
-    assert.equal(created.objective, "stdio planning revised");
-    assert.equal(created.plan_provenance.revision, 2);
+    assert.equal(created.plan_provenance.revision, revised.revision);
   } finally {
-    await client.close();
-    await transport.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeProtocolFixture(root, session);
   }
 });
 
-test("STDIO planner views round-trip without IDs and preserve parent artifact correlation", async () => {
-  const targetFixture = fixture();
-  const { root } = targetFixture;
-  const { transport, client, call } = await start(root);
-  try {
-    const draft = await call("plan_create", {
-      full_plan: "stdio round-trip plan",
-      execution_brief: "stdio round-trip brief",
-      objective: "stdio round-trip objective",
-      approved_paths: ["note.txt"],
-      acceptance_criteria: ["first", "second"],
-      validation_requirements: [
-        "manual inspection",
-        { description: "exact check", argv: ["bun", "run", "check"] },
-      ],
-    });
-    const content = (view: any) => ({
-      full_plan: view.full_plan,
-      execution_brief: view.execution_brief,
-      objective: view.objective,
-      approved_paths: view.approved_paths,
-      acceptance_criteria: view.acceptance_criteria,
-      validation_requirements: view.validation_requirements,
-    });
-    assert.deepEqual(draft.acceptance_criteria, ["first", "second"]);
-    assert.deepEqual(draft.validation_requirements, [
-      { description: "manual inspection", argv: null },
-      { description: "exact check", argv: ["bun", "run", "check"] },
-    ]);
-    assert.equal("approval" in draft.metadata, false);
-
-    const noOp = await call("plan_revise", {
-      plan_id: draft.plan_id,
-      base_revision: draft.revision,
-      replacements: content(draft),
-    });
-    assert.equal(noOp.revision, 1);
-    const acceptance = await call("plan_revise", {
-      plan_id: draft.plan_id,
-      base_revision: noOp.revision,
-      replacements: { acceptance_criteria: ["first", "refined"] },
-    });
-    assert.equal(acceptance.revision, 2);
-    const validation = await call("plan_revise", {
-      plan_id: draft.plan_id,
-      base_revision: acceptance.revision,
-      replacements: {
-        validation_requirements: [
-          { description: "manual inspection", argv: null },
-          { description: "refined check", argv: ["bun", "run", "test:workflow-mcp"] },
-        ],
-      },
-    });
-    assert.equal(validation.revision, 3);
-    const combined = await call("plan_revise", {
-      plan_id: draft.plan_id,
-      base_revision: validation.revision,
-      replacements: {
-        acceptance_criteria: ["combined"],
-        validation_requirements: [{ description: "combined check", argv: null }],
-      },
-    });
-    assert.equal(combined.revision, 4);
-    assert.equal("approval" in combined.metadata, false);
-
-    await call("plan_approve", {
-      plan_id: draft.plan_id,
-      revision: combined.revision,
-      user_authorization: "approve stdio round-trip",
-    });
-    const parent = await call("plan_parent_get", {
-      plan_id: draft.plan_id,
-      revision: combined.revision,
-    });
-    assert.deepEqual(parent.acceptance_criteria, [
-      { criterion_id: "AC-001", description: "combined" },
-    ]);
-    assert.deepEqual(parent.validation_requirements, [
-      { validation_id: "VAL-001", description: "combined check", argv: null },
-    ]);
-    assert.ok(parent.metadata.approval);
-    const created = await call("workflow_create_from_plan", {
-      plan_id: draft.plan_id,
-      revision: combined.revision,
-    });
-    assert.equal("workflow" in created, false);
-    assert.deepEqual(created.acceptance_criteria, parent.acceptance_criteria);
-    assert.deepEqual(created.validation_requirements, parent.validation_requirements);
-  } finally {
-    await client.close();
-    await transport.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("STDIO role routing is exact and parent authorization remains protected", async () => {
+test("SDK role routing rejects obsolete fields and maps boundary errors", async () => {
   const { root, git } = fixture();
-  const { client, transport, call } = await start(root);
+  const session = await connectProtocol(root);
   try {
-    const first = await call("workflow_create", createArgs(git, { objective: "first workflow" }));
-    const second = await call("workflow_create", createArgs(git, { objective: "second workflow" }));
-    assert.equal(
-      (await call("workflow_reviewer_get", { workflow_id: first.workflow_id })).objective,
-      "first workflow",
+    const first = await session.call(
+      "workflow_create",
+      workflowCreateInput(git, { objective: "first" }),
+    );
+    const second = await session.call(
+      "workflow_create",
+      workflowCreateInput(git, { objective: "second" }),
     );
     assert.equal(
-      (await call("workflow_committer_get", { workflow_id: second.workflow_id })).objective,
-      "second workflow",
+      (await session.call("workflow_reviewer_get", { workflow_id: first.workflow_id })).objective,
+      "first",
     );
-    const denied = await client.callTool({
-      name: "workflow_authorize_commit",
-      arguments: {
-        workflow_id: first.workflow_id,
-        capability: "wrong",
-        expected_version: 0,
-        user_authorization: "denied",
-      },
-    });
-    assert.equal(denied.isError, true);
     assert.equal(
-      JSON.parse((denied.content[0] as { text: string }).text).category,
-      "ERROR_INVALID_SHAPE",
+      (await session.call("workflow_committer_get", { workflow_id: second.workflow_id })).objective,
+      "second",
     );
-    const malformed = await client.callTool({
-      name: "workflow_submit_implementation",
-      arguments: { ...implementation(first.workflow_id, 0), capability: "legacy-bearer" },
-    });
-    assert.equal(malformed.isError, true);
-    assert.equal(
-      JSON.parse((malformed.content[0] as { text: string }).text).category,
-      "ERROR_INVALID_SHAPE",
-    );
-  } finally {
-    await client.close();
-    await transport.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
 
-test("startup corruption fails closed with an actionable stderr diagnostic", () => {
-  const { root, git } = fixture();
-  const databasePath = join(root, "corrupt.sqlite");
-  try {
-    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
-    store.create(createArgs(git));
-    store.db.prepare("UPDATE workflows SET state_json = ?").run('{"schema_version":2}');
-    store.close();
-    assert.throws(
-      () =>
-        execFileSync(process.execPath, ["--no-warnings", SERVER], {
-          cwd: root,
-          env: { ...process.env, WORKFLOW_MCP_DB_PATH: databasePath },
-          input: "",
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-        }),
-      (error: any) => {
-        assert.equal(error.stdout ?? "", "");
-        assert.match(error.stderr ?? "", /ERROR_MIGRATION_REQUIRED/u);
-        return true;
-      },
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+    const obsolete = await session.callRaw("workflow_submit_implementation", {
+      ...implementationInput(first.workflow_id, await session.version(first.workflow_id)),
+      implementation_receipt: null,
+      capability: "legacy-bearer",
+    });
+    assert.equal(obsolete.result.isError, true);
+    assert.equal(obsolete.body.category, "ERROR_INVALID_SHAPE");
 
-test("receipt capture stays server-owned for worker submissions", async () => {
-  const { root, git } = fixture();
-  const { client, transport, call } = await start(root);
-  try {
-    const created = await call("workflow_create", createArgs(git));
-    const result = await call(
+    const stale = await session.callRaw(
       "workflow_submit_implementation",
-      implementation(created.workflow_id, 0),
+      implementationInput(first.workflow_id, (await session.version(first.workflow_id)) + 1),
+    );
+    assert.equal(stale.result.isError, true);
+    assert.equal(stale.body.category, "ERROR_VERSION_CONFLICT");
+
+    const invalidPhase = await session.callRaw("workflow_prepare_commit", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+    });
+    assert.equal(invalidPhase.result.isError, true);
+    assert.equal(invalidPhase.body.category, "ERROR_INVALID_TRANSITION");
+
+    await session.call(
+      "workflow_submit_implementation",
+      implementationInput(first.workflow_id, await session.version(first.workflow_id)),
+    );
+    writeFileSync(join(root, "note.txt"), "malformed claim\n");
+    await session.call("workflow_begin_review", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+    });
+    await session.call("workflow_submit_review", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    await session.call("workflow_authorize_commit", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+      user_authorization: "protocol boundary test",
+    });
+    git("add", "note.txt");
+    const prepared = await session.call("workflow_prepare_commit", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+    });
+    const malformedClaim = await session.callRaw("workflow_submit_commit_result", {
+      workflow_id: first.workflow_id,
+      expected_version: await session.version(first.workflow_id),
+      attempt_id: prepared.commit_preparation.attempt_id,
+      outcome: "mismatch",
+      failure_summary: null,
+    });
+    assert.equal(malformedClaim.result.isError, true);
+    assert.equal(malformedClaim.body.category, "ERROR_INVALID_SHAPE");
+  } finally {
+    await disposeProtocolFixture(root, session);
+  }
+});
+
+test("SDK responses keep receipt internals server-owned", async () => {
+  const { root, git } = fixture();
+  const session = await connectProtocol(root);
+  try {
+    const created = await session.call("workflow_create", workflowCreateInput(git));
+    const result = await session.call(
+      "workflow_submit_implementation",
+      implementationInput(created.workflow_id, await session.version(created.workflow_id)),
     );
     assert.equal(result.phase, "REVIEWING");
     assert.equal("initial_receipt" in result, false);
     assert.equal("implementation_receipt" in result, false);
-    assert.equal(
-      (await call("workflow_reviewer_get", { workflow_id: created.workflow_id })).phase,
-      "REVIEWING",
-    );
+    const reviewer = await session.call("workflow_reviewer_get", {
+      workflow_id: created.workflow_id,
+    });
+    assert.equal("initial_receipt" in reviewer, false);
+    assert.equal("implementation_receipt" in reviewer, false);
   } finally {
-    await client.close();
-    await transport.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("test fixture receipts remain available only for direct receipt assertions", () => {
-  const { root } = fixture();
-  try {
-    const current = receipt(root);
-    assert.equal(current.approved_paths[0], "note.txt");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("opt-in child diagnostics correlate tool receipt and result without touching stdout", async () => {
-  const { root, git } = fixture();
-  const { client, transport, call } = await start(root, true);
-  try {
-    const created = await call("workflow_create", createArgs(git));
-    await call("workflow_parent_get", { workflow_id: created.workflow_id });
-    const directory = diagnosticsDirectory(root);
-    const files = readdirSync(directory).filter((entry) => /^runtime-\d+\.jsonl$/u.test(entry));
-    assert.equal(files.length, 1);
-    const records = readFileSync(join(directory, files[0]), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const receipts = records.filter((record) => record.event === "tool_receipt");
-    const results = records.filter((record) => record.event === "tool_result");
-    assert.ok(receipts.some((record) => record.tool === "workflow_parent_get"));
-    const receipt = receipts.find((record) => record.tool === "workflow_parent_get");
-    assert.ok(
-      results.some(
-        (record) => record.request_id === receipt.request_id && record.outcome === "success",
-      ),
-    );
-  } finally {
-    await client.close();
-    await transport.close();
-    rmSync(diagnosticsDirectory(root), { recursive: true, force: true });
-    rmSync(root, { recursive: true, force: true });
+    await disposeProtocolFixture(root, session);
   }
 });

@@ -13,7 +13,7 @@ import {
 
 const serverSource = readFileSync(resolve(import.meta.dir, "../server.ts"), "utf8");
 
-test("protocol tool contract exposes the workflow actions with stable annotations", () => {
+test("closed protocol registry and schema contract exposes workflow actions with stable annotations", () => {
   const names = tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [...SERVER_TOOL_NAMES].sort());
   assert.deepEqual([...DISPATCH_TOOL_NAMES].sort(), names);
@@ -234,7 +234,7 @@ test("protocol tool contract exposes the workflow actions with stable annotation
   assert.match(linkedFromPlan.description ?? "", /resolv.*approved.*PlanArtifact server-side/u);
 });
 
-test("server source retains only the live protocol instructions", () => {
+test("closed protocol source contract retains only the live protocol instructions", () => {
   assert.equal((serverSource.match(/export const protocolInstructions\s*=/gu) ?? []).length, 1);
   assert.doesNotMatch(serverSource, /\b_instructions\b/u);
   assert.doesNotMatch(serverSource, /Legacy instructions were intentionally removed/u);
