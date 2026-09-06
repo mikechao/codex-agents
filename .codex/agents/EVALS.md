@@ -230,6 +230,14 @@ check is defense in depth rather than a new authority boundary.
 - Reconciliation blocking repair: after a fresh reconciliation review reports blocking findings,
   confirm implementer dispatch is conditional on ordinary exact-ID repair authorization; optional
   findings never trigger remediation.
+- Direct aggregate reconciliation repair (#93): create a complete-scope `review_only` working-tree
+  workflow with `approved_plan: null`, dispatch the reviewer first, and seed a P1/P2 blocker. After
+  explicit user authorization naming exactly the current finding IDs and a bounded repair directive,
+  confirm the implementer can act from the complete authoritative direct contract without a
+  PlanArtifact. Confirm implementation remains contained by the exact aggregate approved paths and
+  directive, returns to review, and a fresh independent aggregate re-review still covers every
+  original path rather than only repair-touched files. Preserve the separate approval, validation,
+  and commit-authorization gates; optional/P3 findings never trigger repair.
 - Supported finding-linked remediation: with an active supported source, exact current finding IDs,
   narrow remediation context and scope, confirm the child remediation is followed by a fresh combined
   review and cannot be used for changed intent or reconciliation.

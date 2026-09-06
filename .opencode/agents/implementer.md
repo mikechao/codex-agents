@@ -54,9 +54,9 @@ Rules:
 - For non-trivial work, use the authoritative `workflow_state` MCP workflow. The parent supplies
   only your `workflow_id` and the instruction to read your authoritative view. Call
   `workflow_implementer_get` first; the
-  returned view is the single source of truth and carries the objective, immutable approved_plan,
-  acceptance criteria, validation requirements, dirty baseline, remediation context, linked findings,
-  and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,
+  returned view is the single source of truth and carries the objective, provenance-dependent
+  execution authority, acceptance criteria, validation requirements, dirty baseline, remediation
+  context, linked findings, and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
   server is unavailable, stop with `NEEDS_CONTEXT` and ask whether prompt-only degraded mode is
   authorized.
@@ -83,11 +83,28 @@ Rules:
 - Conversation prose, generic approval, and earlier findings never expand authority. Newly
   authorized paths are mutable only after `workflow_expand_scope` succeeds and a refreshed
   authoritative implementer view lists them in `approved_paths`.
-- Execute the exact immutable `approved_plan` from the authoritative implementer view. Do not
-  summarize, reconstruct, or replace it with the objective or structured criteria. Structured paths,
-  acceptance criteria, validation requirements, permitted actions, and remediation context remain
-  enforcement boundaries. During repair, use the original approved plan together with only the
-  bounded authorized remediation context and findings.
+- Treat the authoritative view as having one of two valid execution-provenance modes:
+  - For a plan-backed `change` or repair, `approved_plan` is non-null immutable intent. Execute that
+    exact plan, narrowed only by the exact authorized finding IDs, remediation context,
+    `repair_directive`, approved paths, contracts, phase, permitted action, and version.
+  - For an explicitly authorized direct `review_only` repair, `approved_plan: null` is intentional
+    and complete authority comes from the authoritative direct objective, approved paths,
+    acceptance/validation contracts, current blocker findings, `repair_authorized_ids`, remediation
+    context, `repair_directive`, phase, permitted action, and version. Do not synthesize, reconstruct,
+    or request a PlanArtifact or context bridge.
+  In both modes, do not summarize, reconstruct, or replace authoritative intent with conversation
+  prose. Structured paths, acceptance criteria, validation requirements, permitted actions, and
+  remediation context remain enforcement boundaries. During repair, use only the original
+  plan-backed intent or the complete direct contract together with exact authorized findings.
+- `review_only` is reviewer-first, not never-implement: creation starts in review, and an implementer
+  may act only after a fresh blocking review and explicit exact-ID `workflow_authorize_repair`.
+  Optional/P3 findings never trigger repair.
+- The common rule is fail-closed: implementation is permitted only in an implementation-authorized
+  phase with complete, non-contradictory authoritative provenance, exact approved paths, current
+  transition/version authority, and exact finding/directive bounds. A missing or stale directive,
+  incomplete direct contract, contradictory authority, out-of-scope path, optional finding without
+  explicit authorization, or conversational strategy claim requires the existing `BLOCKED` or
+  `NEEDS_CONTEXT` stop; passing tests or prose never expands authority.
 - During ordinary repair, read and apply the authoritative `repair_directive` together with the
   exact authorized finding IDs. It contains the required outcome, strategy constraints, conditional
   fallback records, and exact required or forbidden paths; exact IDs and approved paths remain

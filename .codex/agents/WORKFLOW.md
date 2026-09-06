@@ -137,13 +137,20 @@ than reusable contracts. Only the current approved revision can seed execution; 
 revisions stop without workflow creation. `workflow_create_from_plan` server-side snapshots exact
 text, execution brief, normalized contracts, digest, and provenance, so no plan prose is retranscribed.
 
-`approved_plan` is immutable execution intent. `approved_paths` is the effective append-only
-execution scope: only the parent may call `workflow_expand_scope`, and only with fresh explicit user
-authorization naming exact additional paths, a bounded reason, and clean tracked or absent
-authorization-time baselines. The amendment history is parent-only; all role views receive the
-refreshed effective path list. Expansion preserves the active implementation/repair phase and does
-not consume a repair cycle, but clears stale implementation/review/commit evidence so fresh
-implementation and review are required.
+`approved_plan` is immutable execution intent when present. A null `approved_plan` is also valid
+provenance for an explicitly authorized direct `review_only` repair: the complete authoritative
+direct objective, approved paths, acceptance/validation contracts, current blocker findings,
+`repair_authorized_ids`, remediation context, repair directive, phase, permitted action, and version
+are the execution contract. Review-only creation remains reviewer-first; only a fresh blocking review
+and exact-ID `workflow_authorize_repair` permits an implementer. No synthetic PlanArtifact or
+conversation-carried context bridge may be introduced. In either provenance mode, implementation is
+fail-closed when authority is incomplete, contradictory, stale, out of scope, or outside the exact
+directive/finding bounds. `approved_paths` is the effective append-only execution scope: only the
+parent may call `workflow_expand_scope`, and only with fresh explicit user authorization naming exact
+additional paths, a bounded reason, and clean tracked or absent authorization-time baselines. The
+amendment history is parent-only; all role views receive the refreshed effective path list. Expansion
+preserves the active implementation/repair phase and does not consume a repair cycle, but clears stale
+implementation/review/commit evidence so fresh implementation and review are required.
 From `STOPPED_INCONCLUSIVE`, `workflow_adopt_dirty_scope` separately records an authorization-time
 commitment for exact dirty paths originating in an existing scope expansion; that commitment is
 guarded before review resume and review-start snapshot creation.
@@ -300,10 +307,13 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   to the parent and implementer; structured objective, scope, and contracts remain enforceable
   boundaries. The parent owns user and commit authorization, repair and
   resume authorization, retry, and linked follow-up creation.
-- Implementer view: objective, acceptance criteria, validation requirements, dirty
-  baseline, remediation context, linked findings, final implementation fields, result arrays, finding
-  resolution map, blocking findings, and permitted actions. A `change` workflow starts `IMPLEMENTING`
-  and the implementer submits with `workflow_submit_implementation`.
+- Implementer view: objective, immutable `approved_plan` when plan-backed (or null for direct
+  review-only repair), approved paths, acceptance criteria, validation requirements, dirty baseline,
+  remediation context, linked findings, final implementation fields, result arrays, finding
+  resolution map, blocking findings, exact repair IDs/directive, and permitted actions. A `change`
+  workflow starts `IMPLEMENTING`; a `review_only` workflow starts `REVIEWING` and exposes the
+  implementer only after exact repair authorization. The implementer submits with
+  `workflow_submit_implementation`.
 - Reviewer view: criteria, validations, dirty baseline, implementation evidence and results, concern
   acceptance, finding buckets and classifications, active repair IDs and the exact active repair
   directive, resolution map, and permitted actions. When an active directive is present, an
@@ -703,8 +713,12 @@ and planning adds no WorkflowPhase or worker-attempt state. Direct `workflow_cre
 Persisted Workflow MCP state has one current schema. `approved_plan` is stored as exact text in the
 state JSON: `workflow_create_from_plan` copies it from the exact current approved revision, while
 direct/non-plan workflow creation supplies `null`; it cannot be changed by ordinary mutations or
-runtime adoption. Legacy linked follow-ups retain their raw direct-contract and null-plan behavior;
-plan-native linked follow-ups receive only plan identity and never silently copy the source plan.
+runtime adoption. A direct null-plan workflow therefore does not lack authority by itself: for
+`review_only`, it becomes implementable only through the existing reviewer-first blocker review and
+exact repair authorization, using the complete direct contract already persisted in the workflow.
+Legacy linked follow-ups retain their raw direct-contract and null-plan behavior; plan-native linked
+follow-ups receive only plan identity and never silently copy the source plan. No new phase, schema
+field, migration, tool, or redundant authority is created.
 Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,

@@ -1040,6 +1040,44 @@ test("orchestration contracts classify intent and reconcile the final tree expli
   }
 });
 
+test("implementer authority distinguishes plan-backed and direct null-plan repairs", () => {
+  const canonical = readFileSync(resolve(agentsDir, "contracts/implementer.md"), "utf8");
+  const definitions = [
+    canonical,
+    readFileSync(resolve(agentsDir, "implementer.toml"), "utf8"),
+    opencode("implementer.md"),
+  ];
+  for (const definition of definitions) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(normalized, /two valid execution-provenance modes/u);
+    assert.match(
+      normalized,
+      /plan-backed `change` or repair.*`approved_plan` is non-null immutable intent/u,
+    );
+    assert.match(normalized, /direct `review_only` repair.*`approved_plan: null` is intentional/u);
+    assert.match(
+      normalized,
+      /complete authority comes from the authoritative direct objective, approved paths/u,
+    );
+    assert.match(normalized, /Do not synthesize, reconstruct, or request a PlanArtifact/u);
+    assert.match(normalized, /review_only` is reviewer-first, not never-implement/u);
+    assert.match(
+      normalized,
+      /fresh blocking review and explicit exact-ID `workflow_authorize_repair`/u,
+    );
+    assert.match(normalized, /common rule is fail-closed/u);
+    assert.match(normalized, /exact finding\/directive bounds/u);
+    assert.match(normalized, /[Oo]ptional\/P3 findings never trigger repair/u);
+    assert.match(normalized, /materially changing the strategy, outcome, scope, or architecture/u);
+    assert.match(normalized, /fresh bounded workflow/u);
+    assert.doesNotMatch(
+      normalized,
+      /Execute the exact immutable `approved_plan` from the authoritative implementer view/u,
+      "the contract must not universally require a non-null plan",
+    );
+  }
+});
+
 test("implementer reserves concerns for otherwise complete work", () => {
   for (const host of [
     readFileSync(resolve(agentsDir, "implementer.toml"), "utf8"),

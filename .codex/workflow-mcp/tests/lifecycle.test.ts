@@ -1253,6 +1253,108 @@ scenario("repair cycle and approval lifecycle", [
   },
 ]);
 
+scenario("direct review-only aggregate repair preserves null-plan authority and scope", [
+  {
+    name: "create reviewer-first aggregate workflow",
+    run: (ctx: any) =>
+      doCreate(ctx, {
+        workflow_type: "review_only",
+        approved_paths: ["note.txt", "original-scope.txt"],
+        validation_requirements: [],
+        objective: "reconcile the complete logical change",
+      }),
+    snapshots: [snap("parent", "REVIEWING", 0, ACTIONS.reviewing, EVENTS.created)],
+  },
+  {
+    name: "reviewer reports a blocking defect",
+    run: (ctx: any) => {
+      const view = ctx.store.implementerGet(ctx.created.workflow_id);
+      assert.equal(view.approved_plan, null);
+      assert.deepEqual(view.approved_paths, ["note.txt", "original-scope.txt"]);
+      assert.deepEqual(view.permitted_next_actions, []);
+      doReview(ctx, 0, { status: "CHANGES_REQUESTED", blocking: [blocker("DIRECT-1")] });
+    },
+    snapshots: [
+      snap("parent", "REPAIR_REQUIRED", 1, ACTIONS.repairRequired, [
+        "WORKFLOW_CREATED",
+        "REVIEW_SUBMITTED",
+      ]),
+    ],
+  },
+  {
+    name: "authorize only the current exact blocker",
+    run: (ctx: any) => {
+      doAuthorizeRepair(ctx, 1, ["DIRECT-1"]);
+      const view = ctx.store.implementerGet(ctx.created.workflow_id);
+      assert.equal(view.approved_plan, null);
+      assert.equal(view.objective, "reconcile the complete logical change");
+      assert.deepEqual(view.approved_paths, ["note.txt", "original-scope.txt"]);
+      assert.deepEqual(view.repair_authorized_ids, ["DIRECT-1"]);
+      assert.deepEqual(view.repair_directive.required_paths, []);
+      assert.deepEqual(view.repair_directive.forbidden_paths, []);
+      assert.deepEqual(view.permitted_next_actions, ["workflow_submit_implementation"]);
+    },
+    snapshots: [
+      snap("parent", "REPAIRING", 2, ACTIONS.repairing, [
+        "WORKFLOW_CREATED",
+        "REVIEW_SUBMITTED",
+        "REPAIR_AUTHORIZED",
+      ]),
+    ],
+  },
+  {
+    name: "implement bounded direct repair and retain aggregate target",
+    run: (ctx: any) => {
+      writeFileSync(join(ctx.root, "note.txt"), "repaired aggregate change\n");
+      doImplementation(ctx, 2, {
+        touched: ["note.txt"],
+        resolution: { "DIRECT-1": "resolved" },
+      });
+      const parent = ctx.store.parentGet(ctx.created.workflow_id);
+      assert.equal(parent.phase, "REVIEWING");
+      assert.equal(parent.approved_plan, null);
+      assert.deepEqual(parent.review_target.approved_paths, ["note.txt", "original-scope.txt"]);
+      assert.deepEqual(
+        ctx.store.implementerGet(ctx.created.workflow_id).permitted_next_actions,
+        [],
+      );
+    },
+    snapshots: [
+      snap("parent", "REVIEWING", 3, ACTIONS.reviewing, [
+        "WORKFLOW_CREATED",
+        "REVIEW_SUBMITTED",
+        "REPAIR_AUTHORIZED",
+        "IMPLEMENTATION_SUBMITTED",
+      ]),
+    ],
+  },
+  {
+    name: "fresh independent aggregate review approves the repaired target",
+    run: (ctx: any) => {
+      doReview(ctx, 3, { prior: { "DIRECT-1": "resolved" } });
+      const state = JSON.parse(
+        ctx.store.db
+          .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+          .get(ctx.created.workflow_id).state_json,
+      );
+      assert.equal(state.review_target.approved_paths.length, 2);
+      assert.deepEqual(
+        state.review_receipt.paths.map(({ path }: any) => path),
+        ["note.txt", "original-scope.txt"],
+      );
+    },
+    snapshots: [
+      snap("parent", "STOPPED_APPROVED", 4, ACTIONS.approved, [
+        "WORKFLOW_CREATED",
+        "REVIEW_SUBMITTED",
+        "REPAIR_AUTHORIZED",
+        "IMPLEMENTATION_SUBMITTED",
+        "REVIEW_SUBMITTED",
+      ]),
+    ],
+  },
+]);
+
 scenario("both implementation resumes restore their prior phase", [
   {
     name: "needs context from implementing: create",
