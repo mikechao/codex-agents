@@ -1,3 +1,4 @@
+import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
@@ -15,7 +16,6 @@ import type {
   WorkflowState,
 } from "./types.js";
 
-const MAX_LINEAGE = 32;
 const MAX_SUMMARY = 240;
 const MAX_OPTIONAL_FINDINGS = 200;
 
@@ -31,22 +31,6 @@ function bounded(value: string, limit = MAX_SUMMARY): string {
 
 function actionsFor(record: OperatorLineageRecord, role: Role): WorkflowAction[] {
   return record.actions?.[role] ?? permittedNextActions(record.state, role);
-}
-
-function references(state: WorkflowState): WorkflowId[] {
-  const continuation = state.linked_continuation;
-  return [
-    ...new Set(
-      [
-        state.parent_workflow_id,
-        state.source_workflow_id,
-        state.superseded_by_workflow_id,
-        continuation?.root_workflow_id ?? null,
-        continuation?.predecessor_workflow_id ?? null,
-        ...(continuation?.lineage_workflow_ids ?? []),
-      ].filter((value): value is WorkflowId => value != null),
-    ),
-  ];
 }
 
 function stateStatus(state: WorkflowState): OperatorDecision["outcome"]["status"] {
@@ -299,7 +283,8 @@ function validateLineage(
   }
   if (!requested.workflow_id || !byId.has(requested.workflow_id))
     return "requested workflow is absent from lineage";
-  if (byId.size > MAX_LINEAGE) return "explicit lineage exceeds the bounded traversal limit";
+  if (byId.size > MAX_LINEAGE_RECORDS)
+    return "explicit lineage exceeds the bounded traversal limit";
   // The store normally supplies the transitive closure of exact persisted references. Keep the
   // pure projection equally strict when called directly: an extra record must not smuggle an
   // unrelated workflow into the semantic summary.
@@ -311,7 +296,7 @@ function validateLineage(
     const record = byId.get(id);
     if (!record) return "lineage contains a missing referenced workflow";
     reachable.add(id);
-    for (const reference of references(record.state)) {
+    for (const reference of lineageReferences(record.state)) {
       if (!byId.has(reference)) return "lineage contains a missing referenced workflow";
       if (!reachable.has(reference)) pending.push(reference);
     }
@@ -329,7 +314,7 @@ function validateLineage(
     const stateId = state.workflow_id;
     if (!stateId) return "lineage contains a missing workflow identity";
     const continuation = state.linked_continuation;
-    const refs = references(state);
+    const refs = lineageReferences(state);
     if (refs.some((id) => !byId.has(id))) return "lineage contains a missing referenced workflow";
     if ((state.parent_workflow_id || state.source_workflow_id) && !continuation)
       return "linked workflow continuation is missing";

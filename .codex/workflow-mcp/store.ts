@@ -21,6 +21,7 @@ import {
   verifyCommitResult,
   verifyReviewReceipt,
 } from "./git.js";
+import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { assertSupportedStateSchema } from "./migration.js";
 import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
 import { PlanStore, validatePersistedPlanRows } from "./plan-store.js";
@@ -1091,7 +1092,7 @@ export class WorkflowStore {
     while (pending.length > 0) {
       const id = pending.shift() as WorkflowId;
       if (records.has(id)) continue;
-      if (records.size >= 32)
+      if (records.size >= MAX_LINEAGE_RECORDS)
         fail("ERROR_STATE_CORRUPT", "explicit workflow lineage exceeds its bound");
       const relatedRow = id === row.workflow_id ? row : this.#row(id);
       const relatedState = id === row.workflow_id ? state : parseState(relatedRow);
@@ -1102,17 +1103,8 @@ export class WorkflowStore {
         committer: permittedNextActions(relatedState, "committer"),
       };
       records.set(id, { state: relatedState, actions });
-      const continuation = relatedState.linked_continuation;
-      const references = [
-        relatedState.parent_workflow_id,
-        relatedState.source_workflow_id,
-        relatedState.superseded_by_workflow_id,
-        continuation?.root_workflow_id ?? null,
-        continuation?.predecessor_workflow_id ?? null,
-        ...(continuation?.lineage_workflow_ids ?? []),
-      ];
-      for (const reference of references) {
-        if (reference !== null && !records.has(reference)) pending.push(reference);
+      for (const reference of lineageReferences(relatedState)) {
+        if (!records.has(reference)) pending.push(reference);
       }
     }
     return deriveOperatorDecision(state, [...records.values()]);
