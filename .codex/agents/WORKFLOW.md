@@ -332,9 +332,14 @@ manual requirements are never executed.
 Required manual validation is authoritative workflow evidence, not a prompt or conversation claim.
 Implementers must submit `not_run` for every manual (`argv: null`) requirement; only the parent may
 record bounded terminal `passed` or `failed` evidence. A complete implementation may enter
-`REVIEWING` while that evidence is pending, but reviewer routing and commit authorization remain
-gated until the parent records it. Later implementation or repair replaces the current validation
-results, returning manual checks to unresolved `not_run` and requiring fresh parent evidence.
+`REVIEWING` while that evidence is pending. In a `change` workflow, a complete, ordered, and
+authoritative required result set containing a failed validation is terminal blocking evidence that
+allows independent reviewer routing and repair even while unrelated manual evidence remains pending;
+pending evidence stays explicit and the parent retains recording authority. Pending-only state, and
+all `review_only` pending-manual state, remains gated until the parent records it. Only all required
+validations passing enables final approval and commit authorization. Later implementation or repair
+replaces the current validation results, returning manual checks to unresolved `not_run` and
+requiring fresh parent evidence.
 
 The OpenCode orchestrator performs a bounded, read-only policy preflight before
 `workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed non-null
@@ -465,7 +470,10 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
 - `STOPPED_NEEDS_CONTEXT` / `STOPPED_IMPLEMENTATION_BLOCKED`: resume implementation with
   `workflow_resume_implementation` once the missing context or blocker is resolved.
 - `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this
-  enters review without rewriting the failed evidence and never implies commit authorization.
+  enters review without rewriting the failed evidence and never implies commit authorization. If
+  pending manual evidence remains, the parent may record it directly; a valid required failure moves
+  the change workflow to review without fabricating concern acceptance, while concern-only stops
+  still require explicit acceptance.
 
 For `INCOMPLETE`, the parent refreshes authoritative state and may redispatch the implementer
 directly. OpenCode allows at most two consecutive automatic redispatches after the initial attempt;

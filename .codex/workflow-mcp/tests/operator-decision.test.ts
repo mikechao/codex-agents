@@ -6,7 +6,7 @@ import { WorkflowError } from "../errors.js";
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "../lineage.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { WorkflowStore } from "../store.js";
-import { permittedNextActions } from "../transitions.js";
+import { hasFailedRequiredValidation, permittedNextActions } from "../transitions.js";
 import type { WorkflowId, WorkflowState } from "../types.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
@@ -130,6 +130,81 @@ test("operator projection requests parent-owned manual evidence before review", 
       kind: "no_user_action",
       route: "review",
     });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("operator projection routes failed-plus-pending change review and preserves review-only gating", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-failed-pending.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const change = create(store, git, "change", [
+      { description: "executable", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", argv: null },
+    ]);
+    const changeState = structuredClone(change) as any;
+    changeState.phase = "REVIEWING";
+    changeState.linked_continuation = null;
+    changeState.validation_results = [
+      { validation_id: "VAL-001", status: "failed", evidence: "failed" },
+      { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+    ];
+    assert.equal(hasFailedRequiredValidation(changeState), true);
+    assert.deepEqual(
+      deriveOperatorDecision(changeState, [
+        {
+          state: changeState,
+          actions: {
+            parent: ["workflow_record_manual_validation"],
+            reviewer: ["workflow_begin_review"],
+          },
+        },
+      ]).primary,
+      { kind: "no_user_action", route: "review" },
+    );
+
+    const reviewOnly = create(store, git, "review_only", [
+      { description: "executable", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", argv: null },
+    ]);
+    const reviewOnlyState = structuredClone(reviewOnly) as any;
+    reviewOnlyState.phase = "REVIEWING";
+    reviewOnlyState.linked_continuation = null;
+    reviewOnlyState.validation_results = [
+      { validation_id: "VAL-001", status: "failed", evidence: "failed" },
+      { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+    ];
+    assert.equal(hasFailedRequiredValidation(reviewOnlyState), true);
+    assert.deepEqual(
+      deriveOperatorDecision(reviewOnlyState, [
+        {
+          state: reviewOnlyState,
+          actions: { parent: ["workflow_record_manual_validation"], reviewer: [] },
+        },
+      ]).primary,
+      {
+        kind: "manual_validation_required",
+        validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+      },
+    );
+
+    for (const malformed of [
+      [
+        { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+        { validation_id: "VAL-001", status: "failed", evidence: "failed" },
+      ],
+      [
+        { validation_id: "VAL-001", status: "failed", evidence: "failed" },
+        { validation_id: "VAL-001", status: "failed", evidence: "duplicate" },
+      ],
+    ]) {
+      const invalid = structuredClone(changeState) as any;
+      invalid.validation_results = malformed;
+      assert.equal(hasFailedRequiredValidation(invalid), false);
+    }
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

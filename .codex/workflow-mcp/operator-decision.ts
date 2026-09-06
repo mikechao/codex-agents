@@ -2,6 +2,7 @@ import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
+  hasFailedRequiredValidation,
   pendingManualValidations,
   permittedNextActions,
 } from "./transitions.js";
@@ -193,7 +194,11 @@ function primaryDecision(record: OperatorLineageRecord): OperatorDecision["prima
   const committer = actionsFor(record, "committer");
 
   const pendingManual = pendingManualValidations(state);
-  if (state.phase === "REVIEWING" && pendingManual.length > 0) {
+  if (
+    state.phase === "REVIEWING" &&
+    pendingManual.length > 0 &&
+    !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
+  ) {
     if (!parent.includes("workflow_record_manual_validation")) {
       return {
         kind: "operator_intervention",

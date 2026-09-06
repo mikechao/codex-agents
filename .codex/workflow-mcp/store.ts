@@ -51,7 +51,6 @@ import {
   linkedFollowupChildState,
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
-  pendingManualValidations,
   permittedNextActions,
   prepareCommit,
   rangeDirtyBaselinePaths,
@@ -61,6 +60,7 @@ import {
   retryCommit,
   retryCommitPreparation,
   returnCommitToReview,
+  reviewBlockedByPendingManual,
   roleView,
   submitCommitResult,
   submitImplementation,
@@ -1821,7 +1821,7 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_STARTED",
       (state) => {
-        if (pendingManualValidations(state).length > 0) {
+        if (reviewBlockedByPendingManual(state)) {
           fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
         }
         if (state.review_target.review_mode !== "working_tree") {
@@ -1867,7 +1867,7 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_SUBMITTED",
       (state) => {
-        if (pendingManualValidations(state).length > 0) {
+        if (reviewBlockedByPendingManual(state)) {
           fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
         }
         if (

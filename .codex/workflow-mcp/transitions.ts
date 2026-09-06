@@ -586,7 +586,7 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   role(actorRole);
   let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
   if (actorRole === "reviewer" && state.phase === "REVIEWING") {
-    if (pendingManualValidations(state).length > 0) actions = [];
+    if (reviewBlockedByPendingManual(state)) actions = [];
     else if (state.review_target.review_mode === "commit_range") {
       actions = ["workflow_submit_review"];
     } else if (state.review_start_receipt) {
@@ -601,6 +601,13 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     pendingManualValidations(state).length === 0
   )
     actions = [];
+  if (
+    actorRole === "parent" &&
+    state.phase === "STOPPED_CONCERNS" &&
+    pendingManualValidations(state).length > 0
+  ) {
+    actions.push("workflow_record_manual_validation");
+  }
   if (
     actorRole === "parent" &&
     state.phase === "STOPPED_APPROVED" &&
@@ -658,6 +665,89 @@ export function pendingManualValidations(state: WorkflowState): ValidationRequir
       (duplicates.has(requirement.validation_id) ||
         !results.has(requirement.validation_id) ||
         results.get(requirement.validation_id)?.status === "not_run"),
+  );
+}
+
+/**
+ * Return true only for a complete, ordered, one-to-one validation result set containing a
+ * terminal failed required result. This deliberately does not trust a partial or malformed
+ * result set to relax review gating.
+ */
+export function hasFailedRequiredValidation(state: WorkflowState): boolean {
+  if (
+    !Array.isArray(state.validation_requirements) ||
+    !Array.isArray(state.validation_results) ||
+    state.validation_results.length !== state.validation_requirements.length
+  ) {
+    return false;
+  }
+  const requirementIds = new Set<string>();
+  let failed = false;
+  for (let index = 0; index < state.validation_requirements.length; index += 1) {
+    const requirement = state.validation_requirements[index] as unknown;
+    const result = state.validation_results[index] as unknown;
+    if (
+      !requirement ||
+      typeof requirement !== "object" ||
+      Array.isArray(requirement) ||
+      !result ||
+      typeof result !== "object" ||
+      Array.isArray(result)
+    ) {
+      return false;
+    }
+    const requirementRecord = requirement as Record<string, unknown>;
+    const resultRecord = result as Record<string, unknown>;
+    const requirementKeys = Object.keys(requirementRecord).sort();
+    if (
+      requirementKeys.length !== 3 ||
+      requirementKeys.some(
+        (key, keyIndex) => key !== ["argv", "description", "validation_id"][keyIndex],
+      )
+    ) {
+      return false;
+    }
+    const resultKeys = Object.keys(resultRecord).sort();
+    if (
+      resultKeys.length !== 3 ||
+      resultKeys.some((key, keyIndex) => key !== ["evidence", "status", "validation_id"][keyIndex])
+    ) {
+      return false;
+    }
+    const validationId = requirementRecord.validation_id;
+    if (
+      typeof validationId !== "string" ||
+      validationId.length === 0 ||
+      requirementIds.has(validationId) ||
+      resultRecord.validation_id !== validationId ||
+      typeof requirementRecord.description !== "string" ||
+      requirementRecord.description.length === 0 ||
+      requirementRecord.description.length > MAX_TEXT ||
+      (requirementRecord.argv !== null &&
+        (!Array.isArray(requirementRecord.argv) ||
+          requirementRecord.argv.length === 0 ||
+          requirementRecord.argv.length > 50 ||
+          requirementRecord.argv.some(
+            (argument) =>
+              typeof argument !== "string" || argument.length === 0 || argument.length > MAX_TEXT,
+          ))) ||
+      !VALIDATION_STATUS_SET.has(resultRecord.status as ValidationResult["status"]) ||
+      typeof resultRecord.evidence !== "string" ||
+      resultRecord.evidence.length === 0 ||
+      resultRecord.evidence.length > MAX_DETAIL
+    ) {
+      return false;
+    }
+    requirementIds.add(validationId);
+    if (resultRecord.status === "failed") failed = true;
+  }
+  return failed;
+}
+
+export function reviewBlockedByPendingManual(state: WorkflowState): boolean {
+  return (
+    pendingManualValidations(state).length > 0 &&
+    !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
   );
 }
 
@@ -1183,7 +1273,20 @@ export function submitImplementation(
     }
     next.phase = "REVIEWING";
   }
-  if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
+  if (
+    args.status === "DONE_WITH_CONCERNS" &&
+    state.workflow_type === "change" &&
+    hasFailedRequiredValidation(next)
+  ) {
+    next.phase = "REVIEWING";
+    next.stop_context = null;
+    next.concern_acceptance = null;
+  }
+  if (
+    args.status !== "DONE" &&
+    args.status !== "INCOMPLETE" &&
+    !(args.status === "DONE_WITH_CONCERNS" && hasFailedRequiredValidation(next))
+  ) {
     next.stop_context = {
       status: args.status,
       summary: boundedString(args.summary, "summary", 4000),
@@ -1191,7 +1294,11 @@ export function submitImplementation(
     };
     if (state.phase === "IMPLEMENTING") next.repair_authorized_ids = [];
   }
-  if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
+  if (
+    args.status !== "DONE" &&
+    args.status !== "INCOMPLETE" &&
+    !(args.status === "DONE_WITH_CONCERNS" && hasFailedRequiredValidation(next))
+  ) {
     next.phase = IMPLEMENTATION_STOP_PHASES[args.status];
   }
   return next;
@@ -1311,7 +1418,7 @@ export function beginReview(
   }
   exactKeys(input, ["workflow_id", "expected_version"], "review begin");
   ensurePhase(state, "REVIEWING");
-  if (pendingManualValidations(state).length > 0)
+  if (reviewBlockedByPendingManual(state))
     fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
   if (state.review_target.review_mode !== "working_tree") {
     fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
@@ -1342,7 +1449,7 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "review input is invalid");
   }
   ensurePhase(state, "REVIEWING");
-  if (pendingManualValidations(state).length > 0)
+  if (reviewBlockedByPendingManual(state))
     fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
   const args = exactKeys(
     input,
@@ -1494,6 +1601,16 @@ export function submitReview(
       }
       return result;
     });
+  }
+  if (
+    args.review_status === "APPROVED" &&
+    state.workflow_type === "change" &&
+    !allRequiredValidationsPassed(next)
+  ) {
+    fail(
+      "ERROR_INVALID_REVIEW",
+      "approved change review requires all required validations to pass",
+    );
   }
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;
@@ -1718,7 +1835,7 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     ["workflow_id", "expected_version", "validation_id", "status", "evidence"],
     "manual validation",
   );
-  ensurePhase(state, "REVIEWING");
+  ensurePhase(state, "REVIEWING", "STOPPED_CONCERNS");
   if (args.status !== "passed" && args.status !== "failed")
     fail("ERROR_INVALID_SHAPE", "manual validation status is invalid");
   const validationId = args.validation_id;
@@ -1758,6 +1875,11 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     });
     if (insertAt < 0) next.validation_results.push(result);
     else next.validation_results.splice(insertAt, 0, result);
+  }
+  if (state.workflow_type === "change" && hasFailedRequiredValidation(next)) {
+    next.phase = "REVIEWING";
+    next.stop_context = null;
+    next.concern_acceptance = null;
   }
   return next;
 }

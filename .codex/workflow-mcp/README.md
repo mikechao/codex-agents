@@ -208,6 +208,13 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - Implementation context and block stops resume to their prior active phase with
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
+- Required manual evidence remains explicit and parent-owned. For `change` workflows, a complete
+  authoritative required result set containing a failed validation may enable independent review and
+  repair while unrelated manual checks remain pending. Pending-only state, and pending evidence in
+  `review_only` workflows, continues to block reviewer routing. Only all required validations passing
+  enables final approval and commit authorization. A parent may record unresolved manual evidence from
+  `STOPPED_CONCERNS`; a valid failure enters review without fabricating concern acceptance, while a
+  concern-only stop still requires explicit `workflow_accept_concerns`.
 - An inconclusive review resumes with `workflow_resume_review`. `REPAIR_REQUIRED` advances through
   bounded cycles with `workflow_authorize_repair`, supplying one explicit bounded semantic directive
   (outcome, strategy constraints, fallback conditions, and in-scope required/forbidden paths). The

@@ -881,6 +881,134 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
   }
 });
 
+test("failed required evidence enables change review while manual evidence remains pending", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "manual check", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE_WITH_CONCERNS",
+      summary: "implementation complete with a failed check",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "failed", evidence: "check failed" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "manual evidence pending" },
+      ],
+      known_failures: ["executable check failed"],
+      finding_resolution_map: {},
+    });
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+    assert.equal(store.parentGet(id).concern_acceptance, null);
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_record_manual_validation",
+    ]);
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, ["workflow_begin_review"]);
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: 2,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 2,
+      review_status: "CHANGES_REQUESTED",
+      blocking_findings: [
+        {
+          finding_id: "FAILED-CHECK",
+          severity: "P1",
+          blocking: true,
+          file_and_line: "note.txt:1",
+          failure_scenario: "the failed check remains unresolved",
+          impact: "the change is not ready",
+          violated_requirement: "required checks must be addressed",
+          remediation: "repair the failed check",
+          missing_or_inadequate_test: "a repair regression",
+        },
+      ],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(store.parentGet(id).phase, "REPAIR_REQUIRED");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("manual failure from concern stop enables review without fabricating concern acceptance", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "manual check one", argv: null },
+          { description: "manual check two", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE_WITH_CONCERNS",
+      summary: "implementation complete pending operator checks",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "pending" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+      ],
+      known_failures: ["operator checks remain"],
+      finding_resolution_map: {},
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_CONCERNS");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_accept_concerns",
+      "workflow_record_manual_validation",
+    ]);
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 1,
+      validation_id: "VAL-001",
+      status: "failed",
+      evidence: "operator check failed",
+    });
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+    assert.equal(store.parentGet(id).concern_acceptance, null);
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "failed", evidence: "operator check failed" },
+      { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+    ]);
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_record_manual_validation",
+    ]);
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, ["workflow_begin_review"]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function scenario(name: string, steps: any[], options: any = {}) {
   test(name, () => {
     const base = options.fixture ? options.fixture() : fixture();
