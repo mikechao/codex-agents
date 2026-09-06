@@ -23,6 +23,7 @@ import {
 } from "./git.js";
 import { assertSupportedStateSchema } from "./migration.js";
 import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
+import { PlanStore, validatePersistedPlanRows } from "./plan-store.js";
 import {
   isValidRuntimeArtifact,
   type RuntimeArtifact,
@@ -83,13 +84,8 @@ import type {
   IsoTimestamp,
   OperatorDecision,
   ParentView,
-  PlanApproval,
-  PlanId,
   PlannerPlanRead,
-  PlanProvenance,
   PlanRead,
-  PlanRevision,
-  PlanRevisionArtifact,
   Role,
   RoleView,
   ScopeExpansionAudit,
@@ -107,15 +103,7 @@ import {
   expectedVersion,
   isoNow,
   objectDigest,
-  planApproval,
-  planArtifact,
-  planId,
-  planRevision,
-  planRevisionInput,
-  planRevisionInputFromArtifact,
-  planRevisionReplacements,
   repairCycle,
-  userAuthorization,
   workItems,
 } from "./validation.js";
 
@@ -583,151 +571,9 @@ function parseState(row: WorkflowRow): WorkflowState {
   return validateWorkflowStateV9(parsed);
 }
 
-interface PlanRow {
-  plan_id: string;
-  current_revision: number;
-  created_at: string;
-  updated_at: string;
-}
-interface PlanRevisionRow {
-  plan_id: string;
-  revision: number;
-  artifact_json: string;
-  artifact_digest: string;
-  created_at: string;
-}
-interface PlanApprovalRow {
-  plan_id: string;
-  revision: number;
-  artifact_digest: string;
-  user_authorization: string;
-  approved_at: string;
-}
-
-type PlanRevisionContent = Pick<
-  PlanRevisionArtifact,
-  | "full_plan"
-  | "execution_brief"
-  | "objective"
-  | "approved_paths"
-  | "acceptance_criteria"
-  | "validation_requirements"
->;
-
-function planRevisionContent(value: PlanRevisionContent): PlanRevisionContent {
-  return {
-    full_plan: value.full_plan,
-    execution_brief: value.execution_brief,
-    objective: value.objective,
-    approved_paths: value.approved_paths,
-    acceptance_criteria: value.acceptance_criteria,
-    validation_requirements: value.validation_requirements,
-  };
-}
-
-function persistedTimestamp(value: unknown, name: string): void {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
-    fail("ERROR_STATE_CORRUPT", `${name} is invalid`);
-  }
-}
-
-function parsePlanRow(row: PlanRow): PlanRow {
-  try {
-    planId(row.plan_id);
-    planRevision(row.current_revision, "current_revision");
-    persistedTimestamp(row.created_at, "plan created_at");
-    persistedTimestamp(row.updated_at, "plan updated_at");
-  } catch {
-    fail("ERROR_STATE_CORRUPT", "plan aggregate is invalid");
-  }
-  return row;
-}
-
-function parsePlanRevisionRow(row: PlanRevisionRow, root: string): PlanRevisionArtifact {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.artifact_json);
-  } catch {
-    fail("ERROR_STATE_CORRUPT", "plan revision JSON is invalid");
-  }
-  const artifact = planArtifact(parsed, root);
-  if (artifact.plan_id !== row.plan_id || artifact.revision !== row.revision) {
-    fail("ERROR_STATE_CORRUPT", "plan revision identity is inconsistent");
-  }
-  if (row.artifact_digest !== objectDigest(artifact)) {
-    fail("ERROR_STATE_CORRUPT", "plan revision digest is corrupted");
-  }
-  persistedTimestamp(row.created_at, "plan revision created_at");
-  if (artifact.created_at !== row.created_at) {
-    fail("ERROR_STATE_CORRUPT", "plan revision timestamp is inconsistent");
-  }
-  return artifact;
-}
-
-function parsePlanApprovalRow(row: PlanApprovalRow): PlanApproval {
-  try {
-    return planApproval({
-      plan_id: row.plan_id,
-      revision: row.revision,
-      artifact_digest: row.artifact_digest,
-      user_authorization: row.user_authorization,
-      approved_at: row.approved_at,
-    });
-  } catch {
-    fail("ERROR_STATE_CORRUPT", "plan approval is invalid");
-  }
-}
-
-function validatePersistedRows(db: Database, root: string): void {
+function validatePersistedRows(db: Database): void {
   const rows = db.prepare("SELECT * FROM workflows").all() as WorkflowRow[];
   for (const row of rows) parseState(row);
-  const plans = db.prepare("SELECT * FROM plans").all() as PlanRow[];
-  const planIds = new Set<string>();
-  for (const plan of plans) {
-    parsePlanRow(plan);
-    if (
-      planIds.has(plan.plan_id) ||
-      !Number.isSafeInteger(plan.current_revision) ||
-      plan.current_revision < 1
-    )
-      fail("ERROR_STATE_CORRUPT", "plan aggregate is invalid");
-    planIds.add(plan.plan_id);
-    const revisions = db
-      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? ORDER BY revision")
-      .all(plan.plan_id) as PlanRevisionRow[];
-    if (
-      revisions.length === 0 ||
-      revisions[0].revision !== 1 ||
-      revisions.at(-1)?.revision !== plan.current_revision
-    )
-      fail("ERROR_STATE_CORRUPT", "plan revisions are not contiguous");
-    revisions.forEach((row, index) => {
-      if (row.revision !== index + 1)
-        fail("ERROR_STATE_CORRUPT", "plan revisions are not contiguous");
-      parsePlanRevisionRow(row, root);
-    });
-    const approvals = db
-      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ?")
-      .all(plan.plan_id) as PlanApprovalRow[];
-    for (const approvalRow of approvals) {
-      const approval = parsePlanApprovalRow(approvalRow);
-      const revisionRow = revisions.find((revision) => revision.revision === approval.revision);
-      if (!revisionRow || approval.artifact_digest !== revisionRow.artifact_digest)
-        fail("ERROR_STATE_CORRUPT", "plan approval relationship is invalid");
-    }
-  }
-  const orphan = db
-    .prepare(
-      "SELECT plan_id FROM plan_revisions WHERE plan_id NOT IN (SELECT plan_id FROM plans) LIMIT 1",
-    )
-    .get();
-  if (orphan) fail("ERROR_STATE_CORRUPT", "plan revision aggregate is missing");
-  const orphanApproval = db
-    .prepare(
-      "SELECT plan_id FROM plan_approvals WHERE plan_id NOT IN (SELECT plan_id FROM plans) OR (plan_id, revision) NOT IN (SELECT plan_id, revision FROM plan_revisions) LIMIT 1",
-    )
-    .get();
-  if (orphanApproval) fail("ERROR_STATE_CORRUPT", "plan approval relationship is missing");
 }
 
 function adoptionStates(
@@ -805,6 +651,7 @@ export class WorkflowStore {
   private readonly runtimeAttestationKey: Buffer | null;
   readonly diagnostics: DiagnosticRecorder;
   private db: Database;
+  private readonly planStore: PlanStore;
   private closed = false;
 
   constructor(options: WorkflowStoreOptions = {}) {
@@ -848,11 +695,13 @@ export class WorkflowStore {
     this.db = new Database(this.path, { strict: true });
     try {
       requireCurrentSchema(this.db);
-      validatePersistedRows(this.db, this.root);
+      validatePersistedRows(this.db);
+      validatePersistedPlanRows(this.db, this.root);
       if (this.path !== ":memory:")
         this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
       else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
       this.db.exec("PRAGMA foreign_keys = ON;");
+      this.planStore = new PlanStore(this.db, this.root);
     } catch (error) {
       this.db.close();
       throw error;
@@ -1121,109 +970,6 @@ export class WorkflowStore {
     return view;
   }
 
-  #planRevision(
-    planValue: unknown,
-    revisionValue: unknown,
-  ): {
-    plan: PlanRow;
-    revision: PlanRevisionRow;
-    artifact: PlanRevisionArtifact;
-    approval: PlanApproval | null;
-  } {
-    const id = planId(planValue);
-    const revision = planRevision(revisionValue);
-    const planRow = this.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
-      | PlanRow
-      | undefined;
-    if (!planRow) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
-    const plan = parsePlanRow(planRow);
-    const row = this.db
-      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?")
-      .get(id, revision) as PlanRevisionRow | undefined;
-    if (!row) fail("ERROR_PLAN_NOT_FOUND", "plan revision is not found");
-    const artifact = parsePlanRevisionRow(row, this.root);
-    const approvalRow = this.db
-      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? AND revision = ?")
-      .get(id, revision) as PlanApprovalRow | undefined;
-    const approval = approvalRow ? parsePlanApprovalRow(approvalRow) : null;
-    if (approval && approval.artifact_digest !== row.artifact_digest)
-      fail("ERROR_STATE_CORRUPT", "plan approval digest is corrupted");
-    return { plan, revision: row, artifact, approval };
-  }
-
-  #approvedPlan(
-    planValue: unknown,
-    revisionValue: unknown,
-  ): {
-    plan: PlanRow;
-    revision: PlanRevisionRow;
-    artifact: PlanRevisionArtifact;
-    approval: PlanApproval;
-  } {
-    const resolved = this.#planRevision(planValue, revisionValue);
-    if (resolved.plan.current_revision !== resolved.revision.revision)
-      fail("ERROR_PLAN_STALE", "plan revision is stale");
-    if (
-      !resolved.approval ||
-      resolved.approval.artifact_digest !== resolved.revision.artifact_digest
-    )
-      fail("ERROR_PLAN_UNAPPROVED", "plan revision is not approved");
-    return resolved as {
-      plan: PlanRow;
-      revision: PlanRevisionRow;
-      artifact: PlanRevisionArtifact;
-      approval: PlanApproval;
-    };
-  }
-
-  #planProvenance(resolved: {
-    revision: PlanRevisionRow;
-    artifact: PlanRevisionArtifact;
-    approval: PlanApproval;
-  }): PlanProvenance {
-    return {
-      plan_id: resolved.artifact.plan_id,
-      revision: resolved.artifact.revision,
-      artifact_digest: resolved.revision.artifact_digest as PlanProvenance["artifact_digest"],
-      approved_at: resolved.approval.approved_at,
-    };
-  }
-
-  #plannerPlanRead(planValue: unknown, revisionValue: unknown): PlannerPlanRead {
-    this.#ensureOpen();
-    const resolved = this.#planRevision(planValue, revisionValue);
-    const current = resolved.plan.current_revision === resolved.revision.revision;
-    const metadata = {
-      current_revision: resolved.plan.current_revision as PlanRevision,
-      status: resolved.approval ? "approved" : "draft",
-      is_current: current,
-    } as const;
-    return {
-      ...planRevisionInputFromArtifact(resolved.artifact),
-      plan_id: resolved.artifact.plan_id,
-      revision: resolved.artifact.revision,
-      artifact_digest: resolved.revision.artifact_digest as PlannerPlanRead["artifact_digest"],
-      created_at: resolved.artifact.created_at,
-      metadata,
-    };
-  }
-
-  #parentPlanRead(planValue: unknown, revisionValue: unknown): PlanRead {
-    this.#ensureOpen();
-    const resolved = this.#planRevision(planValue, revisionValue);
-    const current = resolved.plan.current_revision === resolved.revision.revision;
-    return {
-      ...resolved.artifact,
-      artifact_digest: resolved.revision.artifact_digest as PlanRead["artifact_digest"],
-      metadata: {
-        current_revision: resolved.plan.current_revision as PlanRevision,
-        status: resolved.approval ? "approved" : "draft",
-        is_current: current,
-        approval: resolved.approval,
-      },
-    };
-  }
-
   planCreate(input: unknown): PlannerPlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
@@ -1239,131 +985,42 @@ export class WorkflowStore {
       ],
       "plan create",
     );
-    const normalized = planRevisionInput(
-      {
-        full_plan: args.full_plan,
-        execution_brief: args.execution_brief,
-        objective: args.objective,
-        approved_paths: args.approved_paths,
-        acceptance_criteria: args.acceptance_criteria,
-        validation_requirements: args.validation_requirements,
-      },
-      this.root,
-    );
-    const id = randomUUID() as PlanId;
-    const revision = 1 as PlanRevision;
-    const artifact: PlanRevisionArtifact = {
-      ...normalized,
-      plan_id: id,
-      revision,
-      created_at: isoNow(),
-    };
-    const digest = objectDigest(artifact);
-    const now = isoNow();
-    this.db
-      .transaction(() => {
-        this.db
-          .prepare(
-            "INSERT INTO plans (plan_id, current_revision, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          )
-          .run(id, revision, now, now);
-        this.db
-          .prepare(
-            "INSERT INTO plan_revisions (plan_id, revision, artifact_json, artifact_digest, created_at) VALUES (?, ?, ?, ?, ?)",
-          )
-          .run(id, revision, JSON.stringify(artifact), digest, artifact.created_at);
-      })
-      .immediate();
-    return this.#plannerPlanRead(id, revision);
+    return this.planStore.planCreate({
+      full_plan: args.full_plan,
+      execution_brief: args.execution_brief,
+      objective: args.objective,
+      approved_paths: args.approved_paths,
+      acceptance_criteria: args.acceptance_criteria,
+      validation_requirements: args.validation_requirements,
+    });
   }
 
   planGet(input: unknown): PlannerPlanRead {
+    this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision"], "plan get");
-    return this.#plannerPlanRead(args.plan_id, args.revision);
+    return this.planStore.planGet(args.plan_id, args.revision);
   }
 
   planParentGet(input: unknown): PlanRead {
+    this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision"], "plan parent get");
-    return this.#parentPlanRead(args.plan_id, args.revision);
+    return this.planStore.planParentGet(args.plan_id, args.revision);
   }
 
   planRevise(input: unknown): PlannerPlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "base_revision", "replacements"], "plan revise");
-    const base = planRevision(args.base_revision, "base_revision");
-    const id = planId(args.plan_id);
-    const replacements = planRevisionReplacements(args.replacements);
-    return this.db
-      .transaction(() => {
-        const plan = this.db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
-          | PlanRow
-          | undefined;
-        if (!plan) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
-        if (plan.current_revision !== base)
-          fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
-        const current = this.#planRevision(id, base);
-        const normalized = planRevisionInput(
-          { ...planRevisionInputFromArtifact(current.artifact), ...replacements },
-          this.root,
-        );
-        if (
-          canonicalJson(planRevisionContent(current.artifact)) ===
-          canonicalJson(planRevisionContent(normalized))
-        ) {
-          return this.#plannerPlanRead(id, base);
-        }
-        const nextRevision = (base + 1) as PlanRevision;
-        const artifact: PlanRevisionArtifact = {
-          ...normalized,
-          plan_id: id,
-          revision: nextRevision,
-          created_at: isoNow(),
-        };
-        const digest = objectDigest(artifact);
-        this.db
-          .prepare(
-            "INSERT INTO plan_revisions (plan_id, revision, artifact_json, artifact_digest, created_at) VALUES (?, ?, ?, ?, ?)",
-          )
-          .run(id, nextRevision, JSON.stringify(artifact), digest, artifact.created_at);
-        const update = this.db
-          .prepare(
-            "UPDATE plans SET current_revision = ?, updated_at = ? WHERE plan_id = ? AND current_revision = ?",
-          )
-          .run(nextRevision, isoNow(), id, base);
-        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "plan revision is stale");
-        return this.#plannerPlanRead(id, nextRevision);
-      })
-      .immediate();
+    return this.planStore.planRevise(args.plan_id, args.base_revision, args.replacements);
   }
 
   planApprove(input: unknown): PlanRead {
     this.#ensureOpen();
     const args = mutationInput(input);
     exactKeys(args, ["plan_id", "revision", "user_authorization"], "plan approval");
-    const id = planId(args.plan_id);
-    const requested = planRevision(args.revision);
-    const authorization = args.user_authorization;
-    return this.db
-      .transaction(() => {
-        const resolved = this.#planRevision(id, requested);
-        if (resolved.plan.current_revision !== requested)
-          fail("ERROR_PLAN_STALE", "only the current plan revision may be approved");
-        if (resolved.approval)
-          fail("ERROR_PLAN_APPROVAL_EXISTS", "plan revision is already approved");
-        const approvedAt = isoNow();
-        // userAuthorization is intentionally validated by the parent-only operation, not by planner writes.
-        const normalizedAuth = userAuthorization(authorization);
-        this.db
-          .prepare(
-            "INSERT INTO plan_approvals (plan_id, revision, artifact_digest, user_authorization, approved_at) VALUES (?, ?, ?, ?, ?)",
-          )
-          .run(id, requested, resolved.revision.artifact_digest, normalizedAuth, approvedAt);
-        return this.#parentPlanRead(id, requested);
-      })
-      .immediate();
+    return this.planStore.planApprove(args.plan_id, args.revision, args.user_authorization);
   }
 
   createFromPlan(input: unknown): ParentView {
@@ -1373,17 +1030,15 @@ export class WorkflowStore {
       "max_repair_cycles",
       "work_items",
     ]);
-    const id = planId(args.plan_id);
-    const requested = planRevision(args.revision);
     const maxRepairCycles = repairCycle(args.max_repair_cycles ?? 2);
     const inheritedItems = workItems(args.work_items ?? []);
     return this.db
       .transaction(() => {
-        const resolved = this.#approvedPlan(id, requested);
+        const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
         const head = currentHead(this.root);
         const state = createStateFromPlan(
           resolved.artifact,
-          this.#planProvenance(resolved),
+          resolved.provenance,
           head,
           maxRepairCycles,
           inheritedItems,
@@ -2605,12 +2260,12 @@ export class WorkflowStore {
         const state = parseState(row);
         // Resolve and approve the child plan inside the same immediate transaction as the
         // source supersession and child insertion. The caller supplies identity only.
-        const resolved = this.#approvedPlan(args.plan_id, args.revision);
+        const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
         const followup = linkedFollowupInputFromPlan(
           state,
           args,
           resolved.artifact,
-          this.#planProvenance(resolved),
+          resolved.provenance,
           currentHead(this.root),
         );
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
