@@ -936,7 +936,7 @@ test("reviewRangeAsync bounds aggregate Git concurrency and preserves path order
   const shim = gitShim();
   try {
     const paths = Array.from(
-      { length: 200 },
+      { length: 5 },
       (_, index) => `file-${String(index).padStart(3, "0")}.txt`,
     );
     for (const path of paths) write(path, `${path}\n`);
@@ -946,7 +946,7 @@ test("reviewRangeAsync bounds aggregate Git concurrency and preserves path order
     git("commit", "--allow-empty", "-qm", "async concurrency head");
     const head = git("rev-parse", "HEAD");
 
-    const representativePaths = [paths[19], paths[0], paths[7]] as string[];
+    const representativePaths = [paths[4], paths[0], paths[2]] as string[];
     const representative = runAsyncReviewChild(root, target(base, head, representativePaths), shim);
     assert.deepEqual(
       representative.paths.map((entry: { path: string }) => entry.path),

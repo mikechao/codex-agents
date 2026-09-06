@@ -860,14 +860,18 @@ describe("Workflow MCP runtime supervision", () => {
         stderr += chunk.toString();
       });
       const reader = createInterface({ input: child.stdout! });
-      const pending = new Map<string | number, (value: any) => void>();
+      const pending = new Map<
+        string | number,
+        { resolve: (value: any) => void; timeout: ReturnType<typeof setTimeout> }
+      >();
       reader.on("line", (line) => {
         try {
           const response = JSON.parse(line);
-          const resolve = response.id === undefined ? undefined : pending.get(response.id);
-          if (resolve) {
+          const entry = response.id === undefined ? undefined : pending.get(response.id);
+          if (entry) {
+            clearTimeout(entry.timeout);
             pending.delete(response.id);
-            resolve(response);
+            entry.resolve(response);
           }
         } catch {
           // The fake runtime emits only JSON responses for request assertions.
@@ -875,7 +879,10 @@ describe("Workflow MCP runtime supervision", () => {
       });
       const request = (id: number, tool: string, args: any) =>
         new Promise<any>((resolve, reject) => {
-          pending.set(id, resolve);
+          const timeout = setTimeout(() => {
+            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
+          }, 10_000);
+          pending.set(id, { resolve, timeout });
           child.stdin!.write(
             `${JSON.stringify({
               jsonrpc: "2.0",
@@ -885,19 +892,16 @@ describe("Workflow MCP runtime supervision", () => {
             })}\n`,
             (error) => error && reject(error),
           );
-          setTimeout(() => {
-            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
-          }, 10_000);
         });
       const initialize = () =>
         new Promise<any>((resolve, reject) => {
-          pending.set(1, resolve);
+          const timeout = setTimeout(() => {
+            if (pending.delete(1)) reject(new Error("initialize timed out"));
+          }, 10_000);
+          pending.set(1, { resolve, timeout });
           child.stdin!.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n', (error) => {
             if (error) reject(error);
           });
-          setTimeout(() => {
-            if (pending.delete(1)) reject(new Error("initialize timed out"));
-          }, 10_000);
         });
       const stop = async () => {
         reader.close();
