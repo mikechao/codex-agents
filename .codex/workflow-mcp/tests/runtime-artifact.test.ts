@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -108,21 +109,93 @@ describe("Workflow MCP runtime artifacts", () => {
       expect(second.runtimePath).toBe(first.runtimePath);
       expect(second.reused).toBe(true);
 
-      writeFileSync(first.runtimePath, "corrupt\n");
-      expect(isValidRuntimeArtifact(first)).toBe(false);
-      const rebuilt = materializeRuntimeArtifact(root, revision, { cacheRoot });
-      expect(rebuilt.reused).toBe(false);
-      expect(readFileSync(rebuilt.runtimePath, "utf8")).toContain("workflow-state");
-      expect(existsSync(join(rebuilt.cachePath, ".runtime-complete"))).toBe(true);
+      const fixture = gitFixture({
+        "package.json":
+          '{"name":"runtime-rebuild-fixture","dependencies":{"fixture-dependency":"1.0.0"}}\n',
+        "bun.lock": "{}\n",
+        ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+        ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+        ".codex/workflow-mcp/server.ts": "export const server = true;\n",
+      });
+      const invocationState = join(cacheRoot, "fixture-installer-invocations");
+      const bunExecutable = join(cacheRoot, "fixture-bun");
+      writeFileSync(invocationState, "0\n");
+      writeFileSync(
+        bunExecutable,
+        `#!/usr/bin/env bun
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-      const installedDependencyFile = dependencyFile(rebuilt.cachePath);
-      expect(installedDependencyFile).toBeDefined();
-      if (installedDependencyFile) {
-        rmSync(installedDependencyFile);
-        expect(isValidRuntimeArtifact(rebuilt)).toBe(false);
-        const dependencyRebuilt = materializeRuntimeArtifact(root, revision, { cacheRoot });
+const statePath = ${JSON.stringify(invocationState)};
+const count = Number(readFileSync(statePath, "utf8").trim());
+writeFileSync(statePath, String(count + 1) + String.fromCharCode(10));
+const dependencyRoot = join(process.cwd(), "node_modules", "fixture-dependency");
+mkdirSync(dependencyRoot, { recursive: true });
+writeFileSync(
+  join(dependencyRoot, "index.js"),
+  "export const fixtureDependency = true;" + String.fromCharCode(10),
+);
+`,
+        { mode: 0o755 },
+      );
+      chmodSync(bunExecutable, 0o755);
+      try {
+        const fixtureOptions = { cacheRoot, bunExecutable };
+        const fixtureFirst = materializeRuntimeArtifact(
+          fixture.root,
+          fixture.revision,
+          fixtureOptions,
+        );
+        const fixtureDependency = join(
+          fixtureFirst.cachePath,
+          "node_modules/fixture-dependency/index.js",
+        );
+        expect(fixtureFirst.reused).toBe(false);
+        expect(isValidRuntimeArtifact(fixtureFirst)).toBe(true);
+        expect(dependencyFile(fixtureFirst.cachePath)).toBe(fixtureDependency);
+        expect(existsSync(fixtureDependency)).toBe(true);
+        expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
+
+        const fixtureSecond = materializeRuntimeArtifact(
+          fixture.root,
+          fixture.revision,
+          fixtureOptions,
+        );
+        expect(fixtureSecond.runtime_id).toBe(fixtureFirst.runtime_id);
+        expect(fixtureSecond.runtimePath).toBe(fixtureFirst.runtimePath);
+        expect(fixtureSecond.reused).toBe(true);
+        expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
+
+        writeFileSync(fixtureFirst.runtimePath, "corrupt\n");
+        expect(isValidRuntimeArtifact(fixtureFirst)).toBe(false);
+        const sourceRebuilt = materializeRuntimeArtifact(
+          fixture.root,
+          fixture.revision,
+          fixtureOptions,
+        );
+        expect(sourceRebuilt.reused).toBe(false);
+        expect(readFileSync(sourceRebuilt.runtimePath, "utf8")).toBe(
+          "export const server = true;\n",
+        );
+        expect(existsSync(join(sourceRebuilt.cachePath, ".runtime-complete"))).toBe(true);
+        expect(existsSync(fixtureDependency)).toBe(true);
+        expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(true);
+        expect(readFileSync(invocationState, "utf8").trim()).toBe("2");
+
+        rmSync(fixtureDependency);
+        expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(false);
+        const dependencyRebuilt = materializeRuntimeArtifact(
+          fixture.root,
+          fixture.revision,
+          fixtureOptions,
+        );
         expect(dependencyRebuilt.reused).toBe(false);
+        expect(existsSync(fixtureDependency)).toBe(true);
+        expect(existsSync(join(dependencyRebuilt.cachePath, ".runtime-complete"))).toBe(true);
         expect(isValidRuntimeArtifact(dependencyRebuilt)).toBe(true);
+        expect(readFileSync(invocationState, "utf8").trim()).toBe("3");
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
       }
     } finally {
       rmSync(cacheRoot, { recursive: true, force: true });
