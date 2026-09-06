@@ -1031,6 +1031,11 @@ test("scope expansion and audit integrity remain append-only", () => {
       assert.deepEqual(view.finding_resolution_map, {});
     }
     assert.equal(rawState(store, created.workflow_id).implementation_receipt, null);
+    assert.equal(rawState(store, created.workflow_id).review_start_receipt, null);
+    assert.equal(rawState(store, created.workflow_id).review_receipt, null);
+    assert.equal(rawState(store, created.workflow_id).commit_authorization, null);
+    assert.equal(rawState(store, created.workflow_id).commit_preparation, null);
+    assert.equal(rawState(store, created.workflow_id).commit_result, null);
     assert.deepEqual(expanded.approved_path_baselines, [
       {
         path: "companion.txt",
@@ -1423,6 +1428,11 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     assert.equal(failed.phase, "STOPPED_COMMIT_PREPARATION");
     assert.equal(failed.stop_context.category, "ERROR_STAGED_SCOPE");
     assert.equal(failed.stop_context.recovery, "retry");
+    assert.ok(failed.commit_authorization);
+    assert.ok(failed.review_receipt === undefined);
+    assert.equal(rawState(store, first.id).review_receipt !== null, true);
+    assert.equal(failed.commit_preparation, null);
+    assert.equal(failed.commit_result, null);
     assert.deepEqual(store.parentGet(first.id).permitted_next_actions, [
       "workflow_retry_commit_preparation",
     ]);
@@ -1433,6 +1443,13 @@ test("commit preparation failures distinguish staged scope, stale review, and re
       retry_context: "stage the reviewed path",
     });
     assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    assert.equal(retried.stop_context, null);
+    assert.deepEqual(retried.recovery_context.kind, "commit");
+    assert.equal(retried.recovery_context.context, "stage the reviewed path");
+    assert.ok(retried.commit_authorization);
+    assert.equal(retried.commit_preparation, null);
+    assert.equal(retried.commit_result, null);
+    assert.equal(rawState(store, first.id).review_receipt !== null, true);
     const prepared = store.prepareCommit({
       workflow_id: first.id,
       expected_version: store.parentGet(first.id).version,
@@ -1457,7 +1474,24 @@ test("commit preparation failures distinguish staged scope, stale review, and re
       review_context: "review changed worktree",
     });
     assert.equal(returned.phase, "REVIEWING");
+    assert.equal(returned.stop_context, null);
     assert.equal(returned.commit_authorization, null);
+    assert.equal(rawState(store, second.id).review_receipt, null);
+    assert.equal(rawState(store, second.id).review_start_receipt, null);
+    assert.equal(rawState(store, second.id).commit_preparation, null);
+    assert.equal(rawState(store, second.id).commit_result, null);
+    assert.equal(returned.implementation_summary, "implementation evidence");
+    assert.deepEqual(returned.recovery_context.kind, "review");
+    assert.equal(returned.recovery_context.context, "review changed worktree");
+    review(store, second.created);
+    assert.equal(
+      store.authorizeCommit({
+        workflow_id: second.id,
+        expected_version: store.parentGet(second.id).version,
+        user_authorization: "fresh authorization",
+      }).phase,
+      "COMMIT_AUTHORIZED",
+    );
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

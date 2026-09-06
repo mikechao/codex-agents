@@ -644,6 +644,14 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   );
 }
 
+function assertRecovery(store: any, workflowId: string, kind: string, context: string) {
+  const view = store.parentGet(workflowId);
+  assert.equal(view.stop_context, null);
+  assert.equal(view.recovery_context.kind, kind);
+  assert.equal(view.recovery_context.context, context);
+  assert.equal(typeof view.recovery_context.recovered_at, "string");
+}
+
 test("reviewer projection conditionally includes the implementer handoff", () => {
   const { root, git } = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
@@ -1131,12 +1139,18 @@ scenario("both implementation resumes restore their prior phase", [
   },
   {
     name: "needs context from implementing: resume",
-    run: (ctx: any) => doResumeImplementation(ctx, 1),
+    run: (ctx: any) => {
+      doResumeImplementation(ctx, 1);
+      assertRecovery(ctx.store, ctx.created.workflow_id, "implementation", "resumed");
+    },
     snapshots: [snap("parent", "IMPLEMENTING", 2, ACTIONS.implementing, EVENTS.resumed)],
   },
   {
     name: "needs context from implementing: complete",
-    run: (ctx: any) => doImplementation(ctx, 2),
+    run: (ctx: any) => {
+      assertRecovery(ctx.store, ctx.created.workflow_id, "implementation", "resumed");
+      doImplementation(ctx, 2);
+    },
     snapshots: [snap("parent", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.resumedSubmitted)],
   },
   {
@@ -1182,12 +1196,18 @@ scenario("both implementation resumes restore their prior phase", [
   },
   {
     name: "blocked from repairing: resume",
-    run: (ctx: any) => doResumeImplementation(ctx, 4),
+    run: (ctx: any) => {
+      doResumeImplementation(ctx, 4);
+      assertRecovery(ctx.store, ctx.created.workflow_id, "implementation", "resumed");
+    },
     snapshots: [snap("parent", "REPAIRING", 5, ACTIONS.repairing, EVENTS.repairResumed)],
   },
   {
     name: "blocked from repairing: complete",
-    run: (ctx: any) => doImplementation(ctx, 5, { resolution: { "F-1": "resolved" } }),
+    run: (ctx: any) => {
+      assertRecovery(ctx.store, ctx.created.workflow_id, "implementation", "resumed");
+      doImplementation(ctx, 5, { resolution: { "F-1": "resolved" } });
+    },
     snapshots: [snap("parent", "REVIEWING", 6, ACTIONS.reviewing, EVENTS.repairResumedSubmitted)],
   },
 ]);
@@ -1319,12 +1339,18 @@ scenario("inconclusive review resumes and approves", [
   },
   {
     name: "resume review",
-    run: (ctx: any) => doResumeReview(ctx, 2),
+    run: (ctx: any) => {
+      doResumeReview(ctx, 2);
+      assertRecovery(ctx.store, ctx.created.workflow_id, "review", "resumed");
+    },
     snapshots: [snap("parent", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.inconclusiveResumed)],
   },
   {
     name: "write worktree change",
-    run: doWriteChange,
+    run: (ctx: any) => {
+      assertRecovery(ctx.store, ctx.created.workflow_id, "review", "resumed");
+      doWriteChange(ctx);
+    },
     snapshots: [snap("parent", "REVIEWING", 3, ACTIONS.reviewing, EVENTS.inconclusiveResumed)],
   },
   {
@@ -1772,14 +1798,24 @@ scenario(
     },
     {
       name: "retry commit",
-      run: (ctx: any) => doRetryCommit(ctx, 5),
+      run: (ctx: any) => {
+        doRetryCommit(ctx, 5);
+        assertRecovery(ctx.store, ctx.created.workflow_id, "commit", "retrying");
+        const view = ctx.store.parentGet(ctx.created.workflow_id);
+        assert.ok(view.commit_authorization);
+        assert.equal(view.commit_preparation, null);
+        assert.equal(view.commit_result, null);
+      },
       snapshots: [
         snap("parent", "COMMIT_AUTHORIZED", 6, ACTIONS.commitAuthorized, EVENTS.commitRetried),
       ],
     },
     {
       name: "prepare commit again",
-      run: (ctx: any) => doPrepareCommit(ctx, 6),
+      run: (ctx: any) => {
+        assertRecovery(ctx.store, ctx.created.workflow_id, "commit", "retrying");
+        doPrepareCommit(ctx, 6);
+      },
       snapshots: [
         snap("parent", "COMMIT_PREPARED", 7, ACTIONS.commitPrepared, EVENTS.commitReprepared),
       ],

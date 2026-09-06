@@ -25,6 +25,7 @@ import type {
   ParentView,
   PlanProvenance,
   PlanRevisionArtifact,
+  RecoveryContext,
   RemediationContext,
   ReviewerView,
   ReviewerViewBase,
@@ -293,25 +294,58 @@ function scopeExpansion(
       baseline: clone(entry),
     })),
   );
-  next.implementation_summary = null;
-  next.implementation_status = null;
-  next.implementation_known_failures = [];
-  next.agent_touched_paths = [];
-  next.scope_changed_paths = [];
-  next.acceptance_results = [];
-  next.validation_results = [];
-  next.finding_resolution_map = {};
-  next.implementation_receipt = null;
-  next.review_start_receipt = null;
-  next.review_receipt = null;
-  next.commit_authorization = null;
-  next.commit_preparation = null;
-  next.commit_result = null;
+  clearStaleImplementationEvidence(next);
+  clearStaleReviewEvidence(next);
+  clearFullCommitEvidence(next);
   return next;
 }
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function clearStaleImplementationEvidence(state: WorkflowState): void {
+  state.implementation_summary = null;
+  state.implementation_status = null;
+  state.implementation_known_failures = [];
+  state.agent_touched_paths = [];
+  state.scope_changed_paths = [];
+  state.acceptance_results = [];
+  state.validation_results = [];
+  state.finding_resolution_map = {};
+  state.implementation_receipt = null;
+}
+
+function clearStaleReviewEvidence(state: WorkflowState): void {
+  state.review_start_receipt = null;
+  state.review_receipt = null;
+}
+
+function clearFullCommitEvidence(state: WorkflowState): void {
+  state.commit_authorization = null;
+  state.commit_preparation = null;
+  state.commit_result = null;
+}
+
+function clearRetryablePreparedAttempt(state: WorkflowState): void {
+  state.commit_preparation = null;
+  state.commit_result = null;
+}
+
+function applyRecovery(
+  state: WorkflowState,
+  phase: WorkflowPhase,
+  kind: RecoveryContext["kind"],
+  context: unknown,
+  contextLabel: string,
+): void {
+  state.phase = phase;
+  state.stop_context = null;
+  state.recovery_context = {
+    kind,
+    context: boundedString(context, contextLabel, 2000),
+    recovered_at: isoNow(),
+  };
 }
 
 function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
@@ -1243,13 +1277,7 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
     fail("ERROR_STATE_CORRUPT", "stop context is invalid");
   }
   const next = clone<WorkflowState>(state);
-  next.phase = stoppedFrom;
-  next.stop_context = null;
-  next.recovery_context = {
-    kind: "implementation",
-    context: boundedString(args.resume_context, "resume_context", 2000),
-    recovered_at: isoNow(),
-  };
+  applyRecovery(next, stoppedFrom, "implementation", args.resume_context, "resume_context");
   return next;
 }
 
@@ -1642,13 +1670,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
   const next = clone<WorkflowState>(state);
-  next.phase = "REVIEWING";
-  next.stop_context = null;
-  next.recovery_context = {
-    kind: "review",
-    context: boundedString(args.resume_context, "resume_context", 2000),
-    recovered_at: isoNow(),
-  };
+  applyRecovery(next, "REVIEWING", "review", args.resume_context, "resume_context");
   return next;
 }
 
@@ -1770,8 +1792,7 @@ export function commitPreparationFailed(
     failed_version: (state.version + 1) as WorkflowVersion,
     stopped_from: "COMMIT_AUTHORIZED",
   };
-  next.commit_preparation = null;
-  next.commit_result = null;
+  clearRetryablePreparedAttempt(next);
   return next;
 }
 
@@ -1812,13 +1833,8 @@ export function retryCommitPreparation(state: WorkflowState, input: unknown): Wo
     fail("ERROR_INVALID_TRANSITION", "preparation failure requires review recovery");
   }
   const next = clone<WorkflowState>(state);
-  next.phase = "COMMIT_AUTHORIZED";
-  next.stop_context = null;
-  next.recovery_context = {
-    kind: "commit",
-    context: boundedString(args.retry_context, "retry_context", 2000),
-    recovered_at: isoNow(),
-  };
+  clearRetryablePreparedAttempt(next);
+  applyRecovery(next, "COMMIT_AUTHORIZED", "commit", args.retry_context, "retry_context");
   return next;
 }
 
@@ -1839,18 +1855,9 @@ export function returnCommitToReview(state: WorkflowState, input: unknown): Work
     fail("ERROR_INVALID_TRANSITION", "preparation failure is retryable");
   }
   const next = clone<WorkflowState>(state);
-  next.phase = "REVIEWING";
-  next.stop_context = null;
-  next.recovery_context = {
-    kind: "review",
-    context: boundedString(args.review_context, "review_context", 2000),
-    recovered_at: isoNow(),
-  };
-  next.review_receipt = null;
-  next.review_start_receipt = null;
-  next.commit_authorization = null;
-  next.commit_preparation = null;
-  next.commit_result = null;
+  clearStaleReviewEvidence(next);
+  clearFullCommitEvidence(next);
+  applyRecovery(next, "REVIEWING", "review", args.review_context, "review_context");
   return next;
 }
 
@@ -1925,14 +1932,8 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
   );
   ensurePhase(state, "STOPPED_NOT_COMMITTED");
   const next = clone<WorkflowState>(state);
-  next.commit_preparation = null;
-  next.commit_result = null;
-  next.phase = "COMMIT_AUTHORIZED";
-  next.recovery_context = {
-    kind: "commit",
-    context: boundedString(args.retry_context, "retry_context", 2000),
-    recovered_at: isoNow(),
-  };
+  clearRetryablePreparedAttempt(next);
+  applyRecovery(next, "COMMIT_AUTHORIZED", "commit", args.retry_context, "retry_context");
   return next;
 }
 
