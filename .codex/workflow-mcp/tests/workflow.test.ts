@@ -394,6 +394,44 @@ test("worker mutations are capability-free and retain optimistic version checks"
   }
 });
 
+test("normal mutation state and audit append roll back together", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(input(git));
+    const before = store.db
+      .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(created.workflow_id);
+    const beforeAudit = store.db
+      .prepare(
+        "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+      )
+      .all(created.workflow_id);
+    store.db.exec(`
+      CREATE TRIGGER fail_workflow_audit_insert
+      BEFORE INSERT ON audit_events
+      BEGIN
+        SELECT RAISE(ABORT, 'test audit append failure');
+      END;
+    `);
+    assert.throws(() => implementation(store, created), /test audit append failure/);
+    const after = store.db
+      .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(created.workflow_id);
+    const afterAudit = store.db
+      .prepare(
+        "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+      )
+      .all(created.workflow_id);
+    assert.deepEqual(after, before);
+    assert.deepEqual(afterAudit, beforeAudit);
+    store.db.exec("DROP TRIGGER fail_workflow_audit_insert");
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("repair and re-review use authoritative expected versions", () => {
   const { root, git } = fixture();
   try {

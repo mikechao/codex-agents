@@ -429,14 +429,18 @@ function auditEnvelope(
   before: WorkflowState | null,
   after: WorkflowState,
   digestBefore: StateDigest | null,
-  options: { linked_workflow_id?: WorkflowId | null; outcome?: AuditOutcome | null } = {},
+  options: {
+    linked_workflow_id?: WorkflowId | null;
+    outcome?: AuditOutcome | null;
+    state_digest_after?: StateDigest;
+  } = {},
 ): AuditEnvelope {
   return {
     schema_version: 2,
     phase_before: before ? before.phase : null,
     phase_after: after.phase,
     state_digest_before: digestBefore ?? null,
-    state_digest_after: objectDigest(after),
+    state_digest_after: options.state_digest_after ?? objectDigest(after),
     changed_fields: changedFields(before, after),
     linked_workflow_id: options.linked_workflow_id ?? null,
     outcome: options.outcome ?? null,
@@ -756,6 +760,22 @@ function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>)
   return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
 }
 
+type MutationAuditDetails = {
+  dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+  finding_adjudications?: FindingAdjudication[];
+};
+
+type ExistingWorkflowTransition = {
+  row: WorkflowRow;
+  current: WorkflowState;
+  expectedVersion: WorkflowVersion;
+  next: WorkflowState;
+  eventType: AuditEventType;
+  actorRole: ActorRole;
+  outcome: AuditOutcome | null;
+  details: MutationAuditDetails;
+};
+
 // roleView's public overloads only accept literal roles; the store reaches the
 // implementation signature with the exact role selected by each dedicated getter.
 const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
@@ -1007,6 +1027,41 @@ export class WorkflowStore {
         JSON.stringify({ ...summary, ...details }),
         isoNow(),
       );
+  }
+
+  #persistExistingTransition({
+    row,
+    current,
+    expectedVersion,
+    next,
+    eventType,
+    actorRole,
+    outcome,
+    details,
+  }: ExistingWorkflowTransition): WorkflowState {
+    next.version = (expectedVersion + 1) as WorkflowVersion;
+    validateWorkflowStateV9(next);
+    const serialized = JSON.stringify(next);
+    const digest = objectDigest(next);
+    const workflowId = row.workflow_id as WorkflowId;
+    const update = this.db
+      .prepare(
+        "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
+      )
+      .run(next.version, serialized, digest, isoNow(), workflowId, expectedVersion);
+    if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+    this.#audit(
+      workflowId,
+      next.version,
+      eventType,
+      actorRole,
+      auditEnvelope(current, next, row.state_digest as StateDigest | null, {
+        outcome,
+        state_digest_after: digest,
+      }),
+      details,
+    );
+    return next;
   }
 
   create(input: unknown): ParentView {
@@ -1870,7 +1925,6 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        const id = row.workflow_id as WorkflowId;
         this.#assertRuntimeAttestation();
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -1916,60 +1970,43 @@ export class WorkflowStore {
             .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
             .map((entry) => entry.path),
         );
-        next.version = (expectedVersionNumber + 1) as WorkflowVersion;
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
-        validateWorkflowStateV9(next);
-        const update = this.db
-          .prepare(
-            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-          )
-          .run(
-            next.version,
-            JSON.stringify(next),
-            objectDigest(next),
-            isoNow(),
-            id,
-            expectedVersionNumber,
-          );
-        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const expansion = next.scope_expansions.find((candidate) =>
           samePathList(candidate.added_paths, addedPaths),
         );
         if (!expansion || !adoptedReceipt || !adoptedIndexStates)
           fail("ERROR_STALE_ADOPTION", "dirty adoption evidence is missing");
-        this.#audit(
-          id,
-          next.version,
-          "DIRTY_SCOPE_ADOPTED",
-          "parent",
-          auditEnvelope(state, next, row.state_digest as StateDigest | null, {
-            outcome: next.phase,
-          }),
-          {
-            dirty_scope_adoption: {
-              scope_expansion_id: expansion.expansion_id,
-              scope_expansion_version: expansion.resulting_version,
-              adopted_paths: expansion.added_paths,
-              base_head: adoptedReceipt.base_head,
-              current_states: adoptionStates(adoptedReceipt, expansion.added_paths),
-              index_states: adoptedIndexStates,
-              current_state_commitment: adoptionCommitment(
-                adoptedReceipt.base_head,
-                adoptedReceipt.paths,
-                adoptedIndexStates,
-              ),
-              runtime_id: owner.runtime_id,
-              runtime_revision: owner.runtime_revision as GitCommitSha,
-              executing_runtime_id: this.runtimeId,
-              executing_runtime_revision: this.runtimeRevision,
-              cross_runtime: true,
-              reason: args.reason as string,
-              user_authorization: args.user_authorization as string,
-            },
-          },
-        );
-        return next;
+        const dirtyScopeAdoption: DirtyScopeAdoptionAudit = {
+          scope_expansion_id: expansion.expansion_id,
+          scope_expansion_version: expansion.resulting_version,
+          adopted_paths: expansion.added_paths,
+          base_head: adoptedReceipt.base_head,
+          current_states: adoptionStates(adoptedReceipt, expansion.added_paths),
+          index_states: adoptedIndexStates,
+          current_state_commitment: adoptionCommitment(
+            adoptedReceipt.base_head,
+            adoptedReceipt.paths,
+            adoptedIndexStates,
+          ),
+          runtime_id: owner.runtime_id,
+          runtime_revision: owner.runtime_revision as GitCommitSha,
+          executing_runtime_id: this.runtimeId,
+          executing_runtime_revision: this.runtimeRevision,
+          cross_runtime: true,
+          reason: args.reason as string,
+          user_authorization: args.user_authorization as string,
+        };
+        return this.#persistExistingTransition({
+          row,
+          current: state,
+          expectedVersion: expectedVersionNumber,
+          next,
+          eventType: "DIRTY_SCOPE_ADOPTED",
+          actorRole: "parent",
+          outcome: next.phase,
+          details: { dirty_scope_adoption: dirtyScopeAdoption },
+        });
       })
       .immediate();
     return roleViewForRole(result, "parent");
@@ -1983,7 +2020,6 @@ export class WorkflowStore {
     const result = this.db
       .transaction(() => {
         const row = this.#row(args.workflow_id);
-        const id = row.workflow_id as WorkflowId;
         this.#assertRuntimeAttestation();
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
@@ -2007,32 +2043,19 @@ export class WorkflowStore {
         const startReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
         this.#verifyPendingDirtyAdoptions(state, startReceipt, { crossRuntime: true });
         const next = beginReview(state, args, startReceipt);
-        next.version = (expectedVersionNumber + 1) as WorkflowVersion;
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV9(next);
-        const update = this.db
-          .prepare(
-            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-          )
-          .run(
-            next.version,
-            JSON.stringify(next),
-            objectDigest(next),
-            isoNow(),
-            id,
-            expectedVersionNumber,
-          );
-        if (update.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
-        this.#audit(
-          id,
-          next.version,
-          "REVIEW_STARTED",
-          "reviewer",
-          auditEnvelope(state, next, row.state_digest as StateDigest | null),
-        );
-        return next;
+        return this.#persistExistingTransition({
+          row,
+          current: state,
+          expectedVersion: expectedVersionNumber,
+          next,
+          eventType: "REVIEW_STARTED",
+          actorRole: "reviewer",
+          outcome: null,
+          details: {},
+        });
       })
       .immediate();
     return roleViewForRole(result, "reviewer");
@@ -2045,21 +2068,14 @@ export class WorkflowStore {
     eventType: AuditEventType | ((next: WorkflowState) => AuditEventType),
     action: (state: WorkflowState) => WorkflowState,
     outcome: AuditOutcome | null | ((next: WorkflowState) => AuditOutcome | null) = null,
-    details: (
-      before: WorkflowState,
-      next: WorkflowState,
-    ) => {
-      dirty_scope_adoption?: DirtyScopeAdoptionAudit;
-      finding_adjudications?: FindingAdjudication[];
-    } = () => ({}),
+    details: (before: WorkflowState, next: WorkflowState) => MutationAuditDetails = () => ({}),
     ownership: "normal" | "reconciliation" = "normal",
   ): RoleView {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
-    const { next, selectedRole } = this.db
+    const next = this.db
       .transaction(() => {
         const row = this.#row(workflowIdValue);
-        const id = row.workflow_id as WorkflowId;
         if (ownership === "reconciliation") this.#assertReconciliationRuntime(row);
         else this.#assertRuntimeOwnership(row);
         if (row.version !== expectedVersionNumber) {
@@ -2094,38 +2110,24 @@ export class WorkflowStore {
         } else if (!isLinkedReviewStageTransition(current, next)) {
           assertScopeUnchanged(current, next);
         }
-        const nextVersion = (expectedVersionNumber + 1) as WorkflowVersion;
-        next.version = nextVersion;
-        validateWorkflowStateV9(next);
-        const now = isoNow();
-        const result = this.db
-          .prepare(
-            "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
-          )
-          .run(
-            nextVersion,
-            JSON.stringify(next),
-            objectDigest(next),
-            now,
-            id,
-            expectedVersionNumber,
-          );
-        if (result.changes !== 1) fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const resolvedOutcome = typeof outcome === "function" ? outcome(next) : outcome;
-        this.#audit(
-          id,
-          nextVersion,
-          resolvedEventType,
+        const resolvedDetails = details(current, {
+          ...next,
+          version: (expectedVersionNumber + 1) as WorkflowVersion,
+        });
+        return this.#persistExistingTransition({
+          row,
+          current,
+          expectedVersion: expectedVersionNumber,
+          next,
+          eventType: resolvedEventType,
           actorRole,
-          auditEnvelope(current, next, row.state_digest as StateDigest | null, {
-            outcome: resolvedOutcome,
-          }),
-          details(current, next),
-        );
-        return { next, selectedRole: actorRole };
+          outcome: resolvedOutcome,
+          details: resolvedDetails,
+        });
       })
       .immediate();
-    return roleViewForRole(next, selectedRole);
+    return roleViewForRole(next, actorRole);
   }
 
   submitImplementation(input: unknown): RoleView {

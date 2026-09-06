@@ -920,6 +920,7 @@ describe("Workflow MCP runtime supervision", () => {
     };
     let active: ReturnType<typeof start> | undefined;
     let owner: any;
+    let faultStore: any;
     try {
       const workflowRoot = join(target.root, ".codex", "workflow-mcp");
       cpSync(join(process.cwd(), ".codex/workflow-mcp"), workflowRoot, { recursive: true });
@@ -1028,6 +1029,45 @@ describe("Workflow MCP runtime supervision", () => {
         ),
         false,
       );
+      faultStore = new WorkflowStore({ repositoryRoot: target.root, databasePath });
+      const beforeCrossRuntimeFailure = faultStore.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id);
+      const beforeCrossRuntimeAudit = faultStore.db
+        .prepare(
+          "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+        )
+        .all(id);
+      faultStore.db.exec(`
+        CREATE TRIGGER fail_cross_runtime_audit_insert
+        BEFORE INSERT ON audit_events
+        BEGIN
+          SELECT RAISE(ABORT, 'test cross-runtime audit append failure');
+        END;
+      `);
+      const failedAdoption = await active.request(3, "workflow_adopt_dirty_scope", {
+        workflow_id: id,
+        expected_version: 4,
+        adopted_paths: ["dirty.txt"],
+        reason: "recover dirty path",
+        user_authorization: "explicit recovery",
+      });
+      assert.equal(failedAdoption.error?.data?.category, "ERROR_RUNTIME_RECOVERY");
+      assert.deepEqual(
+        faultStore.db
+          .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+          .get(id),
+        beforeCrossRuntimeFailure,
+      );
+      assert.deepEqual(
+        faultStore.db
+          .prepare(
+            "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+          )
+          .all(id),
+        beforeCrossRuntimeAudit,
+      );
+      faultStore.db.exec("DROP TRIGGER fail_cross_runtime_audit_insert");
       const adopted = await active.request(3, "workflow_adopt_dirty_scope", {
         workflow_id: id,
         expected_version: 4,
@@ -1080,6 +1120,7 @@ describe("Workflow MCP runtime supervision", () => {
       });
     } finally {
       await active?.stop().catch(() => {});
+      faultStore?.close();
       owner?.close();
       rmSync(target.root, { recursive: true, force: true });
       rmSync(cacheRoot, { recursive: true, force: true });
