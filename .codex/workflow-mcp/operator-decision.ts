@@ -120,6 +120,23 @@ function repairDecision(
       severity: finding.severity,
       summary: blockerSummary(finding),
     })),
+    proposal: {
+      required_outcome:
+        "Resolve all current blocking findings without changing the approved intent.",
+      strategy_constraints: bounded(
+        blockers.map((finding) => finding.remediation).join("; "),
+        MAX_SUMMARY,
+      ),
+      fallbacks: [
+        {
+          strategy: "Stop and request bounded context",
+          condition: "the requested repair strategy is infeasible without changing approved intent",
+        },
+      ],
+      required_paths: [],
+      forbidden_paths: [],
+    },
+    authorization_required: true,
   };
 }
 

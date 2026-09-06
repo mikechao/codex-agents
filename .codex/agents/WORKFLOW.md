@@ -204,6 +204,12 @@ authority is added. Ordinary summaries do not expose internal action/phase names
 preserved semantic enum values include `approve_recovery`, `retry_commit`,
 `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review`.
 
+For exact repair, `approve_exact_repairs` also carries `authorization_required: true` and a bounded
+derived semantic proposal containing the required outcome, strategy constraints, conditional fallback,
+and exact path constraints. The parent presents this proposal before encoding the explicit
+`RepairDirective`; it remains read-only and does not replace the existing finding, version, scope, or
+cycle authority.
+
 The projection cannot classify a newly supplied request: the parent compares objective, outcome,
 criteria, and logical-change scope at the input boundary. A material change requires a new bounded
 workflow, not repair, adjudication, expansion, or a generic follow-up. Explicit linked lineage may
@@ -299,7 +305,10 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   resolution map, blocking findings, and permitted actions. A `change` workflow starts `IMPLEMENTING`
   and the implementer submits with `workflow_submit_implementation`.
 - Reviewer view: criteria, validations, dirty baseline, implementation evidence and results, concern
-  acceptance, finding buckets and classifications, resolution map, and permitted actions. The
+  acceptance, finding buckets and classifications, active repair IDs and the exact active repair
+  directive, resolution map, and permitted actions. When an active directive is present, an
+  approval submission must include explicit conforming evidence against it; initial reviews have
+  no active directive and remain unambiguous. The
   reviewer view exposes `validation_results` for both workflow types. Implementers remain the sole
   producer of `state.validation_results` for `change` workflows; reviewers must omit that field
   there. For `review_only` workflows, reviewers submit only the ordered executable results after
@@ -340,17 +349,17 @@ passed manually. A missing or malformed policy is a stop condition rather than a
 ### Generic work-item provenance
 
 Workflow creation may include optional `work_items` records with provider-neutral `provider`, `id`,
-exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v8 state,
+ exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v9 state,
 survives restart, is visible only to parent and committer views, and is inherited by linked follow-ups
 without caller retranscription. It is separate from scope, criteria, remediation, receipts, review,
-and commit authorization. Schema v8 is a clean break from schema v7 and earlier; incompatible
+and commit authorization. Schema v9 is a clean break from schema v8 and earlier; incompatible
 databases require a clean reset rather than backfill.
 
 The committer renders only authoritative items as one neutral `Refs <display_ref>` line per distinct
 display reference, preserving first occurrence and exact text. Empty provenance emits no lines; no
 tracker API is called and no completion keyword is inferred.
 
-Finding adjudications are append-only schema v8 records. A parent may disposition an exact current
+Finding adjudications are append-only schema v9 records. A parent may disposition an exact current
 blocking finding only with explicit user authorization and a bounded reason identifying a contract
 inconsistency or approved-scope mismatch. The original finding snapshot is retained in state and
 parent audit projection; effective blockers are calculated from the latest review result, and a
@@ -692,8 +701,8 @@ Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
 `workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.
-The current schema is v8, including planning tables and schema-v7 finding-adjudication fields;
-schema-v7 and earlier databases require a clean durable-state reset, so unfinished historical
+The current schema is v9, including planning tables, finding-adjudication fields, and the bounded
+semantic repair directive; schema-v8 and earlier databases require a clean durable-state reset, so unfinished historical
 workflows cannot cross this schema break.
 
 ## Observed end-to-end run

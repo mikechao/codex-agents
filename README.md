@@ -63,7 +63,7 @@ commits an authorization-time content commitment and verifies it before resume a
 creation.
 
 Workflow creation also accepts optional generic work-item provenance. Records preserve provider-neutral
-metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v8, survive
+metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v9, survive
 restart, and flow automatically through linked follow-ups. Only parent and committer views expose this
 metadata; it is not authorization, scope, review evidence, or tracker mutation. Committers render
 authoritative items as neutral `Refs <display_ref>` lines and never infer IDs or emit completion keywords.

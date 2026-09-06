@@ -891,8 +891,13 @@ test("orchestration contracts classify intent and reconcile the final tree expli
   );
   assert.match(
     readme,
-    /generic work-item provenance\. Records preserve provider-neutral metadata[^.]*immutably in schema v8/u,
-    "README must describe current schema v8 work-item provenance",
+    /generic work-item provenance\. Records preserve provider-neutral metadata[^.]*immutably in schema v9/u,
+    "README must describe current schema v9 work-item provenance",
+  );
+  assert.match(
+    workflow,
+    /Schema v9 is a clean break from schema v8 and earlier/u,
+    "Workflow contract must document the schema v9 clean break",
   );
   assert.match(
     evals,

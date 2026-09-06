@@ -68,6 +68,7 @@ export type WorkflowType = TupleValue<typeof WORKFLOW_TYPE_VALUES>;
 export type ImplementationStatus = TupleValue<typeof IMPLEMENTATION_STATUS_VALUES>;
 export type StoppingImplementationStatus = Exclude<ImplementationStatus, "DONE" | "INCOMPLETE">;
 export type ReviewStatus = TupleValue<typeof REVIEW_STATUS_VALUES>;
+export type RepairConformanceStatus = "conforming" | "nonconforming";
 export type FindingSeverity = TupleValue<typeof FINDING_SEVERITY_VALUES>;
 export type FindingResolution = TupleValue<typeof FINDING_RESOLUTION_VALUES>;
 export type FindingAdjudicationDisposition = TupleValue<typeof FINDING_ADJUDICATION_VALUES>;
@@ -152,6 +153,14 @@ export interface OperatorBlocker {
   summary: string;
 }
 
+export interface OperatorRepairProposal {
+  required_outcome: string;
+  strategy_constraints: string;
+  fallbacks: Array<{ strategy: string; condition: string }>;
+  required_paths: string[];
+  forbidden_paths: string[];
+}
+
 export type OperatorFinding = OperatorBlocker;
 
 export interface OperatorRecoverySummary {
@@ -166,7 +175,13 @@ export type OperatorPrimaryDecision =
       kind: "manual_validation_required";
       validations: Array<{ validation_id: ValidationRequirementId; description: string }>;
     }
-  | { kind: "approve_exact_repairs"; blocker_count: number; blockers: OperatorBlocker[] }
+  | {
+      kind: "approve_exact_repairs";
+      blocker_count: number;
+      blockers: OperatorBlocker[];
+      proposal: OperatorRepairProposal;
+      authorization_required: true;
+    }
   | { kind: "finalize_repair_exhausted"; reason: string }
   | { kind: "approve_bounded_continuation"; reason: string; authorization_required: true }
   | { kind: "approve_recovery"; recovery: OperatorRecovery; authorization_required: true }
@@ -454,6 +469,26 @@ export interface RemediationContext {
   user_authorization: string;
 }
 
+/** Semantic repair intent. Binding identity remains in the containing WorkflowState. */
+export interface RepairFallback {
+  strategy: string;
+  condition: string;
+}
+
+export interface RepairDirective {
+  required_outcome: string;
+  strategy_constraints: string;
+  fallbacks: RepairFallback[];
+  required_paths: ExactRepoPath[];
+  forbidden_paths: ExactRepoPath[];
+  user_authorization: string;
+}
+
+export interface RepairConformance {
+  status: RepairConformanceStatus;
+  evidence: string;
+}
+
 // ---------------------------------------------------------------------------
 // 6. Acceptance / validation contracts and results
 // ---------------------------------------------------------------------------
@@ -534,7 +569,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 8;
+  schema_version: 9;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -583,6 +618,7 @@ export interface WorkflowState {
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;
   repair_authorized_ids: FindingId[];
+  repair_directive: RepairDirective | null;
   concern_acceptance: ConcernAcceptance | null;
   commit_authorization: CommitAuthorization | null;
   commit_preparation: CommitPreparation | null;
@@ -634,7 +670,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 8;
+  schema_version: 9;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;
@@ -724,6 +760,7 @@ export interface ImplementerView extends RoleViewCommon {
   finding_resolution_map: FindingResolutionMap;
   blocking_findings: BlockingFinding[];
   repair_authorized_ids: FindingId[];
+  repair_directive: RepairDirective | null;
   stop_context: StopContext | null;
   recovery_context: RecoveryContext | null;
 }
@@ -749,6 +786,8 @@ export interface ReviewerViewBase extends RoleViewCommon {
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;
   finding_adjudications: FindingAdjudication[];
+  repair_authorized_ids: FindingId[];
+  repair_directive: RepairDirective | null;
   review_result_version: WorkflowVersion | null;
   concern_acceptance: ConcernAcceptance | null;
   stop_context: StopContext | null;

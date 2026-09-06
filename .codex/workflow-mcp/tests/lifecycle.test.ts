@@ -383,6 +383,14 @@ function doReview(ctx: any, _version: number, options: any = {}) {
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
     prior_finding_classifications: options.prior ?? {},
+    ...(ctx.store.reviewerGet(workflow.workflow_id).repair_directive
+      ? {
+          repair_conformance: {
+            status: "conforming",
+            evidence: "verified the active repair directive",
+          },
+        }
+      : {}),
   });
 }
 
@@ -392,6 +400,14 @@ function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     finding_ids: ids,
+    repair_directive: {
+      required_outcome: "resolve blockers",
+      strategy_constraints: "preserve approved intent",
+      fallbacks: [],
+      required_paths: [],
+      forbidden_paths: [],
+      user_authorization: "authorize repair",
+    },
   });
 }
 

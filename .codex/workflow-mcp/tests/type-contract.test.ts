@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { SERVER_TOOL_NAMES, type ServerToolName, toolDefinitions } from "../server.js";
 import type {
   RawCommitResultMutation,
+  RawFindingIdsMutation,
   RawImplementationSubmissionMutation,
   RawManualValidationMutation,
   RawParentMutation,
@@ -32,6 +33,8 @@ import type {
   PlannerPlanRead,
   PlanRead,
   PlanRevisionReplacements,
+  RepairConformance,
+  RepairDirective,
   ReviewerViewBase,
   ReviewRangePath,
   ReviewStatus,
@@ -151,6 +154,7 @@ function _compileBrandedCorrelation(): void {
 
   const parentMutation = undefined as unknown as RawParentMutation;
   const workerMutation = undefined as unknown as RawWorkerMutation;
+  const repairMutation = undefined as unknown as RawFindingIdsMutation;
   // @ts-expect-error raw workflow IDs require authoritative validation and branding
   const unvalidatedWorkflowId: WorkflowId = parentMutation.workflow_id;
   // @ts-expect-error raw workflow versions require authoritative validation and branding
@@ -184,6 +188,10 @@ function _compileBrandedCorrelation(): void {
   const manualStatus: "passed" | "failed" = manualValidation.status;
   // @ts-expect-error raw manual validation IDs require transition validation and branding
   const manualId: ValidationRequirementId = manualValidation.validation_id;
+  // @ts-expect-error raw repair directives remain unknown until transition validation
+  const repairDirective: RepairDirective = repairMutation.repair_directive;
+  // @ts-expect-error raw repair conformance remains unknown until transition validation
+  const repairConformance: RepairConformance = review.repair_conformance;
   void implementationStatus;
   void reviewStatus;
   void commitOutcome;
@@ -194,6 +202,8 @@ function _compileBrandedCorrelation(): void {
   void reviewValidationResults;
   void manualStatus;
   void manualId;
+  void repairDirective;
+  void repairConformance;
 }
 
 function _compileDirectParentView(): void {

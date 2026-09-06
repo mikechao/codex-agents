@@ -188,7 +188,7 @@ artifact prose and contracts are never retranscribed. The legacy
 
 The orchestrator passes only explicit user-approved work-item metadata to `workflow_create` or
 `workflow_create_from_plan`; absent tracker metadata is represented as `work_items: []`. These generic
-immutable references are schema v8 state, shown only to parent and committer, and inherited automatically
+immutable references are schema v9 state, shown only to parent and committer, and inherited automatically
 by linked follow-ups. Linked creation never accepts retranscribed replacements or externally discovered identifiers. The committer
 renders exact authoritative display references as neutral `Refs <display_ref>` lines, with no tracker
 API calls and no `Fixes`/`Closes`/`Resolves` completion semantics.
@@ -293,7 +293,8 @@ Before mutation or dispatch, classify the request into one of three routes:
 
 1. **Unchanged approved intent:** a P0-P2 defect is ordinary repair. Use the latest refreshed review's
    exact blocking IDs, explicit authorization, `workflow_authorize_repair`, implementer, and a fresh
-   independent review.
+   independent review. The reviewer receives the exact active repair directive and must submit
+   explicit conforming evidence before approving the re-review.
 2. **Changed intent:** a material change to the objective, desired outcome, acceptance criteria, or
    logical change stops the current route. It requires explicit authorization naming a new bounded
    objective and exact scope, then a new bounded `change` workflow with its own criteria, validations, and

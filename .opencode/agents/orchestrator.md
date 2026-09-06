@@ -95,6 +95,15 @@ payloads. Do not label ordinary choices with internal MCP action/tool names or p
 names are reserved for normative documentation, diagnostics, and tests—not operator summaries.
 Conversation is not durable proposal state and never replaces an authoritative read. No durable proposal state is created.
 
+For repair, the projection's `approve_exact_repairs` decision includes a bounded derived semantic
+proposal and `authorization_required: true`. Present its required outcome, strategy constraints,
+conditional fallback, and deterministic exact paths before asking whether to authorize the repair.
+The proposal is read-only and is not authority: after affirmative input, reread the exact current
+blocking IDs and version and encode the user's explicit semantic directive in
+`workflow_authorize_repair`. Preserve harmless equivalent implementation choices, but require the
+implementer to stop fail-closed for a materially different strategy, required path, fallback
+condition, architecture, objective, or scope; changed intent uses a new bounded workflow.
+
 Accept an unambiguous natural-language response tied to the displayed proposal. Contextual `yes`,
 `continue`, `go ahead`, and `commit it` are valid when they clearly answer the current question;
 ordinary equivalent wording is also valid. Do not require a `Reply ...` incantation or a canonical

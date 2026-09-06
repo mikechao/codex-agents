@@ -23,6 +23,9 @@ import type {
   PlanRevision,
   PlanRevisionArtifact,
   PlanRevisionReplacements,
+  RepairConformance,
+  RepairDirective,
+  RepairFallback,
   ReviewFinding,
   Role,
   StateDigest,
@@ -52,6 +55,7 @@ export const MAX_TEXT = 4000;
 export const MAX_DETAIL = 2000;
 export const MAX_APPROVED_PLAN = 1024 * 1024;
 export const MAX_EXECUTION_BRIEF = 32 * 1024;
+export const MAX_REPAIR_FALLBACKS = 10;
 
 const WORKTREE_NAME_SEPARATOR = /[\\/]+/gu;
 const WORKTREE_NAME_INVALID = /[^a-zA-Z0-9._-]+/gu;
@@ -374,6 +378,77 @@ export function planApproval(value: unknown): PlanApproval {
 
 export function userAuthorization(value: unknown): string {
   return boundedString(value, "user_authorization", MAX_DETAIL);
+}
+
+function nonOverlappingPaths(paths: ReadonlyArray<string>): boolean {
+  const sorted = [...paths].sort();
+  return sorted.every((path, index) => {
+    const prior = sorted[index - 1];
+    return prior === undefined || (path !== prior && !path.startsWith(`${prior}/`));
+  });
+}
+
+/** Parse the bounded semantic repair directive at the parent mutation boundary. */
+export function repairDirective(
+  value: unknown,
+  repositoryRoot: string,
+  approvedPaths: ReadonlyArray<ExactRepoPath>,
+): RepairDirective {
+  const record = exactKeys(
+    value,
+    [
+      "required_outcome",
+      "strategy_constraints",
+      "fallbacks",
+      "required_paths",
+      "forbidden_paths",
+      "user_authorization",
+    ],
+    "repair directive",
+  );
+  const requiredPaths = exactPaths(record.required_paths, repositoryRoot, true);
+  const forbiddenPaths = exactPaths(record.forbidden_paths, repositoryRoot, true);
+  const allPaths = [...requiredPaths, ...forbiddenPaths];
+  if (!nonOverlappingPaths(allPaths) || new Set(allPaths).size !== allPaths.length) {
+    fail("ERROR_INVALID_REPAIR", "repair directive paths overlap");
+  }
+  if (allPaths.some((path) => !approvedPaths.includes(path))) {
+    fail("ERROR_INVALID_REPAIR", "repair directive path is outside approved scope");
+  }
+  if (!Array.isArray(record.fallbacks) || record.fallbacks.length > MAX_REPAIR_FALLBACKS) {
+    fail("ERROR_INVALID_REPAIR", "repair directive fallbacks are invalid");
+  }
+  const fallbacks: RepairFallback[] = record.fallbacks.map((item, index) => {
+    const fallback = exactKeys(item, ["strategy", "condition"], `repair fallback ${index + 1}`);
+    return {
+      strategy: boundedString(fallback.strategy, "fallback strategy", MAX_DETAIL),
+      condition: boundedString(fallback.condition, "fallback condition", MAX_DETAIL),
+    };
+  });
+  return {
+    required_outcome: boundedString(record.required_outcome, "required_outcome", MAX_DETAIL),
+    strategy_constraints: boundedString(
+      record.strategy_constraints,
+      "strategy_constraints",
+      MAX_DETAIL,
+    ),
+    fallbacks,
+    required_paths: requiredPaths,
+    forbidden_paths: forbiddenPaths,
+    user_authorization: userAuthorization(record.user_authorization),
+  };
+}
+
+/** Parse the reviewer's bounded determination against an active repair directive. */
+export function repairConformance(value: unknown): RepairConformance {
+  const record = exactKeys(value, ["status", "evidence"], "repair conformance");
+  if (record.status !== "conforming" && record.status !== "nonconforming") {
+    fail("ERROR_INVALID_REVIEW", "repair conformance status is invalid");
+  }
+  return {
+    status: record.status as RepairConformance["status"],
+    evidence: boundedString(record.evidence, "repair conformance evidence", MAX_DETAIL),
+  };
 }
 
 export function stringList(

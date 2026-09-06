@@ -119,6 +119,14 @@ test("fresh STDIO repair and re-review uses exact role getters and worker IDs on
         workflow_id: id,
         expected_version: await version(id),
         finding_ids: ["BLOCKER-1"],
+        repair_directive: {
+          required_outcome: "resolve blocker",
+          strategy_constraints: "preserve approved intent",
+          fallbacks: [],
+          required_paths: [],
+          forbidden_paths: [],
+          user_authorization: "authorize repair",
+        },
       })
     ).body;
     assert.equal(repairing.phase, "REPAIRING");
@@ -141,6 +149,10 @@ test("fresh STDIO repair and re-review uses exact role getters and worker IDs on
         blocking_findings: [],
         optional_findings: [],
         prior_finding_classifications: { "BLOCKER-1": "resolved" },
+        repair_conformance: {
+          status: "conforming",
+          evidence: "verified the active repair directive",
+        },
       })
     ).body;
     assert.equal(approved.phase, "STOPPED_APPROVED");

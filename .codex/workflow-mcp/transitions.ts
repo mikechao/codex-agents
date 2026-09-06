@@ -65,7 +65,9 @@ import {
   MAX_TEXT,
   objectDigest,
   optionalText,
+  repairConformance,
   repairCycle,
+  repairDirective,
   resolutionMap,
   revision,
   role,
@@ -139,7 +141,7 @@ export const PHASES: readonly WorkflowPhase[] = WORKFLOW_PHASE_VALUES;
 export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
   COMMIT_MISMATCH_CATEGORY_SET;
 
-export const V8_STATE_KEYS = [
+export const V9_STATE_KEYS = [
   "schema_version",
   "version",
   "workflow_id",
@@ -188,14 +190,17 @@ export const V8_STATE_KEYS = [
   "stop_context",
   "recovery_context",
   "repair_authorized_ids",
+  "repair_directive",
   "concern_acceptance",
   "commit_authorization",
   "commit_preparation",
   "commit_result",
 ] as const satisfies readonly (keyof WorkflowState)[];
-type MissingV8StateKey = Exclude<keyof WorkflowState, (typeof V8_STATE_KEYS)[number]>;
-const V8_STATE_KEYS_ARE_EXHAUSTIVE: MissingV8StateKey extends never ? true : never = true;
-void V8_STATE_KEYS_ARE_EXHAUSTIVE;
+/** @deprecated use V9_STATE_KEYS. */
+export const V8_STATE_KEYS = V9_STATE_KEYS;
+type MissingV9StateKey = Exclude<keyof WorkflowState, (typeof V9_STATE_KEYS)[number]>;
+const V9_STATE_KEYS_ARE_EXHAUSTIVE: MissingV9StateKey extends never ? true : never = true;
+void V9_STATE_KEYS_ARE_EXHAUSTIVE;
 
 export function ensurePhase<const P extends WorkflowPhase>(
   state: WorkflowState,
@@ -361,6 +366,7 @@ export const ROLE_VIEW_EXTRA = {
     "finding_resolution_map",
     "blocking_findings",
     "repair_authorized_ids",
+    "repair_directive",
     "stop_context",
     "recovery_context",
   ],
@@ -382,6 +388,8 @@ export const ROLE_VIEW_EXTRA = {
     "optional_findings",
     "prior_finding_classifications",
     "finding_adjudications",
+    "repair_authorized_ids",
+    "repair_directive",
     "review_result_version",
     "concern_acceptance",
     "review_receipt",
@@ -807,6 +815,7 @@ function baseState({
     stop_context: null,
     recovery_context: null,
     repair_authorized_ids: [],
+    repair_directive: null,
     concern_acceptance: null,
     commit_authorization: null,
     commit_preparation: null,
@@ -1138,7 +1147,6 @@ export function submitImplementation(
     if (knownFailures.length > 0) {
       fail("ERROR_INVALID_IMPLEMENTATION", "done implementation has known failures");
     }
-    next.repair_authorized_ids = [];
     next.phase = "REVIEWING";
   }
   if (args.status !== "DONE" && args.status !== "INCOMPLETE") {
@@ -1318,9 +1326,10 @@ export function submitReview(
       "optional_findings",
       "prior_finding_classifications",
       "validation_results",
+      "repair_conformance",
     ],
     "review submission",
-    ["validation_results"],
+    ["validation_results", "repair_conformance"],
   );
   if (!isValue(REVIEW_STATUS_VALUES, args.review_status)) {
     fail("ERROR_INVALID_REVIEW", "review status is invalid");
@@ -1422,6 +1431,23 @@ export function submitReview(
   if (args.review_status === "CHANGES_REQUESTED" && blockingFindings.length === 0) {
     fail("ERROR_INVALID_REVIEW", "changes requested without blockers");
   }
+  const hasActiveRepairDirective = state.repair_directive !== null;
+  let conformance: ReturnType<typeof repairConformance> | null = null;
+  if ("repair_conformance" in args) {
+    if (!hasActiveRepairDirective) {
+      fail("ERROR_INVALID_REVIEW", "repair conformance requires an active repair directive");
+    }
+    conformance = repairConformance(args.repair_conformance);
+  } else if (args.review_status === "APPROVED" && hasActiveRepairDirective) {
+    fail("ERROR_INVALID_REVIEW", "approved repair review requires conformance evidence");
+  }
+  if (
+    args.review_status === "APPROVED" &&
+    hasActiveRepairDirective &&
+    conformance?.status !== "conforming"
+  ) {
+    fail("ERROR_INVALID_REVIEW", "approved repair review is nonconforming");
+  }
   const next = clone<WorkflowState>(state);
   if (state.workflow_type === "review_only" && reviewerValidationResults !== null) {
     const executableById = new Map(
@@ -1447,6 +1473,12 @@ export function submitReview(
   next.review_result_version = (state.version + 1) as WorkflowVersion;
   next.review_receipt = finalReceipt ? clone(finalReceipt) : null;
   next.review_start_receipt = null;
+  // A completed review result replaces any prior repair authorization. An inconclusive review
+  // remains recoverable, so retain the directive for the resumed reviewer.
+  if (args.review_status !== "INCONCLUSIVE") {
+    next.repair_authorized_ids = [];
+    next.repair_directive = null;
+  }
   if (args.review_status === "APPROVED") {
     const continuation = state.linked_continuation;
     if (continuation?.review_stage === "remediation") {
@@ -1557,17 +1589,22 @@ export function adjudicateFindings(state: WorkflowState, input: unknown): Workfl
   if (effectiveBlockingFindings(next).length === 0) {
     next.phase = "REVIEWING";
     next.repair_authorized_ids = [];
+    next.repair_directive = null;
   }
   return next;
 }
 
-export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowState {
+export function authorizeRepair(
+  state: WorkflowState,
+  input: unknown,
+  repositoryRoot = process.cwd(),
+): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_REPAIR", "repair input is invalid");
   }
   const args = exactKeys(
     input,
-    ["workflow_id", "expected_version", "finding_ids"],
+    ["workflow_id", "expected_version", "finding_ids", "repair_directive"],
     "repair authorization",
   );
   ensurePhase(state, "REPAIR_REQUIRED");
@@ -1579,12 +1616,17 @@ export function authorizeRepair(state: WorkflowState, input: unknown): WorkflowS
   const existing = new Set(effective.map((item) => item.finding_id));
   if (ids.some((id) => !existing.has(id)))
     fail("ERROR_INVALID_REPAIR", "finding ID is not a blocker");
+  if (state.review_result_version === null) {
+    fail("ERROR_INVALID_REPAIR", "latest review result is missing");
+  }
+  const directive = repairDirective(args.repair_directive, repositoryRoot, state.approved_paths);
   if (state.repair_cycle >= state.max_repair_cycles) {
     fail("ERROR_REPAIR_LIMIT", "repair cycle limit reached");
   }
   const next = clone<WorkflowState>(state);
   next.repair_cycle += 1;
   next.repair_authorized_ids = [...ids].sort();
+  next.repair_directive = directive;
   next.phase = "REPAIRING";
   return next;
 }
@@ -2547,6 +2589,39 @@ function remediationContextShape(value: unknown): void {
   bounded(value.user_authorization, MAX_DETAIL);
 }
 
+function repairDirectiveShape(value: unknown, approvedPaths: ReadonlyArray<string>): void {
+  if (value === null || value === undefined) return;
+  if (!isObject(value)) corrupt();
+  checkKeys(value, [
+    "required_outcome",
+    "strategy_constraints",
+    "fallbacks",
+    "required_paths",
+    "forbidden_paths",
+    "user_authorization",
+  ]);
+  bounded(value.required_outcome, MAX_DETAIL);
+  bounded(value.strategy_constraints, MAX_DETAIL);
+  bounded(value.user_authorization, MAX_DETAIL);
+  pathList(value.required_paths, true);
+  pathList(value.forbidden_paths, true);
+  const required = value.required_paths as string[];
+  const forbidden = value.forbidden_paths as string[];
+  const all = [...required, ...forbidden];
+  if (new Set(all).size !== all.length || all.some((path) => !approvedPaths.includes(path)))
+    corrupt();
+  const sorted = [...all].sort();
+  if (sorted.some((path, index) => index > 0 && path.startsWith(`${sorted[index - 1]}/`)))
+    corrupt();
+  if (!Array.isArray(value.fallbacks) || value.fallbacks.length > 10) corrupt();
+  for (const fallback of value.fallbacks) {
+    if (!isObject(fallback)) corrupt();
+    checkKeys(fallback, ["strategy", "condition"]);
+    bounded(fallback.strategy, MAX_DETAIL);
+    bounded(fallback.condition, MAX_DETAIL);
+  }
+}
+
 function linkedContinuationShape(value: unknown): void {
   if (value === null || value === undefined) return;
   if (!isObject(value)) corrupt();
@@ -2689,12 +2764,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v8 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v9 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV8(value: unknown): WorkflowState {
+export function validateWorkflowStateV9(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V8_STATE_KEYS].sort() as string[];
+  const required = [...V9_STATE_KEYS].sort() as string[];
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -2960,6 +3035,12 @@ export function validateWorkflowStateV8(value: unknown): WorkflowState {
   stopContextShape(value.stop_context);
   recoveryContextShape(value.recovery_context);
   stringArrayShape(value.repair_authorized_ids, MAX_FINDINGS, 80);
+  repairDirectiveShape(value.repair_directive, value.approved_paths as string[]);
+  if (
+    ((value.repair_authorized_ids as unknown[]).length === 0) !==
+    (value.repair_directive === null || value.repair_directive === undefined)
+  )
+    corrupt();
   concernAcceptanceShape(value.concern_acceptance);
   commitAuthorizationShape(value.commit_authorization);
   commitPreparationShape(value.commit_preparation);
@@ -2967,17 +3048,20 @@ export function validateWorkflowStateV8(value: unknown): WorkflowState {
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
 
-/** @deprecated retained for source compatibility; persisted state is schema v8 only. */
-export const validateWorkflowStateV7 = validateWorkflowStateV8;
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV8 = validateWorkflowStateV9;
 
-/** @deprecated retained for source compatibility; persisted state is schema v8 only. */
-export const validateWorkflowStateV6 = validateWorkflowStateV8;
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV7 = validateWorkflowStateV9;
 
-/** @deprecated retained for source compatibility; persisted state is schema v8 only. */
-export const validateWorkflowStateV5 = validateWorkflowStateV8;
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV6 = validateWorkflowStateV9;
 
-/** @deprecated retained for source compatibility; persisted state is schema v8 only. */
-export const validateWorkflowStateV4 = validateWorkflowStateV8;
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV5 = validateWorkflowStateV9;
 
-/** @deprecated retained for source compatibility; persisted state is schema v8 only. */
-export const validateWorkflowStateV3 = validateWorkflowStateV8;
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV4 = validateWorkflowStateV9;
+
+/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
+export const validateWorkflowStateV3 = validateWorkflowStateV9;

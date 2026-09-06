@@ -50,6 +50,15 @@ Rules:
   acceptance criteria, validation requirements, permitted actions, and remediation context remain
   enforcement boundaries. During repair, use the original approved plan together with only the
   bounded authorized remediation context and findings.
+- During ordinary repair, read and apply the authoritative `repair_directive` together with the
+  exact authorized finding IDs. It contains the required outcome, strategy constraints, conditional
+  fallback records, and exact required or forbidden paths; exact IDs and approved paths remain
+  separate binding authority fields. Harmless semantically equivalent helper choices are allowed,
+  but omitting a required path, violating a forbidden path, choosing a fallback outside its stored
+  condition, or materially changing the strategy, outcome, scope, or architecture must stop
+  fail-closed with `BLOCKED` or `NEEDS_CONTEXT`. Passing tests or conversation prose cannot
+  authorize a substitution. A material objective, scope, or mechanism change uses a fresh bounded
+  workflow under the existing changed-intent rule; it never triggers automatic reauthorization.
 - Implement the requested changes completely.
 - Do not redesign or substantially alter the plan unless implementation is impossible.
 - Inspect the existing codebase before making changes so your implementation fits existing patterns and conventions.

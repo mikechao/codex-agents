@@ -162,6 +162,12 @@ Rules:
 - Re-reviews receive prior findings and implementer resolution claims. Classify every prior finding
   as `resolved`, `still_present`, or `superseded` before reporting new findings. Do not silently
   drop an unresolved prior finding.
+- When the reviewer view contains an active `repair_directive`, inspect that exact directive and
+  verify the implementation conforms to its required outcome, strategy constraints, fallback
+  conditions, and path constraints. An approval must include `repair_conformance` with
+  `status: conforming` and bounded evidence; report `nonconforming` evidence through a blocking
+  finding instead of approving. Initial reviews expose a null directive and do not require this
+  field.
 - A prior finding with an authoritative parent adjudication is already dispositioned outside the
   repair loop. Classify it as `superseded` and do not re-emit the same finding ID; materially new
   evidence must use a new stable finding ID.
@@ -192,7 +198,8 @@ Begin the final report with exactly one status, then report:
 6. Residual risks or missing context.
 
 Submit the review with `workflow_submit_review` using your current `expected_version`, semantic
-findings, and prior classifications. Inspect, but do not echo, the authoritative `review_target`
+findings, prior classifications, and (when re-reviewing an active repair) `repair_conformance`.
+Inspect, but do not echo, the authoritative `review_target`
 from your role view. In prompt-only degraded mode, end with the degraded-mode handoff block
 documented in WORKFLOW.md; do not restate the authoritative view's state when MCP is available.
 

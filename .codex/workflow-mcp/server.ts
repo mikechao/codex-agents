@@ -106,6 +106,49 @@ const findingSchema: JsonSchema = {
   additionalProperties: false,
 };
 
+const repairDirectiveSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    required_outcome: { type: "string", minLength: 1, maxLength: 2000 },
+    strategy_constraints: { type: "string", minLength: 1, maxLength: 2000 },
+    fallbacks: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          strategy: { type: "string", minLength: 1, maxLength: 2000 },
+          condition: { type: "string", minLength: 1, maxLength: 2000 },
+        },
+        required: ["strategy", "condition"],
+        additionalProperties: false,
+      },
+    },
+    required_paths: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 200 },
+    forbidden_paths: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 200 },
+    user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+  },
+  required: [
+    "required_outcome",
+    "strategy_constraints",
+    "fallbacks",
+    "required_paths",
+    "forbidden_paths",
+    "user_authorization",
+  ],
+  additionalProperties: false,
+};
+
+const repairConformanceSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["conforming", "nonconforming"] },
+    evidence: { type: "string", minLength: 1, maxLength: 2000 },
+  },
+  required: ["status", "evidence"],
+  additionalProperties: false,
+};
+
 const workingTreeReviewTargetSchema: JsonSchema = {
   type: "object",
   properties: {
@@ -711,6 +754,7 @@ export const toolDefinitions = [
             additionalProperties: false,
           },
         },
+        repair_conformance: repairConformanceSchema,
       },
       [
         ...workerCommon.required,
@@ -735,8 +779,9 @@ export const toolDefinitions = [
       {
         ...common.properties,
         finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
+        repair_directive: repairDirectiveSchema,
       },
-      [...common.required, "finding_ids"],
+      [...common.required, "finding_ids", "repair_directive"],
     ),
     annotations: {
       title: "Authorize repair",
