@@ -11,11 +11,17 @@ fan out bounded topics to hidden, read-only `explorer` agents; Native Plan recon
 synthesizes one provenance-bearing report, and stops without a PlanArtifact, Workflow, or mutation.
 A change request (including investigate-then-change) delegates to the generated `planner`, which may
 fan out zero to four explorers. Explorer context is disposable and is never persisted in Workflow
-MCP or plan artifacts. Planner is the sole complete change-plan writer/refiner and returns one bounded
+MCP or plan artifacts. Planner is the sole complete plan writer/refiner and returns one bounded
 `PlannerHandoff`; Plan uses the parent surface to retrieve and render exact `full_plan` text verbatim,
-then explicitly approves. A selected report finding is supporting context only: Native Plan invokes a
+then explicitly approves. Each canonical PlanArtifact explicitly authors `workflow_type` as `change`
+or working-tree `review_only`. A selected report finding is supporting context only: Native Plan invokes a
 fresh planner for a normal change-only plan and separate approval. Orchestrator only parent-reads the
 exact current approved plan and executes it through `workflow_create_from_plan`.
+
+Plan schema v2 is a deliberate development clean break: retained pre-change artifacts are rejected
+with reset-required diagnostics and must be recreated, never migrated or retranscribed. The documented
+Native Plan -> Orchestrator reviewer-first `review_only` dogfood is a post-commit, fresh-host-reload
+manual activity; it is not an installed-target pre-commit gate.
 
 ## Authoritative-source transport investigation
 
@@ -173,9 +179,12 @@ and validates/normalizes a complete candidate before inserting one immutable rev
 unknown, null, or empty replacements fail closed; no second complete-replacement operation exists.
 
 For Plan -> Orchestrator execution, `workflow_create_from_plan` receives only the exact approved
-plan ID/revision and supported creation options; the server copies immutable `approved_plan` and
+plan ID/revision and supported creation options; the server resolves and copies the immutable authored
+workflow type and `approved_plan` and
 provenance from the authoritative artifact. Orchestrator must not summarize or reconstruct it.
-Direct requests pass `approved_plan: null`. The parent view and implementer view expose this execution intent, while
+Direct requests pass `approved_plan: null`. A plan-authored `change` routes to the implementer, while
+plan-authored working-tree `review_only` routes directly to the reviewer; direct requests retain their
+existing null-plan behavior. The parent view and implementer view expose this execution intent, while
 reviewer and committer views retain least-context projections. Objective, paths, acceptance criteria,
 validation requirements, and authorized remediation/findings remain structured enforcement fields.
 

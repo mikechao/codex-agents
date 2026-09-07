@@ -34,6 +34,7 @@ import type {
   ValidationResult,
   ValidationStatus,
   WorkflowId,
+  WorkflowType,
   WorkflowVersion,
   WorkItemReference,
   WorktreePlan,
@@ -201,6 +202,7 @@ export function planRevisionInput(
     value,
     [
       "full_plan",
+      "workflow_type",
       "execution_brief",
       "objective",
       "approved_paths",
@@ -210,6 +212,9 @@ export function planRevisionInput(
     "plan revision",
   );
   const objective = boundedString(args.objective, "objective");
+  if (args.workflow_type !== "change" && args.workflow_type !== "review_only") {
+    fail("ERROR_UNSUPPORTED_WORKFLOW_TYPE", "plan workflow type is not supported");
+  }
   const fullPlan = boundedString(args.full_plan, "full_plan", MAX_APPROVED_PLAN);
   const brief = executionBrief(args.execution_brief);
   const approvedPaths = exactPaths(args.approved_paths, repositoryRoot);
@@ -226,7 +231,8 @@ export function planRevisionInput(
     "validation_id",
   );
   return {
-    plan_schema_version: 1,
+    plan_schema_version: 2,
+    workflow_type: args.workflow_type as WorkflowType,
     full_plan: fullPlan,
     execution_brief: brief,
     objective,
@@ -237,6 +243,7 @@ export function planRevisionInput(
 }
 
 const PLAN_REVISION_REPLACEMENT_KEYS = [
+  "workflow_type",
   "full_plan",
   "execution_brief",
   "objective",
@@ -264,6 +271,7 @@ export function planRevisionInputFromArtifact(
   artifact: PlanRevisionArtifact,
 ): PlanAuthoringContent {
   return {
+    workflow_type: artifact.workflow_type,
     full_plan: artifact.full_plan,
     execution_brief: artifact.execution_brief,
     objective: artifact.objective,
@@ -278,13 +286,20 @@ export function planRevisionInputFromArtifact(
 
 export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisionArtifact {
   try {
-    const record = safeObject(value, "plan artifact", 10);
+    const record = safeObject(value, "plan artifact", 12);
+    if (record.plan_schema_version === 1) {
+      fail(
+        "ERROR_MIGRATION_REQUIRED",
+        "retained pre-change PlanArtifact schema v1 is incompatible; reset the Workflow MCP database and recreate plans",
+      );
+    }
     exactKeys(
       record,
       [
         "plan_schema_version",
         "plan_id",
         "revision",
+        "workflow_type",
         "full_plan",
         "execution_brief",
         "objective",
@@ -295,7 +310,7 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
       ],
       "plan artifact",
     );
-    if (record.plan_schema_version !== 1)
+    if (record.plan_schema_version !== 2)
       fail("ERROR_STATE_CORRUPT", "plan schema version is invalid");
     const acceptanceCriteria = persistedPlanRecords(
       record.acceptance_criteria,
@@ -310,6 +325,7 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
     const normalized = planRevisionInput(
       {
         full_plan: record.full_plan,
+        workflow_type: record.workflow_type,
         execution_brief: record.execution_brief,
         objective: record.objective,
         approved_paths: record.approved_paths,
@@ -336,7 +352,11 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
       fail("ERROR_STATE_CORRUPT", "plan artifact validation requirements are not normalized");
     return record as unknown as PlanRevisionArtifact;
   } catch (error) {
-    if (error instanceof WorkflowError && error.category === "ERROR_STATE_CORRUPT") throw error;
+    if (
+      error instanceof WorkflowError &&
+      (error.category === "ERROR_STATE_CORRUPT" || error.category === "ERROR_MIGRATION_REQUIRED")
+    )
+      throw error;
     fail("ERROR_STATE_CORRUPT", "plan artifact is invalid");
   }
 }

@@ -242,9 +242,10 @@ export interface OperatorDecision {
 }
 
 export interface PlanRevisionArtifact {
-  plan_schema_version: 1;
+  plan_schema_version: 2;
   plan_id: PlanId;
   revision: PlanRevision;
+  workflow_type: WorkflowType;
   full_plan: string;
   execution_brief: string;
   objective: string;
@@ -256,6 +257,7 @@ export interface PlanRevisionArtifact {
 
 /** Caller-selected fields for a bounded copy-forward plan revision. */
 export interface PlanRevisionReplacements {
+  workflow_type?: WorkflowType;
   full_plan?: string;
   execution_brief?: string;
   objective?: string;
@@ -747,6 +749,7 @@ export type ParentView = RoleViewCommon &
 export interface ImplementerView extends RoleViewCommon {
   approved_plan: string | null;
   execution_brief: string | null;
+  plan_provenance: PlanProvenance | null;
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
   dirty_baseline_paths: ExactRepoPath[];

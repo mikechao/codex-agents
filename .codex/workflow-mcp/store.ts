@@ -356,6 +356,7 @@ function changedFields(before: WorkflowState | null, after: WorkflowState): stri
 
 function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState): void {
   if (
+    before.workflow_type !== after.workflow_type ||
     before.objective !== after.objective ||
     before.approved_plan !== after.approved_plan ||
     before.execution_brief !== after.execution_brief ||
@@ -977,6 +978,7 @@ export class WorkflowStore {
     exactKeys(
       args,
       [
+        "workflow_type",
         "full_plan",
         "execution_brief",
         "objective",
@@ -987,6 +989,7 @@ export class WorkflowStore {
       "plan create",
     );
     return this.planStore.planCreate({
+      workflow_type: args.workflow_type,
       full_plan: args.full_plan,
       execution_brief: args.execution_brief,
       objective: args.objective,

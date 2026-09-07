@@ -92,7 +92,8 @@ planning and every refinement only to the generated `planner`, which may launch 
 disposable read-only explorers, with no recursive fan-out. Explorer findings, transcripts,
 counts, retries, and lifecycle bookkeeping remain in planner context and are never persisted in
 Workflow MCP or plan artifacts. The planner is the sole complete plan writer/refiner through exactly
-`plan_create`, `plan_get`, and `plan_revise`. Material refinement uses the exact plan identity and
+`plan_create`, `plan_get`, and `plan_revise`; canonical revisions explicitly author
+`workflow_type: "change" | "review_only"`. Material refinement uses the exact plan identity and
 base revision plus a required non-empty bounded `replacements` object; the server copies omissions
 only from the verified base and replaces arrays wholesale before normalizing one complete candidate.
 Built-in Plan uses the parent surface `plan_parent_get`
@@ -138,7 +139,7 @@ every argument. This planning check complements, and does not replace, the orche
 creation preflight and the review runner. The planner discovers exact implementation and verification
 paths and keeps repository-specific guidance in the target-owned `.codex/planner-policy.json` rather
 than reusable contracts. Only the current approved revision can seed execution; stale or historical
-revisions stop without workflow creation. `workflow_create_from_plan` server-side snapshots exact
+revisions stop without workflow creation. `workflow_create_from_plan` server-side snapshots the exact authored workflow type and
 text, execution brief, normalized contracts, digest, and provenance, so no plan prose is retranscribed.
 
 `approved_plan` is immutable execution intent when present. A null `approved_plan` is also valid
@@ -706,11 +707,12 @@ known_failures: <none or concise list>
 
 ## Persistence schema
 
-Planning is a separate pre-workflow domain. Complete PlanArtifact revisions are insert-only and
+Planning is a separate pre-workflow domain. Complete canonical PlanArtifact schema-v2 revisions are
+insert-only and
 read/revise operations require exact optimistic revision numbers. Parent approval is a separate
 exact-revision operation; planner-facing writes cannot self-approve. Historical approved revisions
 remain readable but only the current approved revision can seed a workflow. `workflow_create_from_plan`
-and `workflow_create_linked_followup_from_plan` construct workflows server-side and snapshot the authoritative full plan,
+and `workflow_create_linked_followup_from_plan` construct workflows server-side and snapshot the authoritative authored type and full plan,
 bounded execution brief, normalized contracts, and digest provenance. Plans are not runtime-affined,
 and planning adds no WorkflowPhase or worker-attempt state. Direct `workflow_create` remains supported.
 

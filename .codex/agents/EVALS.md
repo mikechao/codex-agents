@@ -305,6 +305,12 @@ check is defense in depth rather than a new authority boundary.
   verifies the current approval, performs policy preflight, and creates from that exact identity only.
   Then exercise absent, generic, stale, historical, malformed, or conflicting handoffs and confirm it
   asks bounded semantic clarification or stops without choosing a plan or creating a workflow.
+- Plan-authored reviewer-first dogfood (post-commit, fresh host reload only): author and explicitly
+  approve a canonical `workflow_type: "review_only"` working-tree plan, then confirm Orchestrator
+  creates it by exact UUID/revision and dispatches the reviewer directly. If a fresh P1/P2 blocker is
+  reported, authorize only its exact existing repair directive, confirm the bound PlanArtifact reaches
+  the implementer, and verify complete aggregate re-review plus unchanged approval, validation,
+  receipt, and commit gates. This self-host dogfood is not a required pre-commit validation.
 - Semantic vocabulary boundary: confirm ordinary summaries do not expose internal Workflow MCP action
   or phase names, while sanitized values `approve_recovery`, `retry_commit`,
   `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review` remain

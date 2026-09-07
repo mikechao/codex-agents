@@ -383,6 +383,7 @@ export const ROLE_VIEW_EXTRA = {
   implementer: [
     "approved_plan",
     "execution_brief",
+    "plan_provenance",
     "acceptance_criteria",
     "validation_requirements",
     "initial_receipt",
@@ -1131,6 +1132,7 @@ export function createStateFromPlan(
 ): WorkflowState {
   const state = baseState({
     objective: artifact.objective,
+    workflowType: artifact.workflow_type,
     approvedPlan: artifact.full_plan,
     executionBrief: artifact.execution_brief,
     planProvenance: provenance,
@@ -2060,6 +2062,7 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
 }
 
 export interface LinkedFollowupPlan {
+  workflow_type: WorkflowType;
   objective: string;
   approved_plan: string | null;
   execution_brief: string | null;
@@ -2112,6 +2115,7 @@ export function linkedFollowupInput(
     exactPaths(args.approved_paths, repositoryRoot),
     currentHead,
     {
+      workflow_type: "change",
       objective: boundedString(args.objective, "objective"),
       approved_plan: approvedPlan(args.approved_plan),
       execution_brief: null,
@@ -2142,6 +2146,7 @@ export function linkedFollowupInputFromPlan(
     fail("ERROR_INVALID_FOLLOWUP", "resolved plan identity does not match request");
   }
   return linkedFollowupInputCore(state, args, artifact.approved_paths, currentHead, {
+    workflow_type: artifact.workflow_type,
     objective: artifact.objective,
     approved_plan: artifact.full_plan,
     execution_brief: artifact.execution_brief,
@@ -2152,6 +2157,7 @@ export function linkedFollowupInputFromPlan(
 }
 
 interface LinkedFollowupContract {
+  workflow_type: WorkflowType;
   objective: string;
   approved_plan: string | null;
   execution_brief: string | null;
@@ -2197,6 +2203,7 @@ function linkedFollowupInputCore(
     ? [...state.linked_continuation.lineage_workflow_ids, state.workflow_id]
     : [state.workflow_id];
   return {
+    workflow_type: contract.workflow_type,
     objective: contract.objective,
     approved_plan: contract.approved_plan,
     execution_brief: contract.execution_brief,
@@ -2222,6 +2229,7 @@ function linkedFollowupInputCore(
 
 export function linkedFollowupChildState(followup: LinkedFollowupPlan): WorkflowState {
   const state = baseState({
+    workflowType: followup.workflow_type,
     objective: followup.objective,
     approvedPlan: followup.approved_plan,
     executionBrief: followup.execution_brief,

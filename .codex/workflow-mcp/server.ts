@@ -28,7 +28,7 @@ import {
 type JsonSchema = Record<string, JSONValue>;
 
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v2 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -237,6 +237,7 @@ const workItemSchema: JsonSchema = {
 };
 
 const planRevisionProperties: Record<string, JSONValue> = {
+  workflow_type: { type: "string", enum: [...WORKFLOW_TYPE_VALUES] },
   full_plan: { type: "string", minLength: 1, maxLength: 1048576 },
   execution_brief: { type: "string", minLength: 1, maxLength: 32768 },
   objective: { type: "string", minLength: 1, maxLength: 4000 },
@@ -402,7 +403,7 @@ export const toolDefinitions = [
   {
     name: "workflow_create_from_plan",
     description:
-      "Create a working-tree change workflow from one current, explicitly approved plan revision.",
+      "Create the workflow type authored by one current, explicitly approved plan revision; the server resolves the exact artifact and derives its type.",
     inputSchema: schema(
       {
         ...planIdentityProperties,

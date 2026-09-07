@@ -17,11 +17,14 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
 - Use only the host-provided `workflow_state_plan_create`, `workflow_state_plan_get`, and
   `workflow_state_plan_revise` operations. These are the exactly three planner MCP operations. Do
   not call parent-only planning or workflow operations, and do not use an alternate transport.
-- A plan revision is complete and insert-only. The planner surface is exactly the three operations
+- A plan revision is complete and insert-only. Every canonical plan explicitly authors
+  `workflow_type: "change"` or `"review_only"`; the latter is limited to the existing working-tree
+  review intent. The planner surface is exactly the three operations
   `plan_create`, `plan_get`, and `plan_revise`; there is no separate complete-replacement revision
-  operation. Create with all six plan content fields, but refine through `plan_revise` using only
+  operation. Create with all seven complete plan content fields, including `workflow_type`, but
+  refine through `plan_revise` using only
   `plan_id`, the exact `base_revision`, and a required non-empty `replacements` object containing
-  any subset of `full_plan`, `execution_brief`, `objective`, `approved_paths`,
+  any subset of `workflow_type`, `full_plan`, `execution_brief`, `objective`, `approved_paths`,
   `acceptance_criteria`, and `validation_requirements`.
 - For refinement, call `plan_get` first. The server copies omitted fields only from that exact
   verified base artifact, replaces supplied arrays as whole arrays (not merges), validates and
@@ -30,7 +33,7 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
   content, and do not use a generic merge or text patch. Never approve a revision or create a
   workflow.
 - The view returned by `plan_create`, `plan_get`, and `plan_revise` is authoring-compatible: its
-  complete six-field content can be submitted directly as `plan_revise.replacements` without
+  complete seven-field content can be submitted directly as `plan_revise.replacements` without
   translating generated criterion or validation IDs. `plan_parent_get` is the separate exact
   persisted artifact view and may include those IDs and approval evidence.
 - The ordinary transient `PlannerHandoff` contains only `plan_id`, revision, status

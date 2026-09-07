@@ -72,6 +72,8 @@ test("closed protocol registry and schema contract exposes workflow actions with
   const linkedFromPlan = tools.find(
     (tool) => tool.name === "workflow_create_linked_followup_from_plan",
   );
+  const planCreate = tools.find((tool) => tool.name === "plan_create");
+  const createFromPlan = tools.find((tool) => tool.name === "workflow_create_from_plan");
   assert.ok(
     implementation &&
       review &&
@@ -81,7 +83,9 @@ test("closed protocol registry and schema contract exposes workflow actions with
       create &&
       adjudication &&
       manualValidation &&
-      linkedFromPlan,
+      linkedFromPlan &&
+      planCreate &&
+      createFromPlan,
   );
   assert.match(create.description ?? "", /return the parent view/u);
   assert.equal((create.description ?? "").includes("role capabilities"), false);
@@ -180,6 +184,17 @@ test("closed protocol registry and schema contract exposes workflow actions with
   );
   const revise = tools.find((tool) => tool.name === "plan_revise");
   assert.ok(revise);
+  const planCreateSchema = planCreate.inputSchema as any;
+  assert.equal(planCreateSchema.properties.workflow_type.enum.join(","), "change,review_only");
+  assert.equal(planCreateSchema.required.includes("workflow_type"), true);
+  const createFromPlanSchema = createFromPlan.inputSchema as any;
+  assert.deepEqual(Object.keys(createFromPlanSchema.properties).sort(), [
+    "max_repair_cycles",
+    "plan_id",
+    "revision",
+    "work_items",
+  ]);
+  assert.equal("workflow_type" in createFromPlanSchema.properties, false);
   const reviseSchema = revise.inputSchema as any;
   assert.deepEqual(Object.keys(reviseSchema.properties).sort(), [
     "base_revision",
@@ -198,6 +213,7 @@ test("closed protocol registry and schema contract exposes workflow actions with
     "full_plan",
     "objective",
     "validation_requirements",
+    "workflow_type",
   ]);
   for (const name of PLANNER_PLANNING_OPERATIONS) {
     const plannerTool = tools.find((tool) => tool.name === name);

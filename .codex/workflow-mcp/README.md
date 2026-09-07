@@ -12,7 +12,9 @@ review, or commit authorization. Schema v8 and earlier state requires a clean re
 implicit migration.
 
 Planning is a separate pre-workflow domain. The planner surface is exactly `plan_create`, `plan_get`,
-and `plan_revise`. `plan_create` accepts all six complete plan fields; material `plan_revise` calls
+and `plan_revise`. Canonical `plan_schema_version: 2` artifacts accept all seven complete plan
+fields, including explicit `workflow_type: "change" | "review_only"`; `review_only` plan authoring
+is limited to the existing working-tree intent. Material `plan_revise` calls
 carry exact `plan_id`, `base_revision`, and a required non-empty `replacements` object. The server
 copies omitted fields only from the exact verified base, replaces supplied arrays wholesale, and
 normalizes one complete candidate before persisting an immutable insert-only PlanArtifact revision.
@@ -23,11 +25,14 @@ authoritative `full_plan` verbatim, and explicitly approves with parent-only `pl
 only parent-reads an already-approved exact revision and calls `workflow_create_from_plan`, or uses
 the identity-only `workflow_create_linked_followup_from_plan` for a linked child; it does not approve
 or re-plan. Only the current approved revision can seed execution; historical approved
-revisions remain readable but are stale for execution. The server snapshots the exact full plan,
+revisions remain readable but are stale for execution. The server snapshots the exact authored
+workflow type and full plan,
 bounded execution brief, normalized objective/scope/contracts, digest, and provenance into a
-working-tree change workflow. Plans have no runtime affinity and introduce no workflow phase. Direct
+workflow whose type is derived from the approved artifact. Plans have no runtime affinity and
+introduce no workflow phase. Direct
 `workflow_create` continues to be supported as the non-plan fallback. The server transport and
-persistence mechanism remain unchanged apart from the v9 state field described below.
+persistence mechanism remain unchanged apart from the canonical plan schema-v2 type field and the
+v9 state field described below.
 
 `workflow_operator_decision_get` is a read-only, idempotent semantic parent refresh. It derives a
 bounded decision from one authoritative workflow, existing permitted actions, and only reciprocal
@@ -277,7 +282,8 @@ startup never performs implicit schema upgrades or row rewrites. Current workflo
 `workflow_prepare_commit` plus `workflow_submit_commit_result` after commit authorization.
 The parent bearer capability column from pre-change databases is intentionally absent from the
 current table; such databases are an incompatible clean break and require reset rather than
-backfill or row rewriting.
+backfill or row rewriting. Retained pre-change PlanArtifact revisions are also rejected with the
+same reset-required boundary; reset the Workflow MCP database and recreate canonical schema-v2 plans.
 
 The current state stores `approved_plan` exactly in the JSON state: Plan-mode execution supplies the
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable

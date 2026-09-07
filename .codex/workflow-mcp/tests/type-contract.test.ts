@@ -84,6 +84,7 @@ type NoDuplicates<
   : true;
 
 type PlannerContentKeys =
+  | "workflow_type"
   | "full_plan"
   | "execution_brief"
   | "objective"
@@ -218,6 +219,7 @@ function _compileDirectParentView(): void {
 function _compilePlannerAuthoringView(): void {
   const planner = undefined as unknown as PlannerPlanRead;
   const replacements: PlanRevisionReplacements = {
+    workflow_type: planner.workflow_type,
     full_plan: planner.full_plan,
     execution_brief: planner.execution_brief,
     objective: planner.objective,

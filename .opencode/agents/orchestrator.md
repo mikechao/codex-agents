@@ -146,8 +146,9 @@ intended (or stop with bounded clarification) and never choose a historical or u
 ask the user to name the exact `plan_id` and revision when this immediate handoff is unambiguous.
 
 Capture the exact returned `workflow_id` (the exact returned workflow identity), refresh
-`workflow_operator_decision_get`, and dispatch
-`implementer` with only that workflow ID. Never retranscribe `full_plan`, objective, paths, criteria,
+`workflow_operator_decision_get`, and route mechanically from the returned authoritative
+`workflow_type`: dispatch `implementer` for `change`, and dispatch `code_reviewer` directly for
+plan-authored working-tree `review_only`. Never retranscribe `full_plan`, objective, paths, criteria,
 or validation requirements. (do not pass pasted plan text; never pass or retranscribe its full plan.)
 For a plan-native linked follow-up, parent-read and verify the exact
 current child approval, then call only `workflow_create_linked_followup_from_plan` with source

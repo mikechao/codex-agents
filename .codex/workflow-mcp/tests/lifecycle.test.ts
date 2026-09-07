@@ -500,6 +500,7 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
 
 function doCreateChildPlan(ctx: any) {
   ctx.plan = ctx.store.planCreate({
+    workflow_type: "change",
     full_plan: "# exact linked child plan\n\nApply the authorized remediation.",
     execution_brief: "Apply only the server-bound remediation plan.",
     objective: "planned linked remediation",
@@ -680,6 +681,90 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
       assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
     }
     assert.equal("validation_results" in reviewOnlyReviewer, true);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-bound review-only repair preserves authored type and plan authority", () => {
+  const { root } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const plan = store.planCreate({
+      workflow_type: "review_only",
+      full_plan: "# review plan\n\nInspect the complete working tree.",
+      execution_brief: "Review the exact approved working-tree scope.",
+      objective: "review planned aggregate",
+      approved_paths: ["note.txt", "original-scope.txt"],
+      acceptance_criteria: ["the aggregate is safe"],
+      validation_requirements: [
+        { description: "review validation", argv: ["bun", "run", "check"] },
+      ],
+    });
+    store.planApprove({
+      plan_id: plan.plan_id,
+      revision: plan.revision,
+      user_authorization: "approve exact review plan",
+    });
+    const created = store.createFromPlan({ plan_id: plan.plan_id, revision: plan.revision });
+    const id = created.workflow_id;
+    assert.equal(created.workflow_type, "review_only");
+    assert.equal(created.phase, "REVIEWING");
+    store.beginReview({ workflow_id: id, expected_version: 0 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 1,
+      review_status: "CHANGES_REQUESTED",
+      blocking_findings: [blocker("PLAN-REVIEW-1")],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    store.authorizeRepair({
+      workflow_id: id,
+      expected_version: 2,
+      finding_ids: ["PLAN-REVIEW-1"],
+      repair_directive: {
+        required_outcome: "resolve the blocker",
+        strategy_constraints: "preserve the approved review plan",
+        fallbacks: [],
+        required_paths: [],
+        forbidden_paths: [],
+        user_authorization: "authorize exact planned repair",
+      },
+    });
+    const implementer = store.implementerGet(id);
+    assert.equal(implementer.workflow_type, "review_only");
+    assert.equal(implementer.approved_plan, created.approved_plan);
+    assert.deepEqual(implementer.plan_provenance, created.plan_provenance);
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 3,
+      status: "DONE",
+      summary: "repaired the planned review scope",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "safe" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "checked" }],
+      known_failures: [],
+      finding_resolution_map: { "PLAN-REVIEW-1": "resolved" },
+    });
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+    store.beginReview({ workflow_id: id, expected_version: 4 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 5,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: { "PLAN-REVIEW-1": "resolved" },
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "rechecked" }],
+      repair_conformance: {
+        status: "conforming",
+        evidence: "the planned blocker repair conforms to the directive",
+      },
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+    assert.equal(store.parentGet(id).workflow_type, "review_only");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

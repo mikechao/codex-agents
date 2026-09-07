@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { planReference } from "../plan-reference.js";
 import { WorkflowStore } from "../store.js";
+import { objectDigest } from "../validation.js";
 import { disposeFixture, fixture } from "./test-fixtures.js";
 
 function revisionInput() {
   return {
+    workflow_type: "change",
     full_plan: "step one\nstep two\nfinal step",
     execution_brief: "Run the bounded serial implementation.",
     objective: "planning foundation",
@@ -142,11 +144,72 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   disposeFixture(target.root);
 });
 
+test("approved plan-authored review_only binds reviewer-first working-tree state", () => {
+  const target = fixture();
+  const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      ...planInput("planned-review.txt"),
+      workflow_type: "review_only",
+    });
+    assert.equal(draft.workflow_type, "review_only");
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve reviewer-first plan",
+    });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    assert.equal(workflow.workflow_type, "review_only");
+    assert.equal(workflow.phase, "REVIEWING");
+    assert.deepEqual(workflow.review_target, {
+      review_mode: "working_tree",
+      base_revision: target.git("rev-parse", "HEAD"),
+      head_revision: null,
+      approved_paths: ["planned-review.txt"],
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    });
+    assert.equal(workflow.plan_provenance?.artifact_digest, approved.artifact_digest);
+    assert.deepEqual(store.implementerGet(workflow.workflow_id).permitted_next_actions, []);
+    assert.deepEqual(store.reviewerGet(workflow.workflow_id).permitted_next_actions, [
+      "workflow_begin_review",
+    ]);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("retained pre-change plan artifacts require reset and recreation", () => {
+  const target = fixture();
+  const databasePath = join(target.root, "pre-change-plan.sqlite");
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath });
+  const draft = store.planCreate(revisionInput());
+  const row = store.db
+    .prepare("SELECT artifact_json FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+    .get(draft.plan_id) as { artifact_json: string };
+  const artifact = JSON.parse(row.artifact_json) as Record<string, unknown>;
+  delete artifact.workflow_type;
+  artifact.plan_schema_version = 1;
+  store.db
+    .prepare("UPDATE plan_revisions SET artifact_json = ?, artifact_digest = ? WHERE plan_id = ?")
+    .run(JSON.stringify(artifact), objectDigest(artifact), draft.plan_id);
+  store.close();
+  assert.equal(
+    category(() => new WorkflowStore({ repositoryRoot: target.root, databasePath })),
+    "ERROR_MIGRATION_REQUIRED",
+  );
+  rmSync(databasePath, { force: true });
+  disposeFixture(target.root);
+});
+
 test("planner reads round-trip directly while parent reads retain persisted contract IDs", () => {
   const target = fixture();
   const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
   try {
     const draft = store.planCreate({
+      workflow_type: "review_only",
       full_plan: "round-trip plan",
       execution_brief: "round-trip brief",
       objective: "round-trip objective",

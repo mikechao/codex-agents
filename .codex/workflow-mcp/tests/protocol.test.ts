@@ -245,6 +245,7 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
   const session = await connectProtocol(root);
   try {
     const draft = await session.call("plan_create", {
+      workflow_type: "review_only",
       full_plan: "full plan text",
       execution_brief: "bounded execution brief",
       objective: "stdio planning",

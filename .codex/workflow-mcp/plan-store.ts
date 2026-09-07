@@ -51,6 +51,7 @@ interface PlanApprovalRow {
 
 type PlanRevisionContent = Pick<
   PlanRevisionArtifact,
+  | "workflow_type"
   | "full_plan"
   | "execution_brief"
   | "objective"
@@ -75,6 +76,7 @@ export interface ApprovedPlan {
 
 function planRevisionContent(value: PlanRevisionContent): PlanRevisionContent {
   return {
+    workflow_type: value.workflow_type,
     full_plan: value.full_plan,
     execution_brief: value.execution_brief,
     objective: value.objective,
