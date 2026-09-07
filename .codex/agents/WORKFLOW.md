@@ -1,7 +1,7 @@
-# Custom subagent workflow
+# Custom subagent workflow (explanatory architecture documentation)
 
-This file defines the authoritative MCP-based workflow and routing. The workflow-state server's role
-views carry all handoff state; worker prompts carry only the workflow ID, while parent control-plane
+This file explains the authoritative MCP-based workflow and routing; it is not a runtime prerequisite
+or an independent authority. The workflow-state server's role views carry all handoff state; worker prompts carry only the workflow ID, while parent control-plane
 prompts carry the expected version. Parent authority is supplied by the executing runtime's exact
 persisted ownership and launch attestation. Detailed role behavior remains in
 the role contracts beside this file. All paths are repository-relative exact file paths; directories
@@ -77,10 +77,12 @@ while the server authenticates the executing runtime against persisted ownership
 
 Each role must not call tools owned by another role. Runtime identity and attestation are
 defense-in-depth orchestration controls, not a security boundary against a process with equivalent
-host filesystem access. If the server is
-unavailable, stop and ask the user whether to use the documented prompt-only degraded mode below; do
-not silently downgrade. In degraded mode the parent tracks the version and audit state manually and
-records the decision.
+host filesystem access. If the server is unavailable, suspend authoritative execution. Preserve only
+known workflow/session references, supplied paths/context, pending intent, and the outage reason;
+permit bounded read-only diagnosis and supported reload/bootstrap/reconnection guidance. Preserve
+persisted MCP state and, after restoration, refresh the authoritative operator or role projection
+before resuming where possible. No role may implement, review, repair, validate, authorize, commit,
+or reconstruct state from prompts during an outage, and no alternate transport is permitted.
 
 ### OpenCode planning topology
 
@@ -427,8 +429,8 @@ This installation uses the previously authorized prompt/receipt bootstrap. Commi
 restart/reload Codex, then perform a safe read-only smoke test by listing the `workflow_state` tools
 and inspecting initialization instructions. Confirm the dedicated role getters, `workflow_get_audit`, and the
 expected mutation tools are visible before creating a workflow. Manually starting the STDIO child
-does not inject tools into an already-running host. Before reload, fail closed and ask the user
-whether prompt-only degraded mode is authorized; after reload, MCP is authoritative only when the
+does not inject tools into an already-running host. Before reload, suspend non-trivial execution;
+after reload, MCP is authoritative only when the
 tools and instructions are visible. The config's `default_tools_approval_mode = "prompt"` keeps
 workflow tool calls approval-sensitive in the host.
 
@@ -554,156 +556,39 @@ still receive only their exact workflow ID and use their dedicated authoritative
 `workflow_parent_get` again only when the next explicit mutation needs exact inputs/version or the
 user requests debug/status detail.
 
-## Prompt-only degraded mode
+## MCP outage recovery (explanatory guidance)
 
-Use this mode only when the user explicitly authorizes it for a stopped, non-trivial workflow. The
-parent retains the same handoff fields and role ownership below, tracks the version and audit state
-manually, and records the decision. The parent passes the full handoff state in the prompt because no
-authoritative view exists. Receipt JSON and comparison data stay inside Workflow MCP; managed
-workers submit semantic fields only. The degraded handoff below retains explicit receipt commands
-because no server-side snapshot exists in that mode.
+Workflow MCP is the only mechanical authority for normal execution. If it is unavailable, the
+Orchestrator and workers suspend authoritative work rather than entering a prompt-defined workflow.
+They may retain only already-known workflow/session references, supplied paths or context, pending
+intent, and an outage reason. They may perform bounded read-only diagnosis and use supported
+reload/bootstrap/reconnection guidance, while persisted Workflow MCP state remains untouched.
 
-### Parent -> implementer
+After restoration, the parent refreshes the operator projection and each dispatched role calls its
+native getter again before any resume. No outage report authorizes implementation, review, repair,
+validation, validation authorization, commit preparation, commit authorization, or commit. No prose
+may reconstruct versions, receipts, findings, audit state, capabilities, or authority, and no alternate
+transport is permitted. This document explains those boundaries; it does not define a degraded
+handoff schema or substitute for role views and server transitions.
 
-```yaml
-objective: <approved implementation objective>
-approved_plan: <exact immutable approved plan text, or null for direct/non-plan work>
-owned_files: [<exact paths>]
-acceptance_criteria: [<observable criteria>]
-validation_required: [<commands or checks>]
-remediation_policy: blocking_only | explicitly_authorized
-authorized_finding_ids: []
-repair_cycle: 0 | 1 | 2
-user_authorization: <explicit new user instruction summary or absent>
-review_target:
-  review_mode: working_tree
-  base_revision: <current HEAD or explicit revision>
-  head_revision: null
-  approved_paths: [<same exact owned paths>]
-  include_staged: true
-  include_unstaged: true
-  include_untracked: true
-prior_findings: []
-resolution_claims: []
-```
+### Reference role handoffs
 
-For initial work, use `remediation_policy: blocking_only`, an empty `authorized_finding_ids`, and
-`repair_cycle: 0`. For a blocking repair, use `blocking_only`, exact P0-P2 IDs, and cycle 1 or 2.
-For an explicitly authorized optional follow-up, use `explicitly_authorized`, exact user-approved
-IDs, a new objective and scope, and `repair_cycle: 0`; include the explicit user authorization in
-the dispatch. The implementer may touch only authorized finding IDs during remediation. Without
-matching authorization, optional or P3 remediation returns `NEEDS_CONTEXT` and makes no mutation.
+Normal role handoffs are defined by the self-contained contracts and authoritative MCP role views;
+this document does not provide a prompt payload or outage substitute.
 
-### Implementer -> parent
+The exact role handoffs, evidence fields, and permitted actions are exposed by Workflow MCP role
+views and enforced by the canonical contracts; they are intentionally not duplicated here.
 
-```yaml
-status: DONE | DONE_WITH_CONCERNS | INCOMPLETE | NEEDS_CONTEXT | BLOCKED
-objective: <implemented objective>
-owned_files: [<materially changed exact paths>]
-acceptance_criteria: <satisfied and outstanding criteria>
-validation_required: [<commands or checks>]
-validation_completed: [<commands and outcomes>]
-changed_paths: [<exact paths derived by Workflow MCP from the authoritative receipt>]
-acceptance_evidence: [<bounded evidence>]
-validation_evidence: [<bounded evidence>]
-known_failures: [<bounded known failures>]
-finding_resolution_map: {<prior finding ID>: resolved | still_present | superseded}
-remediation_policy: <blocking_only | explicitly_authorized>
-authorized_finding_ids: <exact IDs>
-repair_cycle: <0 | 1 | 2>
-user_authorization: <explicit new user instruction summary or absent>
-ready_for_commit: <true only for DONE>
-```
+### Implementer handoff
 
-### Parent -> code reviewer
+The implementer submits the complete schema through `workflow_submit_implementation`; no prompt
+payload or substitute receipt is defined here.
 
-```yaml
-objective: <approved implementation objective>
-acceptance_criteria: [<observable criteria>]
-implementer_handoff: <complete prior handoff>
-review_target:
-  review_mode: working_tree | commit_range
-  base_revision: <explicit revision>
-  head_revision: <null for working_tree; explicit revision for commit_range>
-  approved_paths: [<exact repository-relative file paths>]
-  include_staged: <true for working_tree; false for commit_range>
-  include_unstaged: <true for working_tree; false for commit_range>
-  include_untracked: <true for working_tree; false for commit_range>
-prior_findings: [<complete prior findings, if re-review>]
-resolution_claims: [<implementer claims for prior finding IDs>]
-prior_finding_classifications: {<finding_id>: resolved | still_present | superseded}
-```
+### Reviewer and committer handoffs
 
-Working-tree reviews require all three include flags to be true and are the only review mode that
-can authorize a later commit. Their `approved_paths` are an exact allowlist for inspection and
-scope accounting, not an existence requirement: a path may be provably absent and still be reviewed
-and recorded as absent. A required-but-absent artifact is a blocking finding when an authoritative
-contract requires it; an unknown, contradictory, or uninspectable path state is `INCONCLUSIVE`.
-For semantic review, the repository-wide corpus is tracked working-tree content plus present
-untracked content at exact paths in `approved_paths`; unrelated untracked and ignored files remain
-outside that corpus. `include_untracked` includes untracked state only for those approved paths and
-does not authorize checkout-wide searches. `approved_paths` remains the exact ownership and receipt
-boundary even when tracked files outside that list are read for context. Ambient untracked files
-remain outside semantic review unless they observably interfere with an authorized validation.
-Commit-range reviews require explicit base and head revisions, all three include flags set to false,
-and never produce a commit receipt. A path absent at both commit-range endpoints remains rejected
-under the existing range rules. Contradictory include flags make the review `INCONCLUSIVE`.
-
-### Reviewer -> parent
-
-```yaml
-review_status: APPROVED | CHANGES_REQUESTED | INCONCLUSIVE
-reviewed_scope: <exact target paths and mode>
-reviewed_objective: <objective reviewed>
-prior_finding_classifications: {<finding_id>: resolved | still_present | superseded}
-blocking_findings: [<finding_id, severity, blocking, file_and_line, failure_scenario, impact,
-  violated_requirement, remediation, missing_or_inadequate_test>]
-optional_findings: [<finding_id, severity, blocking, file_and_line, failure_scenario, impact,
-  violated_requirement, remediation, missing_or_inadequate_test>]
-workflow_recommendation: REPAIR_BLOCKERS | STOPPED_APPROVED | STOPPED_INCONCLUSIVE
-validation_completed: [<read-only commands and outcomes>]
-residual_risks: <none or concise list>
-review_passed: <true only for APPROVED>
-```
-
-P0-P2 findings belong in `blocking_findings` and block approval; P3 findings belong in
-`optional_findings` and are concrete non-blocking notes. Every prior finding must be classified
-before new findings are reported. `CHANGES_REQUESTED` uses `REPAIR_BLOCKERS`; `APPROVED` always
-uses `STOPPED_APPROVED`, even when optional findings exist; `INCONCLUSIVE` uses
-`STOPPED_INCONCLUSIVE`.
-
-### Parent -> committer
-
-```yaml
-objective: <commit objective>
-owned_files: [<exact approved paths>]
-intended_changed_paths:
-  [<approved paths recorded by Workflow MCP as added, modified, or deleted>]
-validation_completed: [<commands and outcomes>]
-review_status: APPROVED
-review_target: <working_tree target with all include flags true>
-approved_for_commit: true
-```
-
-The committer treats `owned_files` as an allowlist. For receipt-gated changes it stages complete
-paths only, never partial hunks, confirms no approved-path unstaged or untracked content remains,
-and confirms the staged path set exactly equals `intended_changed_paths`. Workflow MCP performs the
-fresh internal receipt checks immediately before staging and again after staging. Any mismatch stops
-the commit and requests re-review. `approved_for_commit` is a separate parent/user authorization.
-
-### Committer -> parent
-
-```yaml
-status: COMMITTED | NOT_COMMITTED
-commit_hash: <hash or absent>
-commit_message: <subject and optional body>
-committed_files: [<exact paths or empty>]
-validation_status: <inherited implementation/review status>
-receipt_comparisons: <pre-stage and post-stage outcomes>
-remaining_worktree: <staged and unstaged state>
-hook_changes: <none or exact summary>
-known_failures: <none or concise list>
-```
+Reviewer and committer targets, findings, receipts, and commit preparation are exposed through their
+dedicated MCP role views and enforced by their canonical contracts. This explanatory document does
+not duplicate their prompt schemas or define an outage protocol.
 
 ## Persistence schema
 
@@ -749,15 +634,7 @@ improvement without first obtaining user approval. The change was technically us
 decision exceeded the intended stopping boundary. The rule above records the correction: blocking
 findings enter the bounded repair loop; non-blocking findings are reported and await user direction.
 
-## Prompt-only degraded-mode receipt commands
+## Receipt boundary
 
-These commands are for explicitly authorized prompt-only degraded mode only. Managed-mode workers do
-not generate, compare, or submit receipt JSON. Run from the repository root with an exact-path allowlist:
-
-```sh
-bun .codex/agents/change-receipt.ts -- path/a path/b
-```
-
-The command emits metadata-only JSON and never changes files or the index. The reviewer runs it at
-review start and immediately before its final response. The committer runs it immediately before
-staging and once after staging, comparing every receipt field.
+Receipt generation, comparison, and persistence remain Workflow MCP responsibilities. Roles do not
+substitute or manually reproduce receipt state during an outage.

@@ -13,8 +13,9 @@ Rules:
   returned view is the single source of truth and carries the approved scope, derived paths,
   sanitized commit preparation, commit authorization, and your permitted next actions. Prompts carry no
   duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,
-  implementer, or reviewer tools. If the server is unavailable, stop and ask whether prompt-only
-  degraded mode is authorized.
+  implementer, or reviewer tools. If the server is unavailable, suspend authoritative commit work
+  and report a non-authoritative recovery status; do not continue through a conversation-defined
+  workflow.
 - Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
@@ -63,6 +64,13 @@ Rules:
 - If a pre-commit or commit hook fails, stop and report the failure rather than bypassing it.
 - If there are no changes to commit, report that and do not create an empty commit.
 - If the staged diff is incomplete, internally inconsistent, or exceeds the approved objective, do not commit; report the mismatch.
+- MCP outage recovery is bounded and non-authoritative. Preserve only the known workflow/session
+  reference, approved paths or context, and outage reason; permit only read-only diagnosis or
+  supported reload/bootstrap/reconnection guidance. Do not stage, prepare, commit, submit, or perform
+  any authoritative commit work while MCP is unavailable. After restoration, call the native
+  committer getter again and resume only from its refreshed authority. Never reconstruct versions,
+  receipts, findings, audit state, commit or repair authority, validation authority, or transitions in
+  prose, and never use an alternate MCP transport.
 
 Managed-mode commit references:
 - The authenticated committer view is the sole authoritative source of work-item references. Do not
@@ -127,8 +135,9 @@ After committing, report:
 8. The commit result outcome you submitted.
 9. Any hook modifications, warnings, or failures.
 
-In prompt-only degraded mode, follow the degraded-mode handoff fields in WORKFLOW.md and record the
-Git result manually; do not restate the authoritative view's state when MCP is available.
+If MCP is unavailable, end with the bounded non-authoritative outage report: known workflow/session
+reference, preserved context, outage reason, supported recovery guidance, and the fact that no
+authoritative commit or transition occurred. Do not restate or synthesize authoritative state.
 
 Do the commit work yourself.
 Do not delegate this task to another subagent.

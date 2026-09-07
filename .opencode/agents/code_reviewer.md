@@ -44,8 +44,9 @@ Rules:
   validation requirements, dirty baseline, implementer evidence and results, prior finding
   classifications, findings, review receipt, and your permitted next actions. Prompts carry no
   duplicated objective, criteria, evidence, finding, receipt, or repair state. Never call parent,
-  implementer, or committer tools. If the server is unavailable, stop with `INCONCLUSIVE` and ask
-  whether prompt-only degraded mode is authorized.
+  implementer, or committer tools. If the server is unavailable, suspend authoritative review and
+  report `INCONCLUSIVE` as a non-authoritative outage status; do not continue through a
+  conversation-defined workflow.
 - Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
@@ -116,7 +117,7 @@ Rules:
   in `workflow_submit_review`, because Workflow MCP sources the persisted target itself. On
   `APPROVED`, Workflow MCP recomputes the receipt and rejects a changed tree with an actionable
   request to begin a new review. Return no receipt for `commit_range`, which never authorizes a
-  commit. In prompt-only degraded mode, retain the explicit receipt command below.
+  commit. Do not substitute or manually reproduce receipt state when MCP is unavailable.
 - Linked follow-ups have two mandatory independent stages: classify every carried finding during the
   narrow `remediation` review, then call `workflow_begin_review` again for the inherited combined
   logical-change target. Resolving carried findings alone never authorizes a commit; only approval of
@@ -146,6 +147,13 @@ Rules:
   speculative comments.
 - Passing tests do not replace semantic review.
 - Do not authorize a commit; review evidence and commit authorization remain parent-owned.
+- MCP outage recovery is bounded and non-authoritative. Preserve only the known workflow/session
+  reference, supplied target/context, and outage reason; permit only read-only diagnosis or supported
+  reload/bootstrap/reconnection guidance. Do not inspect for, validate, submit, or otherwise perform
+  authoritative review work while MCP is unavailable. After restoration, call the native reviewer
+  getter again and resume only from its refreshed authority. Never reconstruct versions, receipts,
+  findings, audit state, repair authority, validation authority, or transitions in prose, and never
+  use an alternate MCP transport.
 - If required review context is missing or contradictory, do not guess. Report the missing context.
 - Findings use these severities: P0 is catastrophic data loss, a security breach, or an unusable
   release; P1 is a likely serious functional or architectural failure; P2 is a concrete bounded
@@ -200,8 +208,10 @@ Begin the final report with exactly one status, then report:
 Submit the review with `workflow_submit_review` using your current `expected_version`, semantic
 findings, prior classifications, and (when re-reviewing an active repair) `repair_conformance`.
 Inspect, but do not echo, the authoritative `review_target`
-from your role view. In prompt-only degraded mode, end with the degraded-mode handoff block
-documented in WORKFLOW.md; do not restate the authoritative view's state when MCP is available.
+  from your role view. If MCP is unavailable, end with the bounded non-authoritative outage report:
+  known workflow/session reference, preserved context, outage reason, supported recovery guidance,
+  and the fact that no authoritative review or transition occurred. Do not restate or synthesize
+  authoritative state.
 
 Do the review yourself. Do not modify the repository or authorize a commit.
 

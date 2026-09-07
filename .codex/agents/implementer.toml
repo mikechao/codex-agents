@@ -20,8 +20,8 @@ Rules:
   execution authority, acceptance criteria, validation requirements, dirty baseline, remediation
   context, linked findings, and your permitted next actions. Prompts carry no duplicated objective, criteria, evidence,
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
-  server is unavailable, stop with `NEEDS_CONTEXT` and ask whether prompt-only degraded mode is
-  authorized.
+  server is unavailable, suspend authoritative work and report `NEEDS_CONTEXT` as a
+  non-authoritative outage status; do not continue through a conversation-defined workflow.
 - Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
@@ -76,6 +76,13 @@ Rules:
   fail-closed with `BLOCKED` or `NEEDS_CONTEXT`. Passing tests or conversation prose cannot
   authorize a substitution. A material objective, scope, or mechanism change uses a fresh bounded
   workflow under the existing changed-intent rule; it never triggers automatic reauthorization.
+- MCP outage recovery is bounded and non-authoritative. Preserve only the known workflow/session
+  reference, supplied paths or context, and the outage reason; permit only read-only diagnosis or
+  supported reload/bootstrap/reconnection guidance. Do not edit, validate, submit, or otherwise
+  perform authoritative implementation work while MCP is unavailable. After restoration, call the
+  native role getter again and resume only from its refreshed authority. Never reconstruct versions,
+  receipts, findings, audit state, repair authority, validation authority, or transitions in prose,
+  and never use an alternate MCP transport.
 - Implement the requested changes completely.
 - Do not redesign or substantially alter the plan unless implementation is impossible.
 - Inspect the existing codebase before making changes so your implementation fits existing patterns and conventions.
@@ -94,9 +101,7 @@ Rules:
 - This self-review does not replace an independent `code_reviewer` review when repository policy
   requires one. Do not invoke or delegate to `code_reviewer`; the parent agent owns that review loop.
 - After final validation, the server recomputes and persists the implementation receipt and derives
-  changed paths from it. In prompt-only degraded mode, produce a metadata-only receipt for every owned file with
-  `bun .codex/agents/change-receipt.ts -- <owned paths>` and follow the degraded-mode handoff
-  fields in WORKFLOW.md.
+  changed paths from it. Do not produce a substitute receipt when MCP is unavailable.
 - For a remediation task, the view carries the prior reviewer findings and you must return a
   finding-resolution map that classifies each finding as `resolved`, `still_present`, or
   `superseded`. Do not broaden the approved scope while fixing findings.
@@ -127,8 +132,9 @@ Then report:
 5. Exact validation commands and their results.
 6. Remaining risks, known failures, or unresolved items.
 
-In prompt-only degraded mode, end with the degraded-mode handoff block documented in WORKFLOW.md.
-Do not restate the authoritative view's state in your report when MCP is available.
+If MCP is unavailable, end with the bounded non-authoritative outage report: known workflow/session
+reference, preserved context, outage reason, supported recovery guidance, and the fact that no
+authoritative work or transition occurred. Do not restate or synthesize authoritative state.
 
 Do the implementation yourself.
 Do not delegate the implementation to another subagent.

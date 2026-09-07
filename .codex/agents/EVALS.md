@@ -391,8 +391,9 @@ check is defense in depth rather than a new authority boundary.
   runtime-recovery diagnostic on stderr and never emits non-protocol stdout.
 - Protocol cleanliness: the STDIO child emits only valid MCP traffic on stdout; diagnostics remain
   closed and on stderr.
-- Unavailable server: non-trivial workflows stop and ask whether prompt-only degraded mode is
-  authorized; they never silently fall back.
+- Unavailable server: non-trivial workflows suspend authoritative execution, preserve only bounded
+  known context, permit supported diagnosis/reconnect guidance, and refresh MCP projections before
+  resuming; they never silently fall back to a prompt-defined workflow.
 - Bootstrap/reload: project config is committed, Codex is restarted, and a read-only tool-list and
   instructions check is completed before MCP is treated as authoritative; manual STDIO launch alone
   does not inject tools.

@@ -74,12 +74,13 @@ state.
 - Host reload, stale configuration, transport, and similar infrastructure failures belong at their
   owning boundary; do not model them as workflow-domain phases without genuine durable meaning.
 
-For normative workflow semantics, read `.codex/agents/WORKFLOW.md`; do not duplicate its state
-machine here or add transition details, recovery procedures, operator runbook content, or unfinished
-planner mechanics.
+Workflow MCP state/projections and self-contained role contracts are the mechanical execution
+authority. `.codex/agents/WORKFLOW.md` is retained explanatory architecture documentation; do not
+treat reading it as a runtime precondition or an independent transition authority, and do not
+duplicate its state machine here.
 
-Read `.codex/agents/WORKFLOW.md` before changing an agent contract or the workflow-state MCP
-server. Keep the generated host definitions, workflow documentation, MCP tool schemas and
+Read the relevant architecture documentation before changing an agent contract or the workflow-state
+MCP server. Keep the generated host definitions, explanatory workflow documentation, MCP tool schemas and
 transitions, and their tests consistent. When an agent contract changes, regenerate the host
 definitions (`bun run generate:agents`), keep the generator's per-host frontmatter accurate, and
 use `.codex/agents/EVALS.md` as the manual evaluation checklist; add to `EVAL_RESULTS.md` only

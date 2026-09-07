@@ -35,7 +35,6 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/contracts/implementer.md",
   ".codex/agents/contracts/planner.md",
   ".codex/agents/contracts/explorer.md",
-  ".codex/agents/WORKFLOW.md",
   ".opencode/agents/orchestrator.md",
   ".opencode/tools/runEvidence.ts",
   ".opencode/tools/inspectGitRange.ts",

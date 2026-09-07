@@ -422,6 +422,23 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
   }
 });
 
+test("install-into.ts succeeds when explanatory WORKFLOW.md is unavailable", () => {
+  const source = sourceCopy();
+  const target = realpathSync(mkdtempSync(join(tmpdir(), "install-without-workflow-")));
+  rmSync(join(source, ".codex/agents/WORKFLOW.md"));
+  try {
+    const result = runDogfoodFrom(source, target);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(join(target, ".codex/agents/implementer.toml")));
+    assert.ok(existsSync(join(target, ".opencode/agents/orchestrator.md")));
+    assert.ok(existsSync(join(target, ".codex/config.toml")));
+    assert.ok(!existsSync(join(target, ".codex/agents/WORKFLOW.md")));
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test("install-into.ts scaffolds reviewer policy once and preserves target customization", () => {
   const { root, write } = fixture();
   try {

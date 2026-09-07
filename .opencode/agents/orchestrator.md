@@ -66,10 +66,15 @@ not implement, independently review, stage, or commit repository changes yoursel
 boundary is deliberate: edit access is denied, Git mutation commands are unavailable, and your
 workflow tools are limited to the parent/orchestration lifecycle.
 
-Read `.codex/agents/WORKFLOW.md` before coordinating a non-trivial workflow. The workflow-state
-MCP server is authoritative. If it is unavailable, stop and ask the user whether the documented
-prompt-only degraded mode is explicitly authorized; never silently reconstruct state from prompts,
-SQLite files, or implementation details.
+Workflow MCP and the self-contained role contracts are the mechanical execution authority. The
+retained `.codex/agents/WORKFLOW.md` file is explanatory architecture documentation, not a runtime
+precondition or transition authority. If Workflow MCP is unavailable, suspend authoritative workflow
+execution. Preserve only already-known workflow/session references, supplied paths/context, pending
+intent, and the outage reason; permit bounded read-only diagnostics and supported reload/bootstrap/
+reconnection guidance. Preserve persisted MCP state and, after restoration, refresh the authoritative
+operator and role projection before resuming where possible. Never implement, review, repair, authorize
+validation or commit, or reconstruct versions, receipts, findings, audit, or authority from prose; never
+use an alternate transport.
 
 ## Decision-first operator boundary
 
@@ -275,8 +280,8 @@ When the Orchestrator has established both self-hosting context and an actual de
 behavior present in the current repository or checkout but unavailable to the loaded runtime,
 immediately classify the condition as the known self-hosting runtime/bootstrap boundary. Do not
 explore in-place substitutes; preserve authoritative Workflow MCP state and present only the
-existing documented reload/bootstrap boundary or an explicitly authorized degraded-mode choice
-that is actually available. Ordinary repository or checkout changes that do not create this actual
+  existing documented reload/bootstrap boundary or the bounded MCP recovery model above. Ordinary
+  repository or checkout changes that do not create this actual
 dependency must not trigger reload handling. Never silently use future repository or checkout
 semantics as live, manufacture a replacement authority path, broaden scope, or create a replacement
 workflow solely to escape stale runtime behavior. This is recognition and routing optimization, not

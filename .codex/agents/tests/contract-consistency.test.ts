@@ -663,7 +663,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "known self-hosting runtime/bootstrap boundary",
     "preserve authoritative Workflow MCP state",
     "existing documented reload/bootstrap boundary",
-    "explicitly authorized degraded-mode choice",
+    "bounded MCP recovery model above",
     "future repository or checkout semantics as live",
     "manufacture a replacement authority path",
     "broaden scope",
@@ -686,14 +686,46 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   );
 });
 
+test("normal execution is self-contained and MCP outage handling is recovery-only", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  assert.doesNotMatch(orchestrator, /Read `\.codex\/agents\/WORKFLOW\.md` before coordinating/u);
+  assert.match(orchestrator, /explanatory architecture documentation, not a runtime precondition/u);
+  assert.match(orchestrator, /suspend authoritative workflow execution/u);
+  assert.match(orchestrator, /never implement, review, repair, authorize validation/iu);
+  assert.match(orchestrator, /never use an alternate transport/u);
+
+  for (const role of ["implementer", "code_reviewer", "committer"] as const) {
+    const canonical = readFileSync(resolve(agentsDir, `contracts/${role}.md`), "utf8").replace(
+      /\s+/gu,
+      " ",
+    );
+    const generated = (
+      role === "code_reviewer" ? opencode("code_reviewer.md") : opencode(`${role}.md`)
+    ).replace(/\s+/gu, " ");
+    for (const definition of [canonical, generated]) {
+      assert.doesNotMatch(definition, /WORKFLOW\.md/u);
+      assert.match(
+        definition,
+        /authoritative .*work|authoritative .*review|authoritative .*commit/u,
+      );
+      assert.match(definition, /bounded.*non-authoritative/u);
+      assert.match(definition, /native .*getter again/u);
+      assert.match(definition, /never use an alternate MCP transport/u);
+    }
+  }
+
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+  assert.match(workflow, /explanatory architecture documentation/u);
+  assert.match(workflow, /does not define a degraded handoff schema/u);
+});
+
 test("orchestrator presents semantic proposals before natural-language authorization", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
-  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
   const guide = readFileSync(
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
     "utf8",
   ).replace(/\s+/gu, " ");
-  const contracts = [orchestrator, workflow, guide];
+  const contracts = [orchestrator, guide];
 
   for (const contract of contracts) {
     assert.match(contract, /semantic (?:decisions|choice|user choice)/u);
@@ -752,9 +784,8 @@ test("the checked-in native Plan override is canonical and isolated from generat
 
 test("orchestrator summarizes refreshed semantic transitions before routing", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
-  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
 
-  for (const contract of [orchestrator, workflow]) {
+  for (const contract of [orchestrator]) {
     assert.match(
       contract,
       /After every terminal (?:subagent|worker) handoff[^.]*refresh[^.]*workflow_operator_decision_get[^.]*before summarizing or routing/u,
@@ -815,7 +846,6 @@ test("orchestrator summarizes refreshed semantic transitions before routing", ()
 
 test("repair-terminal routing is projection-first and fail-closed", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
-  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
   const guide = readFileSync(
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
     "utf8",
@@ -832,7 +862,7 @@ test("repair-terminal routing is projection-first and fail-closed", () => {
   assert.ok(terminal >= 0 && terminal < refresh);
   assert.ok(refresh < decision && decision < reviewing && reviewing < reviewer);
 
-  for (const contract of [orchestrator, workflow, guide]) {
+  for (const contract of [orchestrator, guide]) {
     assert.match(contract, /retained (?:findings|blockers)[^.]*history\/remediation context/iu);
     assert.ok(
       /non-empty list alone never constitutes a fresh review result/u.test(contract) ||
@@ -879,7 +909,7 @@ test("orchestration contracts classify intent and reconcile the final tree expli
   );
   const evals = readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " ");
 
-  for (const contract of [orchestrator, workflow, guide]) {
+  for (const contract of [orchestrator, guide]) {
     assert.match(contract, /unchanged (?:objective|approved intent)/iu);
     assert.match(contract, /ordinary repair/u);
     assert.match(contract, /exact (?:blocking finding IDs|blocking IDs)/u);
@@ -965,11 +995,7 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     /semantic decision|operator projection/u,
     "fresh semantic decisions must remain authoritative",
   );
-  assert.match(
-    workflow,
-    /routes?\s+from its state-provable decision/u,
-    "workflow contract must route from refreshed semantic decisions",
-  );
+  assert.match(workflow, /Final-tree reconciliation is a separate explicit-authorization path/u);
 
   const routeSections = [
     [
@@ -977,12 +1003,6 @@ test("orchestration contracts classify intent and reconcile the final tree expli
       "For final-tree reconciliation",
       "Before `workflow_create` or `workflow_create_from_plan`, extract",
       "orchestrator",
-    ],
-    [
-      workflow,
-      "Final-tree reconciliation is a separate explicit-authorization path",
-      "After every terminal worker handoff",
-      "workflow",
     ],
     [guide, "3. **Final-tree reconciliation:**", "```mermaid", "guide"],
   ] as const;

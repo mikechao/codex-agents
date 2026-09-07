@@ -86,9 +86,11 @@ contents are explicitly supplied, the planner uses them directly without redunda
 known payload-limit inability fails closed with bounded input or clarification. No Workflow MCP
 persistence, phase, source artifact, transport bookkeeping, or duplicate task-intent model is involved.
 
-The complete workflow-state contract, including every transition and stop condition, is in
-[`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md). This guide explains how the OpenCode
-primary routes a normal implementation without reproducing that state machine.
+Workflow MCP state/projections and the self-contained role contracts are the mechanical execution
+authority. [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md) is retained explanatory
+architecture documentation, not a runtime precondition or independent transition authority. This
+guide explains how the OpenCode primary routes a normal implementation without reproducing the state
+machine.
 
 ## Semantic operator refresh
 
@@ -400,6 +402,14 @@ When review identifies blocking findings, the parent authorizes a bounded repair
 finding IDs, then sends the implementer back to `REPAIRING` and re-runs independent review. The
 complete repair-cycle limit and transition semantics are defined in
 [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md); this guide does not duplicate them.
+
+If Workflow MCP is unavailable, authoritative execution suspends. The Orchestrator preserves only
+known workflow/session references, supplied paths or context, pending intent, and the outage reason;
+it may provide bounded read-only diagnostics and supported reload/bootstrap/reconnection guidance.
+After restoration it refreshes the authoritative projection before resuming where possible. No
+implementation, review, repair, validation authorization, commit preparation, or commit continues
+from conversation memory, and no versions, receipts, findings, audit state, or authority are
+reconstructed in prose.
 
 Only a fresh reviewer result whose projection reports `approve_exact_repairs` with its authority
 boundary available can request repair authorization. The parent then reads the full view for the

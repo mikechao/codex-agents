@@ -178,9 +178,9 @@ The parent creates a workflow without receiving a bearer. Delegation passes work
 is the authoritative least-authority projection for that role and carries the role's full handoff and
 its sorted `permitted_next_actions`; prompts carry no duplicated objective, criteria, evidence, finding,
 receipt, or repair state. Parent authority is supplied by exact runtime ownership and launch
-attestation. If the server is
-unavailable for non-trivial work, the parent must ask the user before using the documented prompt-only
-degraded mode.
+attestation. If the server is unavailable for non-trivial work, authoritative execution suspends;
+only bounded known context and supported diagnosis/reconnection guidance may be retained until the
+native projections are refreshed after restoration.
 
 The reviewer view includes the authoritative sanitized `review_target` for inspection. Managed
 reviewers submit only semantic findings and prior classifications to `workflow_submit_review`; the
@@ -309,8 +309,7 @@ available MCP tools, verify that `workflow_state` exposes the dedicated role get
 and the mutation tools, and inspect the server initialization instructions. Do not send
 capabilities or mutate state during this smoke test.
 
-Before reload, fail closed for non-trivial work and ask whether the user wants prompt-only
-degraded mode. After reload, the parent may use MCP as authoritative only when the tools and
+Before reload, suspend non-trivial work. After reload, the parent may use MCP as authoritative only when the tools and
 instructions are visible. `default_tools_approval_mode = "prompt"` keeps workflow tool calls
 approval-sensitive in Codex; OpenCode agents instead gate the same tools per role through
 permission blocks (see `.codex/agents/WORKFLOW.md`). The server still enforces the runtime boundary
