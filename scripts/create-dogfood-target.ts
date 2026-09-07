@@ -154,7 +154,7 @@ export function main(args: readonly string[]): number {
     process.stdout.write(`Baseline target commit: ${checkpoints.baseline}\n`);
     process.stdout.write(`Installed target commit: ${checkpoints.installed}\n`);
     process.stdout.write(
-      "Notice: Until #95 lands, the installed Workflow MCP runtime may still depend on the source checkout; this is not a hermetic/source-independent runtime snapshot.\n",
+      "Notice: The installed target contains a standalone local Workflow MCP executable; Bun is needed for installation, while Git, SQLite state, and normal OS facilities remain runtime dependencies.\n",
     );
     return 0;
   } catch (cause) {

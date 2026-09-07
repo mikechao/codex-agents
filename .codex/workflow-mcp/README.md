@@ -72,14 +72,16 @@ runtime and launches only its immutable artifact. It proxies requests for older 
 to the artifact that owns them. The hosts share repository-hash-partitioned durable state, so
 workflows are interchangeable between hosts.
 
-Installed repositories use a different boundary: their Codex and OpenCode registrations invoke the
-provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does not copy the
-bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-artifact
-affinity or promotion lifecycle; the direct server operates on the target repository's Git and
-durable state.
+Installed repositories use a different boundary: installation compiles and verifies a standalone
+executable at the target-local `.codex/runtime/workflow-mcp` path, and both Codex and OpenCode invoke
+that executable directly. The installer does not copy the provider's Workflow MCP sources,
+bootstrap, supervisor, or runtime-artifact sources. Installed mode has no runtime-artifact affinity or
+promotion lifecycle; the executable operates on the target repository's Git and durable state without
+requiring Bun, target `node_modules`, or the provider checkout at runtime.
 
-Sources are TypeScript and run directly under Bun (`server.ts`); `bun run typecheck` runs strict
-`tsc --noEmit` checks. There is no compiled `dist/` mirror and no build step.
+In this repository's development and self-host mode, sources are TypeScript and run directly under Bun
+(`server.ts`); `bun run typecheck` runs strict `tsc --noEmit` checks. The installer uses Bun's
+`build --compile` once to produce the target-local runtime; there is no committed `dist/` mirror.
 
 State is stored in a stable, repository-hash-partitioned path under the user's Codex state area.
 Tests may pass an explicit database path. The server does not read PGlite, corpus data, browser
@@ -168,7 +170,8 @@ The self-hosted regression is deliberately chronological: start the self-hosted 
 create a workflow, edit approved runtime paths and commit them as B, verify the running A child is
 unchanged, then restart the host. Bootstrap promotes B for new workflows and routes the unfinished
 A workflow to a recovered A child. Installed hosts intentionally do not exercise this lifecycle:
-they invoke the provider server directly and do not persist runtime affinity.
+they invoke the target-local `.codex/runtime/workflow-mcp` executable directly and do not persist
+runtime affinity; Bun, target `node_modules`, and the provider checkout are not runtime dependencies.
 
 ## Authoritative role views
 

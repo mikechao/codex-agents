@@ -223,10 +223,12 @@ A restart promotes the current committed runtime for new workflows; requests for
 are routed to their persisted owning artifact. Editing or committing the provider checkout never
 hot-swaps a running artifact.
 
-Installed repositories have a deliberately simpler boundary: Codex and OpenCode invoke the
-provider's absolute `.codex/workflow-mcp/server.ts` directly. The installer does not copy the
-bootstrap, supervisor, or runtime-artifact sources, and installed mode has no runtime-affinity
-lifecycle; its direct server uses the target repository's Git and durable state.
+Installed repositories have a deliberately simpler boundary: installation compiles and verifies a
+standalone executable at `.codex/runtime/workflow-mcp`, which Codex and OpenCode invoke directly.
+The installer does not copy the provider's Workflow MCP, bootstrap, supervisor, or runtime-artifact
+sources. Installed mode has no runtime-affinity lifecycle; its executable uses the target repository's
+Git and durable state and does not require Bun, target `node_modules`, or the provider checkout at
+runtime.
 
 Runtime authority is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the operator projection and uses its semantic decision. It
@@ -439,8 +441,9 @@ recovery allows only those narrow guards and the adoption itself.
 For self-hosting, the regression scenario is A -> edit approved runtime paths -> test/review -> commit
 B -> restart -> create a new workflow under B -> resume the unfinished workflow under A. Missing or
 mismatched artifacts stop with dedicated runtime isolation/recovery errors. Installed hosts do not
-promote runtime artifacts or resume runtime affinity; they execute the provider server directly for
-the target repository.
+promote runtime artifacts or resume runtime affinity; they execute the target-local
+`.codex/runtime/workflow-mcp` executable directly for the target repository, without requiring Bun,
+target `node_modules`, or the provider checkout at runtime.
 
 ## Boundary summary
 

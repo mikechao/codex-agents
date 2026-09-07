@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import {
+  chmodSync,
   cpSync,
   existsSync,
   lstatSync,
@@ -11,9 +12,11 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { spawnSync, TOML } from "bun";
 import { applyEdits, modify, type ParseError, parse as parseJsonc } from "jsonc-parser";
 import {
@@ -21,6 +24,10 @@ import {
   type GeneratedAgentDefinition,
   generateDefinitionManifest,
 } from "./.codex/agents/generate-host-definitions.js";
+import {
+  buildStandaloneWorkflowMcp,
+  verifyStandaloneWorkflowMcp,
+} from "./.codex/workflow-mcp/build.js";
 
 const REGISTRATION_SECTION = ["mcp_servers", "workflow_state"];
 const REQUIRED_SOURCE_FILES = [
@@ -188,8 +195,8 @@ function tomlString(value: string): string {
   return `"${escaped}"`;
 }
 
-function registrationBlock(projectRoot: string): string {
-  const command = providerServerCommand(resolve(projectRoot, ".codex/workflow-mcp/server.ts"));
+function registrationBlock(runtimePath: string): string {
+  const command = providerServerCommand(runtimePath);
   return [
     "# Local durable state for the reusable custom-agent workflow.",
     "[mcp_servers.workflow_state]",
@@ -467,6 +474,14 @@ function removeCreatedDirectory(path: string, existed: boolean): void {
   }
 }
 
+export function cleanupCreatedInstallDirectories(
+  directories: readonly { path: string; existed: boolean }[],
+): void {
+  for (const directory of directories) {
+    removeCreatedDirectory(directory.path, directory.existed);
+  }
+}
+
 function objectValue(value: unknown, context: string): Record<string, unknown> | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -535,27 +550,27 @@ export function trustedBootstrapCommand(serverPath: string): string[] {
   ];
 }
 
-export function providerServerCommand(serverPath: string): string[] {
-  return ["bun", resolve(serverPath)];
+export function providerServerCommand(runtimePath: string): string[] {
+  return [resolve(runtimePath)];
 }
 
-export function openCodeMcpRegistration(serverPath: string): Record<string, unknown> {
+export function openCodeMcpRegistration(runtimePath: string): Record<string, unknown> {
   return {
     type: "local",
-    command: providerServerCommand(serverPath),
+    command: providerServerCommand(runtimePath),
     enabled: true,
     timeout: 30000,
   };
 }
 
-export function createOpenCodeConfig(serverPath: string): string {
+export function createOpenCodeConfig(runtimePath: string): string {
   return `${JSON.stringify(
     {
       $schema: OPENCODE_CONFIG_SCHEMA,
       default_agent: OPENCODE_DEFAULT_AGENT,
       subagent_depth: OPENCODE_SUBAGENT_DEPTH,
       agent: { plan: openCodePlanAgent() },
-      mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(serverPath) },
+      mcp: { [OPENCODE_SERVER_NAME]: openCodeMcpRegistration(runtimePath) },
     },
     null,
     2,
@@ -565,9 +580,9 @@ export function createOpenCodeConfig(serverPath: string): string {
 export function stageOpenCodeConfig(
   configPath: string,
   existing: string | null,
-  serverPath: string,
+  runtimePath: string,
 ): string {
-  if (existing === null) return createOpenCodeConfig(serverPath);
+  if (existing === null) return createOpenCodeConfig(runtimePath);
   const parsedRoot = parseJsoncConfig(configPath, existing);
   const parsedExisting = objectValue(parsedRoot, "config") ?? {};
   if (Object.hasOwn(parsedExisting, "agent")) {
@@ -624,7 +639,7 @@ export function stageOpenCodeConfig(
     modify(
       staged,
       ["mcp", OPENCODE_SERVER_NAME],
-      openCodeMcpRegistration(serverPath),
+      openCodeMcpRegistration(runtimePath),
       formattingOptions,
     ),
   );
@@ -652,7 +667,7 @@ export function stageOpenCodeConfig(
       `Staged OpenCode config would alter unrelated MCP settings; refusing to install: ${configPath}`,
     );
   }
-  if (!deepEqual(stagedMcp[OPENCODE_SERVER_NAME], openCodeMcpRegistration(serverPath))) {
+  if (!deepEqual(stagedMcp[OPENCODE_SERVER_NAME], openCodeMcpRegistration(runtimePath))) {
     error(
       `Staged OpenCode workflow_state registration is invalid; refusing to install: ${configPath}`,
     );
@@ -747,15 +762,27 @@ export function main(args: readonly string[]): number {
     resolve(target, ".opencode/tools", file),
   );
   const codexDirectory = resolve(target, ".codex");
+  const runtimeDirectory = resolve(codexDirectory, "runtime");
+  const runtimeTarget = resolve(
+    runtimeDirectory,
+    process.platform === "win32" ? "workflow-mcp.exe" : "workflow-mcp",
+  );
   const opencodeDirectory = resolve(target, ".opencode");
   const opencodeToolsDirectory = resolve(opencodeDirectory, "tools");
   const codexDirectoryExisting = pathEntryExists(codexDirectory);
+  const runtimeDirectoryExisting = pathEntryExists(runtimeDirectory);
+  if (runtimeDirectoryExisting && !lstatSync(runtimeDirectory).isDirectory()) {
+    error(`Refusing to use a non-directory Workflow MCP runtime parent: ${runtimeDirectory}`);
+  }
   const opencodeDirectoryExisting = pathEntryExists(opencodeDirectory);
   const opencodeToolsDirectoryExisting = pathEntryExists(opencodeToolsDirectory);
   for (const opencodeCustomToolTarget of opencodeCustomToolTargets) {
     if (pathEntryExists(opencodeCustomToolTarget)) {
       error(`Refusing to replace existing OpenCode custom tool: ${opencodeCustomToolTarget}`);
     }
+  }
+  if (pathEntryExists(runtimeTarget)) {
+    error(`Refusing to replace existing Workflow MCP runtime executable: ${runtimeTarget}`);
   }
   const opencodeAgentsExisting = existsSync(opencodeAgentsTarget);
   const opencodeConfig = findOpenCodeConfig(target);
@@ -764,7 +791,7 @@ export function main(args: readonly string[]): number {
   }
   if (!bunVersionAtLeast(MINIMUM_BUN)) {
     error(
-      `Bun ${MINIMUM_BUN.join(".")} or newer is required to run the workflow_state server; found ${Bun.version}.`,
+      `Bun ${MINIMUM_BUN.join(".")} or newer is required to build the workflow_state runtime; found ${Bun.version}.`,
     );
   }
   for (const file of REQUIRED_SOURCE_FILES) {
@@ -773,12 +800,11 @@ export function main(args: readonly string[]): number {
     }
   }
   let generatedManifest: readonly GeneratedAgentDefinition[];
-  const serverPath = resolve(projectRoot, ".codex/workflow-mcp/server.ts");
   try {
     generatedManifest = generateDefinitionManifest({
       policyPath: resolve(projectRoot, ".codex/agents/model-policy.yaml"),
       contractsDir: resolve(projectRoot, ".codex/agents/contracts"),
-      codexWorkflowMcp: enabledCodexWorkflowMcp(serverPath),
+      codexWorkflowMcp: enabledCodexWorkflowMcp(runtimeTarget),
     });
   } catch (cause) {
     error(
@@ -800,12 +826,12 @@ export function main(args: readonly string[]): number {
     }
   }
   try {
-    tomlString(resolve(projectRoot, ".codex/workflow-mcp/bootstrap.ts"));
+    tomlString(runtimeTarget);
   } catch {
     error(`Project path cannot be represented safely in TOML: ${projectRoot}`);
   }
   const existing = existsSync(config) ? `${readFileSync(config, "utf8")}\n` : "";
-  const stagedContent = existing + registrationBlock(projectRoot);
+  const stagedContent = existing + registrationBlock(runtimeTarget);
   try {
     TOML.parse(stagedContent);
   } catch (cause) {
@@ -823,10 +849,26 @@ export function main(args: readonly string[]): number {
   const stagedOpenCode = stageOpenCodeConfig(
     opencodeConfigTarget,
     opencodeConfigOriginal,
-    serverPath,
+    runtimeTarget,
   );
 
+  const buildRoot = mkdtempSync(join(tmpdir(), ".workflow-mcp-build-"));
+  const runtimeBuildPath = resolve(
+    buildRoot,
+    process.platform === "win32" ? "workflow-mcp.exe" : "workflow-mcp",
+  );
+  try {
+    buildStandaloneWorkflowMcp({ sourceRoot: projectRoot, outputPath: runtimeBuildPath });
+    verifyStandaloneWorkflowMcp(runtimeBuildPath);
+  } catch (cause) {
+    rmSync(buildRoot, { recursive: true, force: true });
+    error(
+      `Unable to prepare standalone Workflow MCP runtime: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+
   mkdirSync(codexDirectory, { recursive: true });
+  mkdirSync(runtimeDirectory, { recursive: true });
   mkdirSync(opencodeDirectory, { recursive: true });
   mkdirSync(opencodeToolsDirectory, { recursive: true });
   const agentsStaging = mkdtempSync(resolve(target, ".codex/.agents.install."));
@@ -837,6 +879,7 @@ export function main(args: readonly string[]): number {
   const reviewerPolicyStaging = mkdtempSync(
     resolve(target, ".codex/.reviewer-validation.install."),
   );
+  const runtimeStaging = mkdtempSync(resolve(target, ".codex/.runtime.install."));
   let opencodeAgentsBackup: string | null = null;
   const recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" };
   try {
@@ -854,6 +897,14 @@ export function main(args: readonly string[]): number {
       opencodeAgentsStaging,
       generatedManifest,
     );
+    const stagedRuntime = resolve(runtimeStaging, basename(runtimeTarget));
+    cpSync(runtimeBuildPath, stagedRuntime);
+    if (process.platform !== "win32") {
+      chmodSync(stagedRuntime, 0o755);
+      if ((statSync(stagedRuntime).mode & 0o111) === 0) {
+        throw new Error(`Staged Workflow MCP runtime is not executable: ${stagedRuntime}`);
+      }
+    }
     const stagedCustomTools = OPENCODE_CUSTOM_TOOL_FILES.map((file) => {
       const staged = resolve(opencodeCustomToolStaging, file);
       cpSync(resolve(projectRoot, ".opencode/tools", file), staged);
@@ -904,11 +955,18 @@ export function main(args: readonly string[]): number {
             original: null,
           }
         : undefined,
-      stagedCustomTools.map((staging, index) => ({
-        staging,
-        target: opencodeCustomToolTargets[index] as string,
-        original: null,
-      })),
+      [
+        ...stagedCustomTools.map((staging, index) => ({
+          staging,
+          target: opencodeCustomToolTargets[index] as string,
+          original: null,
+        })),
+        {
+          staging: stagedRuntime,
+          target: runtimeTarget,
+          original: null,
+        },
+      ],
     );
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
@@ -917,16 +975,23 @@ export function main(args: readonly string[]): number {
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
     rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
     rmSync(reviewerPolicyStaging, { recursive: true, force: true });
+    rmSync(runtimeStaging, { recursive: true, force: true });
+    rmSync(buildRoot, { recursive: true, force: true });
     cleanupOpenCodeAgentsBackup(opencodeAgentsBackup, recoveryState);
-    removeCreatedDirectory(opencodeToolsDirectory, opencodeToolsDirectoryExisting);
-    removeCreatedDirectory(opencodeDirectory, opencodeDirectoryExisting);
-    removeCreatedDirectory(codexDirectory, codexDirectoryExisting);
+    cleanupCreatedInstallDirectories([
+      { path: opencodeToolsDirectory, existed: opencodeToolsDirectoryExisting },
+      { path: opencodeDirectory, existed: opencodeDirectoryExisting },
+      { path: runtimeDirectory, existed: runtimeDirectoryExisting },
+      { path: codexDirectory, existed: codexDirectoryExisting },
+    ]);
     throw cause;
   }
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
   rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
   rmSync(reviewerPolicyStaging, { recursive: true, force: true });
+  rmSync(runtimeStaging, { recursive: true, force: true });
+  rmSync(buildRoot, { recursive: true, force: true });
   if (opencodeAgentsBackup !== null) {
     rmSync(opencodeAgentsBackup, { recursive: true, force: true });
   }

@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +28,23 @@ import {
 
 const projectRoot = resolve(import.meta.dir, "../../..");
 const installer = resolve(projectRoot, "install-into.ts");
+
+test("active documentation describes the standalone installed runtime boundary", () => {
+  const documentation = [
+    readFileSync(join(projectRoot, "README.md"), "utf8"),
+    readFileSync(join(projectRoot, "docs/opencode-orchestration-flow.md"), "utf8"),
+    readFileSync(join(projectRoot, ".codex/workflow-mcp/README.md"), "utf8"),
+  ];
+  for (const content of documentation) {
+    assert.match(content, /\.codex\/runtime\/workflow-mcp/u);
+    assert.match(content, /without requiring Bun|Bun, target `node_modules`/u);
+    assert.doesNotMatch(content, /provider-server registration|absolute provider server/u);
+    assert.doesNotMatch(
+      content,
+      /execute the provider server directly|invoke the provider server directly/u,
+    );
+  }
+});
 
 test("materialization replaces stale worker artifacts from policy and contracts", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "materialize-agents-")));
@@ -178,8 +196,8 @@ test("dogfood:target creates and retains a clean two-checkpoint target", () => {
     assert.match(result.stdout, /^Source state: (clean|dirty)$/m);
     assert.match(result.stdout, /^Baseline target commit: [0-9a-f]{40}$/m);
     assert.match(result.stdout, /^Installed target commit: [0-9a-f]{40}$/m);
-    assert.match(result.stdout, /Until #95 lands/);
-    assert.match(result.stdout, /not a hermetic\/source-independent runtime snapshot/);
+    assert.match(result.stdout, /standalone local Workflow MCP executable/);
+    assert.match(result.stdout, /Git, SQLite state/);
     assert.equal(gitAt(target, "rev-list", "--count", "HEAD"), "2");
     assert.equal(gitAt(target, "status", "--short", "--untracked-files=all"), "");
     assert.equal(
@@ -305,9 +323,7 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
       );
     }
     const installedManifest = generateDefinitionManifest({
-      codexWorkflowMcp: enabledCodexWorkflowMcp(
-        resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
-      ),
+      codexWorkflowMcp: enabledCodexWorkflowMcp(resolve(root, ".codex/runtime/workflow-mcp")),
     });
     for (const definition of installedManifest) {
       const destination = definition.host === "codex" ? ".codex/agents" : ".opencode/agents";
@@ -343,10 +359,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         };
       };
       assert.equal(parsedDefinition.mcp_servers.workflow_state.enabled, true);
-      assert.equal(parsedDefinition.mcp_servers.workflow_state.command, "bun");
-      assert.deepEqual(parsedDefinition.mcp_servers.workflow_state.args, [
-        resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
-      ]);
+      assert.equal(
+        parsedDefinition.mcp_servers.workflow_state.command,
+        resolve(root, ".codex/runtime/workflow-mcp"),
+      );
+      assert.deepEqual(parsedDefinition.mcp_servers.workflow_state.args, []);
       assert.equal(parsedDefinition.mcp_servers.workflow_state.startup_timeout_sec, 10);
       assert.equal(parsedDefinition.mcp_servers.workflow_state.tool_timeout_sec, 30);
       assert.equal(parsedDefinition.mcp_servers.workflow_state.required, false);
@@ -387,6 +404,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(!existsSync(join(root, file)), `runtime source must not be installed: ${file}`);
     }
+    assert.equal(existsSync(join(root, ".codex/workflow-mcp")), false);
+    assert.ok(existsSync(join(root, ".codex/runtime/workflow-mcp")));
+    if (process.platform !== "win32") {
+      assert.notEqual(statSync(join(root, ".codex/runtime/workflow-mcp")).mode & 0o111, 0);
+    }
     const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
       subagent_depth: number;
@@ -399,10 +421,12 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     const parsed = TOML.parse(config) as {
       mcp_servers: { workflow_state: { command: string; args: string[] } };
     };
-    assert.equal(parsed.mcp_servers.workflow_state.command, "bun");
-    assert.deepEqual(parsed.mcp_servers.workflow_state.args, [
-      resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts"),
-    ]);
+    assert.equal(
+      parsed.mcp_servers.workflow_state.command,
+      resolve(root, ".codex/runtime/workflow-mcp"),
+    );
+    assert.deepEqual(parsed.mcp_servers.workflow_state.args, []);
+    assert.ok(existsSync(join(root, ".codex/runtime/workflow-mcp")));
     assert.ok(
       !Object.hasOwn(parsed.mcp_servers.workflow_state, "enabled_tools"),
       "the parent Workflow MCP registration must remain unrestricted",

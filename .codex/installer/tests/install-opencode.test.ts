@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+  cleanupCreatedInstallDirectories,
   cleanupOpenCodeAgentsBackup,
   commitBothHosts,
   createOpenCodeConfig,
@@ -139,8 +140,9 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     assert.equal(registration.timeout, 30000);
     assert.deepEqual(
       registration.command,
-      providerServerCommand(resolve(import.meta.dir, "../../../.codex/workflow-mcp/server.ts")),
+      providerServerCommand(resolve(root, ".codex/runtime/workflow-mcp")),
     );
+    assert.ok(existsSync(join(root, ".codex/runtime/workflow-mcp")));
     assert.deepEqual(openCodeAgentsBackups(root), []);
     assert.ok(existsSync(join(root, ".opencode/.config.install.")) === false);
     for (const toolName of ["runEvidence.ts", "inspectGitRange.ts"]) {
@@ -820,8 +822,10 @@ test("commitBothHosts rolls back a newly installed custom tool after a later fai
     const opencodeAgentsTarget = join(root, ".opencode/agents");
     const opencodeConfigTarget = join(root, "opencode.json");
     const customToolTarget = join(root, ".opencode/tools/runEvidence.ts");
+    const runtimeTarget = join(root, ".codex/runtime/workflow-mcp");
     const laterTarget = join(root, ".opencode/tools/later.txt");
     mkdirSync(dirname(codexConfigTarget), { recursive: true });
+    mkdirSync(dirname(runtimeTarget), { recursive: true });
     mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
     mkdirSync(dirname(customToolTarget), { recursive: true });
     const hostPackage = '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n';
@@ -831,12 +835,14 @@ test("commitBothHosts rolls back a newly installed custom tool after a later fai
     const opencodeAgents = agentsDir("opencode-agents-tool-rollback");
     const opencodeConfig = staging("opencode-config-tool-rollback");
     const customTool = staging("custom-tool-tool-rollback");
+    const runtime = staging("runtime-tool-rollback");
     const later = staging("later-tool-rollback");
     writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
     writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
     writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
     writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
     writeFileSync(join(customTool, "runEvidence.ts"), "// installed tool\n");
+    writeFileSync(join(runtime, "workflow-mcp"), Buffer.from([0, 1, 2, 3]));
     writeFileSync(join(later, "later.txt"), "later file\n");
     const rename = (from: string, to: string) => {
       if (to === laterTarget) throw new Error("injected later project-file failure");
@@ -866,17 +872,89 @@ test("commitBothHosts rolls back a newly installed custom tool after a later fai
               target: customToolTarget,
               original: null,
             },
+            { staging: join(runtime, "workflow-mcp"), target: runtimeTarget, original: null },
             { staging: join(later, "later.txt"), target: laterTarget, original: null },
           ],
         ),
       /injected later project-file failure/,
     );
     assert.ok(!existsSync(customToolTarget), "new custom tool must be rolled back");
+    assert.ok(!existsSync(runtimeTarget), "new runtime executable must be rolled back");
     assert.ok(!existsSync(laterTarget), "failed later project file must not remain");
     assert.ok(!existsSync(codexAgentsTarget));
     assert.ok(!existsSync(opencodeAgentsTarget));
     assert.ok(!existsSync(opencodeConfigTarget));
     assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), hostPackage);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rollback cleanup removes runtime and codex directories created for a target without .codex", () => {
+  const { root, staging, agentsDir } = commitFixture();
+  try {
+    const codexDirectory = join(root, ".codex");
+    const runtimeDirectory = join(codexDirectory, "runtime");
+    const codexAgentsTarget = join(codexDirectory, "agents");
+    const codexConfigTarget = join(codexDirectory, "config.toml");
+    const opencodeAgentsTarget = join(root, ".opencode/agents");
+    const opencodeConfigTarget = join(root, "opencode.json");
+    const runtimeTarget = join(runtimeDirectory, "workflow-mcp");
+    const laterTarget = join(root, ".opencode/tools/later.txt");
+
+    // The target starts without .codex; these are the parent directories the
+    // installer creates before entering its atomic commit sequence.
+    mkdirSync(runtimeDirectory, { recursive: true });
+    mkdirSync(join(root, ".opencode/tools"), { recursive: true });
+    const codexAgents = agentsDir("codex-agents-empty-codex");
+    const codexConfig = staging("codex-config-empty-codex");
+    const opencodeAgents = agentsDir("opencode-agents-empty-codex");
+    const opencodeConfig = staging("opencode-config-empty-codex");
+    const runtime = staging("runtime-empty-codex");
+    const later = staging("later-empty-codex");
+    writeFileSync(join(codexAgents, "implementer.toml"), "[agent]\n");
+    writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
+    writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
+    writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    writeFileSync(join(runtime, "workflow-mcp"), Buffer.from([0, 1, 2, 3]));
+    writeFileSync(join(later, "later.txt"), "later file\n");
+    const rename = (from: string, to: string) => {
+      if (to === laterTarget) throw new Error("injected later project-file failure");
+      execFileSync("mv", [from, to], { stdio: "ignore" });
+    };
+
+    assert.throws(
+      () =>
+        commitBothHosts(
+          codexAgents,
+          codexAgentsTarget,
+          join(codexConfig, "config.toml"),
+          codexConfigTarget,
+          opencodeAgents,
+          opencodeAgentsTarget,
+          join(opencodeConfig, "opencode.json"),
+          opencodeConfigTarget,
+          null,
+          null,
+          null,
+          rename,
+          writeFileSync,
+          undefined,
+          undefined,
+          [
+            { staging: join(runtime, "workflow-mcp"), target: runtimeTarget, original: null },
+            { staging: join(later, "later.txt"), target: laterTarget, original: null },
+          ],
+        ),
+      /injected later project-file failure/,
+    );
+    assert.ok(!existsSync(runtimeTarget), "new runtime executable must be rolled back");
+    cleanupCreatedInstallDirectories([
+      { path: runtimeDirectory, existed: false },
+      { path: codexDirectory, existed: false },
+    ]);
+    assert.ok(!existsSync(runtimeDirectory), "created runtime directory must be removed");
+    assert.ok(!existsSync(codexDirectory), "created codex directory must be removed");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

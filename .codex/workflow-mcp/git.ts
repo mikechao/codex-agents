@@ -1,8 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { simpleGit as simpleGitFactory } from "simple-git";
 import { createReceipt as createInProcessReceipt } from "../agents/change-receipt.js";
 import { fail, WorkflowError } from "./errors.js";
 import type {
@@ -38,14 +38,6 @@ import { COMMIT_SUBMISSION_OUTCOME_VALUES, GIT_FILE_MODE_VALUES, isValue } from 
 const MAX_GIT_DETAIL = 500;
 const MAX_TEXTUAL_OUTPUT = 4 * 1024 * 1024;
 const REVIEW_RANGE_CONCURRENCY = 4;
-
-// Loading the CommonJS entry is intentional: Bun's ESM interop exposes the `debug` dependency's
-// default export as undefined, while the library's CJS entry preserves its logger contract.
-const require = createRequire(import.meta.url);
-const simpleGitFactory = require("simple-git").simpleGit as (
-  root: string,
-  options?: Record<string, unknown>,
-) => { raw: (args: string[]) => Promise<string> };
 
 /**
  * Migration boundary: async raw simple-git is used for repository/worktree/ref planning queries.

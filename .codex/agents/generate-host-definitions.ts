@@ -110,8 +110,8 @@ export function enabledCodexWorkflowMcp(serverPath: string): CodexWorkflowMcpTra
   return {
     ...SELF_HOST_CODEX_WORKFLOW_MCP,
     enabled: true,
-    command: "bun",
-    args: [resolve(serverPath)],
+    command: resolve(serverPath),
+    args: [],
   };
 }
 
