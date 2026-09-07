@@ -161,6 +161,19 @@ After `bun install`, run:
 ./install-into.ts /absolute/path/to/target-repository
 ```
 
+To create a retained disposable Git target and install the current checkout into it, run
+`bun run dogfood:target`, or pass an absent or empty target directory after `--`:
+
+```sh
+bun run dogfood:target
+bun run dogfood:target -- /absolute/path/to/dogfood-target
+```
+
+The helper records the source provenance, baseline and installed checkpoints, and leaves the target
+available for inspection. It stops before any manual scenarios or host launch. Until #95 lands, the
+installed Workflow MCP runtime may still depend on this source checkout, so the target is not a
+hermetic or source-independent runtime snapshot.
+
 The installer requires Bun 1.3 or newer and a Git repository and installs both host adapters in
 one all-or-nothing step:
 

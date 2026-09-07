@@ -2,12 +2,14 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,7 +25,8 @@ import {
   generateDefinitionManifest,
 } from "../../agents/generate-host-definitions.js";
 
-const installer = resolve(import.meta.dir, "../../../install-into.ts");
+const projectRoot = resolve(import.meta.dir, "../../..");
+const installer = resolve(projectRoot, "install-into.ts");
 
 test("materialization replaces stale worker artifacts from policy and contracts", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "materialize-agents-")));
@@ -87,6 +90,195 @@ function runInstaller(target: string) {
     };
   }
 }
+
+function runDogfood(target?: string, env: NodeJS.ProcessEnv = process.env) {
+  const args = ["run", "dogfood:target"];
+  if (target !== undefined) args.push("--", target);
+  try {
+    const stdout = execFileSync("bun", args, {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (cause) {
+    assert.ok(cause instanceof Error && "status" in cause);
+    const failure = cause as Error & { status?: number; stdout?: string; stderr?: string };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
+}
+
+function gitAt(root: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function retainedTarget(stdout: string): string {
+  const match = stdout.match(/^Target: (.+)$/m);
+  assert.ok(match, `missing target in helper output: ${stdout}`);
+  return match[1];
+}
+
+function sourceCopy(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-source-")));
+  cpSync(projectRoot, root, {
+    recursive: true,
+    filter: (path) =>
+      !path.endsWith("/.git") &&
+      !path.includes("/.git/") &&
+      !path.endsWith("/node_modules") &&
+      !path.includes("/node_modules/"),
+  });
+  symlinkSync(resolve(projectRoot, "node_modules"), join(root, "node_modules"), "dir");
+  gitAt(root, "init", "-q");
+  gitAt(root, "config", "user.email", "dogfood-source@example.invalid");
+  gitAt(root, "config", "user.name", "Dogfood Source");
+  gitAt(root, "add", "--all");
+  gitAt(root, "commit", "-q", "-m", "source fixture");
+  return root;
+}
+
+function runDogfoodFrom(source: string, target: string) {
+  try {
+    const stdout = execFileSync(
+      "bun",
+      [resolve(source, "scripts/create-dogfood-target.ts"), target],
+      {
+        cwd: source,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    return { status: 0, stdout, stderr: "" };
+  } catch (cause) {
+    assert.ok(cause instanceof Error && "status" in cause);
+    const failure = cause as Error & { status?: number; stdout?: string; stderr?: string };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
+}
+
+test("dogfood:target creates and retains a clean two-checkpoint target", () => {
+  const result = runDogfood();
+  assert.equal(result.status, 0, result.stderr);
+  const target = retainedTarget(result.stdout);
+  try {
+    assert.match(result.stdout, /^Source checkout: .+$/m);
+    assert.match(result.stdout, /^Source HEAD: [0-9a-f]{40}$/m);
+    assert.match(result.stdout, /^Source state: (clean|dirty)$/m);
+    assert.match(result.stdout, /^Baseline target commit: [0-9a-f]{40}$/m);
+    assert.match(result.stdout, /^Installed target commit: [0-9a-f]{40}$/m);
+    assert.match(result.stdout, /Until #95 lands/);
+    assert.match(result.stdout, /not a hermetic\/source-independent runtime snapshot/);
+    assert.equal(gitAt(target, "rev-list", "--count", "HEAD"), "2");
+    assert.equal(gitAt(target, "status", "--short", "--untracked-files=all"), "");
+    assert.equal(
+      gitAt(target, "show", "--format=%s", "--no-patch", "HEAD"),
+      "dogfood installed snapshot",
+    );
+    const baseline = gitAt(target, "rev-parse", "HEAD^");
+    assert.equal(gitAt(target, "show", "--format=%s", "--no-patch", baseline), "dogfood baseline");
+    assert.equal(gitAt(target, "ls-tree", "--name-only", baseline), "README.md");
+    assert.ok(existsSync(join(target, "README.md")));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("dogfood:target accepts an explicit empty target and rejects non-empty targets", () => {
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-target-")));
+  const empty = join(parent, "empty");
+  const nonEmpty = join(parent, "non-empty");
+  mkdirSync(empty);
+  mkdirSync(nonEmpty);
+  const sentinel = join(nonEmpty, "sentinel.txt");
+  writeFileSync(sentinel, "keep me\n");
+  try {
+    const success = runDogfood(empty);
+    assert.equal(success.status, 0, success.stderr);
+    assert.equal(gitAt(empty, "status", "--short", "--untracked-files=all"), "");
+    const failure = runDogfood(nonEmpty);
+    assert.notEqual(failure.status, 0);
+    assert.match(failure.stderr, /not empty/);
+    assert.equal(readFileSync(sentinel, "utf8"), "keep me\n");
+    assert.ok(!existsSync(join(nonEmpty, ".git")));
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("dogfood:target does not invent Git identity when committing the baseline", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-identity-")));
+  const configRoot = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-git-config-")));
+  const env = { ...process.env };
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.GIT_AUTHOR_NAME;
+  delete env.GIT_COMMITTER_EMAIL;
+  delete env.GIT_COMMITTER_NAME;
+  delete env.EMAIL;
+  const emptyGitConfig = join(configRoot, "empty-git-config");
+  writeFileSync(emptyGitConfig, "");
+  env.GIT_CONFIG_GLOBAL = emptyGitConfig;
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_SYSTEM = emptyGitConfig;
+  try {
+    const result = runDogfood(root, env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /identity|user\.name|user\.email/i);
+    assert.match(result.stderr, /Target retained at/);
+    assert.equal(readFileSync(join(root, ".git/config"), "utf8").includes("[user]"), false);
+    assert.throws(() => gitAt(root, "rev-parse", "--verify", "HEAD"), /Needed a single revision/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(configRoot, { recursive: true, force: true });
+  }
+});
+
+test("dogfood:target reports clean and dirty isolated source candidates", () => {
+  const source = sourceCopy();
+  const cleanTarget = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-clean-")));
+  const dirtyTarget = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-dirty-")));
+  try {
+    const clean = runDogfoodFrom(source, cleanTarget);
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.match(clean.stdout, /^Source state: clean$/m);
+    writeFileSync(join(source, "untracked-source-file.txt"), "dirty candidate\n");
+    const dirty = runDogfoodFrom(source, dirtyTarget);
+    assert.equal(dirty.status, 0, dirty.stderr);
+    assert.match(dirty.stdout, /^Source state: dirty$/m);
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(cleanTarget, { recursive: true, force: true });
+    rmSync(dirtyTarget, { recursive: true, force: true });
+  }
+});
+
+test("dogfood:target retains the target when the normal installer fails", () => {
+  const source = sourceCopy();
+  const target = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-failure-")));
+  rmSync(join(source, ".codex/agents/contracts/explorer.md"));
+  try {
+    const result = runDogfoodFrom(source, target);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Normal installer failed/);
+    assert.match(result.stderr, /Target retained at/);
+    assert.equal(gitAt(target, "rev-list", "--count", "HEAD"), "1");
+    assert.equal(gitAt(target, "show", "--format=%s", "--no-patch", "HEAD"), "dogfood baseline");
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
+});
 
 test("install-into.ts runs as an executable and installs agents plus workflow_state registration", () => {
   const { root } = fixture();

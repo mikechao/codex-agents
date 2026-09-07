@@ -14,6 +14,7 @@
     "test:agents": "bun test --parallel=4 --parallel-delay=0 --timeout=60000 ./.codex/agents/tests/*.test.ts",
     "test:installer": "bun test --parallel=4 --parallel-delay=0 --timeout=60000 ./.codex/installer/tests/*.test.ts",
     "test:workflow-mcp": "bun test --parallel=7 --parallel-delay=0 --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts",
+    "dogfood:target": "bun scripts/create-dogfood-target.ts",
     "test:coverage": "bun test --parallel=7 --parallel-delay=0 --coverage --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts ./.codex/agents/tests/*.test.ts ./.codex/installer/tests/*.test.ts",
     "test:stress": "bun test --parallel=7 --parallel-delay=0 --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts ./.codex/agents/tests/*.test.ts ./.codex/installer/tests/*.test.ts",
     "format": "biome format --write .",

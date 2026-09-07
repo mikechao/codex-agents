@@ -1,4 +1,8 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["install-into.ts", ".codex/installer/tests/**/*.ts"]
+  "include": [
+    "install-into.ts",
+    ".codex/installer/tests/**/*.ts",
+    "scripts/create-dogfood-target.ts"
+  ]
 }

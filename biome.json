@@ -4,6 +4,7 @@
     "includes": [
       ".codex/**/*.ts",
       "install-into.ts",
+      "scripts/**/*.ts",
       "package.json",
       "opencode.json",
       ".codex/planner-policy.json",
