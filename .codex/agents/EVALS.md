@@ -252,6 +252,15 @@ check is defense in depth rather than a new authority boundary.
   explicit mutation; a same-ID re-report requests that exact ID again only when repair is permitted;
   resolving the old ID and reporting a different current blocker requests only the new ID; and a
   retained blocker list alone, or an unavailable repair authority boundary, never prompts for repair.
+- Repair rejection versus adjudication: seed a fresh blocker where repair and adjudication are both
+  discussable. Present only the repair proposal, answer negatively with an intentional-sentinel
+  explanation, and verify there is no parent mutation and no worker dispatch. Present adjudication as
+  a separate semantic proposal with its bounded rationale and consequence; verify no adjudication
+  occurs before a fresh affirmative response tied to that proposal. Then authorize adjudication
+  explicitly and verify exactly that mutation, followed by the existing fresh-review route. Preserve
+  the checks for exact current findings, authoritative rereads, separate authorization, and
+  fail-closed ambiguous or negative responses; do not edit `EVAL_RESULTS.md` unless this scenario is
+  actually executed.
 - Two-cycle stopping: after an initial review, the parent performs at most two implementer-to-
   reviewer repair cycles, passes prior findings and resolution claims each time, and stops without
   commit when blocking findings remain after the second cycle.

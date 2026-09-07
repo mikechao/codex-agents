@@ -111,6 +111,21 @@ MCP names and phases are not ordinary labels, while existing semantic values suc
 `approve_recovery`, `retry_commit`, `approve_bounded_continuation`, `no_user_action`, `route: review`,
 and `route: re_review` remain valid.
 
+Every explicit parent mutation is authorized only by an affirmative response to the exact semantic
+proposal currently presented. Authorization is bound to that proposal and mutation class and cannot
+be transferred to another parent mutation. A negative, ambiguous, unrelated, changed, or stale
+response to a repair proposal is terminal for that decision: Orchestrator performs only permitted
+read-only refreshes, makes no mutation and no worker dispatch. A rejection explanation, including
+an intentional dogfood-sentinel explanation, is rejection context only and
+cannot be repurposed as `user_authorization` for adjudication. If adjudication is appropriate,
+Orchestrator presents it as a separate semantic proposal with bounded rationale and consequence;
+before `workflow_adjudicate_findings`, it must receive a fresh affirmative response tied to that
+adjudication proposal. Thus the concrete sequence is repair proposed -> repair rejected -> no
+mutation/no dispatch; adjudication separately proposed -> no adjudication before a fresh affirmative
+-> adjudication -> the existing fresh-review route. Negative, ambiguous, unrelated, changed, or
+stale adjudication responses fail closed in the same way. No durable proposal state or parser is
+introduced by this exchange.
+
 An unambiguous contextual natural-language answer is sufficient: `yes`, `continue`, `go ahead`, and
 `commit it` are examples, not a required incantation, `Reply ...` incantation, or magic phrase.
 Negative, ambiguous, unrelated, changed, or
@@ -420,6 +435,13 @@ those current exact blocker IDs and bounded reasons. A fresh review that reconfi
 request that ID again; if the old ID is resolved and a different blocker is current, only the
 different current ID is requested. A retained non-empty blocker list alone never prompts for repair,
 and an absent permitted action fails closed.
+
+Repair authorization is not adjudication authorization. A repair proposal must be accepted
+affirmatively for that exact proposal; a rejection and its explanation authorize nothing, including
+`workflow_adjudicate_findings`. Finding adjudication requires a newly presented proposal that states
+its bounded rationale and consequence, followed by a fresh affirmative response tied to that proposal.
+Only then may the parent adjudicate the exact current finding, refresh the semantic projection, and
+preserve the existing fresh-review route; adjudication never dispatches an implementer.
 
 For reconciliation, the reviewer-only start is mandatory even when implementation files are already
 dirty. A blocking result can enter ordinary exact-ID repair only after explicit authorization, then

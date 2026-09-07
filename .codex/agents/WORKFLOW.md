@@ -218,6 +218,18 @@ authority is added. Ordinary summaries do not expose internal action/phase names
 preserved semantic enum values include `approve_recovery`, `retry_commit`,
 `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review`.
 
+Every explicit parent mutation is authorized only by an affirmative response to the exact semantic
+proposal currently presented, and authorization is bound to that proposal and mutation class rather
+than transferable between distinct mutations. In particular, a negative, ambiguous, unrelated,
+changed, or stale response to a repair proposal authorizes nothing: the parent may perform only
+permitted read-only refreshes, with no mutation and no worker dispatch. A rejection explanation,
+including an intentional dogfood-sentinel explanation, is rejection context only and cannot become
+adjudication authority or `user_authorization`. If adjudication is warranted, the Orchestrator must
+present a separate semantic proposal with bounded rationale and consequence and obtain a fresh
+affirmative tied to that adjudication proposal before calling `workflow_adjudicate_findings`.
+This is an Orchestrator proposal/authorization discipline, not a Workflow MCP phase, state-machine,
+persistence, finding-semantic, or bookkeeping change.
+
 For exact repair, `approve_exact_repairs` also carries `authorization_required: true` and a bounded
 derived semantic proposal containing the required outcome, strategy constraints, conditional fallback,
 and exact path constraints. The parent presents this proposal before encoding the explicit
@@ -288,8 +300,11 @@ STOPPED_APPROVED -> COMMIT_AUTHORIZED -> COMMIT_PREPARED -> COMMITTED   (termina
 
 `REPAIR_REQUIRED` may record an explicit parent/user finding adjudication with
 `workflow_adjudicate_findings` when a blocking finding is inconsistent with the approved contract
-or outside approved scope. Adjudication preserves the finding snapshot and requires a fresh review;
-it never dispatches an implementer and never approves the workflow. Remaining effective blockers
+or outside approved scope. The Orchestrator must present adjudication separately from any repair
+proposal, with its bounded rationale and consequence, and obtain a fresh affirmative response tied
+to that adjudication proposal; repair authorization or a repair rejection explanation cannot
+authorize it. Adjudication preserves the finding snapshot and requires a fresh review; it never
+dispatches an implementer and never approves the workflow. Remaining effective blockers
 enter `REPAIRING` via `workflow_authorize_repair` and become terminal
 `STOPPED_REPAIR_EXHAUSTED` via `workflow_finalize_repair_exhausted` only when the repair cycle equals
 the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0

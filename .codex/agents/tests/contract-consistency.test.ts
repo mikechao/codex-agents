@@ -757,6 +757,69 @@ test("orchestrator presents semantic proposals before natural-language authoriza
   assert.match(orchestrator, /workflow_create_from_plan` by identity and supported options only/u);
 });
 
+test("repair rejection cannot authorize adjudication or dispatch", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
+
+  for (const contract of [orchestrator, guide, workflow]) {
+    assert.match(contract, /exact semantic proposal currently presented/u);
+    assert.match(
+      contract,
+      /(?:repair proposal|response to a repair proposal)[^.]*?(?:authorizes nothing|no parent mutation|no mutation)/u,
+      "repair rejection must authorize nothing",
+    );
+    assert.match(contract, /no (?:parent )?mutation[^.]*no worker dispatch/u);
+    assert.match(
+      contract,
+      /rejection explanation[^.]*intentional (?:dogfood[- ]?)?sentinel[^.]*rejection context only/u,
+      "a rejection explanation must remain non-authoritative",
+    );
+    assert.match(
+      contract,
+      /separate semantic proposal[^.]*bounded rationale and consequence[^.]*fresh affirmative[^.]*adjudication proposal/u,
+      "adjudication must have a separate fresh authorization",
+    );
+  }
+
+  const repairProposal = orchestrator.indexOf("Present its required outcome");
+  const repairQuestion = orchestrator.indexOf("before asking whether to authorize the repair");
+  const repairRejection = orchestrator.indexOf("response to a repair proposal");
+  const adjudicationProposal = orchestrator.indexOf("as a new, separate semantic proposal");
+  const adjudicationApproval = orchestrator.indexOf(
+    "fresh affirmative response tied to that adjudication proposal",
+  );
+  const adjudicationMutation = orchestrator.indexOf("`workflow_adjudicate_findings`");
+  assert.ok(
+    repairProposal >= 0 &&
+      repairProposal < repairQuestion &&
+      repairQuestion < repairRejection &&
+      repairRejection < adjudicationProposal &&
+      adjudicationProposal < adjudicationApproval &&
+      adjudicationApproval < adjudicationMutation,
+    "repair authorization, rejection, and separate adjudication authorization must be ordered",
+  );
+
+  const affirmativeReread = orchestrator.indexOf(
+    "After affirmative input, re-read current authoritative state",
+  );
+  const exactMutation = orchestrator.indexOf(
+    "encode exactly that proposal into the existing MCP mutation",
+  );
+  const postMutationRefresh = orchestrator.indexOf("After every parent mutation");
+  const reviewerDispatch = orchestrator.indexOf("dispatching `code_reviewer`", postMutationRefresh);
+  assert.ok(
+    affirmativeReread >= 0 &&
+      affirmativeReread < exactMutation &&
+      exactMutation < postMutationRefresh &&
+      postMutationRefresh < reviewerDispatch,
+    "affirmative reread and mutation must precede refresh and reviewer routing",
+  );
+});
+
 test("the checked-in native Plan override is canonical and isolated from generated agents", () => {
   const config = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
