@@ -49,9 +49,11 @@ function verifyProtocol(path: string, databasePath: string, cwd: string): void {
     const lines = [];
     let stderr = "";
     let finished = false;
+    let fallbackTimer;
     const finish = () => {
       if (finished) return;
       finished = true;
+      clearTimeout(fallbackTimer);
       process.stdout.write(JSON.stringify({ lines, stderr }));
     };
     const send = (message) => child.stdin.write(JSON.stringify(message) + "\\n");
@@ -79,7 +81,7 @@ function verifyProtocol(path: string, databasePath: string, cwd: string): void {
     });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("close", finish);
-    setTimeout(() => { child.kill("SIGTERM"); finish(); }, 10000);
+    fallbackTimer = setTimeout(() => { child.kill("SIGTERM"); finish(); }, 10000);
     send({
       jsonrpc: "2.0",
       id: 1,
