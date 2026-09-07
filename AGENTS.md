@@ -38,6 +38,14 @@ state.
 - Self-hosting bootstrap, immutable runtime artifacts, runtime affinity, and reload recovery are
   self-hosting concerns; do not make them installed-target requirements without an independent
   target-repository need.
+- A running self-hosted workflow is governed by the workflow/agent/runtime contract loaded by its
+  current live runtime. Newer Workflow MCP schemas, projections, tools, generated agent
+  definitions, permissions, or host-loaded behavior that exists only in the current repository or
+  checkout—whether uncommitted, committed, or pushed—is not automatically available to that
+  runtime. If continuation or repair requires unavailable behavior, classify it as the known
+  self-hosting runtime/bootstrap boundary and fail closed into the existing documented
+  reload/bootstrap path; this does not make ordinary installed-target application changes a
+  reload requirement.
 - Runtime-specific workflow values—including work items, plans, findings, capabilities, versions,
   and receipts—come from authoritative runtime state and must not be embedded in reusable, static,
   or generated agent definitions, examples, or fixtures.

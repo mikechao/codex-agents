@@ -655,6 +655,35 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   ]) {
     assert.ok(content.includes(phrase), `missing standalone research boundary: ${phrase}`);
   }
+
+  const runtimeBoundary = content.replace(/\s+/gu, " ");
+  for (const phrase of [
+    "established both self-hosting context",
+    "actual dependency on newer behavior present in the current repository or checkout but unavailable to the loaded runtime",
+    "known self-hosting runtime/bootstrap boundary",
+    "preserve authoritative Workflow MCP state",
+    "existing documented reload/bootstrap boundary",
+    "explicitly authorized degraded-mode choice",
+    "future repository or checkout semantics as live",
+    "manufacture a replacement authority path",
+    "broaden scope",
+    "create a replacement workflow solely",
+    "recognition and routing optimization",
+  ]) {
+    assert.ok(runtimeBoundary.includes(phrase), `missing live-runtime boundary: ${phrase}`);
+  }
+  assert.match(
+    runtimeBoundary,
+    /Ordinary repository or checkout changes that do not create this actual dependency must not trigger reload handling/u,
+  );
+  const classify = runtimeBoundary.indexOf(
+    "immediately classify the condition as the known self-hosting runtime/bootstrap boundary",
+  );
+  const substitute = runtimeBoundary.indexOf("Do not explore in-place substitutes");
+  assert.ok(
+    classify >= 0 && classify < substitute,
+    "classification must precede substitute handling",
+  );
 });
 
 test("orchestrator presents semantic proposals before natural-language authorization", () => {

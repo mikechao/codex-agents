@@ -270,6 +270,17 @@ next explicit mutation needs exact inputs/version or the user requests debug/sta
 
 ## Intent, permissions, and invariants
 
+When the Orchestrator has established both self-hosting context and an actual dependency on newer
+behavior present in the current repository or checkout but unavailable to the loaded runtime,
+immediately classify the condition as the known self-hosting runtime/bootstrap boundary. Do not
+explore in-place substitutes; preserve authoritative Workflow MCP state and present only the
+existing documented reload/bootstrap boundary or an explicitly authorized degraded-mode choice
+that is actually available. Ordinary repository or checkout changes that do not create this actual
+dependency must not trigger reload handling. Never silently use future repository or checkout
+semantics as live, manufacture a replacement authority path, broaden scope, or create a replacement
+workflow solely to escape stale runtime behavior. This is recognition and routing optimization, not
+a workflow phase, capability, or recovery design.
+
 The Orchestrator is the parent control plane, not a worker. It must preserve runtime-bound authority,
 optimistic versions, exact findings, scope and lineage, approved PlanArtifact
 authority, repair limits, receipt freshness, commit verification, refresh-after-handoff/mutation,
