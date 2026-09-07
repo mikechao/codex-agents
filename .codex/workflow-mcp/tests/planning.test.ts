@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
+import { planReference } from "../plan-reference.js";
 import { WorkflowStore } from "../store.js";
 import { disposeFixture, fixture } from "./test-fixtures.js";
 
@@ -98,6 +99,13 @@ function planInput(path = "planned.txt") {
   };
 }
 
+test("plan references are deterministic UUID-derived display values", () => {
+  const planId = "00000000-0000-4000-8000-000000000001";
+  assert.equal(planReference(planId), "elaborate-orange-monkey");
+  assert.equal(planReference(planId), planReference(planId));
+  assert.notEqual(planReference(planId), planReference("00000000-0000-4000-8000-000000000002"));
+});
+
 test("plans preserve exact revisions, approval, and workflow provenance", () => {
   const target = fixture();
   const databasePath = join(target.root, "planning.sqlite");
@@ -105,6 +113,8 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   const draft = store.planCreate(revisionInput());
   assert.equal(draft.metadata.status, "draft");
   assert.equal(draft.full_plan, revisionInput().full_plan);
+  assert.equal(draft.plan_ref, planReference(draft.plan_id));
+  assert.equal(store.planGet({ plan_id: draft.plan_id, revision: 1 }).plan_ref, draft.plan_ref);
   const approved = store.planApprove({
     plan_id: draft.plan_id,
     revision: 1,
@@ -122,6 +132,7 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   });
   store.close();
   const reopened = new WorkflowStore({ repositoryRoot: target.root, databasePath });
+  assert.equal(reopened.planGet({ plan_id: draft.plan_id, revision: 1 }).plan_ref, draft.plan_ref);
   assert.equal(
     reopened.planParentGet({ plan_id: draft.plan_id, revision: 1 }).full_plan,
     revisionInput().full_plan,
@@ -175,6 +186,7 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       },
     });
     assert.equal(acceptanceEdit.revision, 2);
+    assert.equal(acceptanceEdit.plan_ref, draft.plan_ref);
     assert.deepEqual(acceptanceEdit.acceptance_criteria, ["first criterion", "refined criterion"]);
 
     const validationEdit = store.planRevise({
@@ -198,6 +210,7 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       },
     });
     assert.equal(combined.revision, 4);
+    assert.equal(combined.plan_ref, draft.plan_ref);
 
     const approved = store.planApprove({
       plan_id: draft.plan_id,
@@ -205,6 +218,7 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       user_authorization: "approve round-trip plan",
     });
     const parent = store.planParentGet({ plan_id: draft.plan_id, revision: combined.revision });
+    assert.equal(parent.plan_ref, draft.plan_ref);
     assert.deepEqual(parent.acceptance_criteria, [
       { criterion_id: "AC-001", description: "combined criterion" },
     ]);
@@ -217,6 +231,10 @@ test("planner reads round-trip directly while parent reads retain persisted cont
     const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: combined.revision });
     assert.deepEqual(workflow.acceptance_criteria, parent.acceptance_criteria);
     assert.deepEqual(workflow.validation_requirements, parent.validation_requirements);
+    assert.equal(
+      category(() => store.planGet({ plan_id: draft.plan_ref, revision: combined.revision })),
+      "ERROR_PLAN_INVALID",
+    );
   } finally {
     store.close();
     disposeFixture(target.root);

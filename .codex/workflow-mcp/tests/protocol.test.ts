@@ -253,6 +253,7 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
       validation_requirements: [{ description: "manual check", argv: null }],
     });
     assert.equal(draft.metadata.status, "draft");
+    assert.equal(typeof draft.plan_ref, "string");
     assert.deepEqual(draft.validation_requirements, [{ description: "manual check", argv: null }]);
 
     const revised = await session.call("plan_revise", {
@@ -268,6 +269,7 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
       },
     });
     assert.equal(revised.revision, 2);
+    assert.equal(revised.plan_ref, draft.plan_ref);
     assert.deepEqual(revised.validation_requirements, [
       { description: "manual replacement", argv: null },
     ]);
@@ -293,13 +295,21 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
       user_authorization: "approve current exact revision",
     });
     assert.equal(approved.metadata.status, "approved");
+    assert.equal(approved.plan_ref, draft.plan_ref);
     const parent = await session.call("plan_parent_get", {
       plan_id: draft.plan_id,
       revision: revised.revision,
     });
+    assert.equal(parent.plan_ref, draft.plan_ref);
     assert.deepEqual(parent.acceptance_criteria, [
       { criterion_id: "AC-001", description: "replacement survives" },
     ]);
+    const alias = await session.callRaw("plan_get", {
+      plan_id: draft.plan_ref,
+      revision: revised.revision,
+    });
+    assert.equal(alias.result.isError, true);
+    assert.equal(alias.body.category, "ERROR_PLAN_INVALID");
     const created = await session.call("workflow_create_from_plan", {
       plan_id: draft.plan_id,
       revision: revised.revision,

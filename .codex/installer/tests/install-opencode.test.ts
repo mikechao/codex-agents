@@ -300,6 +300,20 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
     prompt.slice(cta, approvalWait),
     /never put CTA text inside or alter the `full_plan`/u,
   );
+  for (const phrase of [
+    "ordinary user-facing presentation, show `plan_ref` plus revision",
+    "do not show the UUID `plan_id`",
+    "Raw UUID display is permitted only for an explicit diagnostics, debugging, or protocol request",
+    "internal Native Plan → Orchestrator handoff containing the exact UUID `plan_id` plus exact revision",
+    "parent-read the same exact identity again",
+    "Preserve the exact UUID and revision for Orchestrator's parent reads, approval, revision, workflow creation, provenance, and every other MCP call",
+    "never ask the user to transcribe either identifier",
+    "internal handoff must never be rendered in ordinary user-facing output",
+    "After approval, present `plan_ref` plus revision",
+    "do not report the UUID",
+  ]) {
+    assert.ok(prompt.includes(phrase), `missing plan-reference presentation contract: ${phrase}`);
+  }
   assert.deepEqual(plan.permission, {
     edit: "deny",
     bash: "deny",

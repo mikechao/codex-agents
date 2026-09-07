@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
+import { planReference } from "./plan-reference.js";
 import type {
   ContentDigest,
   PlanApproval,
@@ -247,6 +248,7 @@ export class PlanStore {
     return {
       ...planRevisionInputFromArtifact(resolved.artifact),
       plan_id: resolved.artifact.plan_id,
+      plan_ref: planReference(resolved.artifact.plan_id),
       revision: resolved.artifact.revision,
       artifact_digest: resolved.revision.artifact_digest as PlannerPlanRead["artifact_digest"],
       created_at: resolved.artifact.created_at,
@@ -263,6 +265,7 @@ export class PlanStore {
     const current = resolved.plan.current_revision === resolved.revision.revision;
     return {
       ...resolved.artifact,
+      plan_ref: planReference(resolved.artifact.plan_id),
       artifact_digest: resolved.revision.artifact_digest as PlanRead["artifact_digest"],
       metadata: {
         current_revision: resolved.plan.current_revision as PlanRevision,

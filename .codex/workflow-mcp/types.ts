@@ -283,6 +283,7 @@ export interface PlanReadMetadata {
 }
 
 export type PlanRead = PlanRevisionArtifact & {
+  plan_ref: string;
   artifact_digest: ContentDigest;
   metadata: PlanReadMetadata;
 };
@@ -296,6 +297,7 @@ export interface PlannerPlanReadMetadata {
 /** Planner-facing projection; persisted contract IDs and parent approval evidence stay hidden. */
 export type PlannerPlanRead = PlanAuthoringContent & {
   plan_id: PlanId;
+  plan_ref: string;
   revision: PlanRevision;
   artifact_digest: ContentDigest;
   created_at: IsoTimestamp;

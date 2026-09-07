@@ -97,10 +97,14 @@ base revision plus a required non-empty bounded `replacements` object; the serve
 only from the verified base and replaces arrays wholesale before normalizing one complete candidate.
 Built-in Plan uses the parent surface `plan_parent_get`
 to retrieve the exact revision, renders authoritative `full_plan` verbatim, and calls `plan_approve`
-only after explicit user approval. Orchestrator is execution-only: it parent-reads an already-approved
-exact plan identity and calls `workflow_create_from_plan`; it has no plan approval or planner dispatch
-authority. Planner handoffs are bounded routing summaries rather than full plans. Material refinements
-carry the plan identity, exact base revision, and bounded feedback without pasted old plan text. When
+only after explicit user approval. Ordinary user-facing plan presentation uses the derived `plan_ref`
+plus revision and suppresses the UUID except for an explicit diagnostics/debugging/protocol request.
+The internal Native Plan → Orchestrator handoff preserves the exact UUID `plan_id` plus exact revision;
+it is never rendered for ordinary user-facing output and never requires user transcription. Orchestrator
+is execution-only: it parent-reads an already-approved exact plan identity and calls
+`workflow_create_from_plan`; it has no plan approval or planner dispatch authority. Planner handoffs are
+bounded routing summaries rather than full plans. Material refinements carry the plan identity, exact base
+revision, and bounded feedback without pasted old plan text. When
 the immediately preceding Native Plan handoff unambiguously binds one exact current approved
 PlanArtifact identity, Orchestrator may consume that handoff for execution without asking the operator
 to repeat the identity or revision. It must still parent-read and verify current approval before

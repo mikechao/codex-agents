@@ -32,6 +32,7 @@ import type {
   PlanAuthoringContent,
   PlannerPlanRead,
   PlanRead,
+  PlanRevisionArtifact,
   PlanRevisionReplacements,
   RepairConformance,
   RepairDirective,
@@ -278,7 +279,19 @@ type _PlannerContentKeysAreComplete = Expect<Equal<keyof PlanAuthoringContent, P
 type _PlannerEnvelopeKeysAreBounded = Expect<
   Equal<
     keyof PlannerPlanRead,
-    PlannerContentKeys | "plan_id" | "revision" | "artifact_digest" | "created_at" | "metadata"
+    | PlannerContentKeys
+    | "plan_id"
+    | "plan_ref"
+    | "revision"
+    | "artifact_digest"
+    | "created_at"
+    | "metadata"
+  >
+>;
+type _ParentPlanReadPresentationKeysAreComplete = Expect<
+  Equal<
+    Exclude<keyof PlanRead, keyof PlanRevisionArtifact>,
+    "plan_ref" | "artifact_digest" | "metadata"
   >
 >;
 type _ParentPlanReadRetainsPersistedShape = Expect<
