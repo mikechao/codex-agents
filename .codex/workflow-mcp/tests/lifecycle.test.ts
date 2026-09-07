@@ -1728,6 +1728,284 @@ test("review-only inconclusive review may omit unavailable executable evidence",
   }
 });
 
+test("blocking manual evidence is recorded while inconclusive review remains stopped", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "manual check", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "manual evidence pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+
+    // A stopped review can retain an unresolved manual result from the preceding review attempt.
+    // Seed that persisted state exactly as the store would, without inventing a new transition.
+    const stopped = JSON.parse(
+      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
+    ) as any;
+    stopped.phase = "STOPPED_INCONCLUSIVE";
+    stopped.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(stopped), objectDigest(stopped), id);
+
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_adopt_dirty_scope",
+      "workflow_record_manual_validation",
+    ]);
+    const beforeBlockedResume = store.parentGet(id);
+    const beforeBlockedAudit = store.audit(id);
+    assert.throws(
+      () =>
+        store.resumeReview({
+          workflow_id: id,
+          expected_version: beforeBlockedResume.version,
+          resume_context: "resume before evidence",
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(store.parentGet(id).version, beforeBlockedResume.version);
+    assert.deepEqual(store.audit(id), beforeBlockedAudit);
+
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: beforeBlockedResume.version,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "operator inspected the result",
+    });
+    const recorded = store.parentGet(id);
+    assert.equal(recorded.phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(recorded.validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+      { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
+    ]);
+    assert.deepEqual(recorded.permitted_next_actions, [
+      "workflow_adopt_dirty_scope",
+      "workflow_resume_review",
+    ]);
+    assert.equal(store.audit(id).at(-1).event_type, "MANUAL_VALIDATION_RECORDED");
+
+    store.resumeReview({
+      workflow_id: id,
+      expected_version: recorded.version,
+      resume_context: "resume after evidence",
+    });
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+    store.beginReview({ workflow_id: id, expected_version: recorded.version + 1 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: recorded.version + 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stopped manual failure remains fail-closed and terminal evidence is immutable", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "manual check one", argv: null },
+          { description: "manual check two", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "pending" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    const stopped = JSON.parse(
+      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
+    ) as any;
+    stopped.phase = "STOPPED_INCONCLUSIVE";
+    stopped.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(stopped), objectDigest(stopped), id);
+
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 1,
+      validation_id: "VAL-001",
+      status: "failed",
+      evidence: "manual check failed",
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_adopt_dirty_scope",
+      "workflow_record_manual_validation",
+    ]);
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 2,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "manual check passed",
+    });
+    assert.throws(
+      () =>
+        store.recordManualValidation({
+          workflow_id: id,
+          expected_version: 3,
+          validation_id: "VAL-001",
+          status: "passed",
+          evidence: "replacement is forbidden",
+        }),
+      (error: any) => error.category === "ERROR_INVALID_TRANSITION",
+    );
+    store.resumeReview({
+      workflow_id: id,
+      expected_version: 3,
+      resume_context: "resume after evidence",
+    });
+    store.beginReview({ workflow_id: id, expected_version: 4 });
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: 5,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed-required-validation exemption keeps inconclusive recovery available", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "manual check", argv: null },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE_WITH_CONCERNS",
+      summary: "required executable check failed",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "failed", evidence: "check failed" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "manual evidence pending" },
+      ],
+      known_failures: ["executable check failed"],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 2,
+      review_status: "INCONCLUSIVE",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+    });
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_adopt_dirty_scope",
+      "workflow_record_manual_validation",
+    ]);
+    assert.throws(
+      () =>
+        store.resumeReview({
+          workflow_id: id,
+          expected_version: 3,
+          resume_context: "resume before manual evidence",
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 3,
+      validation_id: "VAL-002",
+      status: "passed",
+      evidence: "manual evidence recorded while stopped",
+    });
+    store.resumeReview({
+      workflow_id: id,
+      expected_version: 4,
+      resume_context: "review context available",
+    });
+    assert.equal(store.parentGet(id).phase, "REVIEWING");
+    store.beginReview({ workflow_id: id, expected_version: 5 });
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: 6,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 scenario("linked follow-ups copy optional and blocking findings into fresh children", [
   {
     name: "optional from approved: create",

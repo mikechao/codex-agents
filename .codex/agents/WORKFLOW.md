@@ -267,7 +267,7 @@ IMPLEMENTING -> REVIEWING -> REPAIR_REQUIRED -> REPAIRING -> REVIEWING
 IMPLEMENTING -- INCOMPLETE --> IMPLEMENTING
 REPAIRING   -- INCOMPLETE --> REPAIRING
    |  |            |   \                  |
-   |  |            |    `-> STOPPED_INCONCLUSIVE -> (resume) REVIEWING
+   |  |            |    `-> STOPPED_INCONCLUSIVE -> (record blocking manual evidence)* -> (resume) REVIEWING
    |  |            |                 |                    |
    |  |            |                 `-> APPROVED -> STOPPED_APPROVED
    |  |            |
@@ -295,8 +295,12 @@ enter `REPAIRING` via `workflow_authorize_repair` and become terminal
 the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0
 workflow with the legacy direct-contract `workflow_create_linked_followup` or the identity-only
 `workflow_create_linked_followup_from_plan`. The latter resolves the exact current approved child
-PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
-recoverable with `workflow_resume_review`. Implementation context/block stops are recoverable with
+PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is recoverable with
+`workflow_resume_review`. If review-blocking parent-owned manual evidence is pending, the parent
+records concrete evidence while stopped first; resume remains explicit and is gated by the shared
+pending-evidence predicate. The complete change-workflow failed-required-validation exemption still
+permits normal review routing despite another pending manual result, but does not bypass stopped-state
+evidence recovery. Implementation context/block stops are recoverable with
 `workflow_resume_implementation`. `STOPPED_CONCERNS` enters review via `workflow_accept_concerns`
 under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED`,
 `STOPPED_COMMIT_MISMATCH`, and `COMMITTED`.
@@ -482,8 +486,11 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
   original or a later instruction, may still dispatch `committer` when review and receipt gates
   pass. An explicitly user-authorized linked follow-up spawns a fresh cycle-0 child that copies the
   exact findings and remediation context.
-- `INCONCLUSIVE` plus `STOPPED_INCONCLUSIVE`: stop without mutation and request the missing context;
-  resume with `workflow_resume_review` once the context is available.
+- `INCONCLUSIVE` plus `STOPPED_INCONCLUSIVE`: stop and request missing context. If any required
+  parent-owned manual result remains `not_run`, record concrete evidence while stopped, then resume
+  explicitly with `workflow_resume_review`; otherwise resume directly once the context is available.
+  A complete change result set with a genuine failed required validation keeps the existing
+  exemption during normal `REVIEWING`, but does not bypass stopped-state evidence recovery.
 - `STOPPED_NEEDS_CONTEXT` / `STOPPED_IMPLEMENTATION_BLOCKED`: resume implementation with
   `workflow_resume_implementation` once the missing context or blocker is resolved.
 - `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this

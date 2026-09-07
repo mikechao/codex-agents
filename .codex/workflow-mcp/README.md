@@ -223,7 +223,12 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
   enables final approval and commit authorization. A parent may record unresolved manual evidence from
   `STOPPED_CONCERNS`; a valid failure enters review without fabricating concern acceptance, while a
   concern-only stop still requires explicit `workflow_accept_concerns`.
-- An inconclusive review resumes with `workflow_resume_review`. `REPAIR_REQUIRED` advances through
+- An inconclusive review normally resumes with `workflow_resume_review`. When a review-blocking
+  parent-owned manual requirement is still `not_run`, the parent records its concrete evidence while
+  the workflow remains stopped; only then may explicit `workflow_resume_review` recover the review.
+  The complete change-workflow failed-required-validation exemption still permits normal review
+  routing despite another pending manual result, but does not bypass stopped-state evidence
+  recovery. `REPAIR_REQUIRED` advances through
   bounded cycles with `workflow_authorize_repair`, supplying one explicit bounded semantic directive
   (outcome, strategy constraints, fallback conditions, and in-scope required/forbidden paths). The
   reviewer sees that exact active directive and an approval of the resulting re-review must include

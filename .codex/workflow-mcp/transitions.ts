@@ -562,7 +562,11 @@ const ACTION_MATRIX: Partial<
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_expand_scope", "workflow_resume_implementation"],
     STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_expand_scope", "workflow_resume_implementation"],
-    STOPPED_INCONCLUSIVE: ["workflow_adopt_dirty_scope", "workflow_resume_review"],
+    STOPPED_INCONCLUSIVE: [
+      "workflow_adopt_dirty_scope",
+      "workflow_record_manual_validation",
+      "workflow_resume_review",
+    ],
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
     STOPPED_COMMIT_PREPARATION: [
       "workflow_retry_commit_preparation",
@@ -608,6 +612,13 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     pendingManualValidations(state).length > 0
   ) {
     actions.push("workflow_record_manual_validation");
+  }
+  if (actorRole === "parent" && state.phase === "STOPPED_INCONCLUSIVE") {
+    if (pendingManualValidations(state).length > 0) {
+      actions = actions.filter((action) => action !== "workflow_resume_review");
+    } else {
+      actions = actions.filter((action) => action !== "workflow_record_manual_validation");
+    }
   }
   if (
     actorRole === "parent" &&
@@ -1788,6 +1799,8 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
     "review resume",
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
+  if (pendingManualValidations(state).length > 0)
+    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
   const next = clone<WorkflowState>(state);
   applyRecovery(next, "REVIEWING", "review", args.resume_context, "resume_context");
   return next;
@@ -1837,7 +1850,10 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     ["workflow_id", "expected_version", "validation_id", "status", "evidence"],
     "manual validation",
   );
-  ensurePhase(state, "REVIEWING", "STOPPED_CONCERNS");
+  ensurePhase(state, "REVIEWING", "STOPPED_CONCERNS", "STOPPED_INCONCLUSIVE");
+  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingManualValidations(state).length === 0) {
+    fail("ERROR_INVALID_TRANSITION", "manual validation evidence is not required for recovery");
+  }
   if (args.status !== "passed" && args.status !== "failed")
     fail("ERROR_INVALID_SHAPE", "manual validation status is invalid");
   const validationId = args.validation_id;
@@ -1878,7 +1894,11 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     if (insertAt < 0) next.validation_results.push(result);
     else next.validation_results.splice(insertAt, 0, result);
   }
-  if (state.workflow_type === "change" && hasFailedRequiredValidation(next)) {
+  if (
+    state.phase !== "STOPPED_INCONCLUSIVE" &&
+    state.workflow_type === "change" &&
+    hasFailedRequiredValidation(next)
+  ) {
     next.phase = "REVIEWING";
     next.stop_context = null;
     next.concern_acceptance = null;

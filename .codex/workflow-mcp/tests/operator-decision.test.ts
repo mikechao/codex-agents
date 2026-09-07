@@ -93,7 +93,7 @@ test("operator projection matches direct action derivation across representative
 test("operator projection requests parent-owned manual evidence before review", () => {
   const { root, git } = fixture();
   const databasePath = join(root, "operator-manual.sqlite");
-  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git, "change", [
       { description: "executable", argv: ["bun", "run", "check"] },
@@ -119,6 +119,23 @@ test("operator projection requests parent-owned manual evidence before review", 
       validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
     });
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+
+    const stopped = JSON.parse(
+      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
+    ) as any;
+    stopped.phase = "STOPPED_INCONCLUSIVE";
+    stopped.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+    store.db
+      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+      .run(JSON.stringify(stopped), objectDigest(stopped), id);
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "manual_validation_required",
+      validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+    });
     store.recordManualValidation({
       workflow_id: id,
       expected_version: 1,
@@ -126,9 +143,14 @@ test("operator projection requests parent-owned manual evidence before review", 
       status: "passed",
       evidence: "inspected",
     });
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      "workflow_adopt_dirty_scope",
+      "workflow_resume_review",
+    ]);
     assert.deepEqual(store.operatorDecisionGet(id).primary, {
-      kind: "no_user_action",
-      route: "review",
+      kind: "approve_recovery",
+      recovery: "resume_review",
+      authorization_required: true,
     });
   } finally {
     store.close();
@@ -164,6 +186,28 @@ test("operator projection routes failed-plus-pending change review and preserves
         },
       ]).primary,
       { kind: "no_user_action", route: "review" },
+    );
+
+    const stoppedChange = structuredClone(changeState) as any;
+    stoppedChange.phase = "STOPPED_INCONCLUSIVE";
+    stoppedChange.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+    assert.deepEqual(
+      deriveOperatorDecision(stoppedChange, [
+        {
+          state: stoppedChange,
+          actions: {
+            parent: ["workflow_adopt_dirty_scope", "workflow_record_manual_validation"],
+          },
+        },
+      ]).primary,
+      {
+        kind: "manual_validation_required",
+        validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+      },
     );
 
     const reviewOnly = create(store, git, "review_only", [
