@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "../migration.js";
 import { WorkflowStore } from "../store.js";
+import { allRequiredValidationsPassed } from "../transitions.js";
+import type { WorkflowState } from "../types.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
 
@@ -51,6 +53,52 @@ function category(callback: () => void): string {
     return error.category;
   }
   assert.fail("expected workflow error");
+}
+
+function persistedValidationState(): {
+  root: ReturnType<typeof fixture>;
+  path: string;
+  state: WorkflowState;
+} {
+  const root = fixture();
+  const path = join(root.root, "state.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root.root, databasePath: path });
+  store.create({
+    workflow_type: "change",
+    objective: "validation identity",
+    approved_plan: null,
+    approved_paths: ["note.txt"],
+    acceptance_criteria: ["state is rejected"],
+    validation_requirements: [
+      { description: "command check", kind: "command", argv: ["bun", "run", "check"] },
+      { description: "inspection check", kind: "inspection" },
+    ],
+    review_target: {
+      review_mode: "working_tree",
+      base_revision: root.git("rev-parse", "HEAD"),
+      head_revision: null,
+      approved_paths: ["note.txt"],
+      include_staged: true,
+      include_unstaged: true,
+      include_untracked: true,
+    },
+  });
+  store.close();
+  const db = new Database(path);
+  const row = db.prepare("SELECT state_json FROM workflows").get() as { state_json: string };
+  const state = JSON.parse(row.state_json) as WorkflowState;
+  db.close();
+  return { root, path, state };
+}
+
+function rewritePersistedState(path: string, state: WorkflowState): void {
+  const db = new Database(path);
+  const stateJson = JSON.stringify(state);
+  db.prepare("UPDATE workflows SET state_json = ?, state_digest = ?").run(
+    stateJson,
+    objectDigest(state),
+  );
+  db.close();
 }
 
 test("rejects incompatible SQLite tables without upgrading or mutating them", () => {
@@ -137,7 +185,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["state is rejected"],
-      validation_requirements: ["startup"],
+      validation_requirements: [{ description: "startup", kind: "inspection" }],
       review_target: {
         review_mode: "working_tree",
         base_revision: root.git("rev-parse", "HEAD"),
@@ -173,7 +221,7 @@ test("rejects an incompatible persisted state schema without rewriting its row",
     const after = afterDb.prepare("SELECT version, state_json, state_digest FROM workflows").all();
     afterDb.close();
     assert.deepEqual(after, before);
-    assert.equal(created.schema_version, 9);
+    assert.equal(created.schema_version, 10);
   } finally {
     rmSync(root.root, { recursive: true, force: true });
   }
@@ -190,7 +238,7 @@ test("rejects current-schema digest corruption distinctly", () => {
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["state is corrupt"],
-      validation_requirements: ["startup"],
+      validation_requirements: [{ description: "startup", kind: "inspection" }],
       review_target: {
         review_mode: "working_tree",
         base_revision: root.git("rev-parse", "HEAD"),
@@ -214,6 +262,71 @@ test("rejects current-schema digest corruption distinctly", () => {
   }
 });
 
+test("rejects inconsistent persisted validation identity and never treats it as commit-complete", () => {
+  const corruptions: Array<{
+    name: string;
+    mutate: (state: WorkflowState) => void;
+  }> = [
+    {
+      name: "duplicate requirement IDs",
+      mutate: (state) => {
+        (state.validation_requirements as Array<{ validation_id: string }>)[1].validation_id =
+          "VAL-001";
+      },
+    },
+    {
+      name: "out-of-order requirement IDs",
+      mutate: (state) => {
+        const requirements = state.validation_requirements as Array<{ validation_id: string }>;
+        requirements[0].validation_id = "VAL-002";
+        requirements[1].validation_id = "VAL-001";
+      },
+    },
+    {
+      name: "duplicate result IDs",
+      mutate: (state) => {
+        state.validation_results = [
+          { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+          { validation_id: "VAL-001", status: "passed", evidence: "checked twice" },
+        ] as WorkflowState["validation_results"];
+      },
+    },
+    {
+      name: "unknown result ID",
+      mutate: (state) => {
+        state.validation_results = [
+          { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+          { validation_id: "VAL-003", status: "passed", evidence: "unknown" },
+        ] as WorkflowState["validation_results"];
+      },
+    },
+  ];
+
+  for (const corruption of corruptions) {
+    const { root, path, state } = persistedValidationState();
+    try {
+      state.validation_results = [
+        { validation_id: "VAL-001", status: "passed", evidence: "checked" },
+        { validation_id: "VAL-002", status: "passed", evidence: "checked" },
+      ] as WorkflowState["validation_results"];
+      corruption.mutate(state);
+      assert.equal(
+        allRequiredValidationsPassed(state),
+        false,
+        `${corruption.name} must not satisfy commit gating`,
+      );
+      rewritePersistedState(path, state);
+      assert.equal(
+        category(() => new WorkflowStore({ repositoryRoot: root.root, databasePath: path })),
+        "ERROR_STATE_CORRUPT",
+        `${corruption.name} must be rejected at the persistence boundary`,
+      );
+    } finally {
+      rmSync(root.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("fresh current-schema stores start with no migration audit behavior", () => {
   const root = fixture();
   const path = join(mkdtempSync(join(tmpdir(), "fresh-store-")), "state.sqlite");
@@ -225,7 +338,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["created"],
-      validation_requirements: ["startup"],
+      validation_requirements: [{ description: "startup", kind: "inspection" }],
       review_target: {
         review_mode: "working_tree",
         base_revision: root.git("rev-parse", "HEAD"),
@@ -236,7 +349,7 @@ test("fresh current-schema stores start with no migration audit behavior", () =>
         include_untracked: true,
       },
     });
-    assert.equal(created.schema_version, 9);
+    assert.equal(created.schema_version, 10);
     assert.equal("capability" in created, false);
     const schemaDb = new Database(path);
     assert.deepEqual(

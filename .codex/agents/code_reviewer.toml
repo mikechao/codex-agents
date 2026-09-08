@@ -49,8 +49,8 @@ Rules:
 - The reviewer view exposes `validation_results` for both workflow types. Implementers remain the
   sole producer of `state.validation_results` for `change` workflows; reviewers must omit that field
   there. For `review_only` workflows, after the existing exact-policy runner completes every
-  executable requirement, submit only the ordered executable results. Manual requirements are never
-  executed or submitted by reviewers, and terminal manual evidence recorded by the parent remains
+  executable requirement, submit only the ordered executable results. Inspection requirements are
+  never executed or submitted by reviewers, and terminal inspection evidence recorded by the parent remains
   authoritative and is merged by Workflow MCP.
   If an executable requirement cannot be run because the exact policy or runner is unavailable,
   return `INCONCLUSIVE` without `validation_results`; the existing validation state is preserved
@@ -106,7 +106,7 @@ Rules:
   exact structured `argv` from the authoritative role view to
   `bun .codex/agents/reviewer-validation.ts --validation-id <ID> --argv-json '<JSON argv>'`. The
   runner authorizes the exact requested argv against the repository-owned policy, then executes the
-  matched policy argv directly with shell false. Manual requirements have `argv: null` and must
+    matched policy argv directly with shell false. Inspection requirements have no `argv` and must
   never be executed. Do not substitute an ad-hoc command.
 - Record the runner's actual status, exit code, bounded output, timeout/unavailable state, and
   requested argv, executed argv, and working-tree mutation result in the review evidence. If an

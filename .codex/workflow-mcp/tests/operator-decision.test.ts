@@ -15,9 +15,11 @@ function create(
   store: WorkflowStore,
   git: (...args: string[]) => string,
   workflowType: "change" | "review_only" = "change",
-  validationRequirements: Array<{ description: string; argv: string[] | null }> = [
-    { description: "validation", argv: ["bun", "run", "check"] },
-  ],
+  validationRequirements: Array<{
+    description: string;
+    kind: "command" | "inspection";
+    argv?: string[];
+  }> = [{ description: "validation", kind: "command", argv: ["bun", "run", "check"] }],
 ) {
   const paths = ["note.txt"];
   return store.create({
@@ -96,8 +98,8 @@ test("operator projection requests parent-owned manual evidence before review", 
   const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git, "change", [
-      { description: "executable", argv: ["bun", "run", "check"] },
-      { description: "manual inspection", argv: null },
+      { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", kind: "inspection" },
     ]);
     const id = created.workflow_id;
     store.submitImplementation({
@@ -115,7 +117,7 @@ test("operator projection requests parent-owned manual evidence before review", 
       finding_resolution_map: {},
     });
     assert.deepEqual(store.operatorDecisionGet(id).primary, {
-      kind: "manual_validation_required",
+      kind: "inspection_required",
       validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
     });
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
@@ -133,7 +135,7 @@ test("operator projection requests parent-owned manual evidence before review", 
       .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
       .run(JSON.stringify(stopped), objectDigest(stopped), id);
     assert.deepEqual(store.operatorDecisionGet(id).primary, {
-      kind: "manual_validation_required",
+      kind: "inspection_required",
       validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
     });
     store.recordManualValidation({
@@ -164,8 +166,8 @@ test("operator projection routes failed-plus-pending change review and preserves
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const change = create(store, git, "change", [
-      { description: "executable", argv: ["bun", "run", "check"] },
-      { description: "manual inspection", argv: null },
+      { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", kind: "inspection" },
     ]);
     const changeState = structuredClone(change) as any;
     changeState.phase = "REVIEWING";
@@ -205,14 +207,14 @@ test("operator projection routes failed-plus-pending change review and preserves
         },
       ]).primary,
       {
-        kind: "manual_validation_required",
+        kind: "inspection_required",
         validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
       },
     );
 
     const reviewOnly = create(store, git, "review_only", [
-      { description: "executable", argv: ["bun", "run", "check"] },
-      { description: "manual inspection", argv: null },
+      { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", kind: "inspection" },
     ]);
     const reviewOnlyState = structuredClone(reviewOnly) as any;
     reviewOnlyState.phase = "REVIEWING";
@@ -230,7 +232,7 @@ test("operator projection routes failed-plus-pending change review and preserves
         },
       ]).primary,
       {
-        kind: "manual_validation_required",
+        kind: "inspection_required",
         validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
       },
     );
@@ -261,7 +263,7 @@ test("operator projection never offers commit for incomplete or failed validatio
   const store = new WorkflowStore({ repositoryRoot: root, databasePath });
   try {
     const created = create(store, git, "change", [
-      { description: "manual inspection", argv: null },
+      { description: "manual inspection", kind: "inspection" },
     ]);
     for (const validationResults of [
       [],

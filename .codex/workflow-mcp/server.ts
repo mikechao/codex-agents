@@ -28,7 +28,7 @@ import {
 type JsonSchema = Record<string, JSONValue>;
 
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v2 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v3 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -201,24 +201,28 @@ const createReviewTargetSchema: JsonSchema = {
 
 const validationRequirementSchema: JsonSchema = {
   oneOf: [
-    { type: "string", minLength: 1, maxLength: 4000 },
     {
       type: "object",
       properties: {
         description: { type: "string", minLength: 1, maxLength: 4000 },
+        kind: { type: "string", const: "command" },
         argv: {
-          oneOf: [
-            { type: "null" },
-            {
-              type: "array",
-              items: { type: "string", minLength: 1, maxLength: 4000 },
-              minItems: 1,
-              maxItems: 50,
-            },
-          ],
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 4000 },
+          minItems: 1,
+          maxItems: 50,
         },
       },
-      required: ["description", "argv"],
+      required: ["description", "kind", "argv"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        description: { type: "string", minLength: 1, maxLength: 4000 },
+        kind: { type: "string", const: "inspection" },
+      },
+      required: ["description", "kind"],
       additionalProperties: false,
     },
   ],
@@ -663,7 +667,7 @@ export const toolDefinitions = [
   {
     name: "workflow_record_manual_validation",
     description:
-      "Record bounded parent-owned terminal evidence for one unresolved manual validation requirement.",
+      "Record bounded parent-owned terminal evidence for one unresolved inspection requirement.",
     inputSchema: schema(
       {
         ...common.properties,
@@ -674,7 +678,7 @@ export const toolDefinitions = [
       [...common.required, "validation_id", "status", "evidence"],
     ),
     annotations: {
-      title: "Record manual validation",
+      title: "Record inspection evidence",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,

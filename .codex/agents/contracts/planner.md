@@ -105,7 +105,8 @@ separate approval.
 Discover every executable validation needed by the proposed change and reconcile it against the
 repository-owned `.codex/reviewer-validation.json` policy. Each executable requirement must use an
 exact argv array: same length, ordering, and every value. Validation IDs, descriptions, prefixes,
-and approximate matches do not authorize execution. Preserve genuinely manual checks as `argv: null`.
+and approximate matches do not authorize execution. Use `kind: "inspection"` for genuinely
+non-executable checks; inspection requirements intentionally omit `argv`.
 Before returning `ready_for_approval`, verify every executable validation requirement has an exact
 policy match. A missing or malformed policy, mismatch, or unavailable exact verification path is a
 bounded `needs_input` risk; never edit policy, guess, silently drop a check, claim an unavailable

@@ -3,16 +3,16 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
-Workflow state schema v9 optionally persists generic immutable `work_items` provenance and append-only
+Workflow state schema v10 optionally persists generic immutable `work_items` provenance and append-only
 finding adjudications. Each
 provider-neutral record has `provider`, `id`, exact `display_ref`, and nullable absolute HTTP(S) `url`.
 The field survives restart and is inherited by linked follow-ups; parent and committer views expose it,
 while implementer and reviewer views omit it. It cannot broaden scope, criteria, remediation, receipts,
-review, or commit authorization. Schema v8 and earlier state requires a clean reset rather than
+review, or commit authorization. Schema v9 and earlier state requires a clean reset rather than
 implicit migration.
 
 Planning is a separate pre-workflow domain. The planner surface is exactly `plan_create`, `plan_get`,
-and `plan_revise`. Canonical `plan_schema_version: 2` artifacts accept all seven complete plan
+and `plan_revise`. Canonical `plan_schema_version: 3` artifacts accept all seven complete plan
 fields, including explicit `workflow_type: "change" | "review_only"`; `review_only` plan authoring
 is limited to the existing working-tree intent. Material `plan_revise` calls
 carry exact `plan_id`, `base_revision`, and a required non-empty `replacements` object. The server
@@ -31,8 +31,8 @@ bounded execution brief, normalized objective/scope/contracts, digest, and prove
 workflow whose type is derived from the approved artifact. Plans have no runtime affinity and
 introduce no workflow phase. Direct
 `workflow_create` continues to be supported as the non-plan fallback. The server transport and
-persistence mechanism remain unchanged apart from the canonical plan schema-v2 type field and the
-v9 state field described below.
+persistence mechanism remain unchanged apart from the canonical plan schema-v3 validation kind field and the
+v10 state field described below.
 
 `workflow_operator_decision_get` is a read-only, idempotent semantic parent refresh. It derives a
 bounded decision from one authoritative workflow, existing permitted actions, and only reciprocal
@@ -216,18 +216,18 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - Implementation context and block stops resume to their prior active phase with
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
-- Required manual evidence remains explicit and parent-owned. For `change` workflows, a complete
+- Required inspection evidence remains explicit and parent-owned. For `change` workflows, a complete
   authoritative required result set containing a failed validation may enable independent review and
-  repair while unrelated manual checks remain pending. Pending-only state, and pending evidence in
+  repair while unrelated inspection checks remain pending. Pending-only state, and pending evidence in
   `review_only` workflows, continues to block reviewer routing. Only all required validations passing
-  enables final approval and commit authorization. A parent may record unresolved manual evidence from
+  enables final approval and commit authorization. A parent may record unresolved inspection evidence from
   `STOPPED_CONCERNS`; a valid failure enters review without fabricating concern acceptance, while a
   concern-only stop still requires explicit `workflow_accept_concerns`.
 - An inconclusive review normally resumes with `workflow_resume_review`. When a review-blocking
-  parent-owned manual requirement is still `not_run`, the parent records its concrete evidence while
+  parent-owned inspection requirement is still `not_run`, the parent records its concrete evidence while
   the workflow remains stopped; only then may explicit `workflow_resume_review` recover the review.
   The complete change-workflow failed-required-validation exemption still permits normal review
-  routing despite another pending manual result, but does not bypass stopped-state evidence
+  routing despite another pending inspection result, but does not bypass stopped-state evidence
   recovery. `REPAIR_REQUIRED` advances through
   bounded cycles with `workflow_authorize_repair`, supplying one explicit bounded semantic directive
   (outcome, strategy constraints, fallback conditions, and in-scope required/forbidden paths). The
@@ -282,7 +282,7 @@ review and fresh commit authorization. No committer action is permitted while st
 
 ## Persistence schema
 
-Workflow MCP supports one current persisted schema (v9, including planning tables,
+Workflow MCP supports one current persisted schema (v10, including planning tables,
 finding-adjudication state, linked-continuation provenance, and bounded semantic repair directives).
 Incompatible SQLite tables and persisted state
 schemas fail closed at startup with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic;
@@ -291,7 +291,7 @@ startup never performs implicit schema upgrades or row rewrites. Current workflo
 The parent bearer capability column from pre-change databases is intentionally absent from the
 current table; such databases are an incompatible clean break and require reset rather than
 backfill or row rewriting. Retained pre-change PlanArtifact revisions are also rejected with the
-same reset-required boundary; reset the Workflow MCP database and recreate canonical schema-v2 plans.
+same reset-required boundary; reset the Workflow MCP database and recreate canonical schema-v3 plans.
 
 The current state stores `approved_plan` exactly in the JSON state: Plan-mode execution supplies the
 non-empty approved text, while direct/non-plan workflows explicitly supply `null`. It is immutable
@@ -299,10 +299,10 @@ execution intent exposed only to parent and implementer views. Structured object
 validations, and remediation/findings remain enforceable contracts. Legacy linked follow-ups retain
 their direct contract and null-plan semantics; plan-native linked follow-ups receive only exact plan
 identity and server-bind the selected artifact. They never reconstruct or silently inherit the source plan. The current state
-also stores append-only parent-only scope amendments, authorization-time baselines, finding-
-adjudication state, and bounded semantic repair directives. State schema changes are clean breaks and
-require resetting incompatible databases. Planning tables and repair directives are part of the v9
-clean break as well: unfinished v8 and earlier
+  also stores append-only parent-only scope amendments, authorization-time baselines, finding-
+  adjudication state, and bounded semantic repair directives. State schema changes are clean breaks and
+  require resetting incompatible databases. Planning tables and repair directives are part of the v10
+clean break as well: unfinished v9 and earlier
 workflows cannot cross this boundary, and startup never upgrades or rewrites existing rows. Reset
 durable state before starting the new self-hosting runtime.
 

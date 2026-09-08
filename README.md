@@ -63,7 +63,7 @@ commits an authorization-time content commitment and verifies it before resume a
 creation.
 
 Workflow creation also accepts optional generic work-item provenance. Records preserve provider-neutral
-metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v9, survive
+metadata (`provider`, `id`, `display_ref`, and nullable HTTP(S) `url`) immutably in schema v10, survive
 restart, and flow automatically through linked follow-ups. Only parent and committer views expose this
 metadata; it is not authorization, scope, review evidence, or tracker mutation. Committers render
 authoritative items as neutral `Refs <display_ref>` lines and never infer IDs or emit completion keywords.
@@ -190,8 +190,9 @@ in one all-or-nothing step:
   customize it in the target project without regenerating agent definitions. Workflow-local
   `VAL-*` IDs correlate evidence only. Reviewer validation is executed directly without a shell, and
   unauthorized argv, malformed policy, shell syntax, timeouts, unavailable commands, and working-tree
-  mutations fail closed. Manual validation requirements are represented with `argv: null` and are
-  never executed.
+  mutations fail closed. Validation requirements use `kind: "command"` with a non-empty exact `argv`
+  array for executable checks, or `kind: "inspection"` without `argv` for non-executable checks;
+  inspection requirements are never executed.
 - OpenCode also installs the structured, explorer-only `runEvidence({ evidenceId, argv })` project-local
   custom tool at `.opencode/tools/runEvidence.ts`, which OpenCode auto-discovers by filename. OpenCode
   creates and synchronizes its writable `.opencode/package.json`, lockfiles, `.opencode/node_modules`,

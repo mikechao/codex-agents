@@ -14,6 +14,7 @@ import type {
   RECEIPT_PATH_STATE_VALUES,
   REVIEW_STATUS_VALUES,
   ROLE_VALUES,
+  VALIDATION_KIND_VALUES,
   VALIDATION_STATUS_VALUES,
   WORKFLOW_ACTION_VALUES,
   WORKFLOW_PHASE_VALUES,
@@ -74,6 +75,7 @@ export type FindingResolution = TupleValue<typeof FINDING_RESOLUTION_VALUES>;
 export type FindingAdjudicationDisposition = TupleValue<typeof FINDING_ADJUDICATION_VALUES>;
 export type AcceptanceStatus = TupleValue<typeof ACCEPTANCE_STATUS_VALUES>;
 export type ValidationStatus = TupleValue<typeof VALIDATION_STATUS_VALUES>;
+export type ValidationKind = TupleValue<typeof VALIDATION_KIND_VALUES>;
 export type RangePathKind = TupleValue<typeof RANGE_PATH_KIND_VALUES>;
 export type GitFileMode = TupleValue<typeof GIT_FILE_MODE_VALUES>;
 export type CommitOutcome = TupleValue<typeof COMMIT_OUTCOME_VALUES>;
@@ -172,7 +174,7 @@ export interface OperatorRecoverySummary {
 export type OperatorPrimaryDecision =
   | { kind: "no_user_action"; route: OperatorRoute }
   | {
-      kind: "manual_validation_required";
+      kind: "inspection_required";
       validations: Array<{ validation_id: ValidationRequirementId; description: string }>;
     }
   | {
@@ -242,7 +244,7 @@ export interface OperatorDecision {
 }
 
 export interface PlanRevisionArtifact {
-  plan_schema_version: 2;
+  plan_schema_version: 3;
   plan_id: PlanId;
   revision: PlanRevision;
   workflow_type: WorkflowType;
@@ -263,7 +265,7 @@ export interface PlanRevisionReplacements {
   objective?: string;
   approved_paths?: string[];
   acceptance_criteria?: string[];
-  validation_requirements?: Array<string | { description: string; argv: string[] | null }>;
+  validation_requirements?: ValidationAuthoringRequirement[];
 }
 
 /** Complete authoring content accepted by plan_create and plan_revise replacements. */
@@ -502,14 +504,19 @@ export interface AcceptanceCriterion {
   description: string;
 }
 
-export interface ValidationRequirement {
-  /** Workflow-local result correlation ID; never a repository command selector. */
-  validation_id: ValidationRequirementId; // "VAL-001"..
-  description: string;
-  /** Exact executable argv, or null for a manual validation requirement. */
-  argv: string[] | null;
-}
+export type ValidationAuthoringRequirement =
+  | { description: string; kind: "command"; argv: string[] }
+  | { description: string; kind: "inspection" };
 
+export type ValidationRequirement =
+  | ({ validation_id: ValidationRequirementId } & Extract<
+      ValidationAuthoringRequirement,
+      { kind: "command" }
+    >)
+  | ({ validation_id: ValidationRequirementId } & Extract<
+      ValidationAuthoringRequirement,
+      { kind: "inspection" }
+    >);
 export interface AcceptanceResult {
   criterion_id: AcceptanceCriterionId;
   status: AcceptanceStatus;
@@ -573,7 +580,7 @@ export interface ReviewRange {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowState {
-  schema_version: 9;
+  schema_version: 10;
   version: WorkflowVersion;
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
@@ -674,7 +681,7 @@ export interface ConcernAcceptance {
 
 export interface RoleViewCommon {
   workflow_id: WorkflowId | null;
-  schema_version: 9;
+  schema_version: 10;
   version: WorkflowVersion;
   workflow_type: WorkflowType;
   phase: WorkflowPhase;

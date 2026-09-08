@@ -3,7 +3,7 @@ import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
   hasFailedRequiredValidation,
-  pendingManualValidations,
+  pendingInspectionValidations,
   permittedNextActions,
 } from "./transitions.js";
 import type {
@@ -193,37 +193,37 @@ function primaryDecision(record: OperatorLineageRecord): OperatorDecision["prima
   const reviewer = actionsFor(record, "reviewer");
   const committer = actionsFor(record, "committer");
 
-  const pendingManual = pendingManualValidations(state);
+  const pendingInspection = pendingInspectionValidations(state);
   if (
     state.phase === "REVIEWING" &&
-    pendingManual.length > 0 &&
+    pendingInspection.length > 0 &&
     !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
   ) {
     if (!parent.includes("workflow_record_manual_validation")) {
       return {
         kind: "operator_intervention",
-        reason: "manual validation is pending but parent evidence authority is unavailable",
+        reason: "inspection evidence is pending but parent evidence authority is unavailable",
       };
     }
     return {
-      kind: "manual_validation_required",
-      validations: pendingManual.map((requirement) => ({
+      kind: "inspection_required",
+      validations: pendingInspection.map((requirement) => ({
         validation_id: requirement.validation_id,
         description: bounded(requirement.description),
       })),
     };
   }
 
-  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingManual.length > 0) {
+  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingInspection.length > 0) {
     if (!parent.includes("workflow_record_manual_validation")) {
       return {
         kind: "operator_intervention",
-        reason: "manual validation is pending but parent evidence authority is unavailable",
+        reason: "inspection evidence is pending but parent evidence authority is unavailable",
       };
     }
     return {
-      kind: "manual_validation_required",
-      validations: pendingManual.map((requirement) => ({
+      kind: "inspection_required",
+      validations: pendingInspection.map((requirement) => ({
         validation_id: requirement.validation_id,
         description: bounded(requirement.description),
       })),

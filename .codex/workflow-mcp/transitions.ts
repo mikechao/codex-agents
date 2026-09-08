@@ -36,6 +36,7 @@ import type {
   RoleView,
   RoleViewCommon,
   StoppingImplementationStatus,
+  ValidationAuthoringRequirement,
   ValidationRequirement,
   ValidationResult,
   WorkflowAction,
@@ -142,7 +143,7 @@ export const PHASES: readonly WorkflowPhase[] = WORKFLOW_PHASE_VALUES;
 export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
   COMMIT_MISMATCH_CATEGORY_SET;
 
-export const V9_STATE_KEYS = [
+export const V10_STATE_KEYS = [
   "schema_version",
   "version",
   "workflow_id",
@@ -197,11 +198,13 @@ export const V9_STATE_KEYS = [
   "commit_preparation",
   "commit_result",
 ] as const satisfies readonly (keyof WorkflowState)[];
-/** @deprecated use V9_STATE_KEYS. */
-export const V8_STATE_KEYS = V9_STATE_KEYS;
-type MissingV9StateKey = Exclude<keyof WorkflowState, (typeof V9_STATE_KEYS)[number]>;
-const V9_STATE_KEYS_ARE_EXHAUSTIVE: MissingV9StateKey extends never ? true : never = true;
-void V9_STATE_KEYS_ARE_EXHAUSTIVE;
+/** @deprecated use V10_STATE_KEYS. */
+export const V9_STATE_KEYS = V10_STATE_KEYS;
+/** @deprecated use V10_STATE_KEYS. */
+export const V8_STATE_KEYS = V10_STATE_KEYS;
+type MissingV10StateKey = Exclude<keyof WorkflowState, (typeof V10_STATE_KEYS)[number]>;
+const V10_STATE_KEYS_ARE_EXHAUSTIVE: MissingV10StateKey extends never ? true : never = true;
+void V10_STATE_KEYS_ARE_EXHAUSTIVE;
 
 export function ensurePhase<const P extends WorkflowPhase>(
   state: WorkflowState,
@@ -591,7 +594,7 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   role(actorRole);
   let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
   if (actorRole === "reviewer" && state.phase === "REVIEWING") {
-    if (reviewBlockedByPendingManual(state)) actions = [];
+    if (reviewBlockedByPendingInspection(state)) actions = [];
     else if (state.review_target.review_mode === "commit_range") {
       actions = ["workflow_submit_review"];
     } else if (state.review_start_receipt) {
@@ -603,18 +606,18 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   if (
     actorRole === "parent" &&
     state.phase === "REVIEWING" &&
-    pendingManualValidations(state).length === 0
+    pendingInspectionValidations(state).length === 0
   )
     actions = [];
   if (
     actorRole === "parent" &&
     state.phase === "STOPPED_CONCERNS" &&
-    pendingManualValidations(state).length > 0
+    pendingInspectionValidations(state).length > 0
   ) {
     actions.push("workflow_record_manual_validation");
   }
   if (actorRole === "parent" && state.phase === "STOPPED_INCONCLUSIVE") {
-    if (pendingManualValidations(state).length > 0) {
+    if (pendingInspectionValidations(state).length > 0) {
       actions = actions.filter((action) => action !== "workflow_resume_review");
     } else {
       actions = actions.filter((action) => action !== "workflow_record_manual_validation");
@@ -663,8 +666,8 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
   return actions.sort();
 }
 
-/** Required manual checks without authoritative terminal evidence. */
-export function pendingManualValidations(state: WorkflowState): ValidationRequirement[] {
+/** Required inspections without authoritative terminal evidence. */
+export function pendingInspectionValidations(state: WorkflowState): ValidationRequirement[] {
   const results = new Map<string, ValidationResult>();
   const duplicates = new Set<string>();
   for (const result of state.validation_results) {
@@ -673,7 +676,7 @@ export function pendingManualValidations(state: WorkflowState): ValidationRequir
   }
   return state.validation_requirements.filter(
     (requirement) =>
-      requirement.argv === null &&
+      requirement.kind === "inspection" &&
       (duplicates.has(requirement.validation_id) ||
         !results.has(requirement.validation_id) ||
         results.get(requirement.validation_id)?.status === "not_run"),
@@ -711,11 +714,14 @@ export function hasFailedRequiredValidation(state: WorkflowState): boolean {
     const requirementRecord = requirement as Record<string, unknown>;
     const resultRecord = result as Record<string, unknown>;
     const requirementKeys = Object.keys(requirementRecord).sort();
+    const expectedRequirementKeys =
+      requirementRecord.kind === "command"
+        ? ["argv", "description", "kind", "validation_id"]
+        : ["description", "kind", "validation_id"];
     if (
-      requirementKeys.length !== 3 ||
-      requirementKeys.some(
-        (key, keyIndex) => key !== ["argv", "description", "validation_id"][keyIndex],
-      )
+      (requirementRecord.kind !== "command" && requirementRecord.kind !== "inspection") ||
+      requirementKeys.length !== expectedRequirementKeys.length ||
+      requirementKeys.some((key, keyIndex) => key !== expectedRequirementKeys[keyIndex])
     ) {
       return false;
     }
@@ -735,7 +741,7 @@ export function hasFailedRequiredValidation(state: WorkflowState): boolean {
       typeof requirementRecord.description !== "string" ||
       requirementRecord.description.length === 0 ||
       requirementRecord.description.length > MAX_TEXT ||
-      (requirementRecord.argv !== null &&
+      (requirementRecord.kind === "command" &&
         (!Array.isArray(requirementRecord.argv) ||
           requirementRecord.argv.length === 0 ||
           requirementRecord.argv.length > 50 ||
@@ -756,12 +762,17 @@ export function hasFailedRequiredValidation(state: WorkflowState): boolean {
   return failed;
 }
 
-export function reviewBlockedByPendingManual(state: WorkflowState): boolean {
+export function reviewBlockedByPendingInspection(state: WorkflowState): boolean {
   return (
-    pendingManualValidations(state).length > 0 &&
+    pendingInspectionValidations(state).length > 0 &&
     !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
   );
 }
+
+/** @deprecated compatibility alias for callers of the public transition helper. */
+export const pendingManualValidations = pendingInspectionValidations;
+/** @deprecated compatibility alias for callers of the public transition helper. */
+export const reviewBlockedByPendingManual = reviewBlockedByPendingInspection;
 
 function parseReviewerValidationResults(
   value: unknown,
@@ -780,11 +791,23 @@ function parseReviewerValidationResults(
 /** Every required validation has exactly one current result and it passed. */
 export function allRequiredValidationsPassed(state: WorkflowState): boolean {
   if (state.validation_results.length !== state.validation_requirements.length) return false;
-  return state.validation_requirements.every(
-    (requirement, index) =>
-      state.validation_results[index]?.validation_id === requirement.validation_id &&
-      state.validation_results[index]?.status === "passed",
-  );
+  const requirementIds = new Set<string>();
+  const resultIds = new Set<string>();
+  return state.validation_requirements.every((requirement, index) => {
+    const expectedId = `VAL-${String(index + 1).padStart(3, "0")}`;
+    const result = state.validation_results[index];
+    if (
+      requirement.validation_id !== expectedId ||
+      requirementIds.has(requirement.validation_id) ||
+      !result ||
+      resultIds.has(result.validation_id)
+    ) {
+      return false;
+    }
+    requirementIds.add(requirement.validation_id);
+    resultIds.add(result.validation_id);
+    return result.validation_id === requirement.validation_id && result.status === "passed";
+  });
 }
 
 export function roleView(state: WorkflowState, actorRole: "parent"): ParentView;
@@ -1218,13 +1241,10 @@ export function submitImplementation(
       (result) =>
         state.validation_requirements.find(
           (requirement) => requirement.validation_id === result.validation_id,
-        )?.argv === null && result.status !== "not_run",
+        )?.kind === "inspection" && result.status !== "not_run",
     )
   ) {
-    fail(
-      "ERROR_INVALID_IMPLEMENTATION",
-      "implementers cannot submit terminal manual validation evidence",
-    );
+    fail("ERROR_INVALID_IMPLEMENTATION", "implementers cannot submit terminal inspection evidence");
   }
   const knownFailures = stringList(args.known_failures, "known_failures");
   const priorIds = (
@@ -1273,7 +1293,7 @@ export function submitImplementation(
         (item) =>
           state.validation_requirements.find(
             (requirement) => requirement.validation_id === item.validation_id,
-          )?.argv !== null && item.status !== "passed",
+          )?.kind === "command" && item.status !== "passed",
       )
     ) {
       fail(
@@ -1431,8 +1451,8 @@ export function beginReview(
   }
   exactKeys(input, ["workflow_id", "expected_version"], "review begin");
   ensurePhase(state, "REVIEWING");
-  if (reviewBlockedByPendingManual(state))
-    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
+  if (reviewBlockedByPendingInspection(state))
+    fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
   if (state.review_target.review_mode !== "working_tree") {
     fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
   }
@@ -1462,8 +1482,8 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "review input is invalid");
   }
   ensurePhase(state, "REVIEWING");
-  if (reviewBlockedByPendingManual(state))
-    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
+  if (reviewBlockedByPendingInspection(state))
+    fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
   const args = exactKeys(
     input,
     [
@@ -1483,7 +1503,7 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "review status is invalid");
   }
   const executableRequirements = state.validation_requirements.filter(
-    (requirement) => requirement.argv !== null,
+    (requirement) => requirement.kind === "command",
   );
   let reviewerValidationResults: ValidationResult[] | null = null;
   if (state.workflow_type === "change") {
@@ -1601,13 +1621,13 @@ export function submitReview(
     const executableById = new Map(
       reviewerValidationResults.map((result) => [result.validation_id, result]),
     );
-    const manualById = new Map(
+    const inspectionById = new Map(
       state.validation_results.map((result) => [result.validation_id, result]),
     );
     next.validation_results = state.validation_requirements.map((requirement) => {
       const result =
-        requirement.argv === null
-          ? manualById.get(requirement.validation_id)
+        requirement.kind === "inspection"
+          ? inspectionById.get(requirement.validation_id)
           : executableById.get(requirement.validation_id);
       if (!result) {
         fail("ERROR_INVALID_REVIEW", "validation results are incomplete");
@@ -1799,8 +1819,8 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
     "review resume",
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
-  if (pendingManualValidations(state).length > 0)
-    fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
+  if (pendingInspectionValidations(state).length > 0)
+    fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
   const next = clone<WorkflowState>(state);
   applyRecovery(next, "REVIEWING", "review", args.resume_context, "resume_context");
   return next;
@@ -1851,7 +1871,7 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     "manual validation",
   );
   ensurePhase(state, "REVIEWING", "STOPPED_CONCERNS", "STOPPED_INCONCLUSIVE");
-  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingManualValidations(state).length === 0) {
+  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingInspectionValidations(state).length === 0) {
     fail("ERROR_INVALID_TRANSITION", "manual validation evidence is not required for recovery");
   }
   if (args.status !== "passed" && args.status !== "failed")
@@ -1861,7 +1881,7 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     (candidate) => candidate.validation_id === validationId,
   );
   if (!requirement) fail("ERROR_INVALID_SHAPE", "manual validation ID is unknown");
-  if (requirement.argv !== null)
+  if (requirement.kind !== "inspection")
     fail("ERROR_INVALID_SHAPE", "validation requirement is executable");
   const matching = state.validation_results.filter(
     (result) => result.validation_id === validationId,
@@ -2089,7 +2109,7 @@ export interface LinkedFollowupPlan {
   plan_provenance: PlanProvenance | null;
   approved_paths: ExactRepoPath[];
   acceptance_criteria: AcceptanceCriterion[] | string[];
-  validation_requirements: ValidationRequirement[] | string[];
+  validation_requirements: ValidationRequirement[] | ValidationAuthoringRequirement[];
   base_head: GitCommitSha;
   max_repair_cycles: number;
   parent_workflow_id: WorkflowId | null;
@@ -2141,7 +2161,7 @@ export function linkedFollowupInput(
       execution_brief: null,
       plan_provenance: null,
       acceptance_criteria: args.acceptance_criteria as string[],
-      validation_requirements: args.validation_requirements as string[],
+      validation_requirements: args.validation_requirements as ValidationAuthoringRequirement[],
     },
   );
 }
@@ -2183,7 +2203,7 @@ interface LinkedFollowupContract {
   execution_brief: string | null;
   plan_provenance: PlanProvenance | null;
   acceptance_criteria: AcceptanceCriterion[] | string[];
-  validation_requirements: ValidationRequirement[] | string[];
+  validation_requirements: ValidationRequirement[] | ValidationAuthoringRequirement[];
 }
 
 function linkedFollowupInputCore(
@@ -2451,14 +2471,19 @@ function pathList(value: unknown, allowEmpty: boolean): void {
 function contractsShape(value: unknown, prefix: "AC" | "VAL"): void {
   if (!Array.isArray(value) || value.length > MAX_CONTRACTS) corrupt();
   const idField = prefix === "AC" ? "criterion_id" : "validation_id";
-  for (const item of value) {
+  for (const [index, item] of value.entries()) {
     if (!isObject(item)) corrupt();
-    checkKeys(item, prefix === "VAL" ? [idField, "description", "argv"] : [idField, "description"]);
+    if (prefix === "VAL") {
+      if (item.kind === "command") checkKeys(item, [idField, "description", "kind", "argv"]);
+      else if (item.kind === "inspection") checkKeys(item, [idField, "description", "kind"]);
+      else corrupt();
+    } else checkKeys(item, [idField, "description"]);
     const id = item[idField];
-    if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
+    const expectedId = `${prefix}-${String(index + 1).padStart(3, "0")}`;
+    if (id !== expectedId) corrupt();
     bounded(item.description, MAX_TEXT);
     if (prefix === "VAL") {
-      if (item.argv !== null) {
+      if (item.kind === "command") {
         if (!Array.isArray(item.argv) || item.argv.length === 0 || item.argv.length > 50) corrupt();
         for (const argument of item.argv) bounded(argument, MAX_TEXT);
       }
@@ -2480,6 +2505,22 @@ function resultsShape(
     if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
     if (!statuses.has(item.status as string)) corrupt();
     bounded(item.evidence, MAX_DETAIL);
+  }
+}
+
+function orderedValidationResultsShape(value: unknown, requirements: unknown): void {
+  resultsShape(value, "validation_id", "VAL", VALIDATION_STATUS_SET as ReadonlySet<string>);
+  if (!Array.isArray(requirements) || !Array.isArray(value) || value.length > requirements.length) {
+    corrupt();
+  }
+  let previousRequirementIndex = -1;
+  for (const result of value) {
+    if (!isObject(result)) corrupt();
+    const requirementIndex = requirements.findIndex(
+      (requirement) => isObject(requirement) && requirement.validation_id === result.validation_id,
+    );
+    if (requirementIndex <= previousRequirementIndex) corrupt();
+    previousRequirementIndex = requirementIndex;
   }
 }
 
@@ -2915,12 +2956,12 @@ function commitResultShape(value: unknown): void {
   }
 }
 
-// Runtime validation of a parsed, digest-verified schema-v9 state before it enters the domain as
+// Runtime validation of a parsed, digest-verified schema-v10 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
-export function validateWorkflowStateV9(value: unknown): WorkflowState {
+export function validateWorkflowStateV10(value: unknown): WorkflowState {
   if (!isObject(value)) corrupt();
   const actual = Object.keys(value).sort();
-  const required = [...V9_STATE_KEYS].sort() as string[];
+  const required = [...V10_STATE_KEYS].sort() as string[];
   if (actual.some((key) => !required.includes(key)) || required.some((key) => !(key in value))) {
     corrupt();
   }
@@ -3149,12 +3190,7 @@ export function validateWorkflowStateV9(value: unknown): WorkflowState {
     "AC",
     ACCEPTANCE_STATUS_SET as ReadonlySet<string>,
   );
-  resultsShape(
-    value.validation_results,
-    "validation_id",
-    "VAL",
-    VALIDATION_STATUS_SET as ReadonlySet<string>,
-  );
+  orderedValidationResultsShape(value.validation_results, value.validation_requirements);
   nullableReceipt(value.implementation_receipt);
   stringArrayShape(value.implementation_known_failures, 50, MAX_DETAIL);
   resolutionMapShape(value.finding_resolution_map);
@@ -3199,20 +3235,22 @@ export function validateWorkflowStateV9(value: unknown): WorkflowState {
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV8 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV9 = validateWorkflowStateV10;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV8 = validateWorkflowStateV10;
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV7 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV7 = validateWorkflowStateV10;
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV6 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV6 = validateWorkflowStateV10;
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV5 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV5 = validateWorkflowStateV10;
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV4 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV4 = validateWorkflowStateV10;
 
-/** @deprecated retained for source compatibility; persisted state is schema v9 only. */
-export const validateWorkflowStateV3 = validateWorkflowStateV9;
+/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
+export const validateWorkflowStateV3 = validateWorkflowStateV10;

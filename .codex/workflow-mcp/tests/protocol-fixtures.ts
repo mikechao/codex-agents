@@ -39,7 +39,7 @@ export function workflowCreateInput(
     approved_paths: paths,
     acceptance_criteria: ["criterion"],
     validation_requirements: options.validation_requirements ?? [
-      { description: "validation", argv: ["bun", "run", "check"] },
+      { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
     ],
     review_target: options.review_target ?? workingTreeTarget(git("rev-parse", "HEAD"), paths),
     ...(options.max_repair_cycles === undefined

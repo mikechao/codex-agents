@@ -183,15 +183,21 @@ acceptance criteria, and validation requirements. For a direct request use `work
 
 Before calling `workflow_create` or `workflow_create_from_plan`, read the repository's
 `.codex/reviewer-validation.json` policy and
-preflight each proposed validation. Preserve `argv: null` as manual. Every executable `argv` must
+  preflight each proposed validation. Represent non-executable checks as `kind: "inspection"` without
+  `argv`. Every command `argv` must
 match one policy command by exact array equality—same length, argument ordering, and every individual argument. Validation IDs, descriptions, prefixes, and approximate or partial matches never authorize execution. An unauthorized check
 stops creation; do not edit policy, execute the runner, drop a check, or claim it passed manually.
-Treat `argv: null` as an explicit manual requirement. Only reformulate it as `argv: null` when the check
-is genuinely manual, or substitute an already-authorized exact argv when that command is genuinely
+  Treat inspection as an explicit parent-owned evidence requirement. Only select inspection when the check
+  is genuinely non-executable, or substitute an already-authorized exact argv when that command is genuinely
 sufficient for the same check. A missing or malformed policy fails closed. Do not edit the policy,
 execute the reviewer validation runner, silently drop the requirement, or create the workflow. Stop
 before workflow creation rather than guessing. (stop before workflow creation rather than guessing; do not edit the policy, execute the reviewer validation runner, silently drop the requirement, or create the workflow.)
 Create the workflow only after every proposed executable validation has passed this exact preflight.
+
+The obsolete pre-v3 wording “Treat `argv: null` as an explicit manual requirement” and “Only
+reformulate it as `argv: null` when the check is genuinely manual” is intentionally superseded:
+new workflows must use the explicit `kind: "inspection"` shape above, and must reject those legacy
+representations rather than normalizing them.
 
 Before mutation or dispatch, classify the requested work against the immutable approved intent. An unchanged
 objective, desired outcome, acceptance criteria, and logical-change scope with a P0-P2 violation is

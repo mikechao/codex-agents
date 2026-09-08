@@ -16,7 +16,9 @@ function revisionInput() {
     objective: "planning foundation",
     approved_paths: ["note.txt"],
     acceptance_criteria: ["the plan is preserved"],
-    validation_requirements: ["bun run check"],
+    validation_requirements: [
+      { description: "bun run check", kind: "command", argv: ["bun", "run", "check"] },
+    ],
   };
 }
 
@@ -37,7 +39,9 @@ function sourceInput(git: (...args: string[]) => string) {
     approved_plan: null,
     approved_paths: approvedPaths,
     acceptance_criteria: ["source criterion"],
-    validation_requirements: [{ description: "source validation", argv: ["bun", "run", "check"] }],
+    validation_requirements: [
+      { description: "source validation", kind: "command", argv: ["bun", "run", "check"] },
+    ],
     review_target: {
       review_mode: "working_tree",
       base_revision: git("rev-parse", "HEAD"),
@@ -96,7 +100,11 @@ function planInput(path = "planned.txt") {
     approved_paths: [path],
     acceptance_criteria: ["authoritative child criterion"],
     validation_requirements: [
-      { description: "authoritative child validation", argv: ["bun", "run", "check"] },
+      {
+        description: "authoritative child validation",
+        kind: "command",
+        argv: ["bun", "run", "check"],
+      },
     ],
   };
 }
@@ -216,8 +224,8 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       approved_paths: ["note.txt"],
       acceptance_criteria: ["first criterion", "second criterion"],
       validation_requirements: [
-        "manual inspection",
-        { description: "exact check", argv: ["bun", "run", "check"] },
+        { description: "manual inspection", kind: "inspection" },
+        { description: "exact check", kind: "command", argv: ["bun", "run", "check"] },
       ],
     });
     const content = {
@@ -237,8 +245,8 @@ test("planner reads round-trip directly while parent reads retain persisted cont
     assert.equal(unchanged.revision, 1);
     assert.deepEqual(unchanged.acceptance_criteria, ["first criterion", "second criterion"]);
     assert.deepEqual(unchanged.validation_requirements, [
-      { description: "manual inspection", argv: null },
-      { description: "exact check", argv: ["bun", "run", "check"] },
+      { description: "manual inspection", kind: "inspection" },
+      { description: "exact check", kind: "command", argv: ["bun", "run", "check"] },
     ]);
 
     const acceptanceEdit = store.planRevise({
@@ -258,7 +266,11 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       replacements: {
         validation_requirements: [
           ...acceptanceEdit.validation_requirements.slice(0, 1),
-          { description: "refined exact check", argv: ["bun", "run", "test:workflow-mcp"] },
+          {
+            description: "refined exact check",
+            kind: "command",
+            argv: ["bun", "run", "test:workflow-mcp"],
+          },
         ],
       },
     });
@@ -269,7 +281,7 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       base_revision: validationEdit.revision,
       replacements: {
         acceptance_criteria: ["combined criterion"],
-        validation_requirements: [{ description: "combined check", argv: null }],
+        validation_requirements: [{ description: "combined check", kind: "inspection" }],
       },
     });
     assert.equal(combined.revision, 4);
@@ -286,7 +298,7 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       { criterion_id: "AC-001", description: "combined criterion" },
     ]);
     assert.deepEqual(parent.validation_requirements, [
-      { validation_id: "VAL-001", description: "combined check", argv: null },
+      { validation_id: "VAL-001", description: "combined check", kind: "inspection" },
     ]);
     assert.equal(parent.artifact_digest, approved.artifact_digest);
     assert.ok(parent.metadata.approval);
@@ -318,7 +330,9 @@ test("plan revisions copy forward omitted fields and stale revisions fail closed
   assert.equal(revised.objective, revisionInput().objective);
   assert.deepEqual(revised.approved_paths, ["note.txt"]);
   assert.deepEqual(revised.acceptance_criteria, ["the plan is preserved"]);
-  assert.deepEqual(revised.validation_requirements, [{ description: "bun run check", argv: null }]);
+  assert.deepEqual(revised.validation_requirements, [
+    { description: "bun run check", kind: "command", argv: ["bun", "run", "check"] },
+  ]);
   assert.equal(
     store.planGet({ plan_id: draft.plan_id, revision: 1 }).full_plan,
     revisionInput().full_plan,
@@ -361,13 +375,15 @@ test("bounded revisions replace arrays wholesale and reject invalid envelopes at
         objective: "all fields objective",
         approved_paths: ["z.txt", "a.txt"],
         acceptance_criteria: ["first", "second"],
-        validation_requirements: [{ description: "executable", argv: ["bun", "run", "check"] }],
+        validation_requirements: [
+          { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+        ],
       },
     });
     assert.deepEqual(revised.approved_paths, ["a.txt", "z.txt"]);
     assert.deepEqual(revised.acceptance_criteria, ["first", "second"]);
     assert.deepEqual(revised.validation_requirements, [
-      { description: "executable", argv: ["bun", "run", "check"] },
+      { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
     ]);
 
     const before = store.db
@@ -379,7 +395,15 @@ test("bounded revisions replace arrays wholesale and reject invalid envelopes at
       [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
       [{ objective: undefined }, "ERROR_INVALID_SHAPE"],
       [{ approved_paths: [] }, "ERROR_INVALID_PATHS"],
-      [{ validation_requirements: [{ description: "bad argv", argv: [] }] }, "ERROR_INVALID_SHAPE"],
+      [{ validation_requirements: ["legacy string requirement"] }, "ERROR_INVALID_SHAPE"],
+      [
+        { validation_requirements: [{ description: "legacy null requirement", argv: null }] },
+        "ERROR_INVALID_SHAPE",
+      ],
+      [
+        { validation_requirements: [{ description: "bad argv", kind: "command", argv: [] }] },
+        "ERROR_INVALID_SHAPE",
+      ],
     ];
     for (const [replacements, expectedCategory] of invalidReplacements) {
       assert.equal(
@@ -627,6 +651,7 @@ test("plan-native linked follow-up binds only the exact current approved child a
       {
         validation_id: "VAL-001",
         description: "authoritative child validation",
+        kind: "command",
         argv: ["bun", "run", "check"],
       },
     ]);

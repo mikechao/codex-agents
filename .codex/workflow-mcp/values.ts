@@ -41,6 +41,7 @@ export const FINDING_ADJUDICATION_VALUES = [
 ] as const;
 export const ACCEPTANCE_STATUS_VALUES = ["satisfied", "not_satisfied"] as const;
 export const VALIDATION_STATUS_VALUES = ["passed", "failed", "not_run"] as const;
+export const VALIDATION_KIND_VALUES = ["command", "inspection"] as const;
 export const RANGE_PATH_KIND_VALUES = ["added", "modified", "deleted", "unchanged"] as const;
 export const GIT_FILE_MODE_VALUES = ["100644", "100755", "120000"] as const;
 export const RECEIPT_PATH_STATE_VALUES = [
@@ -91,6 +92,7 @@ export const FINDING_SEVERITIES = new Set(FINDING_SEVERITY_VALUES);
 export const RESOLUTION_STATUS_SET = new Set(FINDING_RESOLUTION_VALUES);
 export const ACCEPTANCE_STATUS_SET = new Set(ACCEPTANCE_STATUS_VALUES);
 export const VALIDATION_STATUS_SET = new Set(VALIDATION_STATUS_VALUES);
+export const VALIDATION_KIND_SET = new Set(VALIDATION_KIND_VALUES);
 export const ROLE_SET = new Set(ROLE_VALUES);
 export const WORKFLOW_PHASE_SET = new Set(WORKFLOW_PHASE_VALUES);
 export const GIT_FILE_MODE_SET = new Set(GIT_FILE_MODE_VALUES);

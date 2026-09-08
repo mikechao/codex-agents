@@ -33,7 +33,9 @@ describe("Workflow MCP runtime supervision", () => {
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
-      validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
+      validation_requirements: [
+        { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
       review_target: {
         review_mode: "working_tree",
         base_revision: revision,
@@ -970,7 +972,9 @@ describe("Workflow MCP runtime supervision", () => {
         approved_plan: null,
         approved_paths: ["note.txt"],
         acceptance_criteria: ["criterion"],
-        validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
+        validation_requirements: [
+          { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
+        ],
         review_target: {
           review_mode: "working_tree",
           base_revision: revisionB,

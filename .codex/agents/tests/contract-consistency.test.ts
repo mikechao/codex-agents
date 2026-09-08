@@ -970,6 +970,10 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     /\s+/gu,
     " ",
   );
+  const workflowMcpReadme = readFileSync(
+    resolve(import.meta.dir, "../../workflow-mcp/README.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
   const evals = readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator, guide]) {
@@ -1013,13 +1017,28 @@ test("orchestration contracts classify intent and reconcile the final tree expli
   );
   assert.match(
     readme,
-    /generic work-item provenance\. Records preserve provider-neutral metadata[^.]*immutably in schema v9/u,
-    "README must describe current schema v9 work-item provenance",
+    /generic work-item provenance\. Records preserve provider-neutral metadata[^.]*immutably in schema v10/u,
+    "README must describe current schema v10 work-item provenance",
+  );
+  assert.match(
+    workflowMcpReadme,
+    /Workflow state schema v10/u,
+    "Workflow MCP README must describe current schema v10",
+  );
+  assert.match(
+    workflowMcpReadme,
+    /Schema v9 and earlier state requires a clean reset/u,
+    "Workflow MCP README must describe the schema v10 clean break",
+  );
+  assert.doesNotMatch(
+    workflow,
+    /\bmanual (?:evidence|result|requirement)s?\b/iu,
+    "Workflow contract must not use obsolete narrative manual-validation terminology",
   );
   assert.match(
     workflow,
-    /Schema v9 is a clean break from schema v8 and earlier/u,
-    "Workflow contract must document the schema v9 clean break",
+    /Schema v10 is a clean break from schema v9 and earlier/u,
+    "Workflow contract must document the schema v10 clean break",
   );
   assert.match(
     evals,

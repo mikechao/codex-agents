@@ -46,6 +46,7 @@ import {
   FINDING_SEVERITIES,
   RESOLUTION_STATUS_SET,
   ROLE_VALUES,
+  VALIDATION_KIND_SET,
   VALIDATION_STATUS_SET,
 } from "./values.js";
 
@@ -231,7 +232,7 @@ export function planRevisionInput(
     "validation_id",
   );
   return {
-    plan_schema_version: 2,
+    plan_schema_version: 3,
     workflow_type: args.workflow_type as WorkflowType,
     full_plan: fullPlan,
     execution_brief: brief,
@@ -277,17 +278,18 @@ export function planRevisionInputFromArtifact(
     objective: artifact.objective,
     approved_paths: artifact.approved_paths,
     acceptance_criteria: artifact.acceptance_criteria.map((item) => item.description),
-    validation_requirements: artifact.validation_requirements.map((item) => ({
-      description: item.description,
-      argv: item.argv,
-    })),
+    validation_requirements: artifact.validation_requirements.map((item) =>
+      item.kind === "command"
+        ? { description: item.description, kind: item.kind, argv: item.argv }
+        : { description: item.description, kind: item.kind },
+    ),
   };
 }
 
 export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisionArtifact {
   try {
     const record = safeObject(value, "plan artifact", 12);
-    if (record.plan_schema_version === 1) {
+    if (record.plan_schema_version === 1 || record.plan_schema_version === 2) {
       fail(
         "ERROR_MIGRATION_REQUIRED",
         "retained pre-change PlanArtifact schema v1 is incompatible; reset the Workflow MCP database and recreate plans",
@@ -310,18 +312,14 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
       ],
       "plan artifact",
     );
-    if (record.plan_schema_version !== 2)
+    if (record.plan_schema_version !== 3)
       fail("ERROR_STATE_CORRUPT", "plan schema version is invalid");
     const acceptanceCriteria = persistedPlanRecords(
       record.acceptance_criteria,
       "acceptance criteria",
       ["criterion_id", "description"],
     );
-    const validationRequirements = persistedPlanRecords(
-      record.validation_requirements,
-      "validation requirements",
-      ["description", "argv", "validation_id"],
-    );
+    const validationRequirements = persistedValidationRecords(record.validation_requirements);
     const normalized = planRevisionInput(
       {
         full_plan: record.full_plan,
@@ -332,7 +330,8 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
         acceptance_criteria: acceptanceCriteria.map((item) => item.description),
         validation_requirements: validationRequirements.map((item) => ({
           description: item.description,
-          argv: item.argv,
+          kind: item.kind,
+          ...(item.kind === "command" ? { argv: item.argv } : {}),
         })),
       },
       repositoryRoot,
@@ -375,6 +374,23 @@ function persistedPlanRecords(
     const expected = [...keys].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
       fail("ERROR_STATE_CORRUPT", `${name} entry fields are invalid`);
+    return record;
+  });
+}
+
+function persistedValidationRecords(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) fail("ERROR_STATE_CORRUPT", "validation requirements are invalid");
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      fail("ERROR_STATE_CORRUPT", "validation requirements entry is invalid");
+    const record = item as Record<string, unknown>;
+    if (record.kind === "command") {
+      exactKeys(record, ["validation_id", "description", "kind", "argv"], "validation requirement");
+    } else if (record.kind === "inspection") {
+      exactKeys(record, ["validation_id", "description", "kind"], "validation requirement");
+    } else {
+      fail("ERROR_STATE_CORRUPT", "validation requirement kind is invalid");
+    }
     return record;
   });
 }
@@ -799,38 +815,34 @@ export function contractList(
         description: boundedString(item, `${name} description`),
       };
     }
-    // String requirements remain accepted as manual requirements for compatibility with
-    // pre-Issue #33 callers. Executable requirements must use the structured object form;
-    // descriptions are never interpreted as commands.
-    if (typeof item === "string") {
-      return {
-        validation_id: id as ValidationRequirementId,
-        description: boundedString(item, `${name} description`),
-        argv: null,
-      };
-    }
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       fail("ERROR_INVALID_SHAPE", `${name} requirement is invalid`);
     }
     const record = item as Record<string, unknown>;
-    exactKeys(item, ["description", "argv"], `${name} requirement`);
-    if (record.argv !== null && !Array.isArray(record.argv)) {
-      fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
+    if (record.kind === "command") {
+      exactKeys(item, ["description", "kind", "argv"], `${name} requirement`);
+      if (!Array.isArray(record.argv) || record.argv.length === 0 || record.argv.length > 50)
+        fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
+      return {
+        validation_id: id as ValidationRequirementId,
+        description: boundedString(record.description, `${name} description`),
+        kind: "command",
+        argv: record.argv.map((argument, argumentIndex) =>
+          boundedString(argument, `${name} argv[${argumentIndex}]`, MAX_TEXT),
+        ),
+      };
     }
-    const argv =
-      record.argv === null
-        ? null
-        : record.argv.map((argument, argumentIndex) =>
-            boundedString(argument, `${name} argv[${argumentIndex}]`, MAX_TEXT),
-          );
-    if (argv !== null && (argv.length === 0 || argv.length > 50)) {
-      fail("ERROR_INVALID_SHAPE", `${name} requirement argv is invalid`);
+    if (record.kind === "inspection") {
+      exactKeys(item, ["description", "kind"], `${name} requirement`);
+      return {
+        validation_id: id as ValidationRequirementId,
+        description: boundedString(record.description, `${name} description`),
+        kind: "inspection",
+      };
     }
-    return {
-      validation_id: id as ValidationRequirementId,
-      description: boundedString(record.description, `${name} description`),
-      argv,
-    };
+    if (!VALIDATION_KIND_SET.has(record.kind as "command" | "inspection"))
+      return fail("ERROR_INVALID_SHAPE", `${name} requirement kind is invalid`);
+    return fail("ERROR_INVALID_SHAPE", `${name} requirement is invalid`);
   }) as AcceptanceCriterion[] | ValidationRequirement[];
 }
 

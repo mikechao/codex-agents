@@ -279,7 +279,7 @@ IMPLEMENTING -> REVIEWING -> REPAIR_REQUIRED -> REPAIRING -> REVIEWING
 IMPLEMENTING -- INCOMPLETE --> IMPLEMENTING
 REPAIRING   -- INCOMPLETE --> REPAIRING
    |  |            |   \                  |
-   |  |            |    `-> STOPPED_INCONCLUSIVE -> (record blocking manual evidence)* -> (resume) REVIEWING
+   |  |            |    `-> STOPPED_INCONCLUSIVE -> (record blocking inspection evidence)* -> (resume) REVIEWING
    |  |            |                 |                    |
    |  |            |                 `-> APPROVED -> STOPPED_APPROVED
    |  |            |
@@ -311,10 +311,10 @@ the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh
 workflow with the legacy direct-contract `workflow_create_linked_followup` or the identity-only
 `workflow_create_linked_followup_from_plan`. The latter resolves the exact current approved child
 PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is recoverable with
-`workflow_resume_review`. If review-blocking parent-owned manual evidence is pending, the parent
+`workflow_resume_review`. If review-blocking parent-owned inspection evidence is pending, the parent
 records concrete evidence while stopped first; resume remains explicit and is gated by the shared
 pending-evidence predicate. The complete change-workflow failed-required-validation exemption still
-permits normal review routing despite another pending manual result, but does not bypass stopped-state
+permits normal review routing despite another pending inspection result, but does not bypass stopped-state
 evidence recovery. Implementation context/block stops are recoverable with
 `workflow_resume_implementation`. `STOPPED_CONCERNS` enters review via `workflow_accept_concerns`
 under explicit user authorization. Terminal phases are `STOPPED_REPAIR_EXHAUSTED`,
@@ -347,9 +347,9 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   no active directive and remain unambiguous. The
   reviewer view exposes `validation_results` for both workflow types. Implementers remain the sole
   producer of `state.validation_results` for `change` workflows; reviewers must omit that field
-  there. For `review_only` workflows, reviewers submit only the ordered executable results after
-  the existing exact-policy runner completes them. Manual requirements are never executed or
-  submitted by reviewers, and parent terminal manual evidence remains authoritative. Working-tree
+  there. For `review_only` workflows, reviewers submit only the ordered command results after
+  the existing exact-policy runner completes them. Inspection requirements are never executed or
+  submitted by reviewers, and parent terminal inspection evidence remains authoritative. Working-tree
   reviewers call `workflow_begin_review` before inspection; the internal start snapshot is never
   exposed. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
   skipping the implementer; the reviewer view omits the nonexistent implementer handoff.
@@ -361,27 +361,27 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
 Validation requirements are workflow-local contracts. The server assigns `VAL-001`, `VAL-002`, and
 so on in caller order; those IDs correlate a requirement with its result within that workflow and
 are never repository-global command selectors. Each requirement exposes `description` plus either
-an exact structured executable `argv` array or `argv: null` for a manual check. The reviewer policy
-authorizes exact argv entries independently, so descriptions are never parsed as commands and
-manual requirements are never executed.
+an exact structured command `argv` array, or `kind: "inspection"` without `argv`. The reviewer
+policy authorizes exact argv entries independently, so descriptions are never parsed as commands
+and inspection requirements are never executed.
 
-Required manual validation is authoritative workflow evidence, not a prompt or conversation claim.
-Implementers must submit `not_run` for every manual (`argv: null`) requirement; only the parent may
+Required inspection evidence is authoritative workflow evidence, not a prompt or conversation claim.
+Implementers must submit `not_run` for every inspection requirement; only the parent may
 record bounded terminal `passed` or `failed` evidence. A complete implementation may enter
 `REVIEWING` while that evidence is pending. In a `change` workflow, a complete, ordered, and
 authoritative required result set containing a failed validation is terminal blocking evidence that
-allows independent reviewer routing and repair even while unrelated manual evidence remains pending;
+allows independent reviewer routing and repair even while unrelated inspection evidence remains pending;
 pending evidence stays explicit and the parent retains recording authority. Pending-only state, and
-all `review_only` pending-manual state, remains gated until the parent records it. Only all required
+all `review_only` pending-inspection state, remains gated until the parent records it. Only all required
 validations passing enables final approval and commit authorization. Later implementation or repair
-replaces the current validation results, returning manual checks to unresolved `not_run` and
+replaces the current validation results, returning inspection checks to unresolved `not_run` and
 requiring fresh parent evidence.
 
 The OpenCode orchestrator performs a bounded, read-only policy preflight before
-`workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed non-null
+`workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed command
 `argv` by exact array equality, including length, ordering, and every individual argument. Validation
 IDs, descriptions, prefixes, and approximate matches never authorize execution. An unauthorized
-requirement may be reformulated only as a genuinely manual `argv: null` check or as an already-
+requirement may be reformulated only as a genuinely non-executable `kind: "inspection"` check or as an already-
 authorized exact argv that is genuinely sufficient for the same check; otherwise the orchestrator
 stops and reports the mismatch without creating the workflow. It never edits the policy, executes
 reviewer validations, silently drops required checks, or claims an unavailable executable check
@@ -390,17 +390,17 @@ passed manually. A missing or malformed policy is a stop condition rather than a
 ### Generic work-item provenance
 
 Workflow creation may include optional `work_items` records with provider-neutral `provider`, `id`,
- exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v9 state,
+ exact `display_ref`, and nullable absolute HTTP(S) `url`. Provenance is immutable schema v10 state,
 survives restart, is visible only to parent and committer views, and is inherited by linked follow-ups
 without caller retranscription. It is separate from scope, criteria, remediation, receipts, review,
-and commit authorization. Schema v9 is a clean break from schema v8 and earlier; incompatible
+and commit authorization. Schema v10 is a clean break from schema v9 and earlier; incompatible
 databases require a clean reset rather than backfill.
 
 The committer renders only authoritative items as one neutral `Refs <display_ref>` line per distinct
 display reference, preserving first occurrence and exact text. Empty provenance emits no lines; no
 tracker API is called and no completion keyword is inferred.
 
-Finding adjudications are append-only schema v9 records. A parent may disposition an exact current
+Finding adjudications are append-only schema v10 records. A parent may disposition an exact current
 blocking finding only with explicit user authorization and a bounded reason identifying a contract
 inconsistency or approved-scope mismatch. The original finding snapshot is retained in state and
 parent audit projection; effective blockers are calculated from the latest review result, and a
@@ -502,7 +502,7 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
   pass. An explicitly user-authorized linked follow-up spawns a fresh cycle-0 child that copies the
   exact findings and remediation context.
 - `INCONCLUSIVE` plus `STOPPED_INCONCLUSIVE`: stop and request missing context. If any required
-  parent-owned manual result remains `not_run`, record concrete evidence while stopped, then resume
+  parent-owned inspection result remains `not_run`, record concrete evidence while stopped, then resume
   explicitly with `workflow_resume_review`; otherwise resume directly once the context is available.
   A complete change result set with a genuine failed required validation keeps the existing
   exemption during normal `REVIEWING`, but does not bypass stopped-state evidence recovery.
@@ -510,7 +510,7 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
   `workflow_resume_implementation` once the missing context or blocker is resolved.
 - `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this
   enters review without rewriting the failed evidence and never implies commit authorization. If
-  pending manual evidence remains, the parent may record it directly; a valid required failure moves
+  pending inspection evidence remains, the parent may record it directly; a valid required failure moves
   the change workflow to review without fabricating concern acceptance, while concern-only stops
   still require explicit acceptance.
 
@@ -614,7 +614,7 @@ not duplicate their prompt schemas or define an outage protocol.
 
 ## Persistence schema
 
-Planning is a separate pre-workflow domain. Complete canonical PlanArtifact schema-v2 revisions are
+Planning is a separate pre-workflow domain. Complete canonical PlanArtifact schema-v3 revisions are
 insert-only and
 read/revise operations require exact optimistic revision numbers. Parent approval is a separate
 exact-revision operation; planner-facing writes cannot self-approve. Historical approved revisions

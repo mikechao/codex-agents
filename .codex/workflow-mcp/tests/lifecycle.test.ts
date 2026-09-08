@@ -27,7 +27,7 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
     validation_requirements: options.validation_requirements ?? [
-      { description: "validation A", argv: ["bun", "run", "check"] },
+      { description: "validation A", kind: "command", argv: ["bun", "run", "check"] },
     ],
     review_target: options.review_target ?? {
       review_mode: "working_tree",
@@ -492,7 +492,9 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
     approved_plan: null,
     approved_paths: ["note.txt"],
     acceptance_criteria: ["child criterion"],
-    validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
+    validation_requirements: [
+      { description: "child validation", kind: "command", argv: ["bun", "run", "check"] },
+    ],
     finding_ids: findingIds,
     user_authorization: "user authorized follow-up",
   });
@@ -507,7 +509,11 @@ function doCreateChildPlan(ctx: any) {
     approved_paths: ["note.txt"],
     acceptance_criteria: ["the linked remediation is complete"],
     validation_requirements: [
-      { description: "linked remediation validation", argv: ["bun", "run", "check"] },
+      {
+        description: "linked remediation validation",
+        kind: "command",
+        argv: ["bun", "run", "check"],
+      },
     ],
   });
   ctx.store.planApprove({
@@ -699,7 +705,7 @@ test("plan-bound review-only repair preserves authored type and plan authority",
       approved_paths: ["note.txt", "original-scope.txt"],
       acceptance_criteria: ["the aggregate is safe"],
       validation_requirements: [
-        { description: "review validation", argv: ["bun", "run", "check"] },
+        { description: "review validation", kind: "command", argv: ["bun", "run", "check"] },
       ],
     });
     store.planApprove({
@@ -779,8 +785,8 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
       createInput(root, git, {
         workflow_type: "review_only",
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
-          { description: "manual check", argv: null },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "manual check", kind: "inspection" },
         ],
       }),
     );
@@ -918,8 +924,8 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
-          { description: "manual check", argv: null },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "manual check", kind: "inspection" },
         ],
       }),
     );
@@ -973,8 +979,8 @@ test("failed required evidence enables change review while manual evidence remai
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
-          { description: "manual check", argv: null },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "manual check", kind: "inspection" },
         ],
       }),
     );
@@ -1046,8 +1052,8 @@ test("manual failure from concern stop enables review without fabricating concer
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "manual check one", argv: null },
-          { description: "manual check two", argv: null },
+          { description: "manual check one", kind: "inspection" },
+          { description: "manual check two", kind: "inspection" },
         ],
       }),
     );
@@ -1683,7 +1689,7 @@ test("review-only inconclusive review may omit unavailable executable evidence",
       createInput(root, git, {
         workflow_type: "review_only",
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
         ],
       }),
     );
@@ -1735,8 +1741,8 @@ test("blocking manual evidence is recorded while inconclusive review remains sto
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
-          { description: "manual check", argv: null },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "manual check", kind: "inspection" },
         ],
       }),
     );
@@ -1837,8 +1843,8 @@ test("stopped manual failure remains fail-closed and terminal evidence is immuta
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "manual check one", argv: null },
-          { description: "manual check two", argv: null },
+          { description: "manual check one", kind: "inspection" },
+          { description: "manual check two", kind: "inspection" },
         ],
       }),
     );
@@ -1932,8 +1938,8 @@ test("failed-required-validation exemption keeps inconclusive recovery available
     const created = store.create(
       createInput(root, git, {
         validation_requirements: [
-          { description: "executable check", argv: ["bun", "run", "check"] },
-          { description: "manual check", argv: null },
+          { description: "executable check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "manual check", kind: "inspection" },
         ],
       }),
     );
@@ -2148,7 +2154,7 @@ test("legacy linked follow-up rolls back child and source succession after injec
           approved_paths: ["note.txt"],
           acceptance_criteria: ["child criterion"],
           validation_requirements: [
-            { description: "child validation", argv: ["bun", "run", "check"] },
+            { description: "child validation", kind: "command", argv: ["bun", "run", "check"] },
           ],
           finding_ids: ["F-OPT"],
           user_authorization: "user authorized follow-up",
@@ -2517,7 +2523,9 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
-      validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
+      validation_requirements: [
+        { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
       review_target: {
         review_mode: "working_tree",
         base_revision: head,
@@ -2613,7 +2621,9 @@ test("dirty scope adoption binds staged-only index state", () => {
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["criterion"],
-      validation_requirements: [{ description: "validation", argv: ["bun", "run", "check"] }],
+      validation_requirements: [
+        { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
       review_target: {
         review_mode: "working_tree",
         base_revision: head,

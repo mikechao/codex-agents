@@ -17,7 +17,7 @@ function input(git: (...args: string[]) => string, options: any = {}) {
     approved_paths: paths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion"],
     validation_requirements: options.validation_requirements ?? [
-      { description: "validation", argv: ["bun", "run", "check"] },
+      { description: "validation", kind: "command", argv: ["bun", "run", "check"] },
     ],
     review_target: options.review_target ?? {
       review_mode: "working_tree",
@@ -789,7 +789,9 @@ test("linked follow-up inherits findings and gets a direct parent view", () => {
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
-      validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
+      validation_requirements: [
+        { description: "child validation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
       finding_ids: ["OPTIONAL-1"],
       user_authorization: "authorized remediation",
     });
@@ -969,7 +971,9 @@ test("linked remediation and combined review retain receipts through a committed
       approved_plan: null,
       approved_paths: ["note.txt"],
       acceptance_criteria: ["child criterion"],
-      validation_requirements: [{ description: "child validation", argv: ["bun", "run", "check"] }],
+      validation_requirements: [
+        { description: "child validation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
       finding_ids: ["LINKED-OPTIONAL"],
       user_authorization: "authorized linked remediation",
     });
@@ -1217,8 +1221,8 @@ test("approved plan, contracts, and dirty baselines survive restart with least-a
         approved_paths: ["note.txt", "planned.txt"],
         acceptance_criteria: ["duplicate", "duplicate"],
         validation_requirements: [
-          { description: "manual validation", argv: null },
-          { description: "exact validation", argv: ["bun", "run", "test"] },
+          { description: "manual validation", kind: "inspection" },
+          { description: "exact validation", kind: "command", argv: ["bun", "run", "test"] },
         ],
       }),
     );

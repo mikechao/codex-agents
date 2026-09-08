@@ -251,11 +251,13 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
       objective: "stdio planning",
       approved_paths: ["note.txt"],
       acceptance_criteria: ["plan survives"],
-      validation_requirements: [{ description: "manual check", argv: null }],
+      validation_requirements: [{ description: "manual check", kind: "inspection" }],
     });
     assert.equal(draft.metadata.status, "draft");
     assert.equal(typeof draft.plan_ref, "string");
-    assert.deepEqual(draft.validation_requirements, [{ description: "manual check", argv: null }]);
+    assert.deepEqual(draft.validation_requirements, [
+      { description: "manual check", kind: "inspection" },
+    ]);
 
     const revised = await session.call("plan_revise", {
       plan_id: draft.plan_id,
@@ -266,13 +268,13 @@ test("SDK planning dispatch preserves authoring views and maps invalid or stale 
         objective: "stdio planning revised",
         approved_paths: ["note.txt"],
         acceptance_criteria: ["replacement survives"],
-        validation_requirements: ["manual replacement"],
+        validation_requirements: [{ description: "manual replacement", kind: "inspection" }],
       },
     });
     assert.equal(revised.revision, 2);
     assert.equal(revised.plan_ref, draft.plan_ref);
     assert.deepEqual(revised.validation_requirements, [
-      { description: "manual replacement", argv: null },
+      { description: "manual replacement", kind: "inspection" },
     ]);
 
     const invalid = await session.callRaw("plan_revise", {

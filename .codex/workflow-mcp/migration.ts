@@ -1,7 +1,7 @@
 import { fail } from "./errors.js";
 
 /** Persisted workflow/planning schema version. Changes are clean breaks; no implicit upgrades occur. */
-export const CURRENT_STATE_SCHEMA_VERSION = 9;
+export const CURRENT_STATE_SCHEMA_VERSION = 10;
 
 export function assertSupportedStateSchema(value: unknown): void {
   if (
