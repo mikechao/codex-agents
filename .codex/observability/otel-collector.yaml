@@ -1,0 +1,29 @@
+# Repository-local OpenTelemetry dogfood pipeline. Keep traces raw so native
+# OpenCode spans and their attributes remain available for local diagnosis.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions:
+    - health_check
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      exporters:
+        - otlp_grpc/jaeger

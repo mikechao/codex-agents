@@ -22,6 +22,9 @@
       }
     }
   },
+  "experimental": {
+    "openTelemetry": true
+  },
   "mcp": {
     "workflow_state": {
       "type": "local",
