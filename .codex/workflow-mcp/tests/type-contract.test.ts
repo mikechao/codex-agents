@@ -15,7 +15,7 @@ import {
   type REVIEWER_IMPLEMENTER_HANDOFF,
   type ROLE_VIEW_COMMON,
   type ROLE_VIEW_EXTRA,
-  type V8_STATE_KEYS,
+  type V10_STATE_KEYS,
 } from "../transitions.js";
 import type {
   AcceptanceCriterion,
@@ -237,7 +237,7 @@ function _compilePlannerAuthoringView(): void {
   void persistedValidation;
 }
 
-type _StateKeysAreExhaustive = Expect<Equal<(typeof V8_STATE_KEYS)[number], keyof WorkflowState>>;
+type _StateKeysAreExhaustive = Expect<Equal<(typeof V10_STATE_KEYS)[number], keyof WorkflowState>>;
 type _RoleValuesAreCanonical = Expect<Equal<Role, (typeof ROLE_VALUES)[number]>>;
 type _PhaseValuesAreCanonical = Expect<
   Equal<WorkflowPhase, (typeof WORKFLOW_PHASE_VALUES)[number]>

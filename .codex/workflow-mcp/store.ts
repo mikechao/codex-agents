@@ -60,13 +60,13 @@ import {
   retryCommit,
   retryCommitPreparation,
   returnCommitToReview,
-  reviewBlockedByPendingManual,
+  reviewBlockedByPendingInspection,
   roleView,
   submitCommitResult,
   submitImplementation,
   submitReview,
   validateCommitResult,
-  validateWorkflowStateV9,
+  validateWorkflowStateV10,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -570,7 +570,7 @@ function parseState(row: WorkflowRow): WorkflowState {
       (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
     );
   }
-  return validateWorkflowStateV9(parsed);
+  return validateWorkflowStateV10(parsed);
 }
 
 function validatePersistedRows(db: Database): void {
@@ -891,7 +891,7 @@ export class WorkflowStore {
     details,
   }: ExistingWorkflowTransition): WorkflowState {
     next.version = (expectedVersion + 1) as WorkflowVersion;
-    validateWorkflowStateV9(next);
+    validateWorkflowStateV10(next);
     const serialized = JSON.stringify(next);
     const digest = objectDigest(next);
     const workflowId = row.workflow_id as WorkflowId;
@@ -1054,7 +1054,7 @@ export class WorkflowStore {
         if (receipt.base_head !== head) fail("ERROR_STALE_BASE", "scope base is stale");
         state.initial_receipt = receipt;
         state.dirty_baseline_paths = dirtyBaselinePaths(receipt);
-        validateWorkflowStateV9(state);
+        validateWorkflowStateV10(state);
         const now = isoNow();
         this.db
           .prepare(
@@ -1281,7 +1281,7 @@ export class WorkflowStore {
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
-        validateWorkflowStateV9(next);
+        validateWorkflowStateV10(next);
         const result = this.db
           .prepare(
             "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",
@@ -1824,7 +1824,7 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_STARTED",
       (state) => {
-        if (reviewBlockedByPendingManual(state)) {
+        if (reviewBlockedByPendingInspection(state)) {
           fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
         }
         if (state.review_target.review_mode !== "working_tree") {
@@ -1870,7 +1870,7 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_SUBMITTED",
       (state) => {
-        if (reviewBlockedByPendingManual(state)) {
+        if (reviewBlockedByPendingInspection(state)) {
           fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
         }
         if (
@@ -2171,7 +2171,7 @@ export class WorkflowStore {
       fail("ERROR_STALE_BASE", "scope base is stale");
     childState.initial_receipt = childReceipt;
     childState.dirty_baseline_paths = dirtyBaselinePaths(childReceipt);
-    validateWorkflowStateV9(childState);
+    validateWorkflowStateV10(childState);
     const now = isoNow();
     this.db
       .prepare(
@@ -2191,7 +2191,7 @@ export class WorkflowStore {
       version: (expectedVersionNumber + 1) as WorkflowVersion,
     };
     assertWorkItemsUnchanged(state, next);
-    validateWorkflowStateV9(next);
+    validateWorkflowStateV10(next);
     const update = this.db
       .prepare(
         "UPDATE workflows SET version = ?, state_json = ?, state_digest = ?, updated_at = ? WHERE workflow_id = ? AND version = ?",

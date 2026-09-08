@@ -198,10 +198,6 @@ export const V10_STATE_KEYS = [
   "commit_preparation",
   "commit_result",
 ] as const satisfies readonly (keyof WorkflowState)[];
-/** @deprecated use V10_STATE_KEYS. */
-export const V9_STATE_KEYS = V10_STATE_KEYS;
-/** @deprecated use V10_STATE_KEYS. */
-export const V8_STATE_KEYS = V10_STATE_KEYS;
 type MissingV10StateKey = Exclude<keyof WorkflowState, (typeof V10_STATE_KEYS)[number]>;
 const V10_STATE_KEYS_ARE_EXHAUSTIVE: MissingV10StateKey extends never ? true : never = true;
 void V10_STATE_KEYS_ARE_EXHAUSTIVE;
@@ -768,11 +764,6 @@ export function reviewBlockedByPendingInspection(state: WorkflowState): boolean 
     !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
   );
 }
-
-/** @deprecated compatibility alias for callers of the public transition helper. */
-export const pendingManualValidations = pendingInspectionValidations;
-/** @deprecated compatibility alias for callers of the public transition helper. */
-export const reviewBlockedByPendingManual = reviewBlockedByPendingInspection;
 
 function parseReviewerValidationResults(
   value: unknown,
@@ -3234,23 +3225,3 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
   commitResultShape(value.commit_result);
   return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
 }
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV9 = validateWorkflowStateV10;
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV8 = validateWorkflowStateV10;
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV7 = validateWorkflowStateV10;
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV6 = validateWorkflowStateV10;
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV5 = validateWorkflowStateV10;
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV4 = validateWorkflowStateV10;
-
-/** @deprecated retained for source compatibility; persisted state is schema v10 only. */
-export const validateWorkflowStateV3 = validateWorkflowStateV10;
