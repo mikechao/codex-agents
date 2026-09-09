@@ -345,20 +345,24 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   directive, resolution map, and permitted actions. When an active directive is present, an
   approval submission must include explicit conforming evidence against it; initial reviews have
   no active directive and remain unambiguous. The
-  reviewer view exposes `validation_results` for both workflow types. Implementers remain the sole
-  producer of `state.validation_results` for `change` workflows; reviewers must omit that field
-  there. For `review_only` workflows, reviewers submit only the ordered command results after
-  the existing exact-policy runner completes them. Inspection requirements are never executed or
-  submitted by reviewers, and parent terminal inspection evidence remains authoritative. Working-tree
-  reviewers call `workflow_begin_review` before inspection; the internal start snapshot is never
-  exposed. Review-only workflows start `REVIEWING` and are dispatched directly to the reviewer,
-  skipping the implementer; the reviewer view omits the nonexistent implementer handoff.
+  reviewer view exposes `validation_results` for both workflow types. Implementation-time results
+  are handoff evidence; after the exact-policy runner completes every command requirement, reviewers
+  submit the complete ordered fresh command results for approval. Workflow MCP replaces only matching
+  command slots by exact validation ID and requirement order. Inspection requirements are never
+  executed or submitted by reviewers; parent terminal inspection evidence remains authoritative and is
+  preserved byte-for-byte in the merged result set. A failed reviewer command cannot be masked by
+  another passing command. If the runner is unavailable, the reviewer returns `INCONCLUSIVE` without
+  fabricated results and the existing evidence remains recoverable. Working-tree reviewers call
+  `workflow_begin_review` before inspection; the internal start snapshot is never exposed. Review-only
+  workflows start `REVIEWING` and are dispatched directly to the reviewer, skipping the implementer;
+  the reviewer view omits the nonexistent implementer handoff.
 - Committer view: criteria, validations, derived paths, implementation results and failures, concern
   acceptance, finding buckets, sanitized commit preparation, commit authorization, and permitted
   actions. Receipt JSON and digests remain internal; the committer prepares and then submits the
   commit result.
 
-Validation requirements are workflow-local contracts. The server assigns `VAL-001`, `VAL-002`, and
+Validation requirements are workflow-local contracts. Implementation results are handoff evidence,
+while fresh reviewer command results are approval authority. The server assigns `VAL-001`, `VAL-002`, and
 so on in caller order; those IDs correlate a requirement with its result within that workflow and
 are never repository-global command selectors. Each requirement exposes `description` plus either
 an exact structured command `argv` array, or `kind: "inspection"` without `argv`. The reviewer

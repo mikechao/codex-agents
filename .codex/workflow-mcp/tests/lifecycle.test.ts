@@ -380,6 +380,16 @@ function doReview(ctx: any, _version: number, options: any = {}) {
       expected_version: expectedVersion,
     });
   }
+  const validationResults =
+    options.validation_results ??
+    ctx.store
+      .reviewerGet(workflow.workflow_id)
+      .validation_requirements.filter(({ kind }: any) => kind === "command")
+      .map(({ validation_id }: any) => ({
+        validation_id,
+        status: options.validationStatus ?? "passed",
+        evidence: "reviewer validation evidence",
+      }));
   ctx.store.submitReview({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
@@ -387,6 +397,7 @@ function doReview(ctx: any, _version: number, options: any = {}) {
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
     prior_finding_classifications: options.prior ?? {},
+    ...(validationResults.length > 0 ? { validation_results: validationResults } : {}),
     ...(ctx.store.reviewerGet(workflow.workflow_id).repair_directive
       ? {
           repair_conformance: {
@@ -580,6 +591,13 @@ function doChildReview(ctx: any, prior: any = {}) {
     blocking_findings: [],
     optional_findings: [],
     prior_finding_classifications: prior,
+    validation_results: workflow.validation_requirements
+      .filter(({ kind }: any) => kind === "command")
+      .map(({ validation_id }: any) => ({
+        validation_id,
+        status: "passed",
+        evidence: "fresh reviewer pass",
+      })),
   });
 }
 
@@ -737,6 +755,9 @@ test("plan-bound review-only repair preserves authored type and plan authority",
       blocking_findings: [blocker("PLAN-REVIEW-1")],
       optional_findings: [],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
     store.authorizeRepair({
       workflow_id: id,
@@ -874,7 +895,7 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
   }
 });
 
-test("change reviewer validation results cannot overwrite implementer evidence", () => {
+test("change reviewer validation results replace implementer evidence and gate approval", () => {
   const { root, git } = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
   try {
@@ -921,8 +942,125 @@ test("change reviewer validation results cannot overwrite implementer evidence",
       blocking_findings: [],
       optional_findings: [],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
     assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fresh failed reviewer evidence survives inconclusive recovery until a later pass", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(createInput(root, git));
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "implementer" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 2,
+      review_status: "INCONCLUSIVE",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "failed", evidence: "fresh failure" },
+      ],
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_INCONCLUSIVE");
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "failed", evidence: "fresh failure" },
+    ]);
+
+    store.resumeReview({
+      workflow_id: id,
+      expected_version: 3,
+      resume_context: "runner recovered",
+    });
+    store.beginReview({ workflow_id: id, expected_version: 4 });
+    store.submitReview({
+      workflow_id: id,
+      expected_version: 5,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: {},
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "fresh pass" }],
+    });
+    assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
+    assert.deepEqual(store.parentGet(id).validation_results, [
+      { validation_id: "VAL-001", status: "passed", evidence: "fresh pass" },
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reviewer command results remain bound to exact requirement identity and order", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(
+      createInput(root, git, {
+        validation_requirements: [
+          { description: "broad check", kind: "command", argv: ["bun", "run", "check"] },
+          { description: "focused check", kind: "command", argv: ["bun", "run", "test"] },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "implementer broad" },
+        { validation_id: "VAL-002", status: "passed", evidence: "implementer focused" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    store.beginReview({ workflow_id: id, expected_version: 1 });
+    const before = store.parentGet(id);
+    const audit = store.audit(id);
+    assert.throws(
+      () =>
+        store.submitReview({
+          workflow_id: id,
+          expected_version: before.version,
+          review_status: "APPROVED",
+          blocking_findings: [],
+          optional_findings: [],
+          prior_finding_classifications: {},
+          validation_results: [
+            { validation_id: "VAL-001", status: "passed", evidence: "broad pass" },
+            { validation_id: "VAL-002", status: "failed", evidence: "focused failure" },
+          ],
+        }),
+      (error: any) => error.category === "ERROR_INVALID_REVIEW",
+    );
+    assert.equal(store.parentGet(id).version, before.version);
+    assert.equal(store.parentGet(id).phase, before.phase);
+    assert.deepEqual(store.audit(id), audit);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -1840,6 +1978,9 @@ test("blocking manual evidence is recorded while inconclusive review remains sto
       blocking_findings: [],
       optional_findings: [],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
     assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
   } finally {
@@ -2140,6 +2281,9 @@ test("legacy linked follow-up rolls back child and source succession after injec
       blocking_findings: [],
       optional_findings: [optionalFinding("F-OPT")],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
 
     const beforeVersion = store.parentGet(id).version;

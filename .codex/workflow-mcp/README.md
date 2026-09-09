@@ -186,9 +186,13 @@ only bounded known context and supported diagnosis/reconnection guidance may be 
 native projections are refreshed after restoration.
 
 The reviewer view includes the authoritative sanitized `review_target` for inspection. Managed
-reviewers submit only semantic findings and prior classifications to `workflow_submit_review`; the
-target is not accepted from the model at that boundary. Workflow MCP uses the persisted target for
-working-tree snapshot and receipt gating, and rejects corrupt or stale authoritative target state.
+reviewers submit semantic findings, prior classifications, and the complete ordered fresh command
+results from the exact-policy runner to `workflow_submit_review`; the target is not accepted from the
+model at that boundary. Workflow MCP replaces command slots by exact validation ID and requirement
+order, while preserving parent-owned inspection results. A failed command cannot be masked by a
+different passing command, and unavailable runner context remains `INCONCLUSIVE` without fabricated
+evidence. Workflow MCP uses the persisted target for working-tree snapshot and receipt gating, and
+rejects corrupt or stale authoritative target state.
 
 ## Phases, recovery, and stops
 
@@ -216,7 +220,8 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - Implementation context and block stops resume to their prior active phase with
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
-- Required inspection evidence remains explicit and parent-owned. For `change` workflows, a complete
+- Required inspection evidence remains explicit and parent-owned. Implementation results are handoff
+  evidence; fresh reviewer command results are approval authority. For `change` workflows, a complete
   authoritative required result set containing a failed validation may enable independent review and
   repair while unrelated inspection checks remain pending. Pending-only state, and pending evidence in
   `review_only` workflows, continues to block reviewer routing. Only all required validations passing

@@ -738,7 +738,7 @@ export const toolDefinitions = [
   {
     name: "workflow_submit_review",
     description:
-      "Submit semantic reviewer findings; approved working-tree reviews are compared with the internal review-start snapshot.",
+      "Submit semantic reviewer findings and ordered fresh reviewer command evidence; approved working-tree reviews are compared with the internal review-start snapshot.",
     inputSchema: schema(
       {
         ...workerCommon.properties,

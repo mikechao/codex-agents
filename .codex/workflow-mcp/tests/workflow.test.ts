@@ -62,6 +62,16 @@ function implementation(
   });
 }
 
+function reviewerValidationResults(workflow: any, status = "passed") {
+  return workflow.validation_requirements
+    .filter(({ kind }: any) => kind === "command")
+    .map(({ validation_id }: any) => ({
+      validation_id,
+      status,
+      evidence: "reviewer validated",
+    }));
+}
+
 function review(
   store: any,
   workflow: any,
@@ -82,6 +92,7 @@ function review(
     blocking_findings: blocking,
     optional_findings: optional,
     prior_finding_classifications: prior,
+    validation_results: reviewerValidationResults(workflow),
     ...(store.reviewerGet(id).repair_directive
       ? {
           repair_conformance: {
@@ -672,6 +683,7 @@ test("repair re-review requires explicit conforming evidence before approval", (
         blocking_findings: [],
         optional_findings: [],
         prior_finding_classifications: { "CONFORMANCE-1": "resolved" },
+        validation_results: reviewerValidationResults(created),
         ...(repairConformance === undefined ? {} : { repair_conformance: repairConformance }),
       });
     assert.equal(

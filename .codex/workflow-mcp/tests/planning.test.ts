@@ -92,6 +92,7 @@ function approvedSource(store: any, git: (...args: string[]) => string) {
     blocking_findings: [],
     optional_findings: [optional],
     prior_finding_classifications: {},
+    validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "reviewed" }],
   });
   return { source, id, optional };
 }

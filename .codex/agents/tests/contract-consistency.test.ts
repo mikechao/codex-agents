@@ -1309,6 +1309,26 @@ test("reviewer contract distinguishes absent, required, and unknown path states"
   }
 });
 
+test("reviewer contract owns fresh command evidence without owning inspections", () => {
+  const contract = readFileSync(
+    resolve(import.meta.dir, "../contracts/code_reviewer.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  for (const phrase of [
+    "every command-kind requirement",
+    "exact-policy, shell-free reviewer runner",
+    "complete ordered command results",
+    "replaces matching command slots by exact `validation_id`",
+    "preserving parent-owned inspection slots",
+    "Inspection requirements are never executed or submitted",
+    "real failed command cannot be masked",
+    "`APPROVED` is invalid while any required reviewer command result is non-passing",
+    "`INCONCLUSIVE` without fabricated `validation_results`",
+  ]) {
+    assert.ok(contract.includes(phrase), `reviewer contract must include: ${phrase}`);
+  }
+});
+
 test("reviewer contract keeps semantic context separate from ownership and validation", () => {
   const contract = readFileSync(
     resolve(import.meta.dir, "../contracts/code_reviewer.md"),

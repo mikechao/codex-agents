@@ -648,6 +648,7 @@ describe("Workflow MCP runtime supervision", () => {
         blocking_findings: [],
         optional_findings: [],
         prior_finding_classifications: {},
+        validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "reviewed" }],
       });
       firstStore.authorizeCommit({
         workflow_id: workflowIdA,

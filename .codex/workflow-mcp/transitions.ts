@@ -268,6 +268,27 @@ function parseReviewerValidationResults(
   }
 }
 
+/** Merge fresh reviewer command evidence into the authoritative ordered result set. */
+function mergeReviewerValidationResults(
+  state: WorkflowState,
+  reviewerResults: ReadonlyArray<ValidationResult>,
+): ValidationResult[] {
+  const reviewerById = new Map(
+    reviewerResults.map((result) => [result.validation_id, result] as const),
+  );
+  const currentById = new Map(
+    state.validation_results.map((result) => [result.validation_id, result] as const),
+  );
+  return state.validation_requirements.map((requirement) => {
+    const result =
+      requirement.kind === "command"
+        ? reviewerById.get(requirement.validation_id)
+        : currentById.get(requirement.validation_id);
+    if (!result) fail("ERROR_INVALID_REVIEW", "validation results are incomplete");
+    return result;
+  });
+}
+
 export function submitImplementation(
   state: WorkflowState,
   input: unknown,
@@ -585,16 +606,9 @@ export function submitReview(
     (requirement) => requirement.kind === "command",
   );
   let reviewerValidationResults: ValidationResult[] | null = null;
-  if (state.workflow_type === "change") {
-    if ("validation_results" in args) {
-      fail(
-        "ERROR_INVALID_REVIEW",
-        "reviewers cannot submit validation results for change workflows",
-      );
-    }
-  } else if (executableRequirements.length > 0) {
+  if (executableRequirements.length > 0) {
     if (args.review_status === "APPROVED" && !("validation_results" in args)) {
-      fail("ERROR_INVALID_REVIEW", "review-only review requires executable validation results");
+      fail("ERROR_INVALID_REVIEW", "approved review requires executable validation results");
     }
     if ("validation_results" in args) {
       reviewerValidationResults = parseReviewerValidationResults(
@@ -696,33 +710,10 @@ export function submitReview(
     fail("ERROR_INVALID_REVIEW", "approved repair review is nonconforming");
   }
   const next = clone<WorkflowState>(state);
-  if (state.workflow_type === "review_only" && reviewerValidationResults !== null) {
-    const executableById = new Map(
-      reviewerValidationResults.map((result) => [result.validation_id, result]),
-    );
-    const inspectionById = new Map(
-      state.validation_results.map((result) => [result.validation_id, result]),
-    );
-    next.validation_results = state.validation_requirements.map((requirement) => {
-      const result =
-        requirement.kind === "inspection"
-          ? inspectionById.get(requirement.validation_id)
-          : executableById.get(requirement.validation_id);
-      if (!result) {
-        fail("ERROR_INVALID_REVIEW", "validation results are incomplete");
-      }
-      return result;
-    });
-  }
-  if (
-    args.review_status === "APPROVED" &&
-    state.workflow_type === "change" &&
-    !allRequiredValidationsPassed(next)
-  ) {
-    fail(
-      "ERROR_INVALID_REVIEW",
-      "approved change review requires all required validations to pass",
-    );
+  if (reviewerValidationResults !== null)
+    next.validation_results = mergeReviewerValidationResults(state, reviewerValidationResults);
+  if (args.review_status === "APPROVED" && !allRequiredValidationsPassed(next)) {
+    fail("ERROR_INVALID_REVIEW", "approved review requires all required validations to pass");
   }
   next.blocking_findings = blockingFindings;
   next.optional_findings = optionalFindings;

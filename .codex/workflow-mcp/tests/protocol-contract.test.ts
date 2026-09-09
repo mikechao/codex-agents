@@ -122,6 +122,7 @@ test("closed protocol registry and schema contract exposes workflow actions with
   assert.equal("capability" in reviewSchema.properties, false);
   assert.equal("review_target" in reviewSchema.properties, false);
   assert.equal("validation_results" in reviewSchema.properties, true);
+  assert.match(review.description ?? "", /fresh reviewer command evidence/u);
   assert.equal(reviewSchema.required.includes("validation_results"), false);
   assert.deepEqual(reviewSchema.properties.validation_results.items.properties, {
     validation_id: { type: "string" },

@@ -59,6 +59,9 @@ test("SDK dispatch exposes exact role tools and serializes a representative life
       blocking_findings: [],
       optional_findings: [],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
     assert.equal(review.phase, "STOPPED_APPROVED");
     assert.equal("review_receipt" in review, false);
@@ -384,6 +387,9 @@ test("SDK role routing rejects obsolete fields and maps boundary errors", async 
       blocking_findings: [],
       optional_findings: [],
       prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
     });
     await session.call("workflow_authorize_commit", {
       workflow_id: first.workflow_id,

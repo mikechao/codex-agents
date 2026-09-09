@@ -39,15 +39,16 @@ Rules:
   authorize a later commit must use `working_tree`.
 - A `review_only` workflow has no implementer handoff; review the declared target directly from the
   working tree or the declared commit range without expecting implementation evidence.
-- The reviewer view exposes `validation_results` for both workflow types. Implementers remain the
-  sole producer of `state.validation_results` for `change` workflows; reviewers must omit that field
-  there. For `review_only` workflows, after the existing exact-policy runner completes every
-  executable requirement, submit only the ordered executable results. Inspection requirements are
-  never executed or submitted by reviewers, and terminal inspection evidence recorded by the parent remains
-  authoritative and is merged by Workflow MCP.
-  If an executable requirement cannot be run because the exact policy or runner is unavailable,
-  return `INCONCLUSIVE` without `validation_results`; the existing validation state is preserved
-  for recovery.
+- The reviewer view exposes `validation_results` for both workflow types. For every command-kind
+   requirement, run the existing exact-policy, shell-free reviewer runner and submit the complete
+   ordered command results with the review when execution completes, including real failed results.
+   Workflow MCP replaces matching command slots by exact `validation_id` and requirement order while
+   preserving parent-owned inspection slots. Inspection requirements are never executed or submitted
+   by reviewers; terminal inspection evidence recorded by the parent remains authoritative. A real
+   failed command cannot be masked by another passing command or model judgment, and `APPROVED` is
+   invalid while any required reviewer command result is non-passing. If an executable requirement
+   cannot be run because the exact policy or runner is unavailable, return `INCONCLUSIVE` without
+   fabricated `validation_results`; the existing validation state is preserved for recovery.
 - Treat `approved_paths` as an exact path allowlist and scope-accounting obligation, not as an
   assertion that every working-tree path must exist. Inspect every declared path and record its
   observed state, including a provably absent path. A working-tree path is provably absent when the
