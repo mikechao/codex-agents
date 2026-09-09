@@ -35,6 +35,7 @@ const MAX_IGNORED_FINGERPRINT_BYTES = 512 * 1024 * 1024;
 const MAX_OPERATION_STATE_BYTES = 4 * 1024 * 1024;
 const MAX_OPERATION_STATE_ENTRIES = 512;
 const MAX_OPERATION_STATE_DEPTH = 8;
+const MAX_FINGERPRINT_ATTEMPTS = 3;
 const SHELL_SYNTAX = /[;&|`$<>\n\r\\]/u;
 const SHELL_EXECUTABLES = new Set([
   "sh",
@@ -260,8 +261,44 @@ function readOutputBytes(path: string, maximumBytes: number): Buffer {
 
 class FingerprintCollectionError extends Error {}
 
+class MutableFileRaceError extends FingerprintCollectionError {}
+
 function fingerprintError(message: string, cause?: unknown): FingerprintCollectionError {
   return new FingerprintCollectionError(message, { cause });
+}
+
+function mutableFileRaceError(message: string, cause?: unknown): MutableFileRaceError {
+  return new MutableFileRaceError(message, { cause });
+}
+
+export interface ReviewerValidationTestHookContext {
+  relativePath: string;
+  attempt: number;
+}
+
+type ReviewerValidationTestHook = (context: ReviewerValidationTestHookContext) => void;
+
+let reviewerValidationTestHook: ReviewerValidationTestHook | undefined;
+
+export interface ReviewerValidationReadTestHookContext {
+  label: string;
+  attempt: number;
+}
+
+type ReviewerValidationReadTestHook = (context: ReviewerValidationReadTestHookContext) => void;
+
+let reviewerValidationReadTestHook: ReviewerValidationReadTestHook | undefined;
+
+/** @internal Test-only seam for invalidating a listed mutable file before it is opened. */
+export function setReviewerValidationTestHook(hook: ReviewerValidationTestHook | undefined): void {
+  reviewerValidationTestHook = hook;
+}
+
+/** @internal Test-only seam for invalidating a non-retryable file after opening and before reading. */
+export function setReviewerValidationReadTestHook(
+  hook: ReviewerValidationReadTestHook | undefined,
+): void {
+  reviewerValidationReadTestHook = hook;
 }
 
 function frame(hash: ReturnType<typeof createHash>, label: string, value: Uint8Array): void {
@@ -378,11 +415,19 @@ function readBoundedFile(
   budget: FingerprintBudget,
   context: string,
   expectedIdentity?: string,
+  onBeforeOpen?: () => void,
+  onBeforeRead?: () => void,
+  retryableRace = false,
 ): Buffer {
   let descriptor: number;
+  onBeforeOpen?.();
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (retryableRace && expectedIdentity !== undefined && code === "ENOENT") {
+      throw mutableFileRaceError(`unable to open ${context}: listed file changed`, cause);
+    }
     throw fingerprintError(`unable to open ${context}`, cause);
   }
   try {
@@ -394,19 +439,24 @@ function readBoundedFile(
     }
     if (!initial.isFile()) throw fingerprintError(`${context} is not a regular file`);
     if (expectedIdentity !== undefined && stableStat(initial) !== expectedIdentity) {
+      if (retryableRace) throw mutableFileRaceError(`${context} changed before opening`);
       throw fingerprintError(`${context} changed before opening`);
     }
     consumeBudget(budget, initial.size, context);
     const output = Buffer.alloc(initial.size);
     let offset = 0;
     while (offset < output.byteLength) {
+      onBeforeRead?.();
       let bytesRead: number;
       try {
         bytesRead = readSync(descriptor, output, offset, output.byteLength - offset, offset);
       } catch (cause) {
         throw fingerprintError(`unable to read ${context}`, cause);
       }
-      if (bytesRead === 0) throw fingerprintError(`${context} disappeared while reading`);
+      if (bytesRead === 0)
+        throw retryableRace
+          ? mutableFileRaceError(`${context} disappeared while reading`)
+          : fingerprintError(`${context} disappeared while reading`);
       offset += bytesRead;
     }
     let final: ReturnType<typeof fstatSync>;
@@ -415,15 +465,22 @@ function readBoundedFile(
     } catch (cause) {
       throw fingerprintError(`unable to restat ${context}`, cause);
     }
-    if (stableStat(initial) !== stableStat(final))
+    if (stableStat(initial) !== stableStat(final)) {
+      if (retryableRace) throw mutableFileRaceError(`${context} changed while reading`);
       throw fingerprintError(`${context} changed while reading`);
+    }
     let pathValue: ReturnType<typeof lstatSync>;
     try {
       pathValue = lstatSync(path);
     } catch (cause) {
+      if (retryableRace && (cause as NodeJS.ErrnoException).code === "ENOENT") {
+        throw mutableFileRaceError(`${context} disappeared after reading`, cause);
+      }
       throw fingerprintError(`${context} disappeared after reading`, cause);
     }
-    if (!pathValue.isFile() || stableStat(pathValue) !== stableStat(initial)) {
+    if (!pathValue.isFile()) throw fingerprintError(`${context} changed to a non-regular file`);
+    if (stableStat(pathValue) !== stableStat(initial)) {
+      if (retryableRace) throw mutableFileRaceError(`${context} changed while reading`);
       throw fingerprintError(`${context} changed while reading`);
     }
     return output;
@@ -438,12 +495,19 @@ function addRepositoryFile(
   relativePath: string,
   budget: FingerprintBudget,
   context: string,
+  attempt: number,
+  mutableFileRace = false,
+  testHook?: ReviewerValidationTestHook,
+  readTestHook?: ReviewerValidationReadTestHook,
 ): void {
   const absolutePath = join(projectRoot, relativePath);
   let initial: ReturnType<typeof lstatSync>;
   try {
     initial = lstatSync(absolutePath);
   } catch (cause) {
+    if (mutableFileRace && (cause as NodeJS.ErrnoException).code === "ENOENT") {
+      throw mutableFileRaceError(`${context} disappeared`, cause);
+    }
     throw fingerprintError(`${context} disappeared`, cause);
   }
   try {
@@ -473,7 +537,15 @@ function addRepositoryFile(
     consumeBudget(budget, Buffer.byteLength(target, "utf8"), context);
     frame(hash, `${context}:target`, text(target));
   } else if (initial.isFile()) {
-    const bytes = readBoundedFile(absolutePath, budget, context, stableStat(initial));
+    const bytes = readBoundedFile(
+      absolutePath,
+      budget,
+      context,
+      stableStat(initial),
+      mutableFileRace ? () => testHook?.({ relativePath, attempt }) : undefined,
+      readTestHook ? () => readTestHook({ label: context, attempt }) : undefined,
+      mutableFileRace,
+    );
     frame(hash, `${context}:bytes`, bytes);
   } else {
     throw fingerprintError(`${context} has unsupported file type`);
@@ -482,9 +554,13 @@ function addRepositoryFile(
   try {
     final = lstatSync(absolutePath);
   } catch (cause) {
+    if (mutableFileRace && (cause as NodeJS.ErrnoException).code === "ENOENT") {
+      throw mutableFileRaceError(`${context} disappeared after reading`, cause);
+    }
     throw fingerprintError(`${context} disappeared after reading`, cause);
   }
   if (stableStat(initial) !== stableStat(final)) {
+    if (mutableFileRace) throw mutableFileRaceError(`${context} changed while fingerprinting`);
     throw fingerprintError(`${context} changed while fingerprinting`);
   }
 }
@@ -495,6 +571,8 @@ function addOptionalGitFile(
   label: string,
   budget: FingerprintBudget,
   allowAbsent = true,
+  attempt?: number,
+  readTestHook?: ReviewerValidationReadTestHook,
 ): void {
   let value: ReturnType<typeof lstatSync>;
   try {
@@ -508,7 +586,14 @@ function addOptionalGitFile(
     throw fingerprintError(`unable to inspect ${label}`, cause);
   }
   if (!value.isFile()) throw fingerprintError(`${label} is not a regular file`);
-  const bytes = readBoundedFile(path, budget, label, stableStat(value));
+  const bytes = readBoundedFile(
+    path,
+    budget,
+    label,
+    stableStat(value),
+    undefined,
+    readTestHook && attempt !== undefined ? () => readTestHook({ label, attempt }) : undefined,
+  );
   frame(hash, `${label}:present`, bytes);
   let final: ReturnType<typeof lstatSync>;
   try {
@@ -599,6 +684,8 @@ function addOptionalGitDirectory(
   path: string,
   label: string,
   budget: FingerprintBudget,
+  attempt?: number,
+  readTestHook?: ReviewerValidationReadTestHook,
 ): void {
   let value: ReturnType<typeof lstatSync>;
   try {
@@ -629,7 +716,16 @@ function addOptionalGitDirectory(
       frame(
         hash,
         `${label}:content:${entry.relativePath}`,
-        readBoundedFile(entry.path, budget, `${label}/${entry.relativePath}`, entry.identity),
+        readBoundedFile(
+          entry.path,
+          budget,
+          `${label}/${entry.relativePath}`,
+          entry.identity,
+          undefined,
+          readTestHook && attempt !== undefined
+            ? () => readTestHook({ label: `${label}/${entry.relativePath}`, attempt })
+            : undefined,
+        ),
       );
     }
   }
@@ -644,7 +740,12 @@ function addOptionalGitDirectory(
   }
 }
 
-function addOperationState(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+function addOperationState(
+  hash: ReturnType<typeof createHash>,
+  projectRoot: string,
+  attempt?: number,
+  readTestHook?: ReviewerValidationReadTestHook,
+): void {
   const budget = { remaining: MAX_OPERATION_STATE_BYTES };
   for (const marker of [
     "MERGE_HEAD",
@@ -668,11 +769,23 @@ function addOperationState(hash: ReturnType<typeof createHash>, projectRoot: str
       gitOutput(projectRoot, ["rev-parse", "--git-path", directory]),
       `operation-state path ${directory}`,
     );
-    addOptionalGitDirectory(hash, path, `operation-state:${directory}`, budget);
+    addOptionalGitDirectory(
+      hash,
+      path,
+      `operation-state:${directory}`,
+      budget,
+      attempt,
+      readTestHook,
+    );
   }
 }
 
-function addIgnoredFiles(hash: ReturnType<typeof createHash>, projectRoot: string): void {
+function addIgnoredFiles(
+  hash: ReturnType<typeof createHash>,
+  projectRoot: string,
+  attempt: number,
+  testHook?: ReviewerValidationTestHook,
+): void {
   const records = nulRecords(
     gitOutput(projectRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
     "ignored-file listing",
@@ -686,7 +799,16 @@ function addIgnoredFiles(hash: ReturnType<typeof createHash>, projectRoot: strin
   frame(hash, "ignored:count", text(String(paths.length)));
   for (const relativePath of paths) {
     consumeBudget(budget, Buffer.byteLength(relativePath, "utf8"), `ignored file ${relativePath}`);
-    addRepositoryFile(hash, projectRoot, relativePath, budget, `ignored file ${relativePath}`);
+    addRepositoryFile(
+      hash,
+      projectRoot,
+      relativePath,
+      budget,
+      `ignored file ${relativePath}`,
+      attempt,
+      true,
+      testHook,
+    );
   }
 }
 
@@ -799,6 +921,8 @@ function addLocalConfig(
   hash: ReturnType<typeof createHash>,
   projectRoot: string,
   budget: FingerprintBudget,
+  attempt?: number,
+  readTestHook?: ReviewerValidationReadTestHook,
 ): void {
   const records = nulRecords(
     gitOutput(projectRoot, ["config", "--local", "--no-includes", "--null", "--list"]),
@@ -823,9 +947,17 @@ function addLocalConfig(
     gitOutput(projectRoot, ["rev-parse", "--git-path", "config.worktree"]),
     "worktree config path",
   );
-  addOptionalGitFile(hash, configPath, "local-config:file", budget, false);
+  addOptionalGitFile(hash, configPath, "local-config:file", budget, false, attempt, readTestHook);
   if (worktreeConfigPath !== configPath) {
-    addOptionalGitFile(hash, worktreeConfigPath, "local-config:worktree-file", budget);
+    addOptionalGitFile(
+      hash,
+      worktreeConfigPath,
+      "local-config:worktree-file",
+      budget,
+      true,
+      attempt,
+      readTestHook,
+    );
   }
 }
 
@@ -848,7 +980,12 @@ function addIgnoreControl(
   addOptionalGitFile(hash, excludePath, "repository-ignore", budget);
 }
 
-export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
+function collectReviewTargetFingerprint(
+  projectRoot: string,
+  attempt: number,
+  testHook?: ReviewerValidationTestHook,
+  readTestHook?: ReviewerValidationReadTestHook,
+): string {
   const hash = createHash("sha256");
   frame(
     hash,
@@ -879,17 +1016,42 @@ export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
       relativePath,
       untrackedBudget,
       `untracked file ${relativePath}`,
+      attempt,
+      true,
+      testHook,
     );
   }
-  addIgnoredFiles(hash, projectRoot);
+  addIgnoredFiles(hash, projectRoot, attempt, testHook);
   addIndex(hash, projectRoot);
   addHead(hash, projectRoot);
   addRefs(hash, projectRoot);
-  addOperationState(hash, projectRoot);
+  addOperationState(hash, projectRoot, attempt, readTestHook);
   const controlBudget = { remaining: MAX_IGNORED_FINGERPRINT_BYTES };
-  addLocalConfig(hash, projectRoot, controlBudget);
+  addLocalConfig(hash, projectRoot, controlBudget, attempt, readTestHook);
   addIgnoreControl(hash, projectRoot, controlBudget);
   return hash.digest("hex");
+}
+
+function fingerprintWithRetries(
+  projectRoot: string,
+  phase: "before" | "after" | undefined,
+): string {
+  for (let attempt = 1; attempt <= MAX_FINGERPRINT_ATTEMPTS; attempt += 1) {
+    try {
+      const testHook = phase === "after" ? reviewerValidationTestHook : undefined;
+      const readTestHook = phase === "after" ? reviewerValidationReadTestHook : undefined;
+      return collectReviewTargetFingerprint(projectRoot, attempt, testHook, readTestHook);
+    } catch (cause) {
+      if (!(cause instanceof MutableFileRaceError) || attempt === MAX_FINGERPRINT_ATTEMPTS) {
+        throw cause;
+      }
+    }
+  }
+  throw new Error("unreachable fingerprint retry state");
+}
+
+export function reviewTargetFingerprint(projectRoot = PROJECT_ROOT): string {
+  return fingerprintWithRetries(projectRoot, undefined);
 }
 
 function runAuthorizedCommand(
@@ -911,7 +1073,7 @@ function runAuthorizedCommand(
   }
   let before: string;
   try {
-    before = reviewTargetFingerprint(projectRoot);
+    before = fingerprintWithRetries(projectRoot, "before");
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     return {
@@ -970,7 +1132,7 @@ function runAuthorizedCommand(
 
     let after: string;
     try {
-      after = reviewTargetFingerprint(projectRoot);
+      after = fingerprintWithRetries(projectRoot, "after");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       return {

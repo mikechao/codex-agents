@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +23,8 @@ import {
   runReviewerEvidence,
   runReviewerValidation,
   runStructuredReviewerEvidence,
+  setReviewerValidationReadTestHook,
+  setReviewerValidationTestHook,
 } from "../reviewer-validation.js";
 
 function policy(argv: string[]): ReviewerValidationPolicy {
@@ -365,6 +369,164 @@ test("runner detects ignored file creation, modification, and removal", () => {
     assert.equal(runFixtureCommand(fixture.root, removeArgv).status, "mutated");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner retries a post-command ignored-file race and preserves a stable no-op result", () => {
+  const fixture = gitFixture();
+  const ignoredPath = join(fixture.root, "ignored.txt");
+  const argv = ["bun", "-e", "process.stdout.write('noop')"];
+  let hookCalls = 0;
+  const attempts: number[] = [];
+  try {
+    writeFileSync(join(fixture.root, ".gitignore"), "ignored.txt\n");
+    fixture.git("add", ".gitignore");
+    fixture.git("commit", "-qm", "ignore fixture");
+    writeFileSync(ignoredPath, "stable\n");
+
+    setReviewerValidationTestHook(({ relativePath, attempt }) => {
+      if (relativePath !== "ignored.txt") return;
+      hookCalls += 1;
+      attempts.push(attempt);
+      if (hookCalls === 1) {
+        const replacement = `${ignoredPath}.replacement`;
+        writeFileSync(replacement, "stable\n");
+        rmSync(ignoredPath);
+        renameSync(replacement, ignoredPath);
+      }
+    });
+    const result = runFixtureCommand(fixture.root, argv);
+    assert.equal(result.status, "passed");
+    assert.equal(result.exit_code, 0);
+    assert.equal(result.working_tree_changed, false);
+    assert.deepEqual(result.executed_argv, argv);
+    assert.equal(result.output, "noop");
+    assert.deepEqual(attempts, [1, 2]);
+  } finally {
+    setReviewerValidationTestHook(undefined);
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner fails closed after bounded persistent post-command ignored-file instability", () => {
+  const fixture = gitFixture();
+  const ignoredPath = join(fixture.root, "ignored.txt");
+  const argv = ["bun", "-e", "process.stdout.write('noop')"];
+  const attempts: number[] = [];
+  try {
+    writeFileSync(join(fixture.root, ".gitignore"), "ignored.txt\n");
+    fixture.git("add", ".gitignore");
+    fixture.git("commit", "-qm", "ignore fixture");
+    writeFileSync(ignoredPath, "stable\n");
+
+    setReviewerValidationTestHook(({ relativePath, attempt }) => {
+      if (relativePath !== "ignored.txt") return;
+      attempts.push(attempt);
+      const replacement = `${ignoredPath}.replacement`;
+      writeFileSync(replacement, "stable\n");
+      rmSync(ignoredPath);
+      renameSync(replacement, ignoredPath);
+    });
+    const result = runFixtureCommand(fixture.root, argv);
+    assert.equal(result.status, "failed");
+    assert.equal(result.exit_code, 0);
+    assert.deepEqual(result.executed_argv, argv);
+    assert.equal(result.working_tree_changed, false);
+    assert.match(result.output, /fingerprint collection failed after launch/);
+    assert.deepEqual(attempts, [1, 2, 3]);
+  } finally {
+    setReviewerValidationTestHook(undefined);
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner fails closed when a non-retryable file read makes no progress", () => {
+  const fixture = gitFixture();
+  const argv = ["bun", "-e", "process.stdout.write('noop')"];
+  const attempts: number[] = [];
+  try {
+    const configPath = gitPath(fixture.root, "config");
+    setReviewerValidationReadTestHook(({ label, attempt }) => {
+      if (label !== "local-config:file") return;
+      attempts.push(attempt);
+      truncateSync(configPath, 0);
+    });
+    const result = runFixtureCommand(fixture.root, argv);
+    assert.equal(result.status, "failed");
+    assert.equal(result.exit_code, 0);
+    assert.deepEqual(result.executed_argv, argv);
+    assert.equal(result.working_tree_changed, false);
+    assert.match(result.output, /fingerprint collection failed after launch/);
+    assert.deepEqual(attempts, [1]);
+  } finally {
+    setReviewerValidationReadTestHook(undefined);
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner fails closed without retrying operation-state file identity replacement", () => {
+  const fixture = gitFixture();
+  const argv = ["bun", "-e", "process.stdout.write('noop')"];
+  const attempts: number[] = [];
+  try {
+    const sequencerPath = gitPath(fixture.root, "sequencer");
+    mkdirSync(sequencerPath);
+    const statePath = join(sequencerPath, "state");
+    writeFileSync(statePath, "stable\n");
+    setReviewerValidationReadTestHook(({ label, attempt }) => {
+      if (label !== "operation-state:sequencer/state") return;
+      attempts.push(attempt);
+      const replacement = `${statePath}.replacement`;
+      writeFileSync(replacement, "stable\n");
+      rmSync(statePath);
+      renameSync(replacement, statePath);
+    });
+    const result = runFixtureCommand(fixture.root, argv);
+    assert.equal(result.status, "failed");
+    assert.equal(result.exit_code, 0);
+    assert.deepEqual(result.executed_argv, argv);
+    assert.equal(result.working_tree_changed, false);
+    assert.match(result.output, /fingerprint collection failed after launch/);
+    assert.deepEqual(attempts, [1]);
+  } finally {
+    setReviewerValidationReadTestHook(undefined);
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runner fails closed without retrying unsafe or unsupported ignored-file replacements", () => {
+  const argv = ["bun", "-e", "process.stdout.write('noop')"];
+  for (const replacement of ["symlink", "directory"] as const) {
+    const fixture = gitFixture();
+    const ignoredPath = join(fixture.root, "ignored.txt");
+    const attempts: number[] = [];
+    try {
+      writeFileSync(join(fixture.root, ".gitignore"), "ignored.txt\n");
+      fixture.git("add", ".gitignore");
+      fixture.git("commit", "-qm", "ignore fixture");
+      writeFileSync(ignoredPath, "stable\n");
+
+      setReviewerValidationTestHook(({ relativePath, attempt }) => {
+        if (relativePath !== "ignored.txt") return;
+        attempts.push(attempt);
+        rmSync(ignoredPath);
+        if (replacement === "symlink") {
+          symlinkSync("outside.txt", ignoredPath);
+        } else {
+          mkdirSync(ignoredPath);
+        }
+      });
+      const result = runFixtureCommand(fixture.root, argv);
+      assert.equal(result.status, "failed");
+      assert.equal(result.exit_code, 0);
+      assert.deepEqual(result.executed_argv, argv);
+      assert.equal(result.working_tree_changed, false);
+      assert.match(result.output, /fingerprint collection failed after launch/);
+      assert.deepEqual(attempts, [1]);
+    } finally {
+      setReviewerValidationTestHook(undefined);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   }
 });
 
