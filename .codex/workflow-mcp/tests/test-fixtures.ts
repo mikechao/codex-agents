@@ -25,6 +25,10 @@ function fixtureTemplate(): string {
   writeFileSync(join(template, "note.txt"), "before\n");
   mkdirSync(join(template, ".codex", "agents"), { recursive: true });
   cpSync(
+    join(process.cwd(), ".codex", "reviewer-validation.json"),
+    join(template, ".codex", "reviewer-validation.json"),
+  );
+  cpSync(
     join(process.cwd(), ".codex", "agents", "change-receipt.ts"),
     join(template, ".codex", "agents", "change-receipt.ts"),
   );

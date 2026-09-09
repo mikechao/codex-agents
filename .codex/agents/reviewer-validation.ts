@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
   fstatSync,
   lstatSync,
   mkdtempSync,
@@ -19,12 +20,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type {
+  ReviewerValidationCommand,
+  ReviewerValidationPolicy,
+} from "../workflow-mcp/reviewer-validation-policy.js";
 
 const PROJECT_ROOT = resolve(import.meta.dir, "../..");
-const DEFAULT_POLICY_PATH = resolve(PROJECT_ROOT, ".codex/reviewer-validation.json");
-const MAX_TIMEOUT_MS = 300_000;
-const MAX_OUTPUT_BYTES = 1_048_576;
-const MAX_ARGUMENT_LENGTH = 4096;
+const SHARED_POLICY_SOURCE = resolve(
+  import.meta.dir,
+  "../workflow-mcp/reviewer-validation-policy.ts",
+);
 const MAX_EVIDENCE_ID_LENGTH = 200;
 const MAX_IGNORED_FINGERPRINT_BYTES = 512 * 1024 * 1024;
 const MAX_OPERATION_STATE_BYTES = 4 * 1024 * 1024;
@@ -44,37 +49,26 @@ const SHELL_EXECUTABLES = new Set([
   "pwsh",
 ]);
 
-export interface ReviewerValidationCommand {
-  argv: string[];
-  purpose: "validation" | "evidence";
-  timeout_ms: number;
-  max_output_bytes: number;
-}
+type ReviewerValidationPolicyModule =
+  typeof import("../workflow-mcp/reviewer-validation-policy.js");
 
-export interface ReviewerValidationPolicy {
-  version: 1;
-  commands: ReviewerValidationCommand[];
-}
+// The installed reviewer runner is intentionally copied without workflow-mcp source. In the
+// self-hosted checkout, use the shared implementation; in an installed target, use this exact
+// standalone bundle of the same policy contract instead of failing on a missing module import.
+const reviewerValidationPolicyModule: ReviewerValidationPolicyModule | undefined = existsSync(
+  SHARED_POLICY_SOURCE,
+)
+  ? await import("../workflow-mcp/reviewer-validation-policy.js")
+  : undefined;
 
-export interface ValidationEvidence {
-  validation_id: string;
-  requested_argv: string[];
-  executed_argv: string[];
-  status: "passed" | "failed" | "unavailable" | "mutated";
-  exit_code: number | null;
-  timed_out: boolean;
-  output: string;
-  working_tree_changed: boolean;
-}
-
-function objectRecord(value: unknown, context: string): Record<string, unknown> {
+function fallbackObjectRecord(value: unknown, context: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${context} must be an object`);
   }
   return value as Record<string, unknown>;
 }
 
-function stringValue(value: unknown, context: string): string {
+function fallbackStringValue(value: unknown, context: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_ARGUMENT_LENGTH)
     throw new Error(
       `${context} must be a non-empty string of at most ${MAX_ARGUMENT_LENGTH} characters`,
@@ -83,43 +77,43 @@ function stringValue(value: unknown, context: string): string {
   return value;
 }
 
-function evidenceIdValue(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_EVIDENCE_ID_LENGTH) {
-    throw new Error(
-      `evidence ID must be a non-empty string of at most ${MAX_EVIDENCE_ID_LENGTH} characters`,
-    );
-  }
-  if (SHELL_SYNTAX.test(value)) throw new Error("evidence ID contains shell syntax");
-  return value;
-}
-
-function boundedInteger(value: unknown, context: string, maximum: number): number {
+function fallbackBoundedInteger(value: unknown, context: string, maximum: number): number {
   if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > maximum) {
     throw new Error(`${context} must be an integer between 1 and ${maximum}`);
   }
   return value as number;
 }
 
-function argvValue(value: unknown, context: string): string[] {
+function fallbackArgvValue(value: unknown, context: string): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
     throw new Error(`${context} must be a non-empty array`);
   }
-  return value.map((argument, index) => stringValue(argument, `${context}[${index}]`));
+  return value.map((argument, index) => fallbackStringValue(argument, `${context}[${index}]`));
 }
 
-function sameArgv(left: readonly string[], right: readonly string[]): boolean {
+function fallbackSameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((argument, index) => argument === right[index]);
 }
 
-export function parseReviewerValidationPolicy(value: unknown): ReviewerValidationPolicy {
-  const policy = objectRecord(value, "policy");
+function fallbackFindReviewerValidationCommand(
+  policy: ReviewerValidationPolicy,
+  requestedArgv: readonly string[],
+): ReviewerValidationCommand | undefined {
+  return policy.commands.find(
+    (candidate) =>
+      candidate.purpose === "validation" && fallbackSameArgv(candidate.argv, requestedArgv),
+  );
+}
+
+function fallbackParseReviewerValidationPolicy(value: unknown): ReviewerValidationPolicy {
+  const policy = fallbackObjectRecord(value, "policy");
   if (policy.version !== 1) throw new Error("policy.version must be 1");
   if (!Array.isArray(policy.commands) || policy.commands.length === 0) {
     throw new Error("policy.commands must be a non-empty array");
   }
   const parsedCommands: ReviewerValidationCommand[] = [];
   const commands = policy.commands.map((entry, index) => {
-    const command = objectRecord(entry, `policy.commands[${index}]`);
+    const command = fallbackObjectRecord(entry, `policy.commands[${index}]`);
     const keys = Object.keys(command).sort().join(",");
     if (
       keys !== "argv,max_output_bytes,purpose,timeout_ms" &&
@@ -134,7 +128,7 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
     if (purpose !== "validation" && purpose !== "evidence") {
       throw new Error(`policy.commands[${index}].purpose must be validation or evidence`);
     }
-    const argv = argvValue(command.argv, `policy.commands[${index}].argv`);
+    const argv = fallbackArgvValue(command.argv, `policy.commands[${index}].argv`);
     const executable = argv[0].split(/[\\/]/u).pop() ?? argv[0];
     if (
       SHELL_EXECUTABLES.has(executable) ||
@@ -142,17 +136,17 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
     ) {
       throw new Error(`policy.commands[${index}].argv invokes a shell`);
     }
-    const timeout = boundedInteger(
+    const timeout = fallbackBoundedInteger(
       command.timeout_ms,
       `policy.commands[${index}].timeout_ms`,
-      MAX_TIMEOUT_MS,
+      300_000,
     );
-    const maxOutput = boundedInteger(
+    const maxOutput = fallbackBoundedInteger(
       command.max_output_bytes,
       `policy.commands[${index}].max_output_bytes`,
-      MAX_OUTPUT_BYTES,
+      1_048_576,
     );
-    if (parsedCommands.some((candidate) => sameArgv(candidate.argv, argv))) {
+    if (parsedCommands.some((candidate) => fallbackSameArgv(candidate.argv, argv))) {
       throw new Error(`duplicate argv: ${JSON.stringify(argv)}`);
     }
     const parsed = {
@@ -167,8 +161,8 @@ export function parseReviewerValidationPolicy(value: unknown): ReviewerValidatio
   return { version: 1, commands };
 }
 
-export function loadReviewerValidationPolicy(
-  policyPath = DEFAULT_POLICY_PATH,
+function fallbackLoadReviewerValidationPolicy(
+  policyPath = resolve(PROJECT_ROOT, ".codex/reviewer-validation.json"),
 ): ReviewerValidationPolicy {
   let parsed: unknown;
   try {
@@ -176,8 +170,64 @@ export function loadReviewerValidationPolicy(
   } catch (cause) {
     throw new Error(`unable to read reviewer validation policy: ${policyPath}`, { cause });
   }
-  return parseReviewerValidationPolicy(parsed);
+  return fallbackParseReviewerValidationPolicy(parsed);
 }
+
+const MAX_OUTPUT_BYTES =
+  reviewerValidationPolicyModule?.MAX_OUTPUT_BYTES === undefined
+    ? 1_048_576
+    : reviewerValidationPolicyModule.MAX_OUTPUT_BYTES;
+const MAX_ARGUMENT_LENGTH =
+  reviewerValidationPolicyModule?.MAX_ARGUMENT_LENGTH === undefined
+    ? 4096
+    : reviewerValidationPolicyModule.MAX_ARGUMENT_LENGTH;
+const argvValue = reviewerValidationPolicyModule?.argvValue ?? fallbackArgvValue;
+const sameArgv = reviewerValidationPolicyModule?.sameArgv ?? fallbackSameArgv;
+const findReviewerValidationCommand =
+  reviewerValidationPolicyModule?.findReviewerValidationCommand ??
+  fallbackFindReviewerValidationCommand;
+
+function loadReviewerValidationPolicy(policyPath?: string): ReviewerValidationPolicy {
+  return (
+    reviewerValidationPolicyModule?.loadReviewerValidationPolicy(policyPath) ??
+    fallbackLoadReviewerValidationPolicy(policyPath)
+  );
+}
+
+function parseReviewerValidationPolicy(value: unknown): ReviewerValidationPolicy {
+  return (
+    reviewerValidationPolicyModule?.parseReviewerValidationPolicy(value) ??
+    fallbackParseReviewerValidationPolicy(value)
+  );
+}
+
+export interface ValidationEvidence {
+  validation_id: string;
+  requested_argv: string[];
+  executed_argv: string[];
+  status: "passed" | "failed" | "unavailable" | "mutated";
+  exit_code: number | null;
+  timed_out: boolean;
+  output: string;
+  working_tree_changed: boolean;
+}
+
+function evidenceIdValue(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_EVIDENCE_ID_LENGTH) {
+    throw new Error(
+      `evidence ID must be a non-empty string of at most ${MAX_EVIDENCE_ID_LENGTH} characters`,
+    );
+  }
+  if (SHELL_SYNTAX.test(value)) throw new Error("evidence ID contains shell syntax");
+  return value;
+}
+
+export type { ReviewerValidationCommand, ReviewerValidationPolicy };
+export {
+  findReviewerValidationCommand,
+  loadReviewerValidationPolicy,
+  parseReviewerValidationPolicy,
+};
 
 function boundedOutput(value: string, maximumBytes: number, truncated = false): string {
   const bytes = Buffer.from(value, "utf8");
@@ -850,9 +900,12 @@ function runAuthorizedCommand(
   projectRoot = PROJECT_ROOT,
 ): ValidationEvidence {
   const requested = argvValue(requestedArgv, "requested argv");
-  const command = policy.commands.find(
-    (candidate) => candidate.purpose === purpose && sameArgv(candidate.argv, requested),
-  );
+  const command =
+    purpose === "validation"
+      ? findReviewerValidationCommand(policy, requested)
+      : policy.commands.find(
+          (candidate) => candidate.purpose === purpose && sameArgv(candidate.argv, requested),
+        );
   if (command === undefined) {
     throw new Error(`requested ${purpose} argv is not allowlisted: ${JSON.stringify(requested)}`);
   }

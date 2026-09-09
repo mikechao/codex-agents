@@ -17,7 +17,11 @@ function revisionInput() {
     approved_paths: ["note.txt"],
     acceptance_criteria: ["the plan is preserved"],
     validation_requirements: [
-      { description: "bun run check", kind: "command", argv: ["bun", "run", "check"] },
+      {
+        description: "bun run test:workflow-mcp",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
     ],
   };
 }
@@ -103,7 +107,7 @@ function planInput(path = "planned.txt") {
       {
         description: "authoritative child validation",
         kind: "command",
-        argv: ["bun", "run", "check"],
+        argv: ["bun", "run", "test:workflow-mcp"],
       },
     ],
   };
@@ -150,6 +154,162 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   reopened.close();
   rmSync(databasePath, { force: true });
   disposeFixture(target.root);
+});
+
+test("plan creation preflights exact validation policy and preserves inspection contracts", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      ...revisionInput(),
+      validation_requirements: [
+        { description: "manual inspection", kind: "inspection" },
+        {
+          description: "exact workflow suite",
+          kind: "command",
+          argv: ["bun", "run", "test:workflow-mcp"],
+        },
+      ],
+    });
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve exact validation contract",
+    });
+    const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    assert.deepEqual(workflow.validation_requirements, [
+      { validation_id: "VAL-001", description: "manual inspection", kind: "inspection" },
+      {
+        validation_id: "VAL-002",
+        description: "exact workflow suite",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
+    ]);
+    assert.deepEqual(workflow.plan_provenance, {
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      artifact_digest: approved.artifact_digest,
+      approved_at: approved.metadata.approval?.approved_at,
+    });
+    assert.deepEqual(
+      store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision }),
+      beforePlan,
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan creation rejects non-exact or evidence-only validation commands atomically", () => {
+  const rejectedArgv = [
+    ["bun", "run", "typecheck"],
+    ["bun", "run", "test:workflow-mcp", "extra"],
+    ["bun", "test:workflow-mcp", "run"],
+    ["bun", "run", "test:workflow-mcpx"],
+  ];
+  for (const argv of rejectedArgv) {
+    const target = fixture();
+    const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+    try {
+      const draft = store.planCreate({
+        ...revisionInput(),
+        validation_requirements: [{ description: "rejected command", kind: "command", argv }],
+      });
+      store.planApprove({
+        plan_id: draft.plan_id,
+        revision: draft.revision,
+        user_authorization: "approve rejected command for preflight test",
+      });
+      const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision });
+      assert.equal(
+        category(() => store.createFromPlan({ plan_id: draft.plan_id, revision: 1 })),
+        "ERROR_PLAN_INVALID",
+      );
+      assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 0);
+      assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count, 0);
+      assert.deepEqual(
+        store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision }),
+        beforePlan,
+      );
+    } finally {
+      store.close();
+      disposeFixture(target.root);
+    }
+  }
+
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve evidence-only policy test",
+    });
+    writeFileSync(
+      join(target.root, ".codex", "reviewer-validation.json"),
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            argv: ["bun", "run", "test:workflow-mcp"],
+            purpose: "evidence",
+            timeout_ms: 120000,
+            max_output_bytes: 65536,
+          },
+        ],
+      }),
+    );
+    const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision });
+    assert.equal(
+      category(() => store.createFromPlan({ plan_id: draft.plan_id, revision: 1 })),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 0);
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count, 0);
+    assert.deepEqual(
+      store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision }),
+      beforePlan,
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan creation fails closed for missing or malformed reviewer policy", () => {
+  for (const malformed of [false, true]) {
+    const target = fixture();
+    const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+    try {
+      const draft = store.planCreate(revisionInput());
+      store.planApprove({
+        plan_id: draft.plan_id,
+        revision: draft.revision,
+        user_authorization: "approve policy failure test",
+      });
+      const policyPath = join(target.root, ".codex", "reviewer-validation.json");
+      if (malformed) writeFileSync(policyPath, "{ malformed policy");
+      else rmSync(policyPath);
+      const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision });
+      assert.equal(
+        category(() => store.createFromPlan({ plan_id: draft.plan_id, revision: 1 })),
+        "ERROR_PLAN_INVALID",
+      );
+      assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 0);
+      assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count, 0);
+      assert.deepEqual(
+        store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision }),
+        beforePlan,
+      );
+    } finally {
+      store.close();
+      disposeFixture(target.root);
+    }
+  }
 });
 
 test("approved plan-authored review_only binds reviewer-first working-tree state", () => {
@@ -225,7 +385,11 @@ test("planner reads round-trip directly while parent reads retain persisted cont
       acceptance_criteria: ["first criterion", "second criterion"],
       validation_requirements: [
         { description: "manual inspection", kind: "inspection" },
-        { description: "exact check", kind: "command", argv: ["bun", "run", "check"] },
+        {
+          description: "exact check",
+          kind: "command",
+          argv: ["bun", "run", "test:workflow-mcp"],
+        },
       ],
     });
     const content = {
@@ -246,7 +410,11 @@ test("planner reads round-trip directly while parent reads retain persisted cont
     assert.deepEqual(unchanged.acceptance_criteria, ["first criterion", "second criterion"]);
     assert.deepEqual(unchanged.validation_requirements, [
       { description: "manual inspection", kind: "inspection" },
-      { description: "exact check", kind: "command", argv: ["bun", "run", "check"] },
+      {
+        description: "exact check",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
     ]);
 
     const acceptanceEdit = store.planRevise({
@@ -331,7 +499,11 @@ test("plan revisions copy forward omitted fields and stale revisions fail closed
   assert.deepEqual(revised.approved_paths, ["note.txt"]);
   assert.deepEqual(revised.acceptance_criteria, ["the plan is preserved"]);
   assert.deepEqual(revised.validation_requirements, [
-    { description: "bun run check", kind: "command", argv: ["bun", "run", "check"] },
+    {
+      description: "bun run test:workflow-mcp",
+      kind: "command",
+      argv: ["bun", "run", "test:workflow-mcp"],
+    },
   ]);
   assert.equal(
     store.planGet({ plan_id: draft.plan_id, revision: 1 }).full_plan,
@@ -376,14 +548,22 @@ test("bounded revisions replace arrays wholesale and reject invalid envelopes at
         approved_paths: ["z.txt", "a.txt"],
         acceptance_criteria: ["first", "second"],
         validation_requirements: [
-          { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+          {
+            description: "executable",
+            kind: "command",
+            argv: ["bun", "run", "test:workflow-mcp"],
+          },
         ],
       },
     });
     assert.deepEqual(revised.approved_paths, ["a.txt", "z.txt"]);
     assert.deepEqual(revised.acceptance_criteria, ["first", "second"]);
     assert.deepEqual(revised.validation_requirements, [
-      { description: "executable", kind: "command", argv: ["bun", "run", "check"] },
+      {
+        description: "executable",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
     ]);
 
     const before = store.db
@@ -652,7 +832,7 @@ test("plan-native linked follow-up binds only the exact current approved child a
         validation_id: "VAL-001",
         description: "authoritative child validation",
         kind: "command",
-        argv: ["bun", "run", "check"],
+        argv: ["bun", "run", "test:workflow-mcp"],
       },
     ]);
     assert.deepEqual(childView.plan_provenance, {
@@ -665,6 +845,75 @@ test("plan-native linked follow-up binds only the exact current approved child a
     assert.equal(childView.repair_cycle, 0);
     assert.equal(childView.remediation_context.authorized_finding_ids[0], optional.finding_id);
     assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow_id);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan-native linked follow-up rejects unauthorized validation requirements atomically", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const { id, optional } = approvedSource(store, target.git);
+    const draft = store.planCreate({
+      ...planInput(),
+      validation_requirements: [
+        {
+          description: "unauthorized child validation",
+          kind: "command",
+          argv: ["bun", "run", "typecheck"],
+        },
+      ],
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: 1,
+      user_authorization: "approve unauthorized child validation for preflight test",
+    });
+    const beforeVersion = store.parentGet(id).version;
+    const beforeSourceRow = store.db
+      .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+      .get(id);
+    const beforeSourceAudit = store.audit(id);
+    const beforeWorkflowCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM workflows")
+      .get().count;
+    const beforeAuditCount = store.db
+      .prepare("SELECT COUNT(*) AS count FROM audit_events")
+      .get().count;
+    const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: 1 });
+
+    assert.equal(
+      category(() =>
+        store.createLinkedFollowupFromPlan({
+          workflow_id: id,
+          expected_version: beforeVersion,
+          plan_id: draft.plan_id,
+          revision: 1,
+          finding_ids: [optional.finding_id],
+          user_authorization: "authorize child plan preflight test",
+        }),
+      ),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.equal(store.parentGet(id).version, beforeVersion);
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id),
+      beforeSourceRow,
+    );
+    assert.deepEqual(store.audit(id), beforeSourceAudit);
+    assert.equal(
+      store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count,
+      beforeWorkflowCount,
+    );
+    assert.equal(
+      store.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get().count,
+      beforeAuditCount,
+    );
+    assert.deepEqual(store.planParentGet({ plan_id: draft.plan_id, revision: 1 }), beforePlan);
   } finally {
     store.close();
     disposeFixture(target.root);

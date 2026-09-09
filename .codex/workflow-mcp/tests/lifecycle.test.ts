@@ -27,7 +27,11 @@ function createInput(_root: string, git: (...args: string[]) => string, options:
     approved_paths: approvedPaths,
     acceptance_criteria: options.acceptance_criteria ?? ["criterion A"],
     validation_requirements: options.validation_requirements ?? [
-      { description: "validation A", kind: "command", argv: ["bun", "run", "check"] },
+      {
+        description: "validation A",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
     ],
     review_target: options.review_target ?? {
       review_mode: "working_tree",
@@ -493,7 +497,11 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
     approved_paths: ["note.txt"],
     acceptance_criteria: ["child criterion"],
     validation_requirements: [
-      { description: "child validation", kind: "command", argv: ["bun", "run", "check"] },
+      {
+        description: "child validation",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
     ],
     finding_ids: findingIds,
     user_authorization: "user authorized follow-up",
@@ -512,7 +520,7 @@ function doCreateChildPlan(ctx: any) {
       {
         description: "linked remediation validation",
         kind: "command",
-        argv: ["bun", "run", "check"],
+        argv: ["bun", "run", "test:workflow-mcp"],
       },
     ],
   });
@@ -705,7 +713,11 @@ test("plan-bound review-only repair preserves authored type and plan authority",
       approved_paths: ["note.txt", "original-scope.txt"],
       acceptance_criteria: ["the aggregate is safe"],
       validation_requirements: [
-        { description: "review validation", kind: "command", argv: ["bun", "run", "check"] },
+        {
+          description: "review validation",
+          kind: "command",
+          argv: ["bun", "run", "test:workflow-mcp"],
+        },
       ],
     });
     store.planApprove({

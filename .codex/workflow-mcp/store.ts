@@ -26,6 +26,10 @@ import { assertSupportedStateSchema } from "./migration.js";
 import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
 import { PlanStore, validatePersistedPlanRows } from "./plan-store.js";
 import {
+  findReviewerValidationCommand,
+  loadReviewerValidationPolicy,
+} from "./reviewer-validation-policy.js";
+import {
   isValidRuntimeArtifact,
   type RuntimeArtifact,
   type RuntimeManifest,
@@ -87,6 +91,7 @@ import type {
   ParentView,
   PlannerPlanRead,
   PlanRead,
+  PlanRevisionArtifact,
   Role,
   RoleView,
   ScopeExpansionAudit,
@@ -642,6 +647,30 @@ function supportedPreparationFailure(
   return { category: error.category, detail: error.detail || error.category };
 }
 
+function assertPlanValidationPolicy(
+  root: string,
+  requirements: PlanRevisionArtifact["validation_requirements"],
+): void {
+  let policy: ReturnType<typeof loadReviewerValidationPolicy>;
+  try {
+    policy = loadReviewerValidationPolicy(join(root, ".codex/reviewer-validation.json"));
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    fail("ERROR_PLAN_INVALID", `reviewer validation policy is unavailable: ${detail}`);
+  }
+  for (const requirement of requirements) {
+    if (
+      requirement.kind === "command" &&
+      findReviewerValidationCommand(policy, requirement.argv) === undefined
+    ) {
+      fail(
+        "ERROR_PLAN_INVALID",
+        `validation requirement ${requirement.validation_id} is not an exact authorized reviewer validation command: ${JSON.stringify(requirement.argv)}`,
+      );
+    }
+  }
+}
+
 export class WorkflowStore {
   readonly root: string;
   readonly path: string;
@@ -1039,6 +1068,7 @@ export class WorkflowStore {
     return this.db
       .transaction(() => {
         const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
+        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
         const head = currentHead(this.root);
         const state = createStateFromPlan(
           resolved.artifact,
@@ -2256,6 +2286,7 @@ export class WorkflowStore {
         // Resolve and approve the child plan inside the same immediate transaction as the
         // source supersession and child insertion. The caller supplies identity only.
         const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
+        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
         const followup = linkedFollowupInputFromPlan(
           state,
           args,
