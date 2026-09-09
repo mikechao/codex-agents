@@ -5,7 +5,7 @@ import {
   hasFailedRequiredValidation,
   pendingInspectionValidations,
   permittedNextActions,
-} from "./transitions.js";
+} from "./transition-queries.js";
 import type {
   BlockingFinding,
   OperatorDecision,
