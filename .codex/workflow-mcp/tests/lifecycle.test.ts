@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
-import { fixture } from "./test-fixtures.js";
+import { annotateFixtureFailure, captureHeadObservation, fixture } from "./test-fixtures.js";
 
 const ROLES = ["parent", "implementer", "reviewer", "committer"];
 
@@ -334,6 +334,30 @@ function optionalFinding(id: string) {
 
 function doCreate(ctx: any, options: any = {}) {
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
+}
+
+function doCreateWithHeadDiagnostics(ctx: any, options: any = {}) {
+  const input = createInput(ctx.root, ctx.git, options);
+  const preCallObservation = captureHeadObservation(ctx.root, "pre-call");
+  try {
+    ctx.created = ctx.store.create(input);
+  } catch (error) {
+    if ((error as { category?: unknown }).category !== "ERROR_NO_HEAD") throw error;
+    const postFailureObservation = captureHeadObservation(ctx.root, "post-failure");
+    throw annotateFixtureFailure(
+      error,
+      ctx.root,
+      {
+        stage: "WorkflowStore.create/currentHead",
+        operation: "WorkflowStore.create",
+        cleanupStarted: false,
+      },
+      {
+        pre_call_observation: preCallObservation,
+        post_failure_observation: postFailureObservation,
+      },
+    );
+  }
 }
 
 function doImplementation(ctx: any, _version: number, options: any = {}) {
@@ -699,7 +723,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     "finding_resolution_map",
   ];
   try {
-    doCreate(ctx);
+    doCreateWithHeadDiagnostics(ctx);
     const changeReviewer = store.reviewerGet(ctx.created.workflow_id);
     for (const field of handoffFields) {
       assert.equal(field in changeReviewer, true, `change reviewer handoff includes ${field}`);

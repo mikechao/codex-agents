@@ -21,6 +21,7 @@ import {
   approvedResidue,
   branchAvailable,
   branchExists,
+  currentHead,
   findCurrentWorktree,
   findWorktreeByBranch,
   findWorktreeByPath,
@@ -52,7 +53,7 @@ import type {
   GitCommitSha,
   WorkflowState,
 } from "../types.js";
-import { annotateFixtureFailure, emptyFixture } from "./test-fixtures.js";
+import { annotateFixtureFailure, emptyFixture, fixture as sharedFixture } from "./test-fixtures.js";
 
 function fixture() {
   const { root, git } = emptyFixture();
@@ -394,6 +395,52 @@ function childFailureCategory(callback: () => unknown): string {
   }
   assert.fail("expected child workflow error");
 }
+
+test("shared fixtures pin SHA-1 object format and commit shape", () => {
+  for (const createFixture of [sharedFixture, emptyFixture]) {
+    const { root, git } = createFixture();
+    try {
+      assert.equal(git("rev-parse", "--show-object-format"), "sha1");
+      assert.match(git("rev-parse", "HEAD"), /^[0-9a-f]{40}$/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("SHA-256 currentHead rejection is a deterministic mechanism proof", () => {
+  const root = mkdtempSync(join(tmpdir(), "workflow-sha256-"));
+  try {
+    execFileSync("git", ["-C", root, "init", "--object-format=sha256", "-q"], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["-C", root, "config", "user.email", "workflow@example.invalid"], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["-C", root, "config", "user.name", "Workflow Tests"], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["-C", root, "commit", "--allow-empty", "-qm", "sha256 proof"], {
+      stdio: "ignore",
+    });
+    const rawHead = execFileSync("git", ["-C", root, "rev-parse", "--verify", "HEAD"], {
+      encoding: "utf8",
+    });
+    assert.match(rawHead.trim(), /^[0-9a-f]{64}$/u);
+    assert.equal(
+      execFileSync("git", ["-C", root, "rev-parse", "--show-object-format"], {
+        encoding: "utf8",
+      }).trim(),
+      "sha256",
+    );
+    assert.equal(
+      errorCategory(() => currentHead(root)),
+      "ERROR_NO_HEAD",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("verifyRevision accepts commits and rejects invalid, unknown, and non-commit revisions", () => {
   const { root, git, write } = fixture();
