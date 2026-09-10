@@ -144,15 +144,22 @@ function retainedTarget(stdout: string): string {
   return match[1];
 }
 
+function sourceCopyFilter(path: string): boolean {
+  return !path
+    .split(/[\\/]/u)
+    .some(
+      (component) =>
+        component === ".git" ||
+        component === "node_modules" ||
+        (component.length > ".bun-build".length && component.endsWith(".bun-build")),
+    );
+}
+
 function sourceCopy(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dogfood-source-")));
   cpSync(projectRoot, root, {
     recursive: true,
-    filter: (path) =>
-      !path.endsWith("/.git") &&
-      !path.includes("/.git/") &&
-      !path.endsWith("/node_modules") &&
-      !path.includes("/node_modules/"),
+    filter: sourceCopyFilter,
   });
   symlinkSync(resolve(projectRoot, "node_modules"), join(root, "node_modules"), "dir");
   gitAt(root, "init", "-q");
@@ -162,6 +169,36 @@ function sourceCopy(): string {
   gitAt(root, "commit", "-q", "-m", "source fixture");
   return root;
 }
+
+test("source fixture copy excludes transient Bun artifacts before recursion", () => {
+  const source = realpathSync(mkdtempSync(join(tmpdir(), "source-copy-filter-")));
+  const destination = realpathSync(mkdtempSync(join(tmpdir(), "source-copy-destination-")));
+  mkdirSync(join(source, "transient.bun-build", "nested"), { recursive: true });
+  mkdirSync(join(source, ".git"), { recursive: true });
+  mkdirSync(join(source, "node_modules", "dependency"), { recursive: true });
+  writeFileSync(join(source, "ordinary-source.txt"), "ordinary\n");
+  writeFileSync(join(source, "intentional-untracked-fixture.txt"), "untracked\n");
+  writeFileSync(
+    join(source, "transient.bun-build", "nested", "should-not-copy.txt"),
+    "transient\n",
+  );
+  writeFileSync(join(source, ".git", "should-not-copy.txt"), "git\n");
+  writeFileSync(join(source, "node_modules", "dependency", "should-not-copy.txt"), "dependency\n");
+  try {
+    cpSync(source, destination, { recursive: true, filter: sourceCopyFilter });
+    assert.equal(readFileSync(join(destination, "ordinary-source.txt"), "utf8"), "ordinary\n");
+    assert.equal(
+      readFileSync(join(destination, "intentional-untracked-fixture.txt"), "utf8"),
+      "untracked\n",
+    );
+    assert.equal(existsSync(join(destination, "transient.bun-build")), false);
+    assert.equal(existsSync(join(destination, ".git")), false);
+    assert.equal(existsSync(join(destination, "node_modules")), false);
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(destination, { recursive: true, force: true });
+  }
+});
 
 function runDogfoodFrom(source: string, target: string) {
   try {
