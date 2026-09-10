@@ -9,6 +9,52 @@ type Receipt = ReturnType<typeof createReceipt>;
 let template: string | undefined;
 let emptyTemplatePath: string | undefined;
 
+export interface FixtureDiagnosticContext {
+  stage: string;
+  operation: string;
+  cleanupStarted: boolean;
+  child?: {
+    pid?: number;
+    role: string;
+    live: boolean;
+    killed: boolean;
+    exitCode: number | null;
+    signalCode: string | null;
+  };
+}
+
+export function fixtureDiagnostic(root: string, context: FixtureDiagnosticContext): string {
+  const detail = JSON.stringify({
+    repository_root: root,
+    stage: context.stage,
+    operation: context.operation,
+    cleanup_started: context.cleanupStarted,
+    ...(context.child ? { child: context.child } : {}),
+  });
+  return `fixture diagnostic: ${detail.slice(0, 1_000)}`;
+}
+
+export function annotateFixtureFailure(
+  error: unknown,
+  root: string,
+  context: FixtureDiagnosticContext,
+): unknown {
+  const candidate = error as { message?: unknown; stderr?: unknown };
+  const stderr =
+    typeof candidate.stderr === "string"
+      ? candidate.stderr
+      : Buffer.isBuffer(candidate.stderr)
+        ? candidate.stderr.toString("utf8")
+        : "";
+  const detail = `${typeof candidate.message === "string" ? candidate.message : ""} ${stderr}`;
+  if (!detail.includes("ERROR_NO_HEAD")) return error;
+  const diagnostic = fixtureDiagnostic(root, context);
+  if (error instanceof Error) error.message = `${error.message}; ${diagnostic}`;
+  if (typeof candidate.stderr === "string") candidate.stderr = `${candidate.stderr}\n${diagnostic}`;
+  if (Buffer.isBuffer(candidate.stderr)) candidate.stderr = Buffer.from(`${stderr}\n${diagnostic}`);
+  return error;
+}
+
 function runGit(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], {
     encoding: "utf8",
@@ -60,10 +106,18 @@ export function fixture(): Fixture {
     if (args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" && cachedHead) {
       return cachedHead;
     }
-    const result = runGit(root, ...args);
-    cachedHead =
-      args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" ? result : undefined;
-    return result;
+    try {
+      const result = runGit(root, ...args);
+      cachedHead =
+        args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" ? result : undefined;
+      return result;
+    } catch (error) {
+      throw annotateFixtureFailure(error, root, {
+        stage: "fixture git operation",
+        operation: args.join(" "),
+        cleanupStarted: false,
+      });
+    }
   };
   return { root, git };
 }
@@ -76,10 +130,18 @@ export function emptyFixture(): Fixture {
     if (args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" && cachedHead) {
       return cachedHead;
     }
-    const result = runGit(root, ...args);
-    cachedHead =
-      args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" ? result : undefined;
-    return result;
+    try {
+      const result = runGit(root, ...args);
+      cachedHead =
+        args.length === 2 && args[0] === "rev-parse" && args[1] === "HEAD" ? result : undefined;
+      return result;
+    } catch (error) {
+      throw annotateFixtureFailure(error, root, {
+        stage: "empty fixture git operation",
+        operation: args.join(" "),
+        cleanupStarted: false,
+      });
+    }
   };
   return { root, git };
 }

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -51,7 +52,7 @@ import type {
   GitCommitSha,
   WorkflowState,
 } from "../types.js";
-import { emptyFixture } from "./test-fixtures.js";
+import { annotateFixtureFailure, emptyFixture } from "./test-fixtures.js";
 
 function fixture() {
   const { root, git } = emptyFixture();
@@ -85,6 +86,7 @@ interface GitShim {
   directory: string;
   state: string;
   realGit: string;
+  armBarrier: () => void;
   cleanup: () => void;
 }
 
@@ -94,6 +96,11 @@ function gitShim(): GitShim {
   mkdirSync(state);
   writeFileSync(join(state, "active"), "0\n");
   writeFileSync(join(state, "max"), "0\n");
+  const barrier = join(state, "barrier");
+  mkdirSync(barrier);
+  writeFileSync(join(barrier, "arrivals"), "0\n");
+  writeFileSync(join(barrier, "status"), "waiting\n");
+  writeFileSync(join(barrier, "deadline"), "0\n");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const shim = join(directory, "git");
   writeFileSync(
@@ -127,28 +134,106 @@ fi
 lock=$state/lock
 while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
 active=$(cat "$state/active")
+  case "$active" in
+    ''|*[!0-9]*) printf '%s\n' "malformed active counter" >"$state/error"; rmdir "$lock"; exit 125 ;;
+esac
 active=$((active + 1))
 printf '%s\n' "$active" >"$state/active"
 maximum=$(cat "$state/max")
+  case "$maximum" in
+    ''|*[!0-9]*) printf '%s\n' "malformed maximum counter" >"$state/error"; rmdir "$lock"; exit 125 ;;
+esac
 if [ "$active" -gt "$maximum" ]; then printf '%s\n' "$active" >"$state/max"; fi
 rmdir "$lock"
-decrement() {
-  while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
-  active=$(cat "$state/active")
-  active=$((active - 1))
-  printf '%s\n' "$active" >"$state/active"
-  rmdir "$lock"
+active_entered=1
+barrier_registered=0
+cleaned=0
+record_error() {
+  if [ ! -f "$state/error" ]; then printf '%s\n' "$1" >"$state/error"; fi
 }
-trap 'decrement' EXIT
-sleep 0.02
+abort_barrier() {
+  if [ "\${WORKFLOW_GIT_SHIM_BARRIER:-0}" != "1" ]; then return; fi
+  while ! mkdir "$state/barrier-lock" 2>/dev/null; do sleep 0.001; done
+  printf '%s\n' "aborted" >"$state/barrier/status"
+  rmdir "$state/barrier-lock"
+}
+cleanup() {
+  if [ "$cleaned" -eq 1 ]; then return; fi
+  cleaned=1
+  if [ "$barrier_registered" -eq 1 ]; then
+    while ! mkdir "$state/barrier-lock" 2>/dev/null; do sleep 0.001; done
+    arrivals=$(cat "$state/barrier/arrivals")
+    case "$arrivals" in
+      ''|*[!0-9]*) record_error "malformed barrier arrivals"; printf '%s\n' "aborted" >"$state/barrier/status" ;;
+      *) arrivals=$((arrivals - 1)); printf '%s\n' "$arrivals" >"$state/barrier/arrivals" ;;
+    esac
+    if [ "$(cat "$state/barrier/status" 2>/dev/null || true)" = "waiting" ]; then
+      record_error "barrier participant exited while waiting"
+      printf '%s\n' "aborted" >"$state/barrier/status"
+    fi
+    rmdir "$state/barrier-lock"
+    barrier_registered=0
+  fi
+  if [ "$active_entered" -eq 1 ]; then
+    while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
+    active=$(cat "$state/active")
+    case "$active" in
+      ''|*[!0-9]*) printf '%s\n' "malformed active counter" >&2 ;;
+      *) active=$((active - 1)); printf '%s\n' "$active" >"$state/active" ;;
+    esac
+    rmdir "$lock"
+    active_entered=0
+  fi
+}
+trap cleanup EXIT
+trap 'exit 125' HUP INT TERM
+if [ "\${WORKFLOW_GIT_SHIM_BARRIER:-0}" = "1" ]; then
+  barrier_status=$(cat "$state/barrier/status" 2>/dev/null || true)
+  barrier_deadline=$(cat "$state/barrier/deadline" 2>/dev/null || true)
+  case "$barrier_status:$barrier_deadline" in
+    waiting:[0-9]*|released:[0-9]*) ;;
+    *) record_error "malformed barrier state:$barrier_status:$barrier_deadline"; abort_barrier; exit 125 ;;
+  esac
+  if [ "$barrier_status" = "waiting" ]; then
+    while ! mkdir "$state/barrier-lock" 2>/dev/null; do sleep 0.001; done
+    arrivals=$(cat "$state/barrier/arrivals" 2>/dev/null || true)
+    case "$arrivals" in
+      ''|*[!0-9]*) record_error "malformed barrier arrivals"; printf '%s\n' "aborted" >"$state/barrier/status"; rmdir "$state/barrier-lock"; exit 125 ;;
+    esac
+    arrivals=$((arrivals + 1))
+    if [ "$arrivals" -gt 4 ]; then
+      record_error "barrier received too many entries"
+      printf '%s\n' "aborted" >"$state/barrier/status"
+      rmdir "$state/barrier-lock"
+      exit 125
+    fi
+  printf '%s\n' "$arrivals" >"$state/barrier/arrivals"
+  barrier_registered=1
+    if [ "$arrivals" -eq 4 ]; then printf '%s\n' "released" >"$state/barrier/status"; fi
+    rmdir "$state/barrier-lock"
+    while true; do
+      barrier_status=$(cat "$state/barrier/status" 2>/dev/null || true)
+      if [ "$barrier_status" = "released" ]; then break; fi
+      if [ "$barrier_status" != "waiting" ]; then
+        record_error "barrier aborted"
+        exit 125
+      fi
+      now=$(date +%s)
+      case "$now:$barrier_deadline" in
+        ''|*[!0-9:]*|*:) record_error "malformed barrier deadline"; abort_barrier; exit 125 ;;
+      esac
+      if [ "$now" -ge "$barrier_deadline" ]; then
+        record_error "barrier watchdog expired"
+        abort_barrier
+        exit 125
+      fi
+      sleep 0.001
+    done
+  fi
+fi
+if [ "\${WORKFLOW_GIT_SHIM_BARRIER:-0}" != "1" ]; then sleep 0.02; fi
   "$real_git" "$@"
 status=$?
-trap - EXIT
-while ! mkdir "$lock" 2>/dev/null; do sleep 0.001; done
-active=$(cat "$state/active")
-active=$((active - 1))
-printf '%s\n' "$active" >"$state/active"
-rmdir "$lock"
 exit "$status"
 `,
   );
@@ -157,6 +242,11 @@ exit "$status"
     directory,
     state,
     realGit,
+    armBarrier: () => {
+      writeFileSync(join(barrier, "arrivals"), "0\n");
+      writeFileSync(join(barrier, "status"), "waiting\n");
+      writeFileSync(join(barrier, "deadline"), `${Math.floor(Date.now() / 1000) + 15}\n`);
+    },
     cleanup: () => rmSync(directory, { recursive: true, force: true }),
   };
 }
@@ -170,36 +260,74 @@ function runGitChild(
     fail?: boolean;
     treeOutput?: string;
     indexOutput?: string;
+    barrier?: boolean;
   } = {},
 ): any {
   const childSource = `(async () => {
   ${source}
 })().catch((error) => {
-  process.stderr.write(JSON.stringify({ category: error?.category ?? null, code: error?.code ?? null }));
+  process.stderr.write(JSON.stringify({
+    category: error?.category ?? null,
+    code: error?.code ?? null,
+    process_id: process.pid,
+    role: "git test child",
+  }));
   process.exitCode = 1;
 });`;
-  return JSON.parse(
-    execFileSync(process.execPath, ["--no-warnings", "--eval", childSource], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${shim.directory}${delimiter}${process.env.PATH ?? ""}`,
-        WORKFLOW_GIT_REAL: shim.realGit,
-        WORKFLOW_GIT_SHIM_STATE: shim.state,
-        WORKFLOW_GIT_SHIM_LARGE: options.largeOutput ? "1" : "0",
-        WORKFLOW_GIT_SHIM_FAIL: options.fail ? "1" : "0",
-        ...(options.treeOutput === undefined
-          ? {}
-          : { WORKFLOW_GIT_SHIM_TREE_OUTPUT: options.treeOutput }),
-        ...(options.indexOutput === undefined
-          ? {}
-          : { WORKFLOW_GIT_SHIM_INDEX_OUTPUT: options.indexOutput }),
-      },
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
+  try {
+    return JSON.parse(
+      execFileSync(process.execPath, ["--no-warnings", "--eval", childSource], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${shim.directory}${delimiter}${process.env.PATH ?? ""}`,
+          WORKFLOW_GIT_REAL: shim.realGit,
+          WORKFLOW_GIT_SHIM_STATE: shim.state,
+          WORKFLOW_GIT_SHIM_LARGE: options.largeOutput ? "1" : "0",
+          WORKFLOW_GIT_SHIM_FAIL: options.fail ? "1" : "0",
+          WORKFLOW_GIT_SHIM_BARRIER: options.barrier ? "1" : "0",
+          ...(options.treeOutput === undefined
+            ? {}
+            : { WORKFLOW_GIT_SHIM_TREE_OUTPUT: options.treeOutput }),
+          ...(options.indexOutput === undefined
+            ? {}
+            : { WORKFLOW_GIT_SHIM_INDEX_OUTPUT: options.indexOutput }),
+        },
+        maxBuffer: 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+  } catch (error) {
+    const failure = error as { stderr?: unknown; message?: unknown };
+    const shimDetail = existsSync(join(shim.state, "error"))
+      ? readFileSync(join(shim.state, "error"), "utf8")
+      : "none";
+    if (error instanceof Error && typeof failure.stderr === "string" && failure.stderr) {
+      error.message = `${error.message}\nchild stderr: ${failure.stderr.slice(0, 500)}\nshim: ${shimDetail}`;
+    }
+    const childPid =
+      typeof failure.stderr === "string"
+        ? /"process_id":(\d+)/u.exec(failure.stderr)?.[1]
+        : undefined;
+    throw annotateFixtureFailure(error, root, {
+      stage: "Git child harness",
+      operation: "spawned Git review operation",
+      cleanupStarted: false,
+      ...(childPid
+        ? {
+            child: {
+              pid: Number(childPid),
+              role: "git test child",
+              live: false,
+              killed: false,
+              exitCode: null,
+              signalCode: null,
+            },
+          }
+        : {}),
+    });
+  }
 }
 
 function runAsyncReviewChild(
@@ -954,7 +1082,8 @@ test("reviewRangeAsync bounds aggregate Git concurrency and preserves path order
     );
     assert.equal(shimCounter(shim, "active"), 0);
 
-    const maximum = runAsyncReviewChild(root, target(base, head, paths), shim);
+    shim.armBarrier();
+    const maximum = runAsyncReviewChild(root, target(base, head, paths), shim, { barrier: true });
     assert.deepEqual(
       maximum.paths.map((entry: { path: string }) => entry.path),
       paths,
