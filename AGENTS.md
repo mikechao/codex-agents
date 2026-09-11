@@ -80,7 +80,8 @@ treat reading it as a runtime precondition or an independent transition authorit
 duplicate its state machine here.
 
 Read the relevant architecture documentation before changing an agent contract or the workflow-state
-MCP server. Keep the generated host definitions, explanatory workflow documentation, MCP tool schemas and
+MCP server. Before changing `.codex/workflow-mcp/`, read `.codex/workflow-mcp/ARCHITECTURE.md` first and
+preserve its ownership/dependency boundaries unless an architecture change is explicitly in scope. Keep the generated host definitions, explanatory workflow documentation, MCP tool schemas and
 transitions, and their tests consistent. When an agent contract changes, regenerate the host
 definitions (`bun run generate:agents`), keep the generator's per-host frontmatter accurate, and
 use `.codex/agents/EVALS.md` as the manual evaluation checklist; add to `EVAL_RESULTS.md` only

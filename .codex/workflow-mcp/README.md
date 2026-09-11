@@ -3,6 +3,8 @@
 This is local developer tooling for the repository's custom implementer, code reviewer, and
 committer workflow. It is a Bun STDIO MCP server, not an extension runtime or product backend.
 
+For source ownership and dependency direction, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 Workflow state schema v10 optionally persists generic immutable `work_items` provenance and append-only
 finding adjudications. Each
 provider-neutral record has `provider`, `id`, exact `display_ref`, and nullable absolute HTTP(S) `url`.
