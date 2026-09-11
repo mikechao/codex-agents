@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { buildStandaloneWorkflowMcp } from "../build.js";
-import { workflowCreateInput } from "./protocol-fixtures.js";
-import { disposeFixture, fixture } from "./test-fixtures.js";
+import { buildStandaloneWorkflowMcp } from "../../build.js";
+import { workflowCreateInput } from "../protocol-fixtures.js";
+import { disposeFixture, fixture } from "../test-fixtures.js";
 
-const projectRoot = resolve(import.meta.dir, "../../..");
+const projectRoot = resolve(import.meta.dir, "../../../..");
 
 async function connect(binary: string, root: string, databasePath: string) {
   const transport = new StdioClientTransport({

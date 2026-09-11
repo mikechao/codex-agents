@@ -118,6 +118,15 @@ Biome: `.codex/agents/*.toml` and `.codex/config.toml` continue to rely on
 pre-completion/pre-commit validation gate and must leave the working tree unchanged. A change is
 complete only when Biome check, `tsc --noEmit`, and the full `bun run test` suite all pass.
 
+Test ownership is two-tiered: `test:core` keeps fast/contract and ordinary integration tests on
+the existing parallel path, while the bounded `test:runtime` owner (parallelism `2`) runs runtime /
+system tests under `.codex/workflow-mcp/tests/runtime/` and `.codex/installer/tests/runtime/`.
+`test` executes each tier once, and `validate` therefore remains the complete functional gate.
+`test:coverage` is intentionally core-only because runtime behavior is covered by the complete test
+path; `test:stress` runs both tiers with their respective caps. Focused Workflow MCP and installer
+commands retain parallelism `7` and `4` and exclude nested runtime files. Reviewer-level command
+concurrency remains supported without a global lock, retries, or deduplication coordinator.
+
 Subprocess execution keeps Node-compatible `node:child_process` (`execFileSync`/`spawnSync`)
 semantics: Bun's `spawnSync` does not throw on `maxBuffer` overflow (it SIGTERMs with no error),
 so the binary-blob protections and `ERROR_GIT`/`ERROR_RECEIPT_UNAVAILABLE` categorization rely on

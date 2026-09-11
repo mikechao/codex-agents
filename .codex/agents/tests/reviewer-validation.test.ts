@@ -258,6 +258,91 @@ test("project policy maps every required validation to its authoritative command
   ]);
 });
 
+const coreTestGlobs = [
+  "./.codex/workflow-mcp/tests/*.test.ts",
+  "./.codex/agents/tests/*.test.ts",
+  "./.codex/installer/tests/*.test.ts",
+];
+const runtimeTestGlobs = [
+  "./.codex/workflow-mcp/tests/runtime/*.test.ts",
+  "./.codex/installer/tests/runtime/*.test.ts",
+];
+const expectedTestScripts = {
+  "test:core":
+    "bun test --parallel=7 --parallel-delay=0 --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts ./.codex/agents/tests/*.test.ts ./.codex/installer/tests/*.test.ts",
+  "test:agents":
+    "bun test --parallel=4 --parallel-delay=0 --timeout=60000 ./.codex/agents/tests/*.test.ts",
+  "test:installer":
+    "bun test --parallel=4 --parallel-delay=0 --timeout=60000 ./.codex/installer/tests/*.test.ts",
+  "test:workflow-mcp":
+    "bun test --parallel=7 --parallel-delay=0 --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts",
+  "test:runtime":
+    "bun test --parallel=2 --parallel-delay=0 --timeout=60000 ./.codex/workflow-mcp/tests/runtime/*.test.ts ./.codex/installer/tests/runtime/*.test.ts",
+  "test:coverage":
+    "bun test --parallel=7 --parallel-delay=0 --coverage --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts ./.codex/agents/tests/*.test.ts ./.codex/installer/tests/*.test.ts",
+  "test:stress":
+    "bun test --parallel=7 --parallel-delay=0 --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/*.test.ts ./.codex/agents/tests/*.test.ts ./.codex/installer/tests/*.test.ts && bun test --parallel=2 --parallel-delay=0 --randomize --rerun-each=2 --timeout=60000 ./.codex/workflow-mcp/tests/runtime/*.test.ts ./.codex/installer/tests/runtime/*.test.ts",
+  test: "bun run test:core && bun run test:runtime",
+  validate: "bun run check && bun run typecheck && bun run test",
+} as const;
+
+function testFileGlobs(script: string): string[] {
+  return script
+    .split(/\s+/u)
+    .filter((token) => token.startsWith("./") && token.endsWith(".test.ts"));
+}
+
+function assertTestScriptTopology(scripts: Record<string, string>): void {
+  for (const [name, expected] of Object.entries(expectedTestScripts)) {
+    assert.equal(scripts[name], expected, `${name} must retain its exact command ownership`);
+  }
+
+  const core = testFileGlobs(scripts["test:core"] ?? "");
+  const runtime = testFileGlobs(scripts["test:runtime"] ?? "");
+  const workflow = testFileGlobs(scripts["test:workflow-mcp"] ?? "");
+  const agents = testFileGlobs(scripts["test:agents"] ?? "");
+  const installer = testFileGlobs(scripts["test:installer"] ?? "");
+  const coverage = testFileGlobs(scripts["test:coverage"] ?? "");
+  const stress = testFileGlobs(scripts["test:stress"] ?? "");
+
+  assert.deepEqual(core, coreTestGlobs);
+  assert.deepEqual(runtime, runtimeTestGlobs);
+  assert.deepEqual(workflow, [coreTestGlobs[0]]);
+  assert.deepEqual(agents, [coreTestGlobs[1]]);
+  assert.deepEqual(installer, [coreTestGlobs[2]]);
+  assert.deepEqual(coverage, coreTestGlobs);
+  assert.deepEqual(stress, [...coreTestGlobs, ...runtimeTestGlobs]);
+
+  const coreSet = new Set(core);
+  const runtimeSet = new Set(runtime);
+  assert.equal(
+    runtime.some((glob) => coreSet.has(glob)),
+    false,
+  );
+  assert.deepEqual(new Set([...workflow, ...agents, ...installer]), coreSet);
+  assert.deepEqual(new Set(coverage), coreSet);
+  assert.deepEqual(new Set(stress), new Set([...coreSet, ...runtimeSet]));
+}
+
+test("project test scripts keep runtime ownership exact, bounded, and disjoint", () => {
+  const packageJson = JSON.parse(
+    readFileSync(join(import.meta.dir, "../../../package.json"), "utf8"),
+  ) as { scripts: Record<string, string> };
+  assertTestScriptTopology(packageJson.scripts);
+
+  const duplicateRuntime = {
+    ...packageJson.scripts,
+    "test:core": `${packageJson.scripts["test:core"]} ${runtimeTestGlobs[0]}`,
+  };
+  assert.throws(() => assertTestScriptTopology(duplicateRuntime), /exact command ownership/u);
+
+  const omittedRuntime = {
+    ...packageJson.scripts,
+    "test:runtime": packageJson.scripts["test:runtime"].replace(` ${runtimeTestGlobs[1]}`, ""),
+  };
+  assert.throws(() => assertTestScriptTopology(omittedRuntime), /exact command ownership/u);
+});
+
 test("project workflow validation is authorized and runs through the reviewer runner", () => {
   const workflowArgv = ["bun", "run", "test:workflow-mcp"];
   const { root } = workflowValidationFixture();

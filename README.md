@@ -83,18 +83,29 @@ persistence, affinity, promotion, hot swapping, and cache GC.
 bun run start             # launch the workflow_state MCP server on STDIO
 bun run generate:agents   # regenerate checked-in host definitions from policy and contracts
 bun run typecheck         # strict tsc checks without emitting
-bun run test              # full suite: agents + workflow-MCP + installer tests
+bun run test              # complete suite: core/fast tests once, then bounded runtime tests
+bun run test:core         # fast/contract and ordinary integration tests (parallel=7)
+bun run test:runtime      # runtime/system tests only (parallel=2 bounded owner)
 bun run test:agents       # focused change-receipt and contract-consistency tests
 bun run test:installer    # focused installer tests
 bun run test:workflow-mcp # focused workflow-state MCP server tests
-bun run test:coverage     # full suite with Bun coverage reporting
-bun run test:stress       # full suite, randomized order, each file run twice
+bun run test:coverage     # core-only coverage run; runtime behavior is covered functionally by test
+bun run test:stress       # both tiers, randomized order, each file run twice
 bun run format            # apply Biome formatting to supported sources
 bun run format:check      # check Biome formatting without modifying files
 bun run lint              # run Biome linting without modifying files
 bun run check             # complete Biome check (format + lint + import hygiene)
 bun run validate          # pre-completion gate: check + typecheck + full test suite
 ```
+
+The root Workflow MCP and installer commands retain their focused parallelism (`7` and `4`) and
+select only their top-level test directories. Runtime/system scenarios are owned by `test:runtime`
+with a finite concurrency cap and live in `.codex/workflow-mcp/tests/runtime/` and
+`.codex/installer/tests/runtime/`. `test` runs the core composition once and then that runtime
+owner once; `validate` remains `check + typecheck + test`, so it is the complete validation path.
+Coverage intentionally stays core-only to avoid a second concurrently instrumented runtime run.
+Reviewer validation may still run its independent required commands concurrently; it does not add a
+standalone runtime requirement, global lock, retry, or deduplication coordinator.
 
 TOML files (`.codex/agents/*.toml`, `.codex/config.toml`) stay outside Biome and
 continue to be validated through `Bun.TOML.parse` and the existing semantic assertions.

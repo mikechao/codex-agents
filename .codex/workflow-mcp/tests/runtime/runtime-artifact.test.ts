@@ -16,12 +16,12 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { currentHead } from "../git.js";
+import { currentHead } from "../../git.js";
 import {
   isValidRuntimeArtifact,
   materializeRuntimeArtifact,
   trustedRuntimeManifest,
-} from "../runtime-artifact.js";
+} from "../../runtime-artifact.js";
 
 function gitFixture(
   files: Record<string, string>,
