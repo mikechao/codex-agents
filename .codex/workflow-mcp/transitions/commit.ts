@@ -1,13 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { fail } from "./errors.js";
-import { allRequiredValidationsPassed } from "./transition-queries.js";
-import {
-  applyRecovery,
-  clearFullCommitEvidence,
-  clearStaleReviewEvidence,
-  clone,
-  ensurePhase,
-} from "./transition-shared.js";
+import { fail } from "../errors.js";
 import type {
   CommitAttemptId,
   CommitMismatchCategory,
@@ -16,13 +8,27 @@ import type {
   GitCommitSha,
   WorkflowState,
   WorkflowVersion,
-} from "./types.js";
-import { boundedString, exactKeys, isoNow, objectDigest, userAuthorization } from "./validation.js";
+} from "../types.js";
+import {
+  boundedString,
+  exactKeys,
+  isoNow,
+  objectDigest,
+  userAuthorization,
+} from "../validation.js";
 import {
   COMMIT_MISMATCH_CATEGORY_SET,
   COMMIT_SUBMISSION_OUTCOME_VALUES,
   isValue,
-} from "./values.js";
+} from "../values.js";
+import { allRequiredValidationsPassed } from "./queries.js";
+import {
+  applyRecovery,
+  clearFullCommitEvidence,
+  clearStaleReviewEvidence,
+  clone,
+  ensurePhase,
+} from "./shared.js";
 
 export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
   COMMIT_MISMATCH_CATEGORY_SET;

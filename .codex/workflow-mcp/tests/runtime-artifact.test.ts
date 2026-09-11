@@ -65,6 +65,40 @@ function dependencyFile(root: string): string | undefined {
   return undefined;
 }
 
+const TRANSITION_PATHS = [
+  ".codex/workflow-mcp/transitions/commit.ts",
+  ".codex/workflow-mcp/transitions/implementation.ts",
+  ".codex/workflow-mcp/transitions/linked-followup.ts",
+  ".codex/workflow-mcp/transitions/queries.ts",
+  ".codex/workflow-mcp/transitions/receipts.ts",
+  ".codex/workflow-mcp/transitions/review.ts",
+  ".codex/workflow-mcp/transitions/shared.ts",
+  ".codex/workflow-mcp/transitions/state.ts",
+] as const;
+
+function workingTreeRuntimeFiles(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const collect = (path: string): void => {
+    const source = join(root, path);
+    const stat = lstatSync(source);
+    if (stat.isDirectory()) {
+      for (const name of readdirSync(source)) collect(join(path, name));
+    } else if (stat.isFile()) {
+      files[path] = readFileSync(source, "utf8");
+    }
+  };
+  collect(".codex/workflow-mcp");
+  for (const path of [
+    ".codex/agents/change-receipt.ts",
+    ".codex/agents/receipt.ts",
+    "bun.lock",
+    "package.json",
+  ]) {
+    collect(path);
+  }
+  return files;
+}
+
 describe("Workflow MCP runtime artifacts", () => {
   test("fingerprints committed runtime closure and reuses a valid cache entry", () => {
     const root = process.cwd();
@@ -72,7 +106,18 @@ describe("Workflow MCP runtime artifacts", () => {
     try {
       const revision = currentHead(root);
       const manifest = trustedRuntimeManifest(root, revision);
-      expect(manifest.files.map((entry) => entry.path)).toContain(".codex/workflow-mcp/server.ts");
+      const manifestPaths = manifest.files.map((entry) => entry.path);
+      expect(manifestPaths).toContain(".codex/workflow-mcp/server.ts");
+      const workingTreeFixture = gitFixture(workingTreeRuntimeFiles(root));
+      try {
+        expect(
+          trustedRuntimeManifest(workingTreeFixture.root, workingTreeFixture.revision).files.map(
+            (entry) => entry.path,
+          ),
+        ).toEqual(expect.arrayContaining(TRANSITION_PATHS));
+      } finally {
+        rmSync(workingTreeFixture.root, { recursive: true, force: true });
+      }
       expect(manifest.files.map((entry) => entry.path)).toContain(
         ".codex/agents/change-receipt.ts",
       );

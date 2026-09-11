@@ -1,4 +1,3 @@
-import { clone } from "./transition-shared.js";
 import type {
   ApprovedPathBaseline,
   ApprovedPathBaselineView,
@@ -18,9 +17,10 @@ import type {
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
-} from "./types.js";
-import { MAX_DETAIL, MAX_TEXT, role } from "./validation.js";
-import { VALIDATION_STATUS_SET } from "./values.js";
+} from "../types.js";
+import { MAX_DETAIL, MAX_TEXT, role } from "../validation.js";
+import { VALIDATION_STATUS_SET } from "../values.js";
+import { clone } from "./shared.js";
 
 export function approvedPathBaselineView(value: ApprovedPathBaseline): ApprovedPathBaselineView {
   const { baseline } = value;

@@ -1,12 +1,4 @@
-import { fail, WorkflowError } from "./errors.js";
-import {
-  allRequiredValidationsPassed,
-  effectiveBlockingFindings,
-  hasFailedRequiredValidation,
-  pendingInspectionValidations,
-  reviewBlockedByPendingInspection,
-} from "./transition-queries.js";
-import { applyRecovery, clone, ensurePhase } from "./transition-shared.js";
+import { fail, WorkflowError } from "../errors.js";
 import type {
   BlockingFinding,
   ChangeReceipt,
@@ -18,7 +10,7 @@ import type {
   ValidationResult,
   WorkflowState,
   WorkflowVersion,
-} from "./types.js";
+} from "../types.js";
 import {
   boundedString,
   canonicalJson,
@@ -33,8 +25,16 @@ import {
   resolutionMap,
   userAuthorization,
   VALIDATION_STATUSES,
-} from "./validation.js";
-import { FINDING_ADJUDICATION_VALUES, isValue, REVIEW_STATUS_VALUES } from "./values.js";
+} from "../validation.js";
+import { FINDING_ADJUDICATION_VALUES, isValue, REVIEW_STATUS_VALUES } from "../values.js";
+import {
+  allRequiredValidationsPassed,
+  effectiveBlockingFindings,
+  hasFailedRequiredValidation,
+  pendingInspectionValidations,
+  reviewBlockedByPendingInspection,
+} from "./queries.js";
+import { applyRecovery, clone, ensurePhase } from "./shared.js";
 
 function parseReviewerValidationResults(
   value: unknown,

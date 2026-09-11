@@ -1,7 +1,4 @@
-import { fail } from "./errors.js";
-import { effectiveBlockingFindings } from "./transition-queries.js";
-import { clone, ensurePhase } from "./transition-shared.js";
-import { baseState } from "./transition-state.js";
+import { fail } from "../errors.js";
 import type {
   AcceptanceCriterion,
   ExactRepoPath,
@@ -16,7 +13,7 @@ import type {
   WorkflowState,
   WorkflowType,
   WorkItemReference,
-} from "./types.js";
+} from "../types.js";
 import {
   approvedPlan,
   boundedString,
@@ -26,7 +23,10 @@ import {
   findingIdList,
   revision,
   userAuthorization,
-} from "./validation.js";
+} from "../validation.js";
+import { effectiveBlockingFindings } from "./queries.js";
+import { clone, ensurePhase } from "./shared.js";
+import { baseState } from "./state.js";
 
 export interface LinkedFollowupPlan {
   workflow_type: WorkflowType;

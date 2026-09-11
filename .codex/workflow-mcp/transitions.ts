@@ -4,7 +4,7 @@ import {
   dirtyBaselinePaths,
   rangeDirtyBaselinePaths,
   scopeChangedPaths,
-} from "./transition-receipts.js";
+} from "./transitions/receipts.js";
 
 export {
   authorizeCommit,
@@ -17,7 +17,7 @@ export {
   returnCommitToReview,
   submitCommitResult,
   validateCommitResult,
-} from "./transition-commit.js";
+} from "./transitions/commit.js";
 export {
   acceptConcerns,
   adoptDirtyScope,
@@ -25,7 +25,7 @@ export {
   IMPLEMENTATION_STOP_PHASES,
   resumeImplementation,
   submitImplementation,
-} from "./transition-implementation.js";
+} from "./transitions/implementation.js";
 export {
   adjudicateFindings,
   authorizeRepair,
@@ -34,8 +34,8 @@ export {
   recordManualValidation,
   resumeReview,
   submitReview,
-} from "./transition-review.js";
-export { ensurePhase } from "./transition-shared.js";
+} from "./transitions/review.js";
+export { ensurePhase } from "./transitions/shared.js";
 
 import type { WorkflowPhase } from "./types.js";
 import { WORKFLOW_PHASE_VALUES } from "./values.js";
@@ -53,17 +53,17 @@ export {
   ROLE_VIEW_EXTRA,
   reviewBlockedByPendingInspection,
   roleView,
-} from "./transition-queries.js";
+} from "./transitions/queries.js";
 export { changedReceiptPaths, dirtyBaselinePaths, rangeDirtyBaselinePaths, scopeChangedPaths };
 
 export const SCHEMA_VERSION = CURRENT_STATE_SCHEMA_VERSION;
 
-export type { LinkedFollowupPlan } from "./transition-linked-followup.js";
+export type { LinkedFollowupPlan } from "./transitions/linked-followup.js";
 export {
   linkedFollowupChildState,
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
-} from "./transition-linked-followup.js";
-export { createState, createStateFromPlan } from "./transition-state.js";
+} from "./transitions/linked-followup.js";
+export { createState, createStateFromPlan } from "./transitions/state.js";
 
 export const PHASES: readonly WorkflowPhase[] = WORKFLOW_PHASE_VALUES;

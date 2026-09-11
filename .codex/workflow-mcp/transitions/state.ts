@@ -1,6 +1,5 @@
-import { fail } from "./errors.js";
-import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
-import { clone } from "./transition-shared.js";
+import { fail } from "../errors.js";
+import { CURRENT_STATE_SCHEMA_VERSION } from "../migration.js";
 import type {
   ExactRepoPath,
   GitCommitSha,
@@ -15,7 +14,7 @@ import type {
   WorkflowType,
   WorkflowVersion,
   WorkItemReference,
-} from "./types.js";
+} from "../types.js";
 import {
   approvedPlan,
   boundedString,
@@ -26,8 +25,9 @@ import {
   repairCycle,
   revision,
   workItems,
-} from "./validation.js";
-import { isValue, REVIEW_MODE_VALUES, WORKFLOW_TYPE_VALUES } from "./values.js";
+} from "../validation.js";
+import { isValue, REVIEW_MODE_VALUES, WORKFLOW_TYPE_VALUES } from "../values.js";
+import { clone } from "./shared.js";
 
 interface BaseStateOptions {
   objective: string;

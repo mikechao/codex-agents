@@ -1,21 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { fail } from "./errors.js";
-import { hasFailedRequiredValidation } from "./transition-queries.js";
-import { scopeChangedPaths } from "./transition-receipts.js";
-import {
-  applyRecovery,
-  clearFullCommitEvidence,
-  clearStaleReviewEvidence,
-  clone,
-  ensurePhase,
-} from "./transition-shared.js";
+import { fail } from "../errors.js";
 import type {
   ChangeReceipt,
   StoppingImplementationStatus,
   WorkflowPhase,
   WorkflowState,
   WorkflowVersion,
-} from "./types.js";
+} from "../types.js";
 import {
   ACCEPTANCE_STATUSES,
   boundedString,
@@ -30,8 +21,17 @@ import {
   stringList,
   userAuthorization,
   VALIDATION_STATUSES,
-} from "./validation.js";
-import { IMPLEMENTATION_STATUS_VALUES, isValue } from "./values.js";
+} from "../validation.js";
+import { IMPLEMENTATION_STATUS_VALUES, isValue } from "../values.js";
+import { hasFailedRequiredValidation } from "./queries.js";
+import { scopeChangedPaths } from "./receipts.js";
+import {
+  applyRecovery,
+  clearFullCommitEvidence,
+  clearStaleReviewEvidence,
+  clone,
+  ensurePhase,
+} from "./shared.js";
 
 export const IMPLEMENTATION_STOP_PHASES: Record<StoppingImplementationStatus, WorkflowPhase> = {
   DONE_WITH_CONCERNS: "STOPPED_CONCERNS",

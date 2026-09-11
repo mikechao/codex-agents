@@ -1,6 +1,6 @@
-import { fail } from "./errors.js";
-import type { ApprovedPathBaseline, ChangeReceipt, ExactRepoPath, ReviewRange } from "./types.js";
-import { canonicalJson } from "./validation.js";
+import { fail } from "../errors.js";
+import type { ApprovedPathBaseline, ChangeReceipt, ExactRepoPath, ReviewRange } from "../types.js";
+import { canonicalJson } from "../validation.js";
 
 export function changedReceiptPaths(receipt: ChangeReceipt | null | undefined): ExactRepoPath[] {
   if (!receipt || !Array.isArray(receipt.paths)) return [];

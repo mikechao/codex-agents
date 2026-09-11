@@ -20,30 +20,30 @@ The low-level/common layer provides reusable domain primitives:
 
 The shared/support layer contains helpers used by multiple transition domains:
 
-- `transition-shared.ts` owns cloning, phase guards, recovery, and stale-evidence cleanup.
-- `transition-receipts.ts` compares receipt paths and calculates scope changes.
+- `transitions/shared.ts` owns cloning, phase guards, recovery, and stale-evidence cleanup.
+- `transitions/receipts.ts` compares receipt paths and calculates scope changes.
 - `state-validation.ts` validates current-schema persisted state keys and shapes.
-- `transition-queries.ts` derives role views, permitted actions, validation and finding queries,
+- `transitions/queries.ts` derives role views, permitted actions, validation and finding queries,
   and related projections.
-- `transition-state.ts` constructs initial state and normalizes workflow and review targets.
+- `transitions/state.ts` constructs initial state and normalizes workflow and review targets.
 
 Mutation-domain modules own the transition operations for their areas:
 
-- `transition-implementation.ts` handles implementation submission, scope expansion and adoption,
+- `transitions/implementation.ts` handles implementation submission, scope expansion and adoption,
   implementation recovery and concern handling, and implementation-evidence cleanup.
-- `transition-review.ts` handles the review lifecycle, findings, adjudication, repair
+- `transitions/review.ts` handles the review lifecycle, findings, adjudication, repair
   authorization and recovery, and review evidence.
-- `transition-commit.ts` handles commit authorization, preparation and result validation,
+- `transitions/commit.ts` handles commit authorization, preparation and result validation,
   mismatch and failure handling, and commit recovery.
-- `transition-linked-followup.ts` validates linked-follow-up inputs and constructs child state,
+- `transitions/linked-followup.ts` validates linked-follow-up inputs and constructs child state,
   including plan-backed follow-ups.
 
 ## Facade and dependency direction
 
 `transitions.ts` is a thin compatibility and re-export facade. It assembles the public transition
 exports and constants for existing consumers; it is not an implementation owner. The specialized
-transition modules (`transition-implementation.ts`, `transition-review.ts`, `transition-commit.ts`,
-and `transition-linked-followup.ts`) must not import `transitions.ts`. They import common and
+transition modules (`transitions/implementation.ts`, `transitions/review.ts`, `transitions/commit.ts`,
+and `transitions/linked-followup.ts`) must not import `transitions.ts`. They import common and
 support modules directly. Facade consumers such as `store.ts`, `index.ts`, and tests intentionally
 remain separate from specialized transition implementation.
 
