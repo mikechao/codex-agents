@@ -2,16 +2,16 @@ import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
-  hasFailedRequiredValidation,
   pendingInspectionValidations,
-  permittedNextActions,
+  type WorkflowLegality,
+  type WorkflowLegalityReadiness,
+  workflowLegality,
 } from "./transitions/queries.js";
 import type {
   BlockingFinding,
   OperatorDecision,
   OperatorRecovery,
   OptionalFinding,
-  Role,
   WorkflowAction,
   WorkflowId,
   WorkflowState,
@@ -22,7 +22,8 @@ const MAX_OPTIONAL_FINDINGS = 200;
 
 export interface OperatorLineageRecord {
   state: WorkflowState;
-  actions?: Partial<Record<Role, WorkflowAction[]>>;
+  readiness?: WorkflowLegalityReadiness;
+  legality?: WorkflowLegality;
 }
 
 function bounded(value: string, limit = MAX_SUMMARY): string {
@@ -30,12 +31,15 @@ function bounded(value: string, limit = MAX_SUMMARY): string {
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
 }
 
-function actionsFor(record: OperatorLineageRecord, role: Role): WorkflowAction[] {
-  return record.actions?.[role] ?? permittedNextActions(record.state, role);
+function legalityFor(record: OperatorLineageRecord): WorkflowLegality {
+  return record.legality ?? workflowLegality(record.state, record.readiness);
 }
 
-function stateStatus(state: WorkflowState): OperatorDecision["outcome"]["status"] {
+function stateStatus(record: OperatorLineageRecord): OperatorDecision["outcome"]["status"] {
+  const { state } = record;
   if (state.superseded_by_workflow_id) return "superseded";
+  const next = legalityFor(record).next;
+  if (next.kind === "terminal") return next.outcome === "commit_mismatch" ? "failed" : "completed";
   switch (state.phase) {
     case "IMPLEMENTING":
     case "REPAIRING":
@@ -61,7 +65,7 @@ function stateStatus(state: WorkflowState): OperatorDecision["outcome"]["status"
     case "STOPPED_REPAIR_EXHAUSTED":
       return "exhausted";
     case "STOPPED_COMMIT_MISMATCH":
-      return "recovery_needed";
+      return "failed";
   }
 }
 
@@ -69,33 +73,12 @@ function blockerSummary(finding: BlockingFinding | OptionalFinding): string {
   return bounded(finding.impact || finding.remediation || finding.violated_requirement);
 }
 
-function repairDecision(
-  state: WorkflowState,
-  actions: WorkflowAction[],
-): OperatorDecision["primary"] {
+function repairDecision(state: WorkflowState): OperatorDecision["primary"] {
   const blockers = effectiveBlockingFindings(state);
   if (blockers.length === 0) {
     return {
       kind: "operator_intervention",
       reason: "current blocker state is unavailable or contradictory",
-    };
-  }
-  if (state.repair_cycle >= state.max_repair_cycles) {
-    if (actions.includes("workflow_finalize_repair_exhausted")) {
-      return {
-        kind: "finalize_repair_exhausted",
-        reason: "the repair cycle limit is reached; finalize the exhausted workflow",
-      };
-    }
-    return {
-      kind: "operator_intervention",
-      reason: "the repair cycle limit is reached and exhaustion finalization is unavailable",
-    };
-  }
-  if (!actions.includes("workflow_authorize_repair")) {
-    return {
-      kind: "operator_intervention",
-      reason: "current blocker authority is unavailable or contradictory",
     };
   }
   return {
@@ -125,26 +108,24 @@ function repairDecision(
   };
 }
 
-function recoveryDecision(actions: WorkflowAction[]): OperatorDecision["primary"] {
-  const candidates: Array<[WorkflowAction, OperatorRecovery]> = [
+function recoveryDecision(action: WorkflowAction): OperatorDecision["primary"] {
+  const candidates = new Map<WorkflowAction, OperatorRecovery>([
     ["workflow_accept_concerns", "accept_concerns"],
+    ["workflow_adopt_dirty_scope", "adopt_dirty_scope"],
     ["workflow_resume_implementation", "resume_implementation"],
     ["workflow_resume_review", "resume_review"],
     ["workflow_retry_commit", "retry_commit"],
     ["workflow_retry_commit_preparation", "retry_commit_preparation"],
     ["workflow_return_commit_to_review", "return_commit_to_review"],
-  ];
-  const available = candidates.filter(([action]) => actions.includes(action));
-  if (available.length !== 1) {
+  ]);
+  const recovery = candidates.get(action);
+  if (!recovery) {
     return {
       kind: "operator_intervention",
-      reason:
-        available.length === 0
-          ? "no supported recovery is available"
-          : "recovery authority is ambiguous",
+      reason: "no supported recovery is available",
     };
   }
-  return { kind: "approve_recovery", recovery: available[0][1], authorization_required: true };
+  return { kind: "approve_recovery", recovery, authorization_required: true };
 }
 
 function optionalFindingSummaries(state: WorkflowState): OperatorDecision["optional_findings"] {
@@ -188,108 +169,54 @@ function semanticFields(
 
 function primaryDecision(record: OperatorLineageRecord): OperatorDecision["primary"] {
   const { state } = record;
-  const parent = actionsFor(record, "parent");
-  const implementer = actionsFor(record, "implementer");
-  const reviewer = actionsFor(record, "reviewer");
-  const committer = actionsFor(record, "committer");
-
-  const pendingInspection = pendingInspectionValidations(state);
-  if (
-    state.phase === "REVIEWING" &&
-    pendingInspection.length > 0 &&
-    !(state.workflow_type === "change" && hasFailedRequiredValidation(state))
-  ) {
-    if (!parent.includes("workflow_record_manual_validation")) {
+  const next = legalityFor(record).next;
+  switch (next.kind) {
+    case "worker_route":
+      return { kind: "no_user_action", route: next.route };
+    case "inspection_required":
       return {
-        kind: "operator_intervention",
-        reason: "inspection evidence is pending but parent evidence authority is unavailable",
+        kind: "inspection_required",
+        validations: pendingInspectionValidations(state).map((requirement) => ({
+          validation_id: requirement.validation_id,
+          description: bounded(requirement.description),
+        })),
       };
-    }
-    return {
-      kind: "inspection_required",
-      validations: pendingInspection.map((requirement) => ({
-        validation_id: requirement.validation_id,
-        description: bounded(requirement.description),
-      })),
-    };
-  }
-
-  if (state.phase === "STOPPED_INCONCLUSIVE" && pendingInspection.length > 0) {
-    if (!parent.includes("workflow_record_manual_validation")) {
+    case "repair_required":
+      return repairDecision(state);
+    case "finalize_repair_exhausted":
       return {
-        kind: "operator_intervention",
-        reason: "inspection evidence is pending but parent evidence authority is unavailable",
+        kind: "finalize_repair_exhausted",
+        reason: "the repair cycle limit is reached; finalize the exhausted workflow",
       };
-    }
-    return {
-      kind: "inspection_required",
-      validations: pendingInspection.map((requirement) => ({
-        validation_id: requirement.validation_id,
-        description: bounded(requirement.description),
-      })),
-    };
+    case "bounded_continuation":
+      return {
+        kind: "approve_bounded_continuation",
+        reason: "the bounded linked continuation is supported",
+        authorization_required: true,
+      };
+    case "recovery":
+      return recoveryDecision(next.action);
+    case "authorize_commit":
+      return { kind: "approve_commit", authorization_required: true };
+    case "reconcile_commit":
+      return {
+        kind: "reconcile_commit",
+        reason: "an existing commit requires server-owned result reconciliation",
+      };
+    case "terminal":
+      return {
+        kind: "terminal",
+        outcome: next.outcome,
+        reason:
+          next.outcome === "committed"
+            ? "the workflow commit is verified and complete"
+            : next.outcome === "approved_no_commit_required"
+              ? "review completed successfully and authoritative evidence shows no commit is required"
+              : "commit verification failed and the mismatch is terminal",
+      };
+    case "unsupported":
+      return { kind: "operator_intervention", reason: next.reason };
   }
-
-  if (state.phase === "IMPLEMENTING" && implementer.includes("workflow_submit_implementation"))
-    return { kind: "no_user_action", route: "implement" };
-  if (state.phase === "REPAIRING" && implementer.includes("workflow_submit_implementation"))
-    return { kind: "no_user_action", route: "implement" };
-  if (
-    state.phase === "REVIEWING" &&
-    reviewer.some(
-      (action) => action === "workflow_begin_review" || action === "workflow_submit_review",
-    )
-  ) {
-    return {
-      kind: "no_user_action",
-      route:
-        state.review_result_version === null && state.linked_continuation === null
-          ? "review"
-          : "re_review",
-    };
-  }
-  if (state.phase === "REPAIR_REQUIRED") return repairDecision(state, parent);
-  if (state.phase === "STOPPED_REPAIR_EXHAUSTED") {
-    const hasFollowup =
-      parent.includes("workflow_create_linked_followup") ||
-      parent.includes("workflow_create_linked_followup_from_plan");
-    return hasFollowup
-      ? {
-          kind: "approve_bounded_continuation",
-          reason: "the bounded linked continuation is supported",
-          authorization_required: true,
-        }
-      : {
-          kind: "operator_intervention",
-          reason: "repair is exhausted and no bounded continuation is available",
-        };
-  }
-  if (
-    state.phase === "STOPPED_CONCERNS" ||
-    state.phase === "STOPPED_NEEDS_CONTEXT" ||
-    state.phase === "STOPPED_IMPLEMENTATION_BLOCKED" ||
-    state.phase === "STOPPED_INCONCLUSIVE" ||
-    state.phase === "STOPPED_NOT_COMMITTED" ||
-    state.phase === "STOPPED_COMMIT_PREPARATION" ||
-    state.phase === "STOPPED_COMMIT_MISMATCH"
-  )
-    return recoveryDecision(parent);
-  if (
-    state.phase === "STOPPED_APPROVED" &&
-    allRequiredValidationsPassed(state) &&
-    parent.includes("workflow_authorize_commit")
-  )
-    return { kind: "approve_commit", authorization_required: true };
-  if (state.phase === "COMMIT_AUTHORIZED" && committer.includes("workflow_prepare_commit"))
-    return { kind: "no_user_action", route: "commit" };
-  if (state.phase === "COMMIT_PREPARED" && committer.includes("workflow_submit_commit_result"))
-    return { kind: "no_user_action", route: "commit" };
-  if (state.phase === "COMMITTED")
-    return { kind: "operator_intervention", reason: "the workflow is already complete" };
-  return {
-    kind: "operator_intervention",
-    reason: "current state or available authority is ambiguous",
-  };
 }
 
 function validateLineage(
@@ -435,7 +362,7 @@ function boundaryDecision(
   records: OperatorLineageRecord[],
 ): OperatorDecision["authority_boundaries"] {
   const explicit = records.some((record) => record.state.linked_continuation !== null);
-  const scopeAction = actionsFor(record, "parent").includes("workflow_expand_scope");
+  const scopeAction = legalityFor(record).actions.parent.includes("workflow_expand_scope");
   const combined = records.some(
     (record) => record.state.linked_continuation?.review_stage === "combined",
   );
@@ -465,6 +392,9 @@ export function deriveOperatorDecision(
   requested: WorkflowState,
   records: OperatorLineageRecord[] = [{ state: requested }],
 ): OperatorDecision {
+  const requestedRecord = records.find(
+    (candidate) => candidate.state.workflow_id === requested.workflow_id,
+  ) ?? { state: requested };
   const lineageError = validateLineage(requested, records);
   if (lineageError) {
     return {
@@ -484,7 +414,7 @@ export function deriveOperatorDecision(
         display_references: [],
       },
       outcome: {
-        status: stateStatus(requested),
+        status: stateStatus(requestedRecord),
         blocker_count: effectiveBlockingFindings(requested).length,
       },
       related_workflows: [],
@@ -492,25 +422,26 @@ export function deriveOperatorDecision(
       commit: { eligible: false, authorization: "unavailable" },
     };
   }
-  const record = records.find(
-    (candidate) => candidate.state.workflow_id === requested.workflow_id,
-  ) ?? {
-    state: requested,
-  };
+  const record = requestedRecord;
   const primary = primaryDecision(record);
   const boundaries = boundaryDecision(record, records);
   const explicit = records.some((candidate) => candidate.state.linked_continuation !== null);
   const combined = records.some(
     (candidate) => candidate.state.linked_continuation?.review_stage === "combined",
   );
-  const status = stateStatus(requested);
+  const status =
+    primary.kind === "terminal"
+      ? primary.outcome === "commit_mismatch"
+        ? "failed"
+        : "completed"
+      : stateStatus(record);
   const related = records
     .filter((candidate) => candidate.state.workflow_id !== requested.workflow_id)
     .sort((left, right) =>
       String(left.state.workflow_id).localeCompare(String(right.state.workflow_id)),
     )
     .map((candidate) => ({
-      status: stateStatus(candidate.state),
+      status: stateStatus(candidate),
       relation:
         candidate.state.superseded_by_workflow_id === requested.workflow_id
           ? ("ancestor" as const)
@@ -524,7 +455,7 @@ export function deriveOperatorDecision(
     requested.phase === "STOPPED_APPROVED" &&
     requested.review_target.review_mode === "working_tree" &&
     allRequiredValidationsPassed(requested) &&
-    actionsFor(record, "parent").includes("workflow_authorize_commit");
+    legalityFor(record).actions.parent.includes("workflow_authorize_commit");
   return {
     primary,
     ...semanticFields(requested, primary),

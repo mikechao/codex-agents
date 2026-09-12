@@ -83,8 +83,9 @@ workflow creation or reuse, terminal worker handoff, and parent mutation, refres
 `workflow_operator_decision_get` projection. It is a sanitized semantic refresh, not authorization
 and not a proposal store. It contains no raw workflow or PlanArtifact identity, capabilities,
 receipts, audits, opaque authority, or internal action/phase names. Existing semantic enum values
-such as `approve_recovery`, `retry_commit`, `approve_bounded_continuation`, `no_user_action`,
-`route: review`, and `route: re_review` remain valid labels; they are not internal raw names.
+such as `approve_recovery`, `adopt_dirty_scope`, `retry_commit`, `approve_bounded_continuation`, `no_user_action`,
+`route: review`, `route: re_review`, `reconcile_commit`, and `terminal` remain valid labels; they are
+not internal raw names.
 
 Before asking for an explicit mutation decision, resolve one concrete safe proposal from that
 projection and an exact `workflow_parent_get` read. Present the consequence in domain language and
@@ -254,7 +255,11 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
     Adjudication never dispatches implementer; after the authorized mutation, refresh the operator
     projection and preserve the existing fresh-review route. Linked follow-ups are narrow remediation first,
      then a fresh combined review. Supported active source states, exact current finding IDs, and narrow remediation context and scope remain required.
-  4. On approval, stop at `STOPPED_APPROVED`, show approval and optional findings, then ask separately for commit authorization. An `APPROVED` result exposes `optional_findings` before request explicit commit authorization.
+  4. On approval, stop at `STOPPED_APPROVED`, show approval and optional findings, then ask separately
+    for commit authorization only when the refreshed projection returns `approve_commit`. An
+    `APPROVED` result exposes `optional_findings` before request explicit commit authorization. A
+    terminal `approved_no_commit_required` result completes without a commit prompt or committer
+    dispatch.
     Optional findings do not invoke another agent or mutation. For stops, use `recovery_summary.stop_reason`, `recovery_summary.recovery_context`, and the single available recovery decision from the refreshed projection.
 5. Only after explicit commit authorization, read exact current commit inputs, authorize the commit,
    refresh the projection, and delegate commit preparation/execution to `committer`.
@@ -303,7 +308,10 @@ approval, report optional findings before the separate commit question. For exha
 the terminal stop and do not request another cycle. For inconclusive review, implementation
 context/block, and commit stops, show the bounded stop reason, recovery context, and single semantic
 recovery decision without implying authorization. Commit results report the authoritative outcome
-and remaining-worktree decision; linked follow-ups are separate and narrow.
+and remaining-worktree decision; linked follow-ups are separate and narrow. A `reconcile_commit`
+decision invokes only the existing reconciliation tool with fresh exact parent inputs; it never
+dispatches the committer or retries Git. A `terminal` decision reports its authoritative outcome and
+stops without another workflow mutation or worker dispatch.
 
 After every parent mutation, refresh `workflow_operator_decision_get` again and issue a fresh
 semantic summary before redispatching, dispatching `code_reviewer`, or requesting the next authorization. Never route from stale

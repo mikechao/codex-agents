@@ -118,12 +118,19 @@ function directToolResult(value: unknown): unknown {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
 
-function augmentHistoricalParentRecovery(
+export function augmentHistoricalRecovery(
   request: JsonRpcMessage,
   response: JsonRpcMessage,
   historicalOwner: boolean,
+  reconciliationActions: (workflowId: string) => string[],
+  reconciliationDecision: (workflowId: string) => unknown,
 ): JsonRpcMessage {
-  if (!historicalOwner || request.params?.name !== "workflow_parent_get") return response;
+  if (
+    !historicalOwner ||
+    (request.params?.name !== "workflow_parent_get" &&
+      request.params?.name !== "workflow_operator_decision_get")
+  )
+    return response;
   const result = response.result;
   if (!result || typeof result !== "object" || Array.isArray(result)) return response;
   const content = (result as { content?: unknown }).content;
@@ -140,6 +147,40 @@ function augmentHistoricalParentRecovery(
   } catch {
     return response;
   }
+  if (request.params?.name === "workflow_operator_decision_get") {
+    const workflowId = request.params.arguments?.workflow_id;
+    if (typeof workflowId !== "string") return response;
+    let decision: unknown;
+    try {
+      decision = reconciliationDecision(workflowId);
+    } catch {
+      return response;
+    }
+    if (
+      !decision ||
+      typeof decision !== "object" ||
+      Array.isArray(decision) ||
+      !("primary" in decision) ||
+      !decision.primary ||
+      typeof decision.primary !== "object" ||
+      Array.isArray(decision.primary) ||
+      !("kind" in decision.primary) ||
+      decision.primary.kind !== "reconcile_commit"
+    )
+      return response;
+    return {
+      ...response,
+      result: {
+        ...(result as Record<string, unknown>),
+        content: [
+          {
+            ...(item as Record<string, unknown>),
+            text: JSON.stringify(decision),
+          },
+        ],
+      },
+    };
+  }
   if (
     view.workflow_id !== request.params?.arguments?.workflow_id ||
     view.phase !== "COMMIT_PREPARED" ||
@@ -147,8 +188,13 @@ function augmentHistoricalParentRecovery(
     view.permitted_next_actions.some((action) => typeof action !== "string")
   )
     return response;
-  const action = "workflow_reconcile_commit_result";
-  if ((view.permitted_next_actions as string[]).includes(action)) return response;
+  let actions: string[];
+  try {
+    actions = reconciliationActions(view.workflow_id as string);
+  } catch {
+    return response;
+  }
+  if (actions.length === 0) return response;
   const augmented = {
     ...response,
     result: {
@@ -158,7 +204,7 @@ function augmentHistoricalParentRecovery(
           ...(item as Record<string, unknown>),
           text: JSON.stringify({
             ...view,
-            permitted_next_actions: [...(view.permitted_next_actions as string[]), action].sort(),
+            permitted_next_actions: actions,
           }),
         },
       ],
@@ -455,10 +501,12 @@ export class RuntimeSupervisor {
         process.stdout.write(`${line}\n`);
       } else {
         const output = pending
-          ? augmentHistoricalParentRecovery(
+          ? augmentHistoricalRecovery(
               pending.message,
               message,
               runtimeKey(runtime.artifact) !== runtimeKey(this.defaultRuntime),
+              (workflowId) => this.store.reconciliationPermittedActions(workflowId),
+              (workflowId) => this.store.operatorDecisionGetForReconciliation(workflowId),
             )
           : message;
         process.stdout.write(`${output === message ? line : JSON.stringify(output)}\n`);

@@ -24,7 +24,7 @@ import {
   revision,
   userAuthorization,
 } from "../validation.js";
-import { effectiveBlockingFindings } from "./queries.js";
+import { effectiveBlockingFindings, linkedFollowupStateReadiness } from "./queries.js";
 import { clone, ensurePhase } from "./shared.js";
 import { baseState } from "./state.js";
 
@@ -141,8 +141,12 @@ function linkedFollowupInputCore(
   contract: LinkedFollowupContract,
 ): LinkedFollowupPlan {
   ensurePhase(state, "STOPPED_APPROVED", "STOPPED_REPAIR_EXHAUSTED");
-  if (state.superseded_by_workflow_id) {
+  const readiness = linkedFollowupStateReadiness(state);
+  if (readiness === "superseded") {
     fail("ERROR_INVALID_FOLLOWUP", "workflow already has an active linked successor");
+  }
+  if (readiness === "unavailable") {
+    fail("ERROR_INVALID_FOLLOWUP", "workflow has no findings available for follow-up");
   }
   const ids = findingIdList(args.finding_ids, "finding_ids", "ERROR_INVALID_FOLLOWUP");
   const blocking = new Set(effectiveBlockingFindings(state).map((finding) => finding.finding_id));

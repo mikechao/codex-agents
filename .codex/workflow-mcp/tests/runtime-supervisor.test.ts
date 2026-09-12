@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { currentHead } from "../git.js";
-import { RuntimeSupervisor, resolveOwningRuntime } from "../runtime-supervisor.js";
+import {
+  augmentHistoricalRecovery,
+  RuntimeSupervisor,
+  resolveOwningRuntime,
+} from "../runtime-supervisor.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
@@ -46,7 +50,85 @@ function create(store: any, revision: string, objective: string) {
   });
 }
 
+function operatorProjectionResponse(primary: Record<string, unknown>) {
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      content: [{ type: "text", text: JSON.stringify({ primary }) }],
+    },
+  };
+}
+
+const operatorProjectionRequest = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "tools/call",
+  params: {
+    name: "workflow_operator_decision_get",
+    arguments: { workflow_id: "00000000-0000-4000-8000-000000000001" },
+  },
+};
+
 describe("Workflow MCP runtime supervision", () => {
+  test("historical operator projection overrides only for legal reconciliation", () => {
+    const owner = operatorProjectionResponse({ kind: "no_user_action", route: "commit" });
+    const reconciliation = {
+      primary: {
+        kind: "reconcile_commit",
+        reason: "an existing commit requires server-owned result reconciliation",
+      },
+    };
+    const routed = augmentHistoricalRecovery(
+      operatorProjectionRequest,
+      owner,
+      true,
+      () => {
+        throw new Error("operator routing must not run a separate action preflight");
+      },
+      () => reconciliation,
+    );
+    assert.deepEqual(JSON.parse((routed.result as any).content[0].text), reconciliation);
+  });
+
+  test("historical operator projection preserves the owner route when reconciliation changes", () => {
+    const owner = operatorProjectionResponse({ kind: "no_user_action", route: "commit" });
+    let actionPreflightRequested = false;
+    const routed = augmentHistoricalRecovery(
+      operatorProjectionRequest,
+      owner,
+      true,
+      () => {
+        actionPreflightRequested = true;
+        return ["workflow_reconcile_commit_result"];
+      },
+      () => ({ primary: { kind: "operator_intervention" } }),
+    );
+    assert.equal(routed, owner);
+    assert.equal(actionPreflightRequested, false);
+  });
+
+  test("historical terminal and verified-mismatch projections remain owner-authoritative", () => {
+    for (const primary of [
+      { kind: "terminal", outcome: "committed" },
+      { kind: "terminal", outcome: "commit_mismatch" },
+    ]) {
+      const owner = operatorProjectionResponse(primary);
+      assert.equal(
+        augmentHistoricalRecovery(
+          operatorProjectionRequest,
+          owner,
+          true,
+          () => [],
+          () => {
+            throw new Error("terminal workflows do not have reconciliation readiness");
+          },
+        ),
+        owner,
+      );
+    }
+  });
+
   test("persists immutable runtime affinity and keeps it across reopen", () => {
     const { root } = fixture();
     const path = join(root, "runtime.sqlite");

@@ -26,6 +26,15 @@ export {
   resumeImplementation,
   submitImplementation,
 } from "./transitions/implementation.js";
+export type {
+  WorkflowCommitResultReadiness,
+  WorkflowHeadReadiness,
+  WorkflowLegality,
+  WorkflowLegalityReadiness,
+  WorkflowNextStep,
+  WorkflowReviewReadiness,
+  WorkflowReviewRecoveryReadiness,
+} from "./transitions/queries.js";
 export {
   adjudicateFindings,
   authorizeRepair,
@@ -44,15 +53,23 @@ export { V10_STATE_KEYS, validateWorkflowStateV10 } from "./state-validation.js"
 export {
   allRequiredValidationsPassed,
   approvedPathBaselineView,
+  commitAuthorizationStateReady,
   effectiveBlockingFindings,
   hasFailedRequiredValidation,
+  implementationRecoveryStateReady,
+  linkedFollowupStateReadiness,
   pendingInspectionValidations,
   permittedNextActions,
   REVIEWER_IMPLEMENTER_HANDOFF,
   ROLE_VIEW_COMMON,
   ROLE_VIEW_EXTRA,
+  repairCycleReadiness,
   reviewBlockedByPendingInspection,
+  reviewRecoveryStateReady,
+  reviewTargetStateReady,
   roleView,
+  scopeMutationReadiness,
+  workflowLegality,
 } from "./transitions/queries.js";
 export { changedReceiptPaths, dirtyBaselinePaths, rangeDirtyBaselinePaths, scopeChangedPaths };
 

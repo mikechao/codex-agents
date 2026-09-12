@@ -1,7 +1,15 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
@@ -480,11 +488,7 @@ test("repair and re-review use authoritative expected versions", () => {
       review(store, created, undefined, "APPROVED", [], [], { "REPAIR-1": "resolved" }).phase,
       "STOPPED_APPROVED",
     );
-    assert.deepEqual(store.parentGet(id).permitted_next_actions, [
-      "workflow_authorize_commit",
-      "workflow_create_linked_followup",
-      "workflow_create_linked_followup_from_plan",
-    ]);
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, ["workflow_authorize_commit"]);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -529,7 +533,6 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
       "workflow_adjudicate_findings",
       "workflow_authorize_repair",
       "workflow_expand_scope",
-      "workflow_finalize_repair_exhausted",
     ]);
     store.authorizeRepair({
       workflow_id: id,
@@ -848,6 +851,27 @@ test("reconciles an existing commit from a different owning runtime without a se
       workflow_id: created.workflow_id,
       expected_version: oldStore.parentGet(created.workflow_id).version,
     });
+    const gitHead = join(root, ".git", "HEAD");
+    const unavailableHead = join(root, ".git", "HEAD.unavailable");
+    renameSync(gitHead, unavailableHead);
+    try {
+      assert.deepEqual(oldStore.committerGet(created.workflow_id).permitted_next_actions, []);
+      assert.equal(
+        category(() =>
+          oldStore.submitCommitResult({
+            workflow_id: created.workflow_id,
+            expected_version: prepared.version,
+            attempt_id: prepared.commit_preparation.attempt_id,
+            outcome: "not_committed",
+            failure_summary: "commit was not created",
+          }),
+        ),
+        "ERROR_GIT",
+      );
+      assert.equal(rawState(oldStore, created.workflow_id).phase, "COMMIT_PREPARED");
+    } finally {
+      renameSync(unavailableHead, gitHead);
+    }
     assert.deepEqual(oldStore.parentGet(created.workflow_id).permitted_next_actions, []);
     assert.equal(
       category(() =>
@@ -859,6 +883,30 @@ test("reconciles an existing commit from a different owning runtime without a se
       ),
       "ERROR_COMMIT_NOT_ALLOWED",
     );
+    const unverifiedStore: any = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: newRuntimeId,
+      runtimeRevision: base,
+      ...runtimeAttestation(newRuntimeId, base, newKey),
+    });
+    assert.deepEqual(unverifiedStore.reconciliationPermittedActions(created.workflow_id), []);
+    assert.notEqual(
+      unverifiedStore.operatorDecisionGetForReconciliation(created.workflow_id).primary.kind,
+      "reconcile_commit",
+    );
+    assert.equal(
+      category(() =>
+        unverifiedStore.reconcileCommitResult({
+          workflow_id: created.workflow_id,
+          expected_version: prepared.version,
+          attempt_id: prepared.commit_preparation.attempt_id,
+        }),
+      ),
+      "ERROR_COMMIT_MISMATCH",
+    );
+    assert.equal(rawState(unverifiedStore, created.workflow_id).phase, "COMMIT_PREPARED");
+    unverifiedStore.close();
     git("commit", "-qm", "existing commit");
     const current = git("rev-parse", "HEAD");
     oldStore.close();
@@ -964,6 +1012,94 @@ test("reconciles an existing commit from a different owning runtime without a se
     oldReader.close();
     currentStore.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cross-runtime dirty adoption consumes the same aggregate recovery readiness", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "cross-runtime-adoption-readiness.sqlite");
+  const revision = git("rev-parse", "HEAD");
+  const ownerRuntimeId = "a".repeat(64);
+  const ownerKey = "1".repeat(64);
+  const currentRuntimeId = "b".repeat(64);
+  const currentKey = "2".repeat(64);
+  const owner: any = new WorkflowStore({
+    repositoryRoot: root,
+    databasePath,
+    runtimeId: ownerRuntimeId,
+    runtimeRevision: revision,
+    ...runtimeAttestation(ownerRuntimeId, revision, ownerKey),
+  });
+  let current: any;
+  try {
+    const created = owner.create(input(git));
+    owner.expandScope({
+      workflow_id: created.workflow_id,
+      expected_version: 0,
+      added_paths: ["fully-dirty.txt"],
+      reason: "first expansion",
+      user_authorization: "authorize first expansion",
+    });
+    owner.submitImplementation({
+      workflow_id: created.workflow_id,
+      expected_version: 1,
+      status: "INCOMPLETE",
+      summary: "another expansion is required",
+      agent_touched_paths: [],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "scope is incomplete" },
+      ],
+      validation_results: [
+        { validation_id: "VAL-001", status: "failed", evidence: "scope is incomplete" },
+      ],
+      known_failures: ["another expansion is required"],
+      finding_resolution_map: {},
+    });
+    owner.expandScope({
+      workflow_id: created.workflow_id,
+      expected_version: 2,
+      added_paths: ["partially-dirty.txt", "still-clean.txt"],
+      reason: "second expansion",
+      user_authorization: "authorize second expansion",
+    });
+    implementation(owner, created);
+    review(owner, created, undefined, "INCONCLUSIVE");
+    writeFileSync(join(root, "fully-dirty.txt"), "dirty\n");
+    writeFileSync(join(root, "partially-dirty.txt"), "dirty\n");
+    assert.deepEqual(owner.parentGet(created.workflow_id).permitted_next_actions, []);
+    const before = rawState(owner, created.workflow_id);
+    const auditLength = owner.audit(created.workflow_id).length;
+
+    current = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: currentRuntimeId,
+      runtimeRevision: revision,
+      ...runtimeAttestation(currentRuntimeId, revision, currentKey),
+    });
+    assert.equal(
+      category(() =>
+        current.adoptDirtyScopeCrossRuntime({
+          workflow_id: created.workflow_id,
+          expected_version: before.version,
+          adopted_paths: ["fully-dirty.txt"],
+          reason: "attempt partial recovery bypass",
+          user_authorization: "authorize recovery",
+        }),
+      ),
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+    );
+    assert.deepEqual(rawState(current, created.workflow_id), before);
+    assert.equal(
+      current.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE workflow_id = ?")
+        .get(created.workflow_id).count,
+      auditLength,
+    );
+  } finally {
+    current?.close();
+    owner.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -1475,6 +1611,29 @@ test("commit preparation failures distinguish staged scope, stale review, and re
   try {
     const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
     const first = authorized(store, root, git, { objective: "scope failure" });
+    const gitHead = join(root, ".git", "HEAD");
+    const unavailableHead = join(root, ".git", "HEAD.unavailable");
+    const beforeUnavailable = rawState(store, first.id);
+    renameSync(gitHead, unavailableHead);
+    try {
+      assert.deepEqual(store.committerGet(first.id).permitted_next_actions, []);
+      assert.equal(store.operatorDecisionGet(first.id).primary.kind, "operator_intervention");
+      assert.equal(
+        category(() =>
+          store.prepareCommit({
+            workflow_id: first.id,
+            expected_version: beforeUnavailable.version,
+          }),
+        ),
+        "ERROR_NOT_REPOSITORY",
+      );
+      assert.deepEqual(rawState(store, first.id), beforeUnavailable);
+    } finally {
+      renameSync(unavailableHead, gitHead);
+    }
+    assert.deepEqual(store.committerGet(first.id).permitted_next_actions, [
+      "workflow_prepare_commit",
+    ]);
     const failed = store.prepareCommit({
       workflow_id: first.id,
       expected_version: store.parentGet(first.id).version,
@@ -1753,6 +1912,42 @@ test("commit preparation store matrix preserves Git state and routes every failu
     );
     assert.equal(store.parentGet(rangeId).version, beforeVersion);
     assert.deepEqual(store.audit(rangeId), beforeAudit);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("return-to-review legality preflights receipt reconstruction", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const workflow = authorized(store, root, git, { objective: "return receipt readiness" });
+    writeFileSync(join(root, "note.txt"), "changed after approval\n");
+    const stopped = store.prepareCommit({
+      workflow_id: workflow.id,
+      expected_version: store.parentGet(workflow.id).version,
+    });
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.recovery, "review");
+
+    git("commit", "--allow-empty", "-qm", "advance before review recovery");
+    unlinkSync(join(root, "note.txt"));
+    mkdirSync(join(root, "note.txt"));
+    const before = rawState(store, workflow.id);
+    assert.deepEqual(store.parentGet(workflow.id).permitted_next_actions, []);
+    assert.equal(store.operatorDecisionGet(workflow.id).primary.kind, "operator_intervention");
+    assert.equal(
+      category(() =>
+        store.returnCommitToReview({
+          workflow_id: workflow.id,
+          expected_version: before.version,
+          review_context: "reconstruct review target",
+        }),
+      ),
+      "ERROR_DIRECTORY_PATH",
+    );
+    assert.deepEqual(rawState(store, workflow.id), before);
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

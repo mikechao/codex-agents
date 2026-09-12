@@ -62,12 +62,23 @@ const ACTIONS = {
     committer: [],
   },
   repairRequired: {
+    parent: ["workflow_adjudicate_findings", "workflow_authorize_repair", "workflow_expand_scope"],
+    implementer: [],
+    reviewer: [],
+    committer: [],
+  },
+  repairExhaustedReady: {
     parent: [
       "workflow_adjudicate_findings",
-      "workflow_authorize_repair",
       "workflow_expand_scope",
       "workflow_finalize_repair_exhausted",
     ],
+    implementer: [],
+    reviewer: [],
+    committer: [],
+  },
+  reviewOnlyRepairRequired: {
+    parent: ["workflow_adjudicate_findings", "workflow_authorize_repair"],
     implementer: [],
     reviewer: [],
     committer: [],
@@ -78,7 +89,19 @@ const ACTIONS = {
     reviewer: [],
     committer: [],
   },
+  repairingReviewOnly: {
+    parent: [],
+    implementer: ["workflow_submit_implementation"],
+    reviewer: [],
+    committer: [],
+  },
   approved: {
+    parent: ["workflow_authorize_commit"],
+    implementer: [],
+    reviewer: [],
+    committer: [],
+  },
+  approvedWithFindings: {
     parent: [
       "workflow_authorize_commit",
       "workflow_create_linked_followup",
@@ -89,13 +112,13 @@ const ACTIONS = {
     committer: [],
   },
   approvedRange: {
-    parent: ["workflow_create_linked_followup", "workflow_create_linked_followup_from_plan"],
+    parent: [],
     implementer: [],
     reviewer: [],
     committer: [],
   },
   inconclusive: {
-    parent: ["workflow_adopt_dirty_scope", "workflow_resume_review"],
+    parent: ["workflow_resume_review"],
     implementer: [],
     reviewer: [],
     committer: [],
@@ -1540,7 +1563,7 @@ scenario("direct review-only aggregate repair preserves null-plan authority and 
       doReview(ctx, 0, { status: "CHANGES_REQUESTED", blocking: [blocker("DIRECT-1")] });
     },
     snapshots: [
-      snap("parent", "REPAIR_REQUIRED", 1, ACTIONS.repairRequired, [
+      snap("parent", "REPAIR_REQUIRED", 1, ACTIONS.reviewOnlyRepairRequired, [
         "WORKFLOW_CREATED",
         "REVIEW_SUBMITTED",
       ]),
@@ -1560,7 +1583,7 @@ scenario("direct review-only aggregate repair preserves null-plan authority and 
       assert.deepEqual(view.permitted_next_actions, ["workflow_submit_implementation"]);
     },
     snapshots: [
-      snap("parent", "REPAIRING", 2, ACTIONS.repairing, [
+      snap("parent", "REPAIRING", 2, ACTIONS.repairingReviewOnly, [
         "WORKFLOW_CREATED",
         "REVIEW_SUBMITTED",
         "REPAIR_AUTHORIZED",
@@ -1952,7 +1975,6 @@ test("blocking manual evidence is recorded while inconclusive review remains sto
       .run(JSON.stringify(stopped), objectDigest(stopped), id);
 
     assert.deepEqual(store.parentGet(id).permitted_next_actions, [
-      "workflow_adopt_dirty_scope",
       "workflow_record_manual_validation",
     ]);
     const beforeBlockedResume = store.parentGet(id);
@@ -1982,10 +2004,7 @@ test("blocking manual evidence is recorded while inconclusive review remains sto
       { validation_id: "VAL-001", status: "passed", evidence: "checked" },
       { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
     ]);
-    assert.deepEqual(recorded.permitted_next_actions, [
-      "workflow_adopt_dirty_scope",
-      "workflow_resume_review",
-    ]);
+    assert.deepEqual(recorded.permitted_next_actions, ["workflow_resume_review"]);
     assert.equal(store.audit(id).at(-1).event_type, "MANUAL_VALIDATION_RECORDED");
 
     store.resumeReview({
@@ -2062,7 +2081,6 @@ test("stopped manual failure remains fail-closed and terminal evidence is immuta
     });
     assert.equal(store.parentGet(id).phase, "STOPPED_INCONCLUSIVE");
     assert.deepEqual(store.parentGet(id).permitted_next_actions, [
-      "workflow_adopt_dirty_scope",
       "workflow_record_manual_validation",
     ]);
     store.recordManualValidation({
@@ -2145,7 +2163,6 @@ test("failed-required-validation exemption keeps inconclusive recovery available
       prior_finding_classifications: {},
     });
     assert.deepEqual(store.parentGet(id).permitted_next_actions, [
-      "workflow_adopt_dirty_scope",
       "workflow_record_manual_validation",
     ]);
     assert.throws(
@@ -2208,7 +2225,9 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   {
     name: "optional from approved: approve with optional finding",
     run: (ctx: any) => doReview(ctx, 1, { optional: [optionalFinding("F-OPT")] }),
-    snapshots: [snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approved, EVENTS.reviewSubmitted)],
+    snapshots: [
+      snap("parent", "STOPPED_APPROVED", 2, ACTIONS.approvedWithFindings, EVENTS.reviewSubmitted),
+    ],
   },
   {
     name: "optional from approved: link optional child",
@@ -2255,7 +2274,7 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
         prior: { "F-BLK": "still_present" },
       }),
     snapshots: [
-      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview),
+      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairExhaustedReady, EVENTS.repairedReview),
     ],
   },
   {
@@ -2411,7 +2430,7 @@ scenario("plan-native linked remediation requires fresh combined approval", [
         prior: { "F-PLAN": "still_present" },
       }),
     snapshots: [
-      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview),
+      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairExhaustedReady, EVENTS.repairedReview),
     ],
   },
   {
@@ -2493,7 +2512,7 @@ scenario("repair exhaustion is terminal at the max cycle", [
         prior: { "F-1": "still_present" },
       }),
     snapshots: [
-      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairRequired, EVENTS.repairedReview),
+      snap("parent", "REPAIR_REQUIRED", 5, ACTIONS.repairExhaustedReady, EVENTS.repairedReview),
     ],
   },
   {
@@ -2720,7 +2739,7 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
     store.expandScope({
       workflow_id: id,
       expected_version: 0,
-      added_paths: ["dirty.txt"],
+      added_paths: ["clean.txt", "dirty.txt"],
       reason: "planned path",
       user_authorization: "authorized",
     });
@@ -2744,11 +2763,27 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
       optional_findings: [],
       prior_finding_classifications: {},
     });
+    assert.equal(
+      store.parentGet(id).permitted_next_actions.includes("workflow_adopt_dirty_scope"),
+      false,
+    );
     writeFileSync(join(root, "dirty.txt"), "authorized\n");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, []);
+    assert.equal(store.operatorDecisionGet(id).primary.kind, "operator_intervention");
+    writeFileSync(join(root, "clean.txt"), "authorized\n");
+    assert.equal(
+      store.parentGet(id).permitted_next_actions.includes("workflow_adopt_dirty_scope"),
+      true,
+    );
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "approve_recovery",
+      recovery: "adopt_dirty_scope",
+      authorization_required: true,
+    });
     store.adoptDirtyScope({
       workflow_id: id,
       expected_version: 4,
-      adopted_paths: ["dirty.txt"],
+      adopted_paths: ["clean.txt", "dirty.txt"],
       reason: "recover dirty path",
       user_authorization: "explicit recovery",
     });
@@ -2757,6 +2792,8 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
     assert.ok(adoptionAudit.at(-1).dirty_scope_adoption.current_state_commitment);
     const beforeResume = store.parentGet(id);
     writeFileSync(join(root, "dirty.txt"), "changed after adoption\n");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, []);
+    assert.equal(store.operatorDecisionGet(id).primary.kind, "operator_intervention");
     assert.throws(
       () =>
         store.resumeReview({
@@ -2769,7 +2806,19 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
     assert.equal(store.parentGet(id).version, beforeResume.version);
     assert.equal(store.audit(id).length, adoptionAudit.length);
 
+    rmSync(join(root, "dirty.txt"));
+    mkdirSync(join(root, "dirty.txt"));
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, []);
+    assert.equal(store.operatorDecisionGet(id).primary.kind, "operator_intervention");
+
+    rmSync(join(root, "dirty.txt"), { recursive: true });
     writeFileSync(join(root, "dirty.txt"), "authorized\n");
+    assert.deepEqual(store.parentGet(id).permitted_next_actions, ["workflow_resume_review"]);
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "approve_recovery",
+      recovery: "resume_review",
+      authorization_required: true,
+    });
     store.resumeReview({
       workflow_id: id,
       expected_version: beforeResume.version,
@@ -2777,6 +2826,8 @@ test("dirty scope adoption is committed and guarded at both review recovery boun
     });
     const beforeBegin = store.parentGet(id);
     writeFileSync(join(root, "dirty.txt"), "changed before review start\n");
+    assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
+    assert.equal(store.operatorDecisionGet(id).primary.kind, "operator_intervention");
     assert.throws(
       () => store.beginReview({ workflow_id: id, expected_version: beforeBegin.version }),
       (error: any) => error.category === "ERROR_STALE_ADOPTION",

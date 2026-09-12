@@ -21,7 +21,7 @@ import {
   COMMIT_SUBMISSION_OUTCOME_VALUES,
   isValue,
 } from "../values.js";
-import { allRequiredValidationsPassed } from "./queries.js";
+import { commitAuthorizationStateReady } from "./queries.js";
 import {
   applyRecovery,
   clearFullCommitEvidence,
@@ -48,11 +48,17 @@ export function authorizeCommit(state: WorkflowState, authorization: unknown): W
     "commit authorization",
   );
   ensurePhase(state, "STOPPED_APPROVED");
-  if (!allRequiredValidationsPassed(state))
+  if (!commitAuthorizationStateReady(state)) {
+    if (state.review_target.review_mode !== "working_tree")
+      fail("ERROR_COMMIT_NOT_ALLOWED", "commit authorization requires a working-tree review");
+    if (state.superseded_by_workflow_id)
+      fail("ERROR_COMMIT_NOT_ALLOWED", "superseded workflow cannot authorize a commit");
+    if (!state.review_receipt) fail("ERROR_STALE_RECEIPT", "review receipt is missing");
     fail(
       "ERROR_COMMIT_NOT_ALLOWED",
       "all required validations must pass before commit authorization",
     );
+  }
   const next = clone<WorkflowState>(state);
   next.commit_authorization = {
     user_authorization: userAuthorization(args.user_authorization),

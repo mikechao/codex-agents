@@ -32,7 +32,10 @@ import {
   effectiveBlockingFindings,
   hasFailedRequiredValidation,
   pendingInspectionValidations,
+  repairCycleReadiness,
   reviewBlockedByPendingInspection,
+  reviewRecoveryStateReady,
+  reviewTargetStateReady,
 } from "./queries.js";
 import { applyRecovery, clone, ensurePhase } from "./shared.js";
 
@@ -83,6 +86,8 @@ export function beginReview(
   ensurePhase(state, "REVIEWING");
   if (reviewBlockedByPendingInspection(state))
     fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
+  if (!reviewTargetStateReady(state))
+    fail("ERROR_INVALID_REVIEW", "authoritative review target is stale or corrupt");
   if (state.review_target.review_mode !== "working_tree") {
     fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
   }
@@ -114,6 +119,8 @@ export function submitReview(
   ensurePhase(state, "REVIEWING");
   if (reviewBlockedByPendingInspection(state))
     fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
+  if (!reviewTargetStateReady(state))
+    fail("ERROR_INVALID_REVIEW", "authoritative review target is stale or corrupt");
   const args = exactKeys(
     input,
     [
@@ -377,6 +384,12 @@ export function authorizeRepair(
     "repair authorization",
   );
   ensurePhase(state, "REPAIR_REQUIRED");
+  const readiness = repairCycleReadiness(state);
+  if (effectiveBlockingFindings(state).length === 0)
+    fail("ERROR_INVALID_REPAIR", "no effective blockers remain");
+  if (state.review_result_version === null)
+    fail("ERROR_INVALID_REPAIR", "latest review result is missing");
+  if (readiness !== "authorize") fail("ERROR_REPAIR_LIMIT", "repair cycle limit reached");
   const ids = findingIdList(args.finding_ids, "finding_ids", "ERROR_INVALID_REPAIR");
   const effective = effectiveBlockingFindings(state);
   if (ids.length > effective.length) {
@@ -385,13 +398,7 @@ export function authorizeRepair(
   const existing = new Set(effective.map((item) => item.finding_id));
   if (ids.some((id) => !existing.has(id)))
     fail("ERROR_INVALID_REPAIR", "finding ID is not a blocker");
-  if (state.review_result_version === null) {
-    fail("ERROR_INVALID_REPAIR", "latest review result is missing");
-  }
   const directive = repairDirective(args.repair_directive, repositoryRoot, state.approved_paths);
-  if (state.repair_cycle >= state.max_repair_cycles) {
-    fail("ERROR_REPAIR_LIMIT", "repair cycle limit reached");
-  }
   const next = clone<WorkflowState>(state);
   next.repair_cycle += 1;
   next.repair_authorized_ids = [...ids].sort();
@@ -410,7 +417,7 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
     "review resume",
   );
   ensurePhase(state, "STOPPED_INCONCLUSIVE");
-  if (pendingInspectionValidations(state).length > 0)
+  if (!reviewRecoveryStateReady(state))
     fail("ERROR_INVALID_REVIEW", "required inspection evidence is pending");
   const next = clone<WorkflowState>(state);
   applyRecovery(next, "REVIEWING", "review", args.resume_context, "resume_context");
@@ -420,10 +427,12 @@ export function resumeReview(state: WorkflowState, input: unknown): WorkflowStat
 export function finalizeRepairExhausted(state: WorkflowState, input: unknown): WorkflowState {
   exactKeys(input, ["workflow_id", "expected_version"], "repair exhaustion");
   ensurePhase(state, "REPAIR_REQUIRED");
+  const readiness = repairCycleReadiness(state);
   if (effectiveBlockingFindings(state).length === 0)
     fail("ERROR_INVALID_REPAIR", "no effective blockers remain");
-  if (state.repair_cycle < state.max_repair_cycles)
-    fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
+  if (state.review_result_version === null)
+    fail("ERROR_INVALID_REPAIR", "latest review result is missing");
+  if (readiness !== "finalize") fail("ERROR_REPAIR_LIMIT", "repair cycles remain");
   const next = clone<WorkflowState>(state);
   next.phase = "STOPPED_REPAIR_EXHAUSTED";
   return next;

@@ -23,7 +23,11 @@ import {
   VALIDATION_STATUSES,
 } from "../validation.js";
 import { IMPLEMENTATION_STATUS_VALUES, isValue } from "../values.js";
-import { hasFailedRequiredValidation } from "./queries.js";
+import {
+  hasFailedRequiredValidation,
+  implementationRecoveryStateReady,
+  scopeMutationReadiness,
+} from "./queries.js";
 import { scopeChangedPaths } from "./receipts.js";
 import {
   applyRecovery,
@@ -61,11 +65,15 @@ function scopeExpansion(
     "STOPPED_NEEDS_CONTEXT",
     "STOPPED_IMPLEMENTATION_BLOCKED",
   );
-  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
+  const readiness = scopeMutationReadiness(state);
+  if (readiness === "wrong_workflow") {
     fail(
       "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
       "scope expansion requires a working-tree change workflow",
     );
+  }
+  if (readiness === "path_limit_reached") {
+    fail("ERROR_INVALID_PATHS", "scope expansion exceeds the path limit");
   }
   const addedPaths = exactPaths(args.added_paths, repositoryRoot);
   if (addedPaths.some((path) => state.approved_paths.includes(path))) {
@@ -367,10 +375,10 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
     "implementation resume",
   );
   ensurePhase(state, "STOPPED_NEEDS_CONTEXT", "STOPPED_IMPLEMENTATION_BLOCKED");
-  const stoppedFrom = state.stop_context?.stopped_from;
-  if (!stoppedFrom || (stoppedFrom !== "IMPLEMENTING" && stoppedFrom !== "REPAIRING")) {
+  if (!implementationRecoveryStateReady(state)) {
     fail("ERROR_STATE_CORRUPT", "stop context is invalid");
   }
+  const stoppedFrom = state.stop_context?.stopped_from as "IMPLEMENTING" | "REPAIRING";
   const next = clone<WorkflowState>(state);
   applyRecovery(next, stoppedFrom, "implementation", args.resume_context, "resume_context");
   return next;

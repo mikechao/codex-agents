@@ -144,6 +144,7 @@ export type WorkflowAction = TupleValue<typeof WORKFLOW_ACTION_VALUES>;
 export type OperatorRoute = "implement" | "review" | "re_review" | "commit";
 export type OperatorRecovery =
   | "accept_concerns"
+  | "adopt_dirty_scope"
   | "resume_implementation"
   | "resume_review"
   | "retry_commit"
@@ -173,6 +174,12 @@ export interface OperatorRecoverySummary {
 
 export type OperatorPrimaryDecision =
   | { kind: "no_user_action"; route: OperatorRoute }
+  | { kind: "reconcile_commit"; reason: string }
+  | {
+      kind: "terminal";
+      outcome: "committed" | "approved_no_commit_required" | "commit_mismatch";
+      reason: string;
+    }
   | {
       kind: "inspection_required";
       validations: Array<{ validation_id: ValidationRequirementId; description: string }>;
@@ -225,6 +232,7 @@ export interface OperatorDecision {
       | "approved"
       | "committing"
       | "completed"
+      | "failed"
       | "superseded"
       | "exhausted";
     blocker_count: number;

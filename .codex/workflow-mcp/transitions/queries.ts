@@ -3,6 +3,7 @@ import type {
   ApprovedPathBaselineView,
   BlockingFinding,
   CommitterView,
+  GitCommitSha,
   ImplementerHandoffView,
   ImplementerView,
   LinkedContinuation,
@@ -18,8 +19,9 @@ import type {
   WorkflowPhase,
   WorkflowState,
 } from "../types.js";
-import { MAX_DETAIL, MAX_TEXT, role } from "../validation.js";
+import { canonicalJson, MAX_DETAIL, MAX_PATHS, MAX_TEXT, role } from "../validation.js";
 import { VALIDATION_STATUS_SET } from "../values.js";
+import { dirtyBaselinePaths } from "./receipts.js";
 import { clone } from "./shared.js";
 
 export function approvedPathBaselineView(value: ApprovedPathBaseline): ApprovedPathBaselineView {
@@ -282,6 +284,50 @@ const ACTION_MATRIX: Partial<
   },
 };
 
+export type WorkflowHeadReadiness =
+  | { status: "readable"; current_head: GitCommitSha }
+  | { status: "unavailable" };
+export type WorkflowReviewReadiness =
+  | { status: "begin" | "submit" | "refresh" }
+  | { status: "unavailable" };
+export type WorkflowReviewRecoveryReadiness =
+  | { status: "resume" | "adopt" }
+  | { status: "unavailable" };
+export type WorkflowCommitResultReadiness =
+  | { status: "ready"; authority: "committer" | "reconciliation" }
+  | { status: "unavailable" };
+
+export interface WorkflowLegalityReadiness {
+  head?: WorkflowHeadReadiness;
+  implementation_submission?: { status: "ready" | "unavailable" };
+  review?: WorkflowReviewReadiness;
+  review_recovery?: WorkflowReviewRecoveryReadiness;
+  approved_review?: { status: "current" | "unavailable" };
+  commit_preparation?: { status: "ready" | "unavailable" };
+  commit_review_return?: { status: "ready" | "unavailable" };
+  commit_result?: WorkflowCommitResultReadiness;
+}
+
+export type WorkflowNextStep =
+  | { kind: "worker_route"; route: "implement" | "review" | "re_review" | "commit" }
+  | { kind: "inspection_required" }
+  | { kind: "repair_required" }
+  | { kind: "finalize_repair_exhausted" }
+  | { kind: "bounded_continuation" }
+  | { kind: "recovery"; action: WorkflowAction }
+  | { kind: "authorize_commit" }
+  | { kind: "reconcile_commit" }
+  | {
+      kind: "terminal";
+      outcome: "committed" | "approved_no_commit_required" | "commit_mismatch";
+    }
+  | { kind: "unsupported"; reason: string };
+
+export interface WorkflowLegality {
+  actions: Record<Role, WorkflowAction[]>;
+  next: WorkflowNextStep;
+}
+
 const INTERNAL_RECEIPT_FIELDS = new Set<keyof WorkflowState>([
   "initial_receipt",
   "review_start_receipt",
@@ -290,18 +336,118 @@ const INTERNAL_RECEIPT_FIELDS = new Set<keyof WorkflowState>([
   "approved_path_baselines",
 ]);
 
-export function permittedNextActions(state: WorkflowState, actorRole: Role): WorkflowAction[] {
+function approvedWithoutCommit(
+  state: WorkflowState,
+  readiness: WorkflowLegalityReadiness,
+): boolean {
+  if (
+    state.phase !== "STOPPED_APPROVED" ||
+    !allRequiredValidationsPassed(state) ||
+    readiness.approved_review?.status !== "current"
+  )
+    return false;
+  if (state.review_target.review_mode === "commit_range") return true;
+  return (
+    state.workflow_type === "review_only" &&
+    state.review_receipt !== null &&
+    dirtyBaselinePaths(state.review_receipt).length === 0
+  );
+}
+
+export type ScopeMutationReadiness = "ready" | "wrong_workflow" | "path_limit_reached";
+
+export function scopeMutationReadiness(state: WorkflowState): ScopeMutationReadiness {
+  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree")
+    return "wrong_workflow";
+  return state.approved_paths.length < MAX_PATHS ? "ready" : "path_limit_reached";
+}
+
+export type RepairCycleReadiness = "authorize" | "finalize" | "unavailable";
+
+export function repairCycleReadiness(state: WorkflowState): RepairCycleReadiness {
+  if (
+    state.phase !== "REPAIR_REQUIRED" ||
+    effectiveBlockingFindings(state).length === 0 ||
+    state.review_result_version === null
+  )
+    return "unavailable";
+  return state.repair_cycle < state.max_repair_cycles ? "authorize" : "finalize";
+}
+
+export function reviewRecoveryStateReady(state: WorkflowState): boolean {
+  return state.phase === "STOPPED_INCONCLUSIVE" && pendingInspectionValidations(state).length === 0;
+}
+
+export function implementationRecoveryStateReady(state: WorkflowState): boolean {
+  const expectedStatus =
+    state.phase === "STOPPED_NEEDS_CONTEXT"
+      ? "NEEDS_CONTEXT"
+      : state.phase === "STOPPED_IMPLEMENTATION_BLOCKED"
+        ? "BLOCKED"
+        : null;
+  return (
+    expectedStatus !== null &&
+    state.stop_context?.status === expectedStatus &&
+    (state.stop_context.stopped_from === "IMPLEMENTING" ||
+      state.stop_context.stopped_from === "REPAIRING")
+  );
+}
+
+export function reviewTargetStateReady(state: WorkflowState): boolean {
+  const expectedPaths =
+    state.linked_continuation?.review_stage === "combined"
+      ? state.linked_continuation.combined_review_paths
+      : state.approved_paths;
+  return (
+    state.review_target.base_revision === state.base_head &&
+    canonicalJson(state.review_target.approved_paths) === canonicalJson(expectedPaths) &&
+    (state.review_target.review_mode !== "commit_range" || state.workflow_type === "review_only")
+  );
+}
+
+export function commitAuthorizationStateReady(state: WorkflowState): boolean {
+  return (
+    state.phase === "STOPPED_APPROVED" &&
+    state.review_target.review_mode === "working_tree" &&
+    !state.superseded_by_workflow_id &&
+    state.review_receipt !== null &&
+    allRequiredValidationsPassed(state)
+  );
+}
+
+export type LinkedFollowupStateReadiness = "ready" | "superseded" | "unavailable";
+
+export function linkedFollowupStateReadiness(state: WorkflowState): LinkedFollowupStateReadiness {
+  if (state.superseded_by_workflow_id) return "superseded";
+  if (state.phase !== "STOPPED_APPROVED" && state.phase !== "STOPPED_REPAIR_EXHAUSTED")
+    return "unavailable";
+  return effectiveBlockingFindings(state).length > 0 || state.optional_findings.length > 0
+    ? "ready"
+    : "unavailable";
+}
+
+function actionsForRole(
+  state: WorkflowState,
+  actorRole: Role,
+  readiness: WorkflowLegalityReadiness,
+): WorkflowAction[] {
   role(actorRole);
   let actions = [...(ACTION_MATRIX[actorRole]?.[state.phase] ?? [])];
+  const readableHead = readiness.head?.status === "readable" ? readiness.head.current_head : null;
+  const baseHeadCurrent = readableHead === state.base_head;
+  if (
+    actorRole === "implementer" &&
+    (state.phase === "IMPLEMENTING" || state.phase === "REPAIRING") &&
+    readiness.implementation_submission?.status !== "ready"
+  ) {
+    actions = actions.filter((action) => action !== "workflow_submit_implementation");
+  }
   if (actorRole === "reviewer" && state.phase === "REVIEWING") {
-    if (reviewBlockedByPendingInspection(state)) actions = [];
-    else if (state.review_target.review_mode === "commit_range") {
-      actions = ["workflow_submit_review"];
-    } else if (state.review_start_receipt) {
-      actions = ["workflow_submit_review"];
-    } else {
+    if (reviewBlockedByPendingInspection(state) || !reviewTargetStateReady(state)) actions = [];
+    else if (readiness.review?.status === "submit") actions = ["workflow_submit_review"];
+    else if (readiness.review?.status === "begin" || readiness.review?.status === "refresh")
       actions = ["workflow_begin_review"];
-    }
+    else actions = [];
   }
   if (
     actorRole === "parent" &&
@@ -309,6 +455,13 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     pendingInspectionValidations(state).length === 0
   )
     actions = [];
+  if (
+    actorRole === "parent" &&
+    (state.phase === "STOPPED_NEEDS_CONTEXT" || state.phase === "STOPPED_IMPLEMENTATION_BLOCKED") &&
+    !implementationRecoveryStateReady(state)
+  ) {
+    actions = actions.filter((action) => action !== "workflow_resume_implementation");
+  }
   if (
     actorRole === "parent" &&
     state.phase === "STOPPED_CONCERNS" &&
@@ -331,9 +484,27 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     actions = actions.filter((action) => action !== "workflow_authorize_commit");
   }
   if (actorRole === "parent" && state.phase === "REPAIR_REQUIRED") {
-    if (effectiveBlockingFindings(state).length === 0) {
-      actions = [];
-    }
+    const repair = repairCycleReadiness(state);
+    if (repair === "unavailable") actions = [];
+    else
+      actions = actions.filter((action) =>
+        repair === "authorize"
+          ? action !== "workflow_finalize_repair_exhausted"
+          : action !== "workflow_authorize_repair",
+      );
+  }
+  if (actorRole === "parent" && (scopeMutationReadiness(state) !== "ready" || !baseHeadCurrent)) {
+    actions = actions.filter((action) => action !== "workflow_expand_scope");
+  }
+  if (actorRole === "parent" && state.phase === "STOPPED_INCONCLUSIVE") {
+    const recovery = readiness.review_recovery?.status;
+    actions = actions.filter((action) =>
+      recovery === "adopt"
+        ? action !== "workflow_resume_review"
+        : recovery === "resume"
+          ? action !== "workflow_adopt_dirty_scope"
+          : action !== "workflow_adopt_dirty_scope" && action !== "workflow_resume_review",
+    );
   }
   if (
     actorRole === "parent" &&
@@ -341,6 +512,38 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
     state.review_target?.review_mode !== "working_tree"
   ) {
     actions = actions.filter((action) => action !== "workflow_authorize_commit");
+  }
+  if (
+    actorRole === "parent" &&
+    state.phase === "STOPPED_APPROVED" &&
+    (!commitAuthorizationStateReady(state) ||
+      readiness.approved_review?.status !== "current" ||
+      approvedWithoutCommit(state, readiness))
+  ) {
+    actions = actions.filter((action) => action !== "workflow_authorize_commit");
+  }
+  if (
+    actorRole === "parent" &&
+    (state.phase === "STOPPED_APPROVED" || state.phase === "STOPPED_REPAIR_EXHAUSTED") &&
+    linkedFollowupStateReadiness(state) !== "ready"
+  ) {
+    actions = actions.filter(
+      (action) =>
+        action !== "workflow_create_linked_followup" &&
+        action !== "workflow_create_linked_followup_from_plan",
+    );
+  }
+  if (
+    actorRole === "parent" &&
+    (state.phase === "STOPPED_APPROVED" || state.phase === "STOPPED_REPAIR_EXHAUSTED") &&
+    (readableHead === null ||
+      (state.review_target.review_mode === "working_tree" && !baseHeadCurrent))
+  ) {
+    actions = actions.filter(
+      (action) =>
+        action !== "workflow_create_linked_followup" &&
+        action !== "workflow_create_linked_followup_from_plan",
+    );
   }
   if (actorRole === "parent" && state.phase === "STOPPED_COMMIT_PREPARATION") {
     const recovery =
@@ -354,8 +557,9 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
           ? action === "workflow_return_commit_to_review"
           : false,
     );
+    if (recovery === "review" && readiness.commit_review_return?.status !== "ready") actions = [];
   }
-  if (actorRole === "parent" && state.superseded_by_workflow_id) {
+  if (actorRole === "parent" && linkedFollowupStateReadiness(state) === "superseded") {
     actions = actions.filter(
       (action) =>
         action !== "workflow_authorize_commit" &&
@@ -363,7 +567,161 @@ export function permittedNextActions(state: WorkflowState, actorRole: Role): Wor
         action !== "workflow_create_linked_followup_from_plan",
     );
   }
+  if (
+    actorRole === "parent" &&
+    state.phase === "COMMIT_PREPARED" &&
+    readiness.commit_result?.status === "ready" &&
+    readiness.commit_result.authority === "reconciliation"
+  ) {
+    actions.push("workflow_reconcile_commit_result");
+  }
+  if (
+    actorRole === "committer" &&
+    state.phase === "COMMIT_AUTHORIZED" &&
+    readiness.commit_preparation?.status !== "ready"
+  ) {
+    actions = actions.filter((action) => action !== "workflow_prepare_commit");
+  }
+  if (
+    actorRole === "committer" &&
+    state.phase === "COMMIT_PREPARED" &&
+    (readiness.commit_result?.status !== "ready" ||
+      readiness.commit_result.authority !== "committer")
+  ) {
+    actions = actions.filter((action) => action !== "workflow_submit_commit_result");
+  }
   return actions.sort();
+}
+
+function nextStep(
+  state: WorkflowState,
+  actions: Record<Role, WorkflowAction[]>,
+  readiness: WorkflowLegalityReadiness,
+): WorkflowNextStep {
+  if (state.superseded_by_workflow_id)
+    return { kind: "unsupported", reason: "the workflow has been superseded" };
+  if (actions.parent.includes("workflow_adopt_dirty_scope")) {
+    return { kind: "recovery", action: "workflow_adopt_dirty_scope" };
+  }
+  const pendingInspection = pendingInspectionValidations(state);
+  if (
+    ((state.phase === "REVIEWING" &&
+      !(state.workflow_type === "change" && hasFailedRequiredValidation(state))) ||
+      state.phase === "STOPPED_INCONCLUSIVE") &&
+    pendingInspection.length > 0
+  ) {
+    return actions.parent.includes("workflow_record_manual_validation")
+      ? { kind: "inspection_required" }
+      : { kind: "unsupported", reason: "inspection evidence authority is unavailable" };
+  }
+  if (
+    (state.phase === "IMPLEMENTING" || state.phase === "REPAIRING") &&
+    actions.implementer.includes("workflow_submit_implementation")
+  ) {
+    return { kind: "worker_route", route: "implement" };
+  }
+  if (
+    state.phase === "REVIEWING" &&
+    actions.reviewer.some(
+      (action) => action === "workflow_begin_review" || action === "workflow_submit_review",
+    )
+  ) {
+    return {
+      kind: "worker_route",
+      route:
+        state.review_result_version === null && state.linked_continuation === null
+          ? "review"
+          : "re_review",
+    };
+  }
+  if (state.phase === "REPAIR_REQUIRED") {
+    if (actions.parent.includes("workflow_finalize_repair_exhausted"))
+      return { kind: "finalize_repair_exhausted" };
+    if (actions.parent.includes("workflow_authorize_repair")) return { kind: "repair_required" };
+    return { kind: "unsupported", reason: "current blocker authority is unavailable" };
+  }
+  if (state.phase === "STOPPED_REPAIR_EXHAUSTED") {
+    return actions.parent.some(
+      (action) =>
+        action === "workflow_create_linked_followup" ||
+        action === "workflow_create_linked_followup_from_plan",
+    )
+      ? { kind: "bounded_continuation" }
+      : { kind: "unsupported", reason: "bounded continuation authority is unavailable" };
+  }
+  const recoveries: WorkflowAction[] = [
+    "workflow_accept_concerns",
+    "workflow_resume_implementation",
+    "workflow_resume_review",
+    "workflow_retry_commit",
+    "workflow_retry_commit_preparation",
+    "workflow_return_commit_to_review",
+  ];
+  if (
+    state.phase === "STOPPED_CONCERNS" ||
+    state.phase === "STOPPED_NEEDS_CONTEXT" ||
+    state.phase === "STOPPED_IMPLEMENTATION_BLOCKED" ||
+    state.phase === "STOPPED_INCONCLUSIVE" ||
+    state.phase === "STOPPED_NOT_COMMITTED" ||
+    state.phase === "STOPPED_COMMIT_PREPARATION"
+  ) {
+    const available = actions.parent.filter((action) => recoveries.includes(action));
+    return available.length === 1
+      ? { kind: "recovery", action: available[0] as WorkflowAction }
+      : {
+          kind: "unsupported",
+          reason:
+            available.length === 0
+              ? "no supported recovery is available"
+              : "recovery authority is ambiguous",
+        };
+  }
+  if (state.phase === "STOPPED_APPROVED") {
+    if (state.superseded_by_workflow_id)
+      return { kind: "unsupported", reason: "the workflow has been superseded" };
+    if (actions.parent.includes("workflow_authorize_commit")) return { kind: "authorize_commit" };
+    if (approvedWithoutCommit(state, readiness))
+      return { kind: "terminal", outcome: "approved_no_commit_required" };
+    return { kind: "unsupported", reason: "approved workflow commit authority is unavailable" };
+  }
+  if (
+    state.phase === "COMMIT_AUTHORIZED" &&
+    actions.committer.includes("workflow_prepare_commit")
+  ) {
+    return { kind: "worker_route", route: "commit" };
+  }
+  if (state.phase === "COMMIT_PREPARED") {
+    if (actions.parent.includes("workflow_reconcile_commit_result"))
+      return { kind: "reconcile_commit" };
+    if (actions.committer.includes("workflow_submit_commit_result"))
+      return { kind: "worker_route", route: "commit" };
+  }
+  if (state.phase === "COMMITTED") return { kind: "terminal", outcome: "committed" };
+  if (state.phase === "STOPPED_COMMIT_MISMATCH")
+    return { kind: "terminal", outcome: "commit_mismatch" };
+  return { kind: "unsupported", reason: "current state or available authority is ambiguous" };
+}
+
+export function workflowLegality(
+  state: WorkflowState,
+  readiness: WorkflowLegalityReadiness = {},
+): WorkflowLegality {
+  const actions = Object.fromEntries(
+    (["parent", "implementer", "reviewer", "committer"] as const).map((actorRole) => [
+      actorRole,
+      actionsForRole(state, actorRole, readiness),
+    ]),
+  ) as Record<Role, WorkflowAction[]>;
+  return { actions, next: nextStep(state, actions, readiness) };
+}
+
+export function permittedNextActions(
+  state: WorkflowState,
+  actorRole: Role,
+  readiness: WorkflowLegalityReadiness = {},
+): WorkflowAction[] {
+  role(actorRole);
+  return workflowLegality(state, readiness).actions[actorRole];
 }
 
 /** Required inspections without authoritative terminal evidence. */
@@ -491,11 +849,31 @@ export function allRequiredValidationsPassed(state: WorkflowState): boolean {
   });
 }
 
-export function roleView(state: WorkflowState, actorRole: "parent"): ParentView;
-export function roleView(state: WorkflowState, actorRole: "implementer"): ImplementerView;
-export function roleView(state: WorkflowState, actorRole: "reviewer"): ReviewerView;
-export function roleView(state: WorkflowState, actorRole: "committer"): CommitterView;
-export function roleView(state: WorkflowState, actorRole: Role): RoleView {
+export function roleView(
+  state: WorkflowState,
+  actorRole: "parent",
+  readiness?: WorkflowLegalityReadiness,
+): ParentView;
+export function roleView(
+  state: WorkflowState,
+  actorRole: "implementer",
+  readiness?: WorkflowLegalityReadiness,
+): ImplementerView;
+export function roleView(
+  state: WorkflowState,
+  actorRole: "reviewer",
+  readiness?: WorkflowLegalityReadiness,
+): ReviewerView;
+export function roleView(
+  state: WorkflowState,
+  actorRole: "committer",
+  readiness?: WorkflowLegalityReadiness,
+): CommitterView;
+export function roleView(
+  state: WorkflowState,
+  actorRole: Role,
+  readiness: WorkflowLegalityReadiness = {},
+): RoleView {
   role(actorRole);
   const view: Record<string, unknown> = {};
   const raw = state as unknown as Record<string, unknown>;
@@ -515,7 +893,7 @@ export function roleView(state: WorkflowState, actorRole: Role): RoleView {
       }
     }
   }
-  view.permitted_next_actions = permittedNextActions(state, actorRole);
+  view.permitted_next_actions = permittedNextActions(state, actorRole, readiness);
   if (actorRole === "parent") {
     for (const key of Object.keys(state)) {
       if ((ROLE_VIEW_COMMON as readonly string[]).includes(key)) continue;

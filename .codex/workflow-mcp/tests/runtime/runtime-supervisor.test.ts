@@ -562,6 +562,20 @@ describe("Workflow MCP runtime supervision", () => {
       const historicalView = JSON.parse(routedAAfterRestart.result.content[0].text);
       assert.equal(historicalView.runtime_label, "historical");
       assert.deepEqual(historicalView.permitted_next_actions, ["workflow_reconcile_commit_result"]);
+      const routedPreparedDecision = await restarted.request(
+        11,
+        "tools/call",
+        workflowIdA,
+        {},
+        "workflow_operator_decision_get",
+      );
+      assert.equal(routedPreparedDecision.result.runtime_revision, revisionA);
+      assert.equal(routedPreparedDecision.result.tool, "workflow_operator_decision_get");
+      const preparedDecision = JSON.parse(routedPreparedDecision.result.content[0].text);
+      assert.deepEqual(preparedDecision.primary, {
+        kind: "reconcile_commit",
+        reason: "an existing commit requires server-owned result reconciliation",
+      });
       secondStore.reconcileCommitResult({
         workflow_id: workflowIdA,
         expected_version: preparedA.version,
@@ -596,6 +610,12 @@ describe("Workflow MCP runtime supervision", () => {
       );
       assert.equal(routedTerminalDecision.result.runtime_revision, revisionB);
       assert.equal(routedTerminalDecision.result.tool, "workflow_operator_decision_get");
+      const terminalDecision = JSON.parse(routedTerminalDecision.result.content[0].text);
+      assert.deepEqual(terminalDecision.primary, {
+        kind: "terminal",
+        outcome: "committed",
+        reason: "the workflow commit is verified and complete",
+      });
       const routedWorker = await restarted.request(
         8,
         "tools/call",

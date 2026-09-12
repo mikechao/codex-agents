@@ -215,7 +215,7 @@ closed. After affirmative input, the parent re-reads authoritative state, verifi
 findings, lineage, plan binding, permitted action, runtime authority, and version, then encodes exactly that
 proposal in the existing mutation. No durable proposal state, natural-language parser, or replacement
 authority is added. Ordinary summaries do not expose internal action/phase names or raw action/tool names;
-preserved semantic enum values include `approve_recovery`, `retry_commit`,
+preserved semantic enum values include `approve_recovery`, `adopt_dirty_scope`, `retry_commit`,
 `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review`.
 
 Every explicit parent mutation is authorized only by an affirmative response to the exact semantic
@@ -346,7 +346,9 @@ a later attempt; phase gating prevents interim evidence from becoming a reviewab
   and all receipt structures/digests). `approved_plan` is immutable execution intent exposed only
   to the parent and implementer; structured objective, scope, and contracts remain enforceable
   boundaries. The parent owns user and commit authorization, repair and
-  resume authorization, retry, and linked follow-up creation.
+  resume authorization, retry, and linked follow-up creation. Permitted actions come from the same
+  exact legality computation as the operator projection; runtime-only reconciliation authority is
+  supplied explicitly by the runtime boundary.
 - Implementer view: objective, immutable `approved_plan` when plan-backed (or null for direct
   review-only repair), approved paths, acceptance criteria, validation requirements, dirty baseline,
   remediation context, linked findings, final implementation fields, result arrays, finding
@@ -428,7 +430,9 @@ fresh independent review is required after the last effective blocker is adjudic
 
 A commit is authorized only for an approved working-tree workflow with a fresh internal review
 receipt and an explicit parent/user `commit_authorization`; a `commit_range` review never authorizes
-a commit. After the parent authorizes, the committer stages complete approved paths and calls
+a commit. An approved `review_only` working-tree receipt with no changed paths and an approved
+commit-range review are projected as successful no-commit terminal outcomes; a changed working-tree
+review retains the explicit commit-authorization path. After the parent authorizes, the committer stages complete approved paths and calls
 `workflow_prepare_commit`, which checks the current HEAD and the staged scope, file modes, and blob
 digests against the internal authorized receipt, rejects approved-path residue, and binds the
 prepared tree and path set without changing Git state. Receipt paths use exact delete+add semantics
@@ -453,6 +457,8 @@ If commit-result bookkeeping fails after Git has already created the commit, nev
 commit. Prefer ordinary `workflow_submit_commit_result` when the owning corrected runtime is
 available; the parent-only `workflow_reconcile_commit_result` operation exists only to route this
 bounded verification to the current runtime for workflows stranded on an older immutable runtime.
+The same server-owned legality computation supplies this route to historical parent and operator
+reads; it is not added by an independent phase/action rule.
 It leaves runtime affinity unchanged and never creates, amends, or duplicates a commit. After a
 successful reconciliation, only an attested current non-owner runtime may serve the terminal
 `workflow_parent_get` view when the current persisted version has the parent reconciliation audit

@@ -19,6 +19,7 @@ import {
   stagedAdoptionStates,
   stagedScopeChanges,
   verifyCommitResult,
+  verifyPreparedCommit,
   verifyReviewReceipt,
 } from "./git.js";
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
@@ -34,16 +35,23 @@ import {
   type RuntimeArtifact,
   type RuntimeManifest,
 } from "./runtime-artifact.js";
-import type { LinkedFollowupPlan } from "./transitions.js";
+import type {
+  LinkedFollowupPlan,
+  WorkflowCommitResultReadiness,
+  WorkflowHeadReadiness,
+  WorkflowLegalityReadiness,
+  WorkflowReviewReadiness,
+  WorkflowReviewRecoveryReadiness,
+} from "./transitions.js";
 import {
   acceptConcerns,
   adjudicateFindings,
   adoptDirtyScope,
-  allRequiredValidationsPassed,
   approvedPathBaselineView,
   authorizeCommit,
   authorizeRepair,
   beginReview,
+  commitAuthorizationStateReady,
   commitMismatch,
   commitPreparationFailed,
   createState,
@@ -55,7 +63,7 @@ import {
   linkedFollowupChildState,
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
-  permittedNextActions,
+  linkedFollowupStateReadiness,
   prepareCommit,
   rangeDirtyBaselinePaths,
   recordManualValidation,
@@ -65,12 +73,16 @@ import {
   retryCommitPreparation,
   returnCommitToReview,
   reviewBlockedByPendingInspection,
+  reviewRecoveryStateReady,
+  reviewTargetStateReady,
   roleView,
+  scopeMutationReadiness,
   submitCommitResult,
   submitImplementation,
   submitReview,
   validateCommitResult,
   validateWorkflowStateV10,
+  workflowLegality,
 } from "./transitions.js";
 import type {
   ActorRole,
@@ -631,7 +643,43 @@ type ExistingWorkflowTransition = {
 
 // roleView's public overloads only accept literal roles; the store reaches the
 // implementation signature with the exact role selected by each dedicated getter.
-const roleViewForRole = roleView as unknown as (state: WorkflowState, actorRole: Role) => RoleView;
+const roleViewForRole = roleView as unknown as (
+  state: WorkflowState,
+  actorRole: Role,
+  readiness?: WorkflowLegalityReadiness,
+) => RoleView;
+
+type ReviewPreflight = {
+  readiness: WorkflowReviewReadiness;
+  receipt: ChangeReceipt | null;
+  error?: unknown;
+};
+
+type ReviewRecoveryPreflight = {
+  readiness: WorkflowReviewRecoveryReadiness;
+  error?: unknown;
+};
+
+type ReconciliationPreflight = {
+  readiness: WorkflowCommitResultReadiness;
+  commitHash: GitCommitSha | null;
+  mismatch: string | null;
+  error?: unknown;
+};
+
+type CommitPreparationPreflight = {
+  readiness: { status: "ready" | "unavailable" };
+  evidence: CommitPreparationEvidence | null;
+  failure: { category: CommitPreparationFailureCategory; detail: string } | null;
+  error?: unknown;
+};
+
+type CommitReviewReturnPreflight = {
+  readiness: { status: "ready" | "unavailable" };
+  head: GitCommitSha | null;
+  initialReceipt: ChangeReceipt | null;
+  error?: unknown;
+};
 
 function supportedPreparationFailure(
   error: unknown,
@@ -974,7 +1022,7 @@ export class WorkflowStore {
         return state;
       })
       .immediate();
-    return roleView(created, "parent") as ParentView;
+    return this.#roleView(created, "parent") as ParentView;
   }
 
   #get(workflowIdValue: unknown, actorRole: Role): RoleView {
@@ -985,20 +1033,227 @@ export class WorkflowStore {
       actorRole === "parent" && this.#isCrossRuntimeCommitReconciled(row, state);
     if (reconciledParentRead) this.#assertRuntimeAttestation();
     else this.#assertRuntimeOwnership(row);
-    const view = roleViewForRole(state, actorRole);
-    const affinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
-    if (
-      actorRole === "parent" &&
-      state.phase === "COMMIT_PREPARED" &&
-      affinity.runtime_id !== null &&
-      (affinity.runtime_id !== this.runtimeId || affinity.runtime_revision !== this.runtimeRevision)
-    ) {
-      view.permitted_next_actions = [
-        ...view.permitted_next_actions,
-        "workflow_reconcile_commit_result",
-      ];
+    return this.#roleView(state, actorRole);
+  }
+
+  #headReadiness(): WorkflowHeadReadiness {
+    try {
+      return { status: "readable", current_head: currentHead(this.root) };
+    } catch {
+      return { status: "unavailable" };
     }
-    return view;
+  }
+
+  #reviewPreflight(
+    state: WorkflowState,
+    crossRuntime: boolean | "historical-owner" = false,
+  ): ReviewPreflight {
+    try {
+      if (!reviewTargetStateReady(state))
+        return { readiness: { status: "unavailable" }, receipt: null };
+      if (state.review_target.review_mode === "commit_range") {
+        reviewRange(this.root, state.review_target);
+        return { readiness: { status: "submit" }, receipt: null };
+      }
+      const receipt = createReceipt(this.root, state.review_target.approved_paths, true);
+      if (receipt.base_head !== state.base_head)
+        return { readiness: { status: "unavailable" }, receipt: null };
+      this.#verifyPendingDirtyAdoptions(state, receipt, { crossRuntime });
+      if (!state.review_start_receipt) return { readiness: { status: "begin" }, receipt };
+      return canonicalJson(receipt) === canonicalJson(state.review_start_receipt)
+        ? { readiness: { status: "submit" }, receipt }
+        : { readiness: { status: "refresh" }, receipt };
+    } catch (error) {
+      return { readiness: { status: "unavailable" }, receipt: null, error };
+    }
+  }
+
+  #reviewRecoveryPreflight(state: WorkflowState): ReviewRecoveryPreflight {
+    try {
+      if (!reviewRecoveryStateReady(state)) return { readiness: { status: "unavailable" } };
+      if (state.review_target.review_mode === "commit_range") {
+        reviewRange(this.root, state.review_target);
+        return { readiness: { status: "resume" } };
+      }
+      const currentReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
+      this.#verifyPendingDirtyAdoptions(state, currentReceipt, {
+        crossRuntime: "historical-owner",
+      });
+      if (state.workflow_type !== "change" || state.scope_expansions.length === 0)
+        return { readiness: { status: "resume" } };
+      const adopted = new Set(
+        this.#pendingDirtyAdoptions(state, { crossRuntime: "any" }).flatMap(
+          (item) => item.adopted_paths,
+        ),
+      );
+      const adoptionStates = state.scope_expansions.map((expansion) => {
+        if (expansion.added_paths.some((path) => adopted.has(path))) return false;
+        const receipt = createReceipt(this.root, expansion.added_paths, true);
+        if (receipt.base_head !== state.base_head) return false;
+        const indexDirty = new Set(
+          stagedAdoptionStates(this.root, expansion.added_paths, receipt.base_head)
+            .filter((entry) => ["added", "modified", "deleted"].includes(entry.state))
+            .map((entry) => entry.path),
+        );
+        const dirty = receipt.paths.filter(
+          (entry) =>
+            ["added", "modified", "deleted"].includes(entry.state) || indexDirty.has(entry.path),
+        ).length;
+        if (dirty > 0 && dirty < receipt.paths.length) {
+          fail(
+            "ERROR_SCOPE_EXPANSION_DIRTY",
+            "partially dirty scope expansion cannot be adopted or bypassed",
+          );
+        }
+        return dirty === receipt.paths.length;
+      });
+      return { readiness: { status: adoptionStates.some(Boolean) ? "adopt" : "resume" } };
+    } catch (error) {
+      return { readiness: { status: "unavailable" }, error };
+    }
+  }
+
+  #approvedReviewReadiness(state: WorkflowState): { status: "current" | "unavailable" } {
+    try {
+      if (state.review_target.review_mode === "commit_range")
+        reviewRange(this.root, state.review_target);
+      else {
+        if (!state.review_receipt) return { status: "unavailable" };
+        verifyReviewReceipt(
+          this.root,
+          state.review_receipt,
+          state.review_target.approved_paths,
+          state.base_head,
+        );
+      }
+      return { status: "current" };
+    } catch {
+      return { status: "unavailable" };
+    }
+  }
+
+  #reconciliationPreflight(state: WorkflowState): ReconciliationPreflight {
+    try {
+      const verification = verifyPreparedCommit(this.root, state);
+      return verification.category === null
+        ? {
+            readiness: { status: "ready", authority: "reconciliation" },
+            commitHash: verification.commit_hash,
+            mismatch: null,
+          }
+        : {
+            readiness: { status: "unavailable" },
+            commitHash: null,
+            mismatch: verification.category,
+          };
+    } catch (error) {
+      return {
+        readiness: { status: "unavailable" },
+        commitHash: null,
+        mismatch: null,
+        error,
+      };
+    }
+  }
+
+  #commitSubmissionReadiness(head: WorkflowHeadReadiness): WorkflowCommitResultReadiness {
+    return head.status === "readable"
+      ? { status: "ready", authority: "committer" }
+      : { status: "unavailable" };
+  }
+
+  #commitPreparationPreflight(state: WorkflowState): CommitPreparationPreflight {
+    try {
+      return {
+        readiness: { status: "ready" },
+        evidence: prepareCommitReceipt(this.root, state),
+        failure: null,
+      };
+    } catch (error) {
+      const failure = supportedPreparationFailure(error);
+      return failure
+        ? { readiness: { status: "ready" }, evidence: null, failure }
+        : {
+            readiness: { status: "unavailable" },
+            evidence: null,
+            failure: null,
+            error,
+          };
+    }
+  }
+
+  #commitReviewReturnPreflight(state: WorkflowState): CommitReviewReturnPreflight {
+    try {
+      if (
+        state.phase !== "STOPPED_COMMIT_PREPARATION" ||
+        state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
+        state.stop_context.recovery !== "review"
+      ) {
+        return { readiness: { status: "unavailable" }, head: null, initialReceipt: null };
+      }
+      const headReadiness = this.#headReadiness();
+      if (headReadiness.status !== "readable") {
+        return { readiness: { status: "unavailable" }, head: null, initialReceipt: null };
+      }
+      const head = headReadiness.current_head;
+      if (state.review_target.review_mode !== "working_tree" || state.base_head === head) {
+        return { readiness: { status: "ready" }, head, initialReceipt: null };
+      }
+      const originalPaths = state.initial_receipt?.approved_paths ?? state.approved_paths;
+      const initialReceipt = createReceipt(this.root, originalPaths, true);
+      if (initialReceipt.base_head !== head) {
+        return { readiness: { status: "unavailable" }, head: null, initialReceipt: null };
+      }
+      return { readiness: { status: "ready" }, head, initialReceipt };
+    } catch (error) {
+      return {
+        readiness: { status: "unavailable" },
+        head: null,
+        initialReceipt: null,
+        error,
+      };
+    }
+  }
+
+  #legalityReadiness(state: WorkflowState): WorkflowLegalityReadiness {
+    const head = this.#headReadiness();
+    const readiness: WorkflowLegalityReadiness = {
+      head,
+      implementation_submission: { status: "unavailable" },
+      review: { status: "unavailable" },
+      review_recovery: { status: "unavailable" },
+      approved_review: { status: "unavailable" },
+      commit_preparation: { status: "unavailable" },
+      commit_review_return: { status: "unavailable" },
+      commit_result:
+        state.phase === "COMMIT_PREPARED"
+          ? this.#commitSubmissionReadiness(head)
+          : { status: "unavailable" },
+    };
+    if (state.phase === "IMPLEMENTING" || state.phase === "REPAIRING") {
+      try {
+        const receipt = createReceipt(this.root, state.approved_paths, true);
+        readiness.implementation_submission = {
+          status: receipt.base_head === state.base_head ? "ready" : "unavailable",
+        };
+      } catch {
+        readiness.implementation_submission = { status: "unavailable" };
+      }
+    }
+    if (state.phase === "REVIEWING") readiness.review = this.#reviewPreflight(state).readiness;
+    if (state.phase === "STOPPED_INCONCLUSIVE")
+      readiness.review_recovery = this.#reviewRecoveryPreflight(state).readiness;
+    if (state.phase === "STOPPED_APPROVED")
+      readiness.approved_review = this.#approvedReviewReadiness(state);
+    if (state.phase === "COMMIT_AUTHORIZED")
+      readiness.commit_preparation = this.#commitPreparationPreflight(state).readiness;
+    if (state.phase === "STOPPED_COMMIT_PREPARATION")
+      readiness.commit_review_return = this.#commitReviewReturnPreflight(state).readiness;
+    return readiness;
+  }
+
+  #roleView(state: WorkflowState, actorRole: Role): RoleView {
+    return roleViewForRole(state, actorRole, this.#legalityReadiness(state));
   }
 
   planCreate(input: unknown): PlannerPlanRead {
@@ -1098,7 +1353,7 @@ export class WorkflowStore {
           "parent",
           auditEnvelope(null, state, null),
         );
-        return roleView(state, "parent") as ParentView;
+        return this.#roleView(state, "parent") as ParentView;
       })
       .immediate();
   }
@@ -1120,8 +1375,18 @@ export class WorkflowStore {
     else this.#assertRuntimeOwnership(row);
     if (!state.workflow_id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
 
+    return this.#deriveOperatorDecision(state, row, this.#legalityReadiness(state));
+  }
+
+  #deriveOperatorDecision(
+    state: WorkflowState,
+    row: WorkflowRow,
+    readiness: WorkflowLegalityReadiness,
+  ): OperatorDecision {
     const records = new Map<string, OperatorLineageRecord>();
-    const pending: WorkflowId[] = [state.workflow_id];
+    const currentWorkflowId = state.workflow_id;
+    if (!currentWorkflowId) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
+    const pending: WorkflowId[] = [currentWorkflowId];
     while (pending.length > 0) {
       const id = pending.shift() as WorkflowId;
       if (records.has(id)) continue;
@@ -1129,18 +1394,44 @@ export class WorkflowStore {
         fail("ERROR_STATE_CORRUPT", "explicit workflow lineage exceeds its bound");
       const relatedRow = id === row.workflow_id ? row : this.#row(id);
       const relatedState = id === row.workflow_id ? state : parseState(relatedRow);
-      const actions: Partial<Record<Role, WorkflowAction[]>> = {
-        parent: permittedNextActions(relatedState, "parent"),
-        implementer: permittedNextActions(relatedState, "implementer"),
-        reviewer: permittedNextActions(relatedState, "reviewer"),
-        committer: permittedNextActions(relatedState, "committer"),
-      };
-      records.set(id, { state: relatedState, actions });
+      const recordReadiness =
+        id === currentWorkflowId ? readiness : this.#legalityReadiness(relatedState);
+      records.set(id, {
+        state: relatedState,
+        readiness: recordReadiness,
+        legality: workflowLegality(relatedState, recordReadiness),
+      });
       for (const reference of lineageReferences(relatedState)) {
         if (!records.has(reference)) pending.push(reference);
       }
     }
     return deriveOperatorDecision(state, [...records.values()]);
+  }
+
+  reconciliationPermittedActions(workflowIdValue: unknown): WorkflowAction[] {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    this.#assertReconciliationRuntime(row);
+    const state = parseState(row);
+    if (state.phase !== "COMMIT_PREPARED") {
+      fail("ERROR_INVALID_TRANSITION", "commit reconciliation requires a prepared commit");
+    }
+    return workflowLegality(state, {
+      commit_result: this.#reconciliationPreflight(state).readiness,
+    }).actions.parent;
+  }
+
+  operatorDecisionGetForReconciliation(workflowIdValue: unknown): OperatorDecision {
+    this.#ensureOpen();
+    const row = this.#row(workflowIdValue);
+    this.#assertReconciliationRuntime(row);
+    const state = parseState(row);
+    if (state.phase !== "COMMIT_PREPARED") {
+      fail("ERROR_INVALID_TRANSITION", "commit reconciliation requires a prepared commit");
+    }
+    return this.#deriveOperatorDecision(state, row, {
+      commit_result: this.#reconciliationPreflight(state).readiness,
+    });
   }
 
   isCrossRuntimeCommitReconciled(workflowIdValue: unknown): boolean {
@@ -1169,10 +1460,7 @@ export class WorkflowStore {
       args.expected_version,
       "SCOPE_EXPANDED",
       (state) => {
-        if (
-          state.workflow_type !== "change" ||
-          state.review_target.review_mode !== "working_tree"
-        ) {
+        if (scopeMutationReadiness(state) === "wrong_workflow") {
           fail(
             "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
             "scope expansion requires a working-tree change workflow",
@@ -1182,8 +1470,9 @@ export class WorkflowStore {
         if (addedPaths.some((path) => state.approved_paths.includes(path))) {
           fail("ERROR_INVALID_PATHS", "scope expansion path is already approved");
         }
-        const head = currentHead(this.root);
-        if (head !== state.base_head) fail("ERROR_STALE_BASE", "scope base is stale");
+        const headReadiness = this.#headReadiness();
+        if (headReadiness.status !== "readable" || headReadiness.current_head !== state.base_head)
+          fail("ERROR_STALE_BASE", "scope base is stale");
         const stagedChanges = stagedScopeChanges(this.root, addedPaths);
         const inheritedCombined = state.linked_continuation?.combined_review_paths ?? [];
         const expandingInherited =
@@ -1217,6 +1506,11 @@ export class WorkflowStore {
       args.expected_version,
       "DIRTY_SCOPE_ADOPTED",
       (state) => {
+        const preflight = this.#reviewRecoveryPreflight(state);
+        if (preflight.readiness.status !== "adopt") {
+          if (preflight.error) throw preflight.error;
+          fail("ERROR_STALE_ADOPTION", "dirty scope adoption readiness is unavailable");
+        }
         if (state.review_target.review_mode !== "working_tree") {
           fail(
             "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
@@ -1619,6 +1913,11 @@ export class WorkflowStore {
         ) {
           fail("ERROR_RUNTIME_ISOLATION", "dirty adoption is not a cross-runtime recovery");
         }
+        const preflight = this.#reviewRecoveryPreflight(state);
+        if (preflight.readiness.status !== "adopt") {
+          if (preflight.error) throw preflight.error;
+          fail("ERROR_STALE_ADOPTION", "dirty scope adoption readiness is unavailable");
+        }
         if (state.review_target.review_mode !== "working_tree") {
           fail(
             "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
@@ -1689,7 +1988,7 @@ export class WorkflowStore {
         });
       })
       .immediate();
-    return roleViewForRole(result, "parent");
+    return this.#roleView(result, "parent");
   }
 
   /** Establish the review-start receipt in the narrow historical-runtime recovery boundary. */
@@ -1720,9 +2019,15 @@ export class WorkflowStore {
         if (this.#pendingDirtyAdoptions(state, { crossRuntime: true }).length === 0) {
           fail("ERROR_STALE_ADOPTION", "no pending dirty scope adoption exists");
         }
-        const startReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
-        this.#verifyPendingDirtyAdoptions(state, startReceipt, { crossRuntime: true });
-        const next = beginReview(state, args, startReceipt);
+        const preflight = this.#reviewPreflight(state, true);
+        if (
+          (preflight.readiness.status !== "begin" && preflight.readiness.status !== "refresh") ||
+          !preflight.receipt
+        ) {
+          if (preflight.error) throw preflight.error;
+          fail("ERROR_STALE_ADOPTION", "cross-runtime review readiness is unavailable");
+        }
+        const next = beginReview(state, args, preflight.receipt);
         assertApprovedPlanUnchanged(state, next);
         assertWorkItemsUnchanged(state, next);
         assertScopeUnchanged(state, next);
@@ -1738,7 +2043,7 @@ export class WorkflowStore {
         });
       })
       .immediate();
-    return roleViewForRole(result, "reviewer");
+    return this.#roleView(result, "reviewer");
   }
 
   #mutate(
@@ -1807,7 +2112,7 @@ export class WorkflowStore {
         });
       })
       .immediate();
-    return roleViewForRole(next, actorRole);
+    return this.#roleView(next, actorRole);
   }
 
   submitImplementation(input: unknown): RoleView {
@@ -1860,12 +2165,15 @@ export class WorkflowStore {
         if (state.review_target.review_mode !== "working_tree") {
           fail("ERROR_INVALID_REVIEW", "commit-range reviews do not use review snapshots");
         }
-        const startReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
-        if (startReceipt.base_head !== state.base_head) {
+        const preflight = this.#reviewPreflight(state);
+        if (
+          (preflight.readiness.status !== "begin" && preflight.readiness.status !== "refresh") ||
+          !preflight.receipt
+        ) {
+          if (preflight.error) throw preflight.error;
           fail("ERROR_STALE_RECEIPT", "review snapshot base is stale; begin review again");
         }
-        this.#verifyPendingDirtyAdoptions(state, startReceipt, { crossRuntime: false });
-        return beginReview(state, args, startReceipt);
+        return beginReview(state, args, preflight.receipt);
       },
     );
   }
@@ -1903,14 +2211,7 @@ export class WorkflowStore {
         if (reviewBlockedByPendingInspection(state)) {
           fail("ERROR_INVALID_REVIEW", "required manual validation evidence is pending");
         }
-        if (
-          state.review_target.base_revision !== state.base_head ||
-          (state.linked_continuation?.review_stage === "combined"
-            ? canonicalJson(state.review_target.approved_paths) !==
-              canonicalJson(state.linked_continuation.combined_review_paths)
-            : canonicalJson(state.review_target.approved_paths) !==
-              canonicalJson(state.approved_paths))
-        ) {
+        if (!reviewTargetStateReady(state)) {
           fail("ERROR_INVALID_REVIEW", "authoritative review target is stale or corrupt");
         }
         if (state.review_target.review_mode === "commit_range") {
@@ -1919,25 +2220,24 @@ export class WorkflowStore {
           }
           // Re-resolve the persisted range so a deleted or rewritten authoritative target fails
           // closed instead of allowing semantic review of an unavailable revision.
-          reviewRange(this.root, state.review_target);
+          if (this.#reviewPreflight(state).readiness.status !== "submit") {
+            fail("ERROR_INVALID_REVIEW", "authoritative commit-range target is unavailable");
+          }
         }
         let finalReceipt: ChangeReceipt | null = null;
         if (state.review_target.review_mode === "working_tree") {
           if (!state.review_start_receipt) {
             fail("ERROR_INVALID_REVIEW", "working-tree review must begin before submission");
           }
-          if (args.review_status === "APPROVED") {
-            finalReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
-            if (finalReceipt.base_head !== state.base_head) {
-              fail("ERROR_STALE_RECEIPT", "review base changed; begin a new review");
-            }
-            if (canonicalJson(finalReceipt) !== canonicalJson(state.review_start_receipt)) {
-              fail(
-                "ERROR_INVALID_REVIEW",
-                "working tree changed after review began; begin a new review before approving",
-              );
-            }
+          const preflight = this.#reviewPreflight(state);
+          if (preflight.readiness.status !== "submit" || !preflight.receipt) {
+            if (preflight.error) throw preflight.error;
+            fail(
+              "ERROR_INVALID_REVIEW",
+              "working tree changed after review began; begin a new review before submitting",
+            );
           }
+          if (args.review_status === "APPROVED") finalReceipt = preflight.receipt;
         }
         return submitReview(state, args, finalReceipt);
       },
@@ -1981,11 +2281,12 @@ export class WorkflowStore {
       args.expected_version,
       "REVIEW_RESUMED",
       (state) => {
-        if (state.review_target.review_mode !== "working_tree") return resumeReview(state, args);
-        const currentReceipt = createReceipt(this.root, state.review_target.approved_paths, true);
-        this.#verifyPendingDirtyAdoptions(state, currentReceipt, {
-          crossRuntime: "historical-owner",
-        });
+        if (!reviewRecoveryStateReady(state)) return resumeReview(state, args);
+        const preflight = this.#reviewRecoveryPreflight(state);
+        if (preflight.readiness.status !== "resume") {
+          if (preflight.error) throw preflight.error;
+          fail("ERROR_STALE_ADOPTION", "review recovery readiness is unavailable");
+        }
         return resumeReview(state, args);
       },
     );
@@ -2011,25 +2312,9 @@ export class WorkflowStore {
       args.expected_version,
       "COMMIT_AUTHORIZED",
       (state) => {
-        if (state.review_target.review_mode !== "working_tree") {
-          fail("ERROR_COMMIT_NOT_ALLOWED", "commit authorization requires a working-tree review");
-        }
-        if (state.superseded_by_workflow_id) {
-          fail("ERROR_COMMIT_NOT_ALLOWED", "superseded workflow cannot authorize a commit");
-        }
-        if (!allRequiredValidationsPassed(state)) {
-          fail(
-            "ERROR_COMMIT_NOT_ALLOWED",
-            "all required validations must pass before commit authorization",
-          );
-        }
-        if (!state.review_receipt) fail("ERROR_STALE_RECEIPT", "review receipt is missing");
-        verifyReviewReceipt(
-          this.root,
-          state.review_receipt,
-          state.review_target.approved_paths,
-          state.base_head,
-        );
+        if (!commitAuthorizationStateReady(state)) return authorizeCommit(state, args);
+        if (this.#approvedReviewReadiness(state).status !== "current")
+          fail("ERROR_STALE_RECEIPT", "review receipt is missing or stale");
         return authorizeCommit(state, args);
       },
     );
@@ -2058,14 +2343,16 @@ export class WorkflowStore {
           ? "COMMIT_PREPARATION_FAILED"
           : "COMMIT_PREPARED",
       (state) => {
-        try {
-          const evidence: CommitPreparationEvidence = prepareCommitReceipt(this.root, state);
-          return prepareCommit(state, args, evidence);
-        } catch (error) {
-          const failure = supportedPreparationFailure(error);
-          if (!failure) throw error;
-          return commitPreparationFailed(state, failure.category, failure.detail);
-        }
+        const preflight = this.#commitPreparationPreflight(state);
+        if (preflight.evidence) return prepareCommit(state, args, preflight.evidence);
+        if (preflight.failure)
+          return commitPreparationFailed(
+            state,
+            preflight.failure.category,
+            preflight.failure.detail,
+          );
+        if (preflight.error) throw preflight.error;
+        fail("ERROR_GIT", "commit preparation readiness is unavailable");
       },
     );
   }
@@ -2090,17 +2377,19 @@ export class WorkflowStore {
       args.expected_version,
       "COMMIT_PREPARATION_REVIEW_AUTHORIZED",
       (state) => {
+        const preflight = this.#commitReviewReturnPreflight(state);
+        if (preflight.readiness.status !== "ready" || preflight.head === null) {
+          if (preflight.error) throw preflight.error;
+          fail("ERROR_GIT", "commit review recovery readiness is unavailable");
+        }
         const next = returnCommitToReview(state, args);
-        const head = currentHead(this.root);
+        const head = preflight.head;
         if (next.review_target.review_mode === "working_tree" && next.base_head !== head) {
           // Keep the original receipt boundary separate from authorization-time baselines for
           // paths appended by scope expansion. Re-baselining the full effective scope would
           // duplicate those paths and lose their provenance in scopeChangedPaths().
-          const originalPaths = next.initial_receipt?.approved_paths ?? next.approved_paths;
-          const initialReceipt = createReceipt(this.root, originalPaths, true);
-          if (initialReceipt.base_head !== head) {
-            fail("ERROR_STALE_BASE", "review recovery base is stale");
-          }
+          const initialReceipt = preflight.initialReceipt;
+          if (!initialReceipt) fail("ERROR_GIT", "commit review recovery receipt is unavailable");
           next.base_head = head;
           next.review_target = { ...next.review_target, base_revision: head };
           if (next.linked_continuation?.review_stage === "combined") {
@@ -2135,6 +2424,9 @@ export class WorkflowStore {
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
         validateCommitResult(state, args);
+        if (this.#commitSubmissionReadiness(this.#headReadiness()).status !== "ready") {
+          fail("ERROR_GIT", "repository HEAD is unavailable");
+        }
         const verification = verifyCommitResult(this.root, state, args);
         if (verification.category) return commitMismatch(state, verification.category);
         return submitCommitResult(state, args, verification.commit_hash);
@@ -2160,9 +2452,21 @@ export class WorkflowStore {
       "COMMIT_RESULT_SUBMITTED",
       (state) => {
         validateCommitResult(state, result);
-        const verification = verifyCommitResult(this.root, state, result);
-        if (verification.category) return commitMismatch(state, verification.category);
-        return submitCommitResult(state, result, verification.commit_hash);
+        const preflight = this.#reconciliationPreflight(state);
+        if (
+          preflight.readiness.status !== "ready" ||
+          preflight.readiness.authority !== "reconciliation" ||
+          preflight.commitHash === null
+        ) {
+          if (preflight.error) throw preflight.error;
+          fail(
+            "ERROR_COMMIT_MISMATCH",
+            preflight.mismatch
+              ? `prepared commit verification failed: ${preflight.mismatch}`
+              : "prepared commit verification is unavailable",
+          );
+        }
+        return submitCommitResult(state, result, preflight.commitHash);
       },
       (next) => next.commit_result!.outcome,
       undefined,
@@ -2253,11 +2557,16 @@ export class WorkflowStore {
         if (row.version !== expectedVersionNumber)
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         const state = parseState(row);
-        const followup = linkedFollowupInput(state, args, this.root, currentHead(this.root));
+        if (linkedFollowupStateReadiness(state) !== "ready") {
+          linkedFollowupInput(state, args, this.root, state.base_head);
+        }
+        const head = this.#headReadiness();
+        if (head.status !== "readable") fail("ERROR_GIT", "repository HEAD is unavailable");
+        const followup = linkedFollowupInput(state, args, this.root, head.current_head);
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return roleView(result, "parent") as ParentView;
+    return this.#roleView(result, "parent") as ParentView;
   }
 
   createLinkedFollowupFromPlan(input: unknown): ParentView {
@@ -2287,17 +2596,28 @@ export class WorkflowStore {
         // source supersession and child insertion. The caller supplies identity only.
         const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
         assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
+        if (linkedFollowupStateReadiness(state) !== "ready") {
+          linkedFollowupInputFromPlan(
+            state,
+            args,
+            resolved.artifact,
+            resolved.provenance,
+            state.base_head,
+          );
+        }
+        const head = this.#headReadiness();
+        if (head.status !== "readable") fail("ERROR_GIT", "repository HEAD is unavailable");
         const followup = linkedFollowupInputFromPlan(
           state,
           args,
           resolved.artifact,
           resolved.provenance,
-          currentHead(this.root),
+          head.current_head,
         );
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return roleView(result, "parent") as ParentView;
+    return this.#roleView(result, "parent") as ParentView;
   }
 }
 
