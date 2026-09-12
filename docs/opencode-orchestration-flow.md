@@ -394,6 +394,21 @@ sequenceDiagram
     code_reviewer->>GitWorkingTree: Independent read-only review
     code_reviewer->>workflow_state: Terminal review submission
     code_reviewer-->>Orchestrator: Final textual review report
+    alt Fresh blocking repair with affirmative response
+        Orchestrator->>workflow_state: Refresh projection and resolve bounded repair proposal
+        workflow_state-->>Orchestrator: approve_exact_repairs with authority boundary
+        Orchestrator-->>User: Bounded exact repair proposal
+        User->>Orchestrator: Affirm repair proposal
+        Orchestrator->>workflow_state: Exact current workflow_parent_get
+        workflow_state-->>Orchestrator: Current findings, version, and permitted repair action
+        Orchestrator->>workflow_state: Successful workflow_authorize_repair
+        Orchestrator->>workflow_state: Refreshed workflow_operator_decision_get
+        workflow_state-->>Orchestrator: Semantic implementation route for authorized repair
+        Orchestrator->>implementer: Repair task with exact workflow_id
+        Note over Orchestrator,code_reviewer: Repair completion refreshes and returns to fresh independent review before commit
+    else Stale, failed, unavailable, changed, or non-implementation route
+        Note over Orchestrator,implementer: Stop with no implementer dispatch
+    end
     Orchestrator->>workflow_state: workflow_operator_decision_get refresh
     workflow_state-->>Orchestrator: Explicit commit-authorization boundary
     User->>Orchestrator: Explicit commit authorization
@@ -435,6 +450,18 @@ those current exact blocker IDs and bounded reasons. A fresh review that reconfi
 request that ID again; if the old ID is resolved and a different blocker is current, only the
 different current ID is requested. A retained non-empty blocker list alone never prompts for repair,
 and an absent permitted action fails closed.
+
+### Repair authorization and delegation ordering
+
+User affirmation is semantic authorization to attempt the displayed repair, not permission to dispatch
+a worker directly. The repair handoff must be ordered exactly as: user affirmative response -> immediate
+exact current `workflow_parent_get` -> successful `workflow_authorize_repair` -> refreshed
+`workflow_operator_decision_get` -> repair `implementer` task dispatch. No implementer task is dispatched
+while the parent read or authorization is pending, failed, stale, rejected, unavailable, or materially
+changed. A stale proposal or version, changed repair scope, MCP outage, failed or unavailable mutation,
+or a refreshed projection that does not route implementation for the authorized repair all fail closed
+with no implementer dispatch. The parent routes from that refreshed projection and otherwise uses the
+existing bounded recovery or clarification behavior; it does not add workflow state or retry bookkeeping.
 
 Repair authorization is not adjudication authorization. A repair proposal must be accepted
 affirmatively for that exact proposal; a rejection and its explanation authorize nothing, including

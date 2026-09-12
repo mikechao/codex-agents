@@ -246,7 +246,7 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
       fresh reviewer handoff whose projection reports `approve_exact_repairs` with its authority boundary
      available may lead to an exact-ID repair prompt. Read the full parent view then for exact current
      finding IDs, version, and permitted action. The current exact blocker IDs are read here; obtain current exact blocking finding IDs from this authoritative read. A same-ID blocker may be requested again only when freshly reported; after authorization, state the current repair
-     cycle and that the next role is the implementer, then dispatch implementer, refresh, and re-review. If an old ID is resolved and a different current blocker appears, request only that different current blocker. Respect the repair limit;
+     cycle and that the next role is the implementer, then follow the repair authorization/delegation invariant below before dispatching, refreshing, and re-reviewing. If an old ID is resolved and a different current blocker appears, request only that different current blocker. Respect the repair limit;
      exhaustion is terminal and forbids another cycle. A repair rejection, including its explanation,
     does not authorize adjudication. Adjudication must first be presented as a separate semantic
     proposal with bounded rationale and consequence and then receive a fresh affirmative response;
@@ -258,6 +258,19 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
     Optional findings do not invoke another agent or mutation. For stops, use `recovery_summary.stop_reason`, `recovery_summary.recovery_context`, and the single available recovery decision from the refreshed projection.
 5. Only after explicit commit authorization, read exact current commit inputs, authorize the commit,
    refresh the projection, and delegate commit preparation/execution to `committer`.
+
+### Repair authorization/delegation invariant
+
+For an authorized repair, the required ordering is: user affirmative response -> immediate exact current
+`workflow_parent_get` -> successful `workflow_authorize_repair` -> refreshed
+`workflow_operator_decision_get` -> repair `implementer` task dispatch. The user's affirmative response
+is necessary semantic authorization but is not dispatch authority. No `task(implementer)` call may occur
+while the exact parent read or authorization is pending, failed, stale, rejected, unavailable, or
+materially changed. A stale proposal or version, changed repair scope, MCP outage, failed or unavailable
+mutation, or any other mismatch stops with no implementer dispatch. After successful authorization, route
+only from the refreshed projection and dispatch the repair implementer only when that projection
+authoritatively routes implementation for the authorized repair; if it does not, stop without dispatch
+and use the existing bounded recovery or clarification behavior.
 
 The same exact workflow ID flows through implementer, reviewer, repair, and committer handoffs.
 Review-only workflows skip implementer when authoritative state says so. Stopped concerns,

@@ -236,6 +236,20 @@ and exact path constraints. The parent presents this proposal before encoding th
 `RepairDirective`; it remains read-only and does not replace the existing finding, version, scope, or
 cycle authority.
 
+### Repair authorization/delegation invariant
+
+For an authorized repair, the parent follows one exact sequence: user affirmative response -> immediate
+exact current `workflow_parent_get` -> successful `workflow_authorize_repair` -> refreshed
+`workflow_operator_decision_get` -> repair `implementer` task dispatch. The affirmative response is
+necessary semantic authorization but is not dispatch authority. No implementer task may be dispatched
+while the parent read or authorization is pending, failed, stale, rejected, unavailable, or materially
+changed. A stale proposal or version, changed repair scope, MCP outage, failed or unavailable mutation,
+or any other mismatch therefore produces no implementer dispatch. The parent routes only from the
+refreshed projection and dispatches the implementer only when it authoritatively routes implementation
+for the authorized repair; a non-implementation route stops without dispatch and uses the existing
+bounded recovery or clarification behavior. This is a delegation invariant only: it adds no phase,
+schema field, dispatch-attempt record, retry persistence, or new MCP tool.
+
 The projection cannot classify a newly supplied request: the parent compares objective, outcome,
 criteria, and logical-change scope at the input boundary. A material change requires a new bounded
 workflow, not repair, adjudication, expansion, or a generic follow-up. Explicit linked lineage may

@@ -820,6 +820,54 @@ test("repair rejection cannot authorize adjudication or dispatch", () => {
   );
 });
 
+test("repair implementer dispatch requires persisted authorization and refreshed routing", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  const start = orchestrator.indexOf("### Repair authorization/delegation invariant");
+  const end = orchestrator.indexOf("The same exact workflow ID flows", start);
+  assert.ok(start >= 0 && end > start, "orchestrator must isolate the repair delegation invariant");
+  const invariant = orchestrator.slice(start, end);
+
+  const affirmative = invariant.indexOf("user affirmative response");
+  const parentRead = invariant.indexOf("immediate exact current `workflow_parent_get`");
+  const authorization = invariant.indexOf("successful `workflow_authorize_repair`");
+  const refresh = invariant.indexOf("refreshed `workflow_operator_decision_get`");
+  const dispatch = invariant.indexOf("repair `implementer` task dispatch");
+  assert.ok(
+    affirmative >= 0 &&
+      affirmative < parentRead &&
+      parentRead < authorization &&
+      authorization < refresh &&
+      refresh < dispatch,
+    "repair delegation must read, authorize, refresh, then dispatch",
+  );
+  assert.match(
+    invariant,
+    /affirmative response[^.]*necessary semantic authorization but is not dispatch authority/u,
+  );
+  assert.match(
+    invariant,
+    /No `task\(implementer\)` call may occur[^.]*pending, failed, stale, rejected, unavailable, or materially changed/u,
+  );
+  assert.match(
+    invariant,
+    /stale proposal or version, changed repair scope, MCP outage, failed or unavailable mutation[^.]*no implementer dispatch/u,
+  );
+  assert.match(
+    invariant,
+    /refreshed projection[^.]*only when that projection authoritatively routes implementation[^.]*stop without dispatch/u,
+  );
+
+  const implementer = readFileSync(resolve(agentsDir, "contracts/implementer.md"), "utf8").replace(
+    /\s+/gu,
+    " ",
+  );
+  assert.match(
+    implementer,
+    /missing or stale directive[^.]*existing `BLOCKED` or `NEEDS_CONTEXT` stop/u,
+    "implementer must retain the missing-authority fail-closed defense",
+  );
+});
+
 test("the checked-in native Plan override is canonical and isolated from generated agents", () => {
   const config = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
