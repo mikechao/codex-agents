@@ -890,20 +890,12 @@ test("reconciles an existing commit from a different owning runtime without a se
       runtimeRevision: base,
       ...runtimeAttestation(newRuntimeId, base, newKey),
     });
-    assert.deepEqual(unverifiedStore.reconciliationPermittedActions(created.workflow_id), []);
-    assert.notEqual(
+    assert.deepEqual(unverifiedStore.reconciliationPermittedActions(created.workflow_id), [
+      "workflow_reconcile_commit_result",
+    ]);
+    assert.equal(
       unverifiedStore.operatorDecisionGetForReconciliation(created.workflow_id).primary.kind,
       "reconcile_commit",
-    );
-    assert.equal(
-      category(() =>
-        unverifiedStore.reconcileCommitResult({
-          workflow_id: created.workflow_id,
-          expected_version: prepared.version,
-          attempt_id: prepared.commit_preparation.attempt_id,
-        }),
-      ),
-      "ERROR_COMMIT_MISMATCH",
     );
     assert.equal(rawState(unverifiedStore, created.workflow_id).phase, "COMMIT_PREPARED");
     unverifiedStore.close();

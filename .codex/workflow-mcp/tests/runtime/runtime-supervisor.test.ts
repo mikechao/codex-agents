@@ -331,13 +331,22 @@ describe("Workflow MCP runtime supervision", () => {
          const request = JSON.parse(line);
          if (request.id === undefined) return;
            const parentView = request.params?.name === "workflow_parent_get" ? {
-            content: [{ type: "text", text: JSON.stringify({
-              workflow_id: request.params?.arguments?.workflow_id,
-              phase: runtimeLabel === "current" ? "COMMITTED" : "COMMIT_PREPARED",
-             permitted_next_actions: [],
-             runtime_label: runtimeLabel,
-           }) }],
-         } : {};
+              content: [{ type: "text", text: JSON.stringify({
+                workflow_id: request.params?.arguments?.workflow_id,
+                phase: runtimeLabel === "current" ? "COMMITTED" : "COMMIT_PREPARED",
+               permitted_next_actions: [],
+               runtime_label: runtimeLabel,
+             }) }],
+           } : {};
+           const operatorDecision = request.params?.name === "workflow_operator_decision_get" ? {
+             content: [{ type: "text", text: JSON.stringify({
+               primary: runtimeLabel === "current" ? {
+                 kind: "terminal",
+                 outcome: "committed",
+                 reason: "the workflow commit is verified and complete",
+               } : null,
+             }) }],
+           } : {};
          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
            runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
            runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
@@ -345,6 +354,7 @@ describe("Workflow MCP runtime supervision", () => {
            method: request.method,
            tool: request.params?.name,
            ...parentView,
+           ...operatorDecision,
          } }) + "\\n");
        });
      `;

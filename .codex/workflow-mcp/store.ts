@@ -91,6 +91,7 @@ import type {
   AuditEventType,
   AuditOutcome,
   ChangeReceipt,
+  CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
   DirtyScopeAdoptionAudit,
@@ -663,7 +664,7 @@ type ReviewRecoveryPreflight = {
 type ReconciliationPreflight = {
   readiness: WorkflowCommitResultReadiness;
   commitHash: GitCommitSha | null;
-  mismatch: string | null;
+  mismatch: CommitMismatchCategory | null;
   error?: unknown;
 };
 
@@ -1135,17 +1136,11 @@ export class WorkflowStore {
   #reconciliationPreflight(state: WorkflowState): ReconciliationPreflight {
     try {
       const verification = verifyPreparedCommit(this.root, state);
-      return verification.category === null
-        ? {
-            readiness: { status: "ready", authority: "reconciliation" },
-            commitHash: verification.commit_hash,
-            mismatch: null,
-          }
-        : {
-            readiness: { status: "unavailable" },
-            commitHash: null,
-            mismatch: verification.category,
-          };
+      return {
+        readiness: { status: "ready", authority: "reconciliation" },
+        commitHash: verification.commit_hash,
+        mismatch: verification.category,
+      };
     } catch (error) {
       return {
         readiness: { status: "unavailable" },
@@ -1791,15 +1786,14 @@ export class WorkflowStore {
       const executingCurrent =
         detail.executing_runtime_id === this.runtimeId &&
         detail.executing_runtime_revision === this.runtimeRevision;
-      const historicalOwnerEvidence =
-        options.crossRuntime === "historical-owner" && detail.cross_runtime && !executingCurrent;
-      const expectedExecutingRuntime =
-        historicalOwnerEvidence ||
-        (options.crossRuntime === "any" && !detail.cross_runtime
-          ? executingOwner
-          : executingCurrent);
-      if (!expectedExecutingRuntime) {
-        fail("ERROR_STALE_ADOPTION", "dirty scope adoption executing runtime is unavailable");
+      if (typeof options.crossRuntime === "boolean") {
+        if (options.crossRuntime !== detail.cross_runtime || !executingCurrent) {
+          fail("ERROR_STALE_ADOPTION", "dirty scope adoption executing runtime is unavailable");
+        }
+      } else if (options.crossRuntime === "historical-owner" && !detail.cross_runtime) {
+        if (!executingOwner) {
+          fail("ERROR_STALE_ADOPTION", "dirty scope adoption executing runtime is unavailable");
+        }
       }
       if (
         detail.current_states.length !== detail.adopted_paths.length ||
@@ -1878,7 +1872,7 @@ export class WorkflowStore {
       fail("ERROR_STALE_ADOPTION", "dirty scope recovery requires a working-tree review");
     }
     const receipt = createReceipt(this.root, state.review_target.approved_paths, true);
-    this.#verifyPendingDirtyAdoptions(state, receipt, { crossRuntime: true });
+    this.#verifyPendingDirtyAdoptions(state, receipt, { crossRuntime: "historical-owner" });
   }
 
   pendingDirtyScope(workflowIdValue: unknown): boolean {
@@ -2455,8 +2449,7 @@ export class WorkflowStore {
         const preflight = this.#reconciliationPreflight(state);
         if (
           preflight.readiness.status !== "ready" ||
-          preflight.readiness.authority !== "reconciliation" ||
-          preflight.commitHash === null
+          preflight.readiness.authority !== "reconciliation"
         ) {
           if (preflight.error) throw preflight.error;
           fail(
@@ -2465,6 +2458,10 @@ export class WorkflowStore {
               ? `prepared commit verification failed: ${preflight.mismatch}`
               : "prepared commit verification is unavailable",
           );
+        }
+        if (preflight.mismatch) return commitMismatch(state, preflight.mismatch);
+        if (preflight.commitHash === null) {
+          fail("ERROR_COMMIT_MISMATCH", "prepared commit verification is unavailable");
         }
         return submitCommitResult(state, result, preflight.commitHash);
       },
