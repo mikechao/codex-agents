@@ -643,8 +643,9 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   assert.match(content, /immediately preceding Native Plan handoff/);
   assert.match(content, /without asking the user to repeat/);
   assert.match(content, /generic.*pasted prose.*not authority/u);
-  assert.match(content, /do not pass pasted plan text/);
-  assert.match(content, /never pass or retranscribe its full plan/);
+  const normalizedContent = content.replace(/\s+/gu, " ");
+  assert.match(normalizedContent, /do not pass pasted plan text/);
+  assert.match(normalizedContent, /never pass or retranscribe its full plan/);
   for (const phrase of [
     "Standalone audit, research, explain, trace, and report requests",
     "Fail closed with bounded direction to use Native Plan",
@@ -719,7 +720,7 @@ test("normal execution is self-contained and MCP outage handling is recovery-onl
   assert.match(workflow, /does not define a degraded handoff schema/u);
 });
 
-test("orchestrator presents semantic proposals before natural-language authorization", () => {
+test("orchestrator presents semantic proposals and consumes descriptor inputs", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const guide = readFileSync(
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
@@ -730,35 +731,38 @@ test("orchestrator presents semantic proposals before natural-language authoriza
   for (const contract of contracts) {
     assert.match(contract, /semantic (?:decisions|choice|user choice)/u);
     assert.match(contract, /concrete safe proposal/u);
-    assert.match(contract, /exact `workflow_parent_get`/u);
-    assert.match(contract, /consequence/u);
-    assert.match(contract, /exact repository-relative/u);
-    assert.match(contract, /not authorization/u);
-    assert.match(contract, /internal (?:action\/phase|action\/tool) names/u);
-    assert.match(contract, /contextual `yes`|`yes`, `continue`, `go ahead`, and `commit it`/u);
-    assert.match(contract, /`Reply \.\.\.` incantation|magic phrase/u);
+    assert.match(contract, /descriptor/u);
+    assert.match(contract, /consequence|outcome/u);
+    assert.match(contract, /exact (?:visible )?repository-relative/u);
+    assert.match(contract, /not (?:authorization|a proposal store|a bearer capability)/u);
+    assert.match(contract, /internal.*(?:action\/phase|action\/tool).*names/u);
+    assert.match(contract, /contextual `yes`|`yes`, `continue`, `go ahead`, and `commit it`/iu);
+    assert.match(contract, /ordinary equivalent wording|contextual `yes`/iu);
     assert.match(contract, /ambiguous.*fail(?:s)? closed/u);
-    assert.match(contract, /After affirmative input.*re-read/u);
+    assert.match(contract, /After (?:(?:any )?required )?affirmative input.*(?:refetch|re-read)/u);
+    assert.match(contract, /durable proposal state/u);
+    assert.match(contract, /parent_context/u);
     assert.match(
       contract,
-      /[Vv]erif(?:y|ies) proposal,\s*(?:exact\s+)?scope,\s*(?:current\s+)?findings,\s*lineage,\s*plan binding/u,
+      /(?:undeclared.*fail(?:s)? closed|does not declare.*fail(?:s)? closed)/u,
     );
-    assert.match(contract, /No durable proposal state/u);
   }
 
-  const proposal = orchestrator.indexOf("resolve one concrete safe proposal");
-  const question = orchestrator.indexOf("Ask only for the genuine user-owned choice", proposal);
-  const affirmative = orchestrator.indexOf("After affirmative input", question);
+  const proposal = orchestrator.indexOf("Present one concrete safe proposal");
+  const question = orchestrator.indexOf("genuine user-owned choice", proposal);
+  const affirmative = orchestrator.indexOf("For `parent_mutation`, follow", question);
   assert.ok(proposal >= 0 && proposal < question && question < affirmative);
   assert.match(orchestrator, /negative, ambiguous, unrelated, changed, or stale response/u);
+  assert.match(orchestrator, /authorization\.required.*(?:true|false)/u);
   assert.match(orchestrator, /without asking the user to repeat its identity or revision/u);
   assert.match(orchestrator, /generic.*pasted prose.*not authority/u);
   assert.match(orchestrator, /never choose a historical or unrelated plan/u);
   assert.match(orchestrator, /workflow_create_from_plan` by identity and supported options only/u);
 });
 
-test("repair rejection cannot authorize adjudication or dispatch", () => {
-  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+test("descriptor version 3 is the only executable descriptor", () => {
+  const orchestratorSource = opencode("orchestrator.md");
+  const orchestrator = orchestratorSource.replace(/\s+/gu, " ");
   const guide = readFileSync(
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
     "utf8",
@@ -766,96 +770,450 @@ test("repair rejection cannot authorize adjudication or dispatch", () => {
   const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator, guide, workflow]) {
-    assert.match(contract, /exact semantic proposal currently presented/u);
-    assert.match(
+    assert.match(contract, /descriptor_version/u);
+    assert.match(contract, /descriptor version 3|v3/u);
+    assert.match(contract, /fail(?:s)? closed/u);
+    assert.match(contract, /(?:no|without fallback) (?:fallback )?mutation or dispatch/u);
+    assert.match(contract, /unknown/iu);
+    assert.match(contract, /malformed/iu);
+    assert.match(contract, /contradictory/iu);
+    assert.doesNotMatch(
       contract,
-      /(?:repair proposal|response to a repair proposal)[^.]*?(?:authorizes nothing|no parent mutation|no mutation)/u,
-      "repair rejection must authorize nothing",
-    );
-    assert.match(contract, /no (?:parent )?mutation[^.]*no worker dispatch/u);
-    assert.match(
-      contract,
-      /rejection explanation[^.]*intentional (?:dogfood[- ]?)?sentinel[^.]*rejection context only/u,
-      "a rejection explanation must remain non-authoritative",
-    );
-    assert.match(
-      contract,
-      /separate semantic proposal[^.]*bounded rationale and consequence[^.]*fresh affirmative[^.]*adjudication proposal/u,
-      "adjudication must have a separate fresh authorization",
+      /descriptor(?:s)? v[12]|v[12] descriptor|historical descriptor/iu,
     );
   }
 
-  const repairProposal = orchestrator.indexOf("Present its required outcome");
-  const repairQuestion = orchestrator.indexOf("before asking whether to authorize the repair");
-  const repairRejection = orchestrator.indexOf("response to a repair proposal");
-  const adjudicationProposal = orchestrator.indexOf("as a new, separate semantic proposal");
-  const adjudicationApproval = orchestrator.indexOf(
-    "fresh affirmative response tied to that adjudication proposal",
+  const descriptor = (descriptor_version: unknown, primary: Record<string, unknown>) => ({
+    descriptor_version,
+    primary,
+    parent_actions: [],
+  });
+  // These are host worker-route capabilities, not route-to-operation protocol knowledge.
+  const hostDispatchRoutes = new Set(["implement", "review", "re_review", "commit"]);
+  const hostParentTools = new Set(
+    [...orchestratorSource.matchAll(/^\s+workflow_state_(workflow_[a-z_]+): allow$/gmu)].map(
+      (match) => match[1],
+    ),
   );
-  const adjudicationMutation = orchestrator.indexOf("`workflow_adjudicate_findings`");
-  assert.ok(
-    repairProposal >= 0 &&
-      repairProposal < repairQuestion &&
-      repairQuestion < repairRejection &&
-      repairRejection < adjudicationProposal &&
-      adjudicationProposal < adjudicationApproval &&
-      adjudicationApproval < adjudicationMutation,
-    "repair authorization, rejection, and separate adjudication authorization must be ordered",
-  );
+  const hostWorkerTools = new Set<string>();
+  for (const role of ["implementer", "code_reviewer", "committer"] as const) {
+    const parsed = TOML.parse(readFileSync(resolve(agentsDir, `${role}.toml`), "utf8")) as {
+      mcp_servers?: { workflow_state?: { enabled_tools?: unknown } };
+    };
+    const enabledTools = parsed.mcp_servers?.workflow_state?.enabled_tools;
+    if (Array.isArray(enabledTools)) {
+      for (const tool of enabledTools) if (typeof tool === "string") hostWorkerTools.add(tool);
+    }
+  }
+  assert.ok(hostParentTools.has("workflow_authorize_commit"));
+  assert.ok(hostWorkerTools.has("workflow_submit_implementation"));
 
-  const affirmativeReread = orchestrator.indexOf(
-    "After affirmative input, re-read current authoritative state",
+  const noAuthorization = {
+    required: false,
+    representation: { kind: "none" },
+    binding: { kind: "none" },
+  };
+  const parentInvocation = {
+    operation: "workflow_authorize_commit",
+    fixed_arguments: { workflow_id: "wf-current", expected_version: 7 },
+    required_inputs: [],
+    input_alternatives: [{ paths: [["choice_a"], ["choice_b"]], source: "user", required: true }],
+    authorization: {
+      required: true,
+      representation: { kind: "field", path: ["user_authorization"] },
+      binding: { kind: "all", paths: [] },
+    },
+    stale_binding: {
+      workflow_id: "wf-current",
+      expected_version: 7,
+      references: [],
+    },
+    on_success: {
+      kind: "refresh_required",
+      expected: ["commit", "wait"],
+      dispatch_authority: false,
+    },
+  };
+  const inspectionInvocation = (status: "passed" | "failed") => ({
+    operation: "workflow_record_manual_validation",
+    fixed_arguments: {
+      workflow_id: "wf-current",
+      expected_version: 7,
+      validation_id: "VAL-001",
+      status,
+    },
+    required_inputs: [{ path: ["evidence"], source: "parent_context", required: true }],
+    authorization: noAuthorization,
+    stale_binding: {
+      workflow_id: "wf-current",
+      expected_version: 7,
+      references: [{ kind: "validation", validation_ids: ["VAL-001"] }],
+    },
+    on_success: {
+      kind: "refresh_required",
+      expected: ["collect_evidence", "review", "wait"],
+      dispatch_authority: false,
+    },
+  });
+
+  const v3Fixtures = [
+    {
+      name: "dispatch",
+      descriptor: descriptor(3, {
+        mode: "dispatch",
+        route: "implement",
+        operation: "workflow_submit_implementation",
+        workflow_id: "wf-current",
+        expected_version: 7,
+      }),
+      expected: "dispatch",
+    },
+    {
+      name: "parent mutation with required authorization",
+      descriptor: descriptor(3, {
+        mode: "parent_mutation",
+        selection: "single",
+        invocations: [parentInvocation],
+      }),
+      expected: "parent_mutation",
+    },
+    {
+      name: "collect evidence observed",
+      descriptor: descriptor(3, {
+        mode: "collect_evidence",
+        validation_id: "VAL-001",
+        outcomes: {
+          observed: {
+            passed: {
+              mode: "parent_mutation",
+              selection: "single",
+              invocations: [inspectionInvocation("passed")],
+            },
+            failed: {
+              mode: "parent_mutation",
+              selection: "single",
+              invocations: [inspectionInvocation("failed")],
+            },
+          },
+          unavailable: { mode: "wait", reason: "inspection evidence is unavailable" },
+        },
+        specialization: "recovery_inspection",
+      }),
+      observed: "passed",
+      expected: "parent_mutation",
+    },
+    {
+      name: "collect evidence unavailable",
+      descriptor: descriptor(3, {
+        mode: "collect_evidence",
+        validation_id: "VAL-001",
+        outcomes: {
+          observed: {
+            passed: {
+              mode: "parent_mutation",
+              selection: "single",
+              invocations: [inspectionInvocation("passed")],
+            },
+            failed: {
+              mode: "parent_mutation",
+              selection: "single",
+              invocations: [inspectionInvocation("failed")],
+            },
+          },
+          unavailable: { mode: "wait", reason: "inspection evidence is unavailable" },
+        },
+        specialization: "recovery_inspection",
+      }),
+      observed: "unavailable",
+      expected: "wait",
+    },
+    {
+      name: "wait",
+      descriptor: descriptor(3, { mode: "wait", reason: "authoritative action is unavailable" }),
+      expected: "wait",
+    },
+    {
+      name: "terminal",
+      descriptor: descriptor(3, { mode: "terminal", outcome: "committed" }),
+      expected: "terminal",
+    },
+  ] as const;
+
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const inputSources = new Set(["user", "parent_context", "server_derived"]);
+  const isStringArray = (value: unknown): value is string[] =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === "string" && item.length > 0);
+  const isAuthorization = (value: unknown): boolean => {
+    if (!isRecord(value) || typeof value.required !== "boolean") return false;
+    if (!isRecord(value.representation) || !isRecord(value.binding)) return false;
+    if (!value.required) {
+      return value.representation.kind === "none" && value.binding.kind === "none";
+    }
+    const representationValid =
+      value.representation.kind === "metadata_only" ||
+      (value.representation.kind === "field" &&
+        isStringArray(value.representation.path) &&
+        value.representation.path.length > 0);
+    if (!representationValid) return false;
+    if (value.binding.kind === "all") {
+      return Array.isArray(value.binding.paths) && value.binding.paths.every(isStringArray);
+    }
+    return (
+      value.binding.kind === "exclusive_one_of" &&
+      Array.isArray(value.binding.common_paths) &&
+      value.binding.common_paths.every(isStringArray) &&
+      Array.isArray(value.binding.alternatives) &&
+      value.binding.alternatives.every(isStringArray)
+    );
+  };
+  const isInput = (value: unknown): boolean =>
+    isRecord(value) &&
+    value.required === true &&
+    isStringArray(value.path) &&
+    typeof value.source === "string" &&
+    inputSources.has(value.source);
+  const isAlternative = (value: unknown): boolean =>
+    isRecord(value) &&
+    value.required === true &&
+    Array.isArray(value.paths) &&
+    value.paths.length > 0 &&
+    value.paths.every(isStringArray) &&
+    typeof value.source === "string" &&
+    inputSources.has(value.source);
+  const isInvocation = (value: unknown): boolean => {
+    if (!isRecord(value)) return false;
+    const success = value.on_success;
+    return (
+      typeof value.operation === "string" &&
+      hostParentTools.has(value.operation) &&
+      isRecord(value.fixed_arguments) &&
+      Object.values(value.fixed_arguments).every(
+        (argument) =>
+          (typeof argument === "string" && argument.length > 0) ||
+          (typeof argument === "number" && Number.isFinite(argument)),
+      ) &&
+      Array.isArray(value.required_inputs) &&
+      value.required_inputs.every(isInput) &&
+      (value.input_alternatives === undefined ||
+        (Array.isArray(value.input_alternatives) &&
+          value.input_alternatives.every(isAlternative))) &&
+      isAuthorization(value.authorization) &&
+      isRecord(value.stale_binding) &&
+      typeof value.stale_binding.workflow_id === "string" &&
+      value.stale_binding.workflow_id.length > 0 &&
+      typeof value.stale_binding.expected_version === "number" &&
+      Number.isInteger(value.stale_binding.expected_version) &&
+      value.stale_binding.expected_version >= 0 &&
+      Array.isArray(value.stale_binding.references) &&
+      value.stale_binding.references.every(isRecord) &&
+      isRecord(success) &&
+      success.kind === "refresh_required" &&
+      Array.isArray(success.expected) &&
+      success.expected.every((next) => typeof next === "string" && next.length > 0) &&
+      success.dispatch_authority === false
+    );
+  };
+  const isMutation = (value: unknown): boolean =>
+    isRecord(value) &&
+    value.mode === "parent_mutation" &&
+    (value.selection === "single" || value.selection === "choose_one") &&
+    Array.isArray(value.invocations) &&
+    value.invocations.length > 0 &&
+    value.invocations.every(isInvocation);
+  const isWait = (value: unknown): boolean =>
+    isRecord(value) &&
+    value.mode === "wait" &&
+    typeof value.reason === "string" &&
+    value.reason.length > 0;
+  const classify = (
+    value: unknown,
+    observed?: "passed" | "failed" | "unavailable",
+  ): "dispatch" | "parent_mutation" | "wait" | "terminal" | "fail_closed" => {
+    if (
+      !isRecord(value) ||
+      value.descriptor_version !== 3 ||
+      !isRecord(value.primary) ||
+      !Array.isArray(value.parent_actions) ||
+      !value.parent_actions.every(isRecord)
+    ) {
+      return "fail_closed";
+    }
+    const primary = value.primary;
+    if (primary.mode === "dispatch") {
+      return typeof primary.route === "string" &&
+        hostDispatchRoutes.has(primary.route) &&
+        typeof primary.operation === "string" &&
+        hostWorkerTools.has(primary.operation) &&
+        typeof primary.workflow_id === "string" &&
+        primary.workflow_id.length > 0 &&
+        typeof primary.expected_version === "number" &&
+        Number.isInteger(primary.expected_version) &&
+        primary.expected_version >= 0
+        ? "dispatch"
+        : "fail_closed";
+    }
+    if (primary.mode === "parent_mutation") {
+      return isMutation(primary) ? "parent_mutation" : "fail_closed";
+    }
+    if (primary.mode === "wait") return isWait(primary) ? "wait" : "fail_closed";
+    if (primary.mode === "terminal") {
+      return typeof primary.outcome === "string" && primary.outcome.length > 0
+        ? "terminal"
+        : "fail_closed";
+    }
+    if (
+      primary.mode !== "collect_evidence" ||
+      typeof primary.validation_id !== "string" ||
+      primary.validation_id.length === 0 ||
+      primary.specialization !== "recovery_inspection" ||
+      !isRecord(primary.outcomes) ||
+      !isRecord(primary.outcomes.observed) ||
+      !isRecord(primary.outcomes.unavailable) ||
+      !isMutation(primary.outcomes.observed.passed) ||
+      !isMutation(primary.outcomes.observed.failed) ||
+      !isWait(primary.outcomes.unavailable)
+    ) {
+      return "fail_closed";
+    }
+    if (observed === "unavailable") return "wait";
+    return observed === "passed" || observed === "failed" ? "parent_mutation" : "fail_closed";
+  };
+
+  for (const fixture of v3Fixtures) {
+    const observed = "observed" in fixture ? fixture.observed : undefined;
+    assert.equal(classify(fixture.descriptor, observed), fixture.expected, fixture.name);
+  }
+  for (const version of [undefined, null, 0, 1, 2, 4, "3"]) {
+    assert.equal(
+      classify(
+        descriptor(version, {
+          mode: "dispatch",
+          route: "implement",
+          operation: "workflow_submit_implementation",
+          workflow_id: "wf-current",
+          expected_version: 7,
+        }),
+      ),
+      "fail_closed",
+      `unsupported descriptor version ${String(version)}`,
+    );
+  }
+  assert.equal(
+    classify(
+      descriptor(3, {
+        mode: "dispatch",
+        route: "bogus",
+        operation: "workflow_submit_implementation",
+        workflow_id: "wf-current",
+        expected_version: 7,
+      }),
+    ),
+    "fail_closed",
+    "malformed v3 dispatch",
   );
-  const exactMutation = orchestrator.indexOf(
-    "encode exactly that proposal into the existing MCP mutation",
+  assert.equal(
+    classify(
+      descriptor(3, {
+        mode: "dispatch",
+        route: "implement",
+        operation: "bogus",
+        workflow_id: "wf-current",
+        expected_version: 7,
+      }),
+    ),
+    "fail_closed",
+    "unusable v3 dispatch operation",
   );
-  const postMutationRefresh = orchestrator.indexOf("After every parent mutation");
-  const reviewerDispatch = orchestrator.indexOf("dispatching `code_reviewer`", postMutationRefresh);
-  assert.ok(
-    affirmativeReread >= 0 &&
-      affirmativeReread < exactMutation &&
-      exactMutation < postMutationRefresh &&
-      postMutationRefresh < reviewerDispatch,
-    "affirmative reread and mutation must precede refresh and reviewer routing",
+  assert.equal(
+    classify(
+      descriptor(3, {
+        mode: "parent_mutation",
+        selection: "single",
+        invocations: [{ ...parentInvocation, authorization: { required: true } }],
+      }),
+    ),
+    "fail_closed",
+    "malformed v3 authorization",
   );
+  assert.equal(
+    classify(
+      descriptor(3, {
+        mode: "parent_mutation",
+        selection: "single",
+        invocations: [
+          {
+            ...inspectionInvocation("passed"),
+            required_inputs: [{ path: ["evidence"], source: "bogus", required: true }],
+          },
+        ],
+      }),
+    ),
+    "fail_closed",
+    "unusable v3 input source",
+  );
+  assert.equal(classify(descriptor(3, { mode: "unknown" })), "fail_closed", "unsupported v3 mode");
+  assert.equal(
+    classify(descriptor(3, { mode: "wait" })),
+    "fail_closed",
+    "incomplete v3 wait descriptor",
+  );
+  assert.equal(
+    classify({
+      descriptor_version: 3,
+      primary: { mode: "wait", reason: "stop" },
+      parent_actions: [null],
+    }),
+    "fail_closed",
+    "malformed v3 parent actions",
+  );
+  assert.equal(
+    classify(
+      descriptor(3, {
+        mode: "collect_evidence",
+        validation_id: "VAL-001",
+        specialization: "deferred",
+        outcomes: {
+          observed: {
+            passed: { mode: "wait", reason: "not a mutation" },
+            failed: { mode: "wait", reason: "not a mutation" },
+          },
+          unavailable: { mode: "wait", reason: "inspection evidence is unavailable" },
+        },
+      }),
+    ),
+    "fail_closed",
+    "unsupported v3 specialization",
+  );
+  assert.match(orchestrator, /descriptor_version.*exactly `3`/u);
+  assert.match(orchestrator, /input_alternatives/u);
+  assert.match(orchestrator, /authorization\.required.*false.*(?:do not invent|block)/u);
+  assert.match(orchestrator, /contradictory.*descriptor.*fail(?:s)? closed/iu);
 });
 
-test("repair implementer dispatch requires persisted authorization and refreshed routing", () => {
+test("descriptor routing preserves worker and mutation fail-closed boundaries", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
-  const start = orchestrator.indexOf("### Repair authorization/delegation invariant");
-  const end = orchestrator.indexOf("The same exact workflow ID flows", start);
-  assert.ok(start >= 0 && end > start, "orchestrator must isolate the repair delegation invariant");
-  const invariant = orchestrator.slice(start, end);
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
 
-  const affirmative = invariant.indexOf("user affirmative response");
-  const parentRead = invariant.indexOf("immediate exact current `workflow_parent_get`");
-  const authorization = invariant.indexOf("successful `workflow_authorize_repair`");
-  const refresh = invariant.indexOf("refreshed `workflow_operator_decision_get`");
-  const dispatch = invariant.indexOf("repair `implementer` task dispatch");
-  assert.ok(
-    affirmative >= 0 &&
-      affirmative < parentRead &&
-      parentRead < authorization &&
-      authorization < refresh &&
-      refresh < dispatch,
-    "repair delegation must read, authorize, refresh, then dispatch",
-  );
-  assert.match(
-    invariant,
-    /affirmative response[^.]*necessary semantic authorization but is not dispatch authority/u,
-  );
-  assert.match(
-    invariant,
-    /No `task\(implementer\)` call may occur[^.]*pending, failed, stale, rejected, unavailable, or materially changed/u,
-  );
-  assert.match(
-    invariant,
-    /stale proposal or version, changed repair scope, MCP outage, failed or unavailable mutation[^.]*no implementer dispatch/u,
-  );
-  assert.match(
-    invariant,
-    /refreshed projection[^.]*only when that projection authoritatively routes implementation[^.]*stop without dispatch/u,
-  );
+  for (const contract of [orchestrator, guide]) {
+    assert.match(contract, /dispatch.*returned route/u);
+    assert.match(contract, /parent_mutation/u);
+    assert.match(contract, /fixed arguments/u);
+    assert.match(contract, /declared inputs/u);
+    assert.match(contract, /authorization.*(?:representation|boundary)/u);
+    assert.match(contract, /committed_execution/u);
+    assert.match(contract, /fresh descriptor/u);
+    assert.match(contract, /failed/u);
+    assert.match(contract, /stale/u);
+    assert.match(contract, /rejected/u);
+    assert.match(contract, /unavailable/u);
+    assert.match(contract, /no (?:speculative )?mutation or dispatch/u);
+  }
 
   const implementer = readFileSync(resolve(agentsDir, "contracts/implementer.md"), "utf8").replace(
     /\s+/gu,
@@ -866,6 +1224,47 @@ test("repair implementer dispatch requires persisted authorization and refreshed
     /missing or stale directive[^.]*existing `BLOCKED` or `NEEDS_CONTEXT` stop/u,
     "implementer must retain the missing-authority fail-closed defense",
   );
+});
+
+test("orchestrator and flow guide do not duplicate descriptor protocol maps", () => {
+  const orchestratorSource = opencode("orchestrator.md");
+  const orchestrator = orchestratorSource.slice(orchestratorSource.indexOf("\n---\n") + 5);
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  );
+  const compactOrchestrator = orchestrator.replace(/\s+/gu, " ");
+  const compactGuide = guide.replace(/\s+/gu, " ");
+
+  for (const contract of [orchestrator, guide]) {
+    assert.match(contract, /descriptor/u);
+    assert.doesNotMatch(contract, /\b(?:resume_context|retry_context|review_context)\b/u);
+    assert.doesNotMatch(
+      contract,
+      /workflow_(?:authorize_repair|authorize_commit|retry_commit|return_commit_to_review)[^\n]*(?:->|then).*?(?:implementer|committer|reviewer)/u,
+    );
+    assert.doesNotMatch(
+      contract,
+      /(?:workflow_authorize_repair|workflow_authorize_commit)[^\n]*payload/u,
+    );
+    assert.doesNotMatch(
+      contract,
+      /phase[^\n]*(?:selects|routes|dispatches).*?(?:implementer|reviewer|committer)/iu,
+    );
+  }
+
+  assert.match(orchestrator, /execution\.primary/u);
+  assert.match(orchestrator, /fixed arguments/u);
+  assert.match(orchestrator, /declared inputs/u);
+  assert.match(orchestrator, /committed_execution/u);
+  assert.match(compactOrchestrator, /workflow_parent_get.*parent_context/u);
+  assert.match(compactOrchestrator, /If an advertised input.*source `parent_context`/u);
+  assert.match(
+    compactOrchestrator,
+    /If a mutation would require an input that the descriptor does not declare/u,
+  );
+  assert.match(compactGuide, /workflow_parent_get.*parent_context/u);
+  assert.match(compactGuide, /other descriptor-declared protocol knowledge/u);
 });
 
 test("the checked-in native Plan override is canonical and isolated from generated agents", () => {
@@ -893,13 +1292,13 @@ test("the checked-in native Plan override is canonical and isolated from generat
   assert.ok(!generatedPaths.some((path) => path.endsWith("/.opencode/agents/plan.md")));
 });
 
-test("orchestrator summarizes refreshed semantic transitions before routing", () => {
+test("orchestrator summarizes refreshed descriptors before routing", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator]) {
     assert.match(
       contract,
-      /After every terminal (?:subagent|worker) handoff[^.]*refresh[^.]*workflow_operator_decision_get[^.]*before summarizing or routing/u,
+      /After every terminal subagent handoff[^.]*refresh `workflow_operator_decision_get`[^.]*before summarizing or routing/u,
       "terminal handoffs must refresh the operator projection before summary and routing",
     );
     assert.match(contract, /authoritative/u, "summaries must use authoritative parent state");
@@ -913,30 +1312,30 @@ test("orchestrator summarizes refreshed semantic transitions before routing", ()
     );
     assert.match(
       contract,
-      /After every parent mutation[^.]*refresh[^.]*workflow_operator_decision_get[^.]*again[^.]*fresh semantic summary[^.]*before redispatch/u,
-      "parent mutations require a second projection refresh and summary before redispatch",
+      /After every parent mutation[^.]*process the committed or freshly read descriptor[^.]*before redispatching/u,
+      "parent mutations require committed or freshly read descriptor routing",
     );
   }
 
   assert.match(
     orchestrator,
-    /CHANGES_REQUESTED.*?every bounded blocker summary.*?before asking for repair authorization.*?exact current.*?finding IDs.*?do not authorize repair or redispatch/u,
-    "blocking findings must be visible before repair routing",
+    /descriptor supplies the exact repair operation.*?directive envelope.*?authorization placement.*?post-success route/u,
+    "repair protocol details must be descriptor-owned",
   );
   assert.match(
     orchestrator,
-    /current repair cycle[^.]*next role is the implementer/u,
-    "repair authorization must identify the cycle and next role",
+    /fresh descriptor.*?selects the next worker/u,
+    "worker routing must use a fresh descriptor",
   );
   assert.match(
     orchestrator,
-    /APPROVED[^.]*optional_findings[^.]*request explicit commit authorization/u,
-    "approval must precede commit authorization",
+    /optional findings never trigger remediation/iu,
+    "optional findings must not trigger remediation",
   );
   assert.match(
     orchestrator,
-    /recovery_summary\.stop_reason[^.]*recovery_summary\.recovery_context[^.]*single available recovery decision/u,
-    "stop summaries must use projection-only recovery context",
+    /terminal.*descriptor reports its authoritative outcome/iu,
+    "terminal outcomes must come from the descriptor",
   );
   assert.match(
     orchestrator,
@@ -955,56 +1354,39 @@ test("orchestrator summarizes refreshed semantic transitions before routing", ()
   );
 });
 
-test("repair-terminal routing is projection-first and fail-closed", () => {
+test("descriptor routing is projection-first and fail-closed", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const guide = readFileSync(
     resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
     "utf8",
   ).replace(/\s+/gu, " ");
 
-  const terminal = orchestrator.indexOf("After every terminal implementation handoff");
-  const refresh = orchestrator.indexOf("call `workflow_operator_decision_get` first", terminal);
-  const decision = orchestrator.indexOf("semantic decision", terminal);
-  const reviewing = orchestrator.indexOf(
-    "`no_user_action/review` or `no_user_action/re_review`",
-    terminal,
-  );
-  const reviewer = orchestrator.indexOf("dispatch `code_reviewer` for a", reviewing);
-  assert.ok(terminal >= 0 && terminal < refresh);
-  assert.ok(refresh < decision && decision < reviewing && reviewing < reviewer);
-
   for (const contract of [orchestrator, guide]) {
-    assert.match(contract, /retained (?:findings|blockers)[^.]*history\/remediation context/iu);
+    assert.match(contract, /retained (?:findings|blockers)/iu);
+    assert.match(contract, /history(?:\/| and )remediation context/iu);
     assert.ok(
       /non-empty list alone never constitutes a fresh review result/u.test(contract) ||
         /non-empty retained list is not a fresh review result/u.test(contract) ||
-        /retained non-empty blocker list alone never prompts for repair/u.test(contract),
+        /retained non-empty blocker list alone never prompts for repair/u.test(contract) ||
+        /retained (?:finding|blocker)s?[^.]*never (?:create a repair route|prompts for repair)/iu.test(
+          contract,
+        ),
       "retained findings must never be treated as a fresh repair result",
     );
     assert.match(
       contract,
-      /fresh[^.]*?(?:projection reports `approve_exact_repairs`|`REPAIR_REQUIRED`)[^.]*?(?:(?:its )?authority boundary (?:is )?available|`workflow_authorize_repair`.*?permitted_next_actions|permitted_next_actions.*?`workflow_authorize_repair`)/u,
+      /fresh[^.]*descriptor[^.]*repair|repair[^.]*descriptor/u,
+      "repair must be exposed by a fresh descriptor",
     );
-    assert.match(contract, /current exact (?:(?:blocking )?(?:finding )?IDs|blocker IDs)/u);
+    assert.match(
+      contract,
+      /exact (?:eligible\/selected finding binding|(?:current )?finding IDs)/u,
+    );
     assert.ok(
       contract.includes("fail closed") || contract.includes("fails closed"),
       "an unavailable repair action must fail closed",
     );
   }
-
-  for (const contract of [orchestrator, guide]) {
-    assert.match(contract, /same[- ]ID[^.]*again/u);
-    assert.match(contract, /old ID[^.]*resolved[^.]*different (?:current )?blocker/u);
-  }
-  assert.match(
-    readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " "),
-    /same-ID[^.]*exact ID[^.]*resolv(?:ing|ed)[^.]*old ID[^.]*different current blocker/u,
-  );
-
-  const repairBranch = orchestrator.indexOf("Only a fresh reviewer handoff");
-  const repairAction = orchestrator.indexOf("`approve_exact_repairs`", repairBranch);
-  const currentIds = orchestrator.indexOf("current exact blocking finding IDs", repairBranch);
-  assert.ok(repairBranch >= 0 && repairBranch < repairAction && repairAction < currentIds);
 });
 
 test("orchestration contracts classify intent and reconcile the final tree explicitly", () => {
@@ -1027,8 +1409,14 @@ test("orchestration contracts classify intent and reconcile the final tree expli
   for (const contract of [orchestrator, guide]) {
     assert.match(contract, /unchanged (?:objective|approved intent)/iu);
     assert.match(contract, /ordinary repair/u);
-    assert.match(contract, /exact (?:blocking finding IDs|blocking IDs)/u);
-    assert.match(contract, /fresh independent (?:review|re-review)/u);
+    assert.match(
+      contract,
+      /exact (?:blocking finding IDs|blocking IDs|finding IDs|eligible\/selected finding binding)/u,
+    );
+    assert.match(
+      contract,
+      /fresh (?:independent )?(?:reconciliation )?review|fresh combined review/u,
+    );
     assert.match(contract, /changed intent/u);
     assert.match(contract, /new bounded `change` workflow/u);
     assert.match(contract, /repair, (?:finding )?adjudication, `workflow_expand_scope`/iu);
@@ -1040,15 +1428,23 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     assert.match(contract, /include_(?:staged|unstaged|untracked)/u);
     assert.match(contract, /exact complete/u);
     assert.match(contract, /unrelated and ignored/u);
-    assert.match(contract, /code_reviewer` directly/u);
-    assert.match(contract, /never (?:dispatch )?`?implementer`? first/u);
-    assert.match(contract, /fresh (?:reconciliation )?review reports blocking findings/u);
-    assert.match(contract, /ordinary exact-ID repair authorization/u);
+    assert.match(contract, /descriptor[^.]*returned route|returned descriptor[^.]*authoritative/u);
+    assert.doesNotMatch(
+      contract,
+      /commit authorization[^.]*dispatch(?:es)?[^.]*committer|blocking review[^.]*dispatch(?:es)?[^.]*implementer/u,
+    );
+    assert.match(
+      contract,
+      /fresh (?:reconciliation )?review(?: reports blocking findings| can expose a repair authorization descriptor| may expose a repair authorization descriptor)|fresh combined review/u,
+    );
+    assert.match(contract, /descriptor[^.]*repair|repair[^.]*descriptor/u);
     assert.match(contract, /optional findings never (?:trigger )?remediation/iu);
     assert.match(contract, /separate[^.]*commit authorization/u);
-    assert.match(contract, /one coherent commit/u);
     assert.match(contract, /supported (?:active )?source/u);
-    assert.match(contract, /exact current finding IDs/u);
+    assert.match(
+      contract,
+      /exact (?:current )?finding IDs|exact eligible\/selected finding binding/u,
+    );
     assert.match(contract, /narrow remediation (?:context and )?scope/u);
     assert.match(contract, /fresh combined review/u);
   }
@@ -1112,13 +1508,12 @@ test("orchestration contracts classify intent and reconcile the final tree expli
 
   const mutation = orchestrator.indexOf("After every parent mutation");
   const secondRefresh = orchestrator.indexOf(
-    "refresh `workflow_operator_decision_get` again",
+    "process the committed or freshly read descriptor",
     mutation,
   );
-  const freshSummary = orchestrator.indexOf("fresh semantic summary", mutation);
   const redispatch = orchestrator.indexOf("before redispatching", mutation);
   assert.ok(mutation >= 0 && mutation < secondRefresh);
-  assert.ok(secondRefresh < freshSummary && freshSummary < redispatch);
+  assert.ok(secondRefresh < redispatch);
 
   assert.match(
     orchestrator,
@@ -1175,46 +1570,14 @@ test("orchestration contracts classify intent and reconcile the final tree expli
       `${label} must scope the complete logical change and exclude unrelated or ignored state`,
     );
 
-    const reviewerDispatch = route.indexOf("Dispatch `code_reviewer` directly");
-    const blockingReview = Math.max(
-      route.indexOf("fresh reconciliation review reports blocking findings"),
-      route.indexOf("fresh review reports blocking findings"),
+    const reviewerDispatch = Math.max(
+      route.indexOf("Dispatch `code_reviewer` directly"),
+      route.indexOf("descriptor dispatches `code_reviewer` directly"),
     );
-    const repairAuthorization = route.indexOf("ordinary exact-ID repair authorization");
-    const implementerGate = Math.max(
-      route.indexOf("before permitting implementer"),
-      route.indexOf("before dispatching an implementer"),
-    );
+    assert.equal(reviewerDispatch, -1, `${label} must not hard-code a reconciliation worker`);
     assert.match(
       route,
-      /Dispatch `code_reviewer` directly(?:,| and) (?:never )?(?:dispatch )?(?:an )?`?implementer`? first/u,
-      `${label} must not start reconciliation with implementer`,
-    );
-    if (route.includes("Implementer is allowed in this route only after")) {
-      assert.match(
-        route,
-        /Implementer is allowed in this route only after a fresh review reports blocking findings and ordinary exact-ID repair authorization is obtained/u,
-        `${label} must co-locate the implementer gate with its blocking-finding authorization`,
-      );
-    } else {
-      assert.ok(
-        implementerGate > repairAuthorization,
-        `${label} must place implementer dispatch after ordinary repair authorization`,
-      );
-    }
-    assert.ok(
-      reviewerDispatch >= 0 &&
-        reviewerDispatch < blockingReview &&
-        blockingReview < repairAuthorization,
-      `${label} must order reviewer dispatch, blocking findings, and repair authorization`,
-    );
-
-    const approval = route.indexOf("Approval");
-    const commitAuthorization = route.indexOf("commit authorization");
-    const coherentCommit = route.indexOf("one coherent commit");
-    assert.ok(
-      approval >= 0 && approval < commitAuthorization && commitAuthorization < coherentCommit,
-      `${label} must keep approval, commit authorization, and coherent commit in order`,
+      /returned descriptor|descriptor[^.]*authoritative|descriptor[^.]*returned route|execution descriptor[^.]*determines/u,
     );
   }
 });

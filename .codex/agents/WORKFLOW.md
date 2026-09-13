@@ -148,12 +148,12 @@ text, execution brief, normalized contracts, digest, and provenance, so no plan 
 provenance for an explicitly authorized direct `review_only` repair: the complete authoritative
 direct objective, approved paths, acceptance/validation contracts, current blocker findings,
 `repair_authorized_ids`, remediation context, repair directive, phase, permitted action, and version
-are the execution contract. Review-only creation remains reviewer-first; only a fresh blocking review
-and exact-ID `workflow_authorize_repair` permits an implementer. No synthetic PlanArtifact or
-conversation-carried context bridge may be introduced. In either provenance mode, implementation is
-fail-closed when authority is incomplete, contradictory, stale, out of scope, or outside the exact
-directive/finding bounds. `approved_paths` is the effective append-only execution scope: only the
-parent may call `workflow_expand_scope`, and only with fresh explicit user authorization naming exact
+remain server-owned execution authority. Review-only creation remains reviewer-first; the fresh
+descriptor exposes whether an implementer may follow a blocking review and explicit authorization.
+No synthetic PlanArtifact or conversation-carried context bridge may be introduced. In either
+provenance mode, implementation is fail-closed when authority is incomplete, contradictory, stale,
+out of scope, or outside the exact directive/finding bounds. `approved_paths` is the effective
+append-only execution scope: only the parent may call `workflow_expand_scope`, and only with fresh explicit user authorization naming exact
 additional paths, a bounded reason, and clean tracked or absent authorization-time baselines. The
 amendment history is parent-only; all role views receive the refreshed effective path list. Expansion
 preserves the active implementation/repair phase and does not consume a repair cycle, but clears stale
@@ -166,10 +166,10 @@ guarded before review resume and review-start snapshot creation.
 
 Before mutating state or dispatching a role, the parent classifies the request against the immutable
 approved intent. An unchanged objective, desired outcome, acceptance criteria, and logical-change
-scope with a P0-P2 violation is ordinary repair: use the latest refreshed review's exact blocking
-finding IDs, obtain explicit parent/user authorization, call `workflow_authorize_repair`, dispatch
-the implementer, and obtain a fresh independent review. Repair is limited to those exact IDs and does
-not alter the approved intent.
+scope with a P0-P2 violation is ordinary repair. The fresh descriptor supplies the bounded repair
+proposal, exact finding binding, advertised mutation, and subsequent route; the parent obtains
+explicit authorization and binds only the descriptor's declared inputs. Repair does not alter the
+approved intent.
 
 A material alteration to the objective, desired outcome, acceptance criteria, or logical change is
 changed intent. Stop the current route. Do not use repair, finding adjudication, `workflow_expand_scope`,
@@ -186,73 +186,50 @@ allowlist for the whole logical change, including staged, unstaged, and approved
 exclude unrelated and ignored state. Dispatch `code_reviewer` directly, never implementer first.
 Approval still requires separate explicit commit authorization; after it, the committer stages the
 complete exact scope for one coherent commit. Only a fresh reconciliation review reports blocking
-findings; ordinary exact-ID repair authorization is then required before dispatching an implementer. Optional
+findings; the descriptor can expose bounded repair authorization before implementer dispatch. Optional
 findings never trigger remediation. Finding-linked follow-ups remain limited to supported active
 source states, exact current finding IDs, narrow remediation context and scope, and a fresh combined
 review; they are not changed-intent or reconciliation shortcuts.
 
 After every terminal worker handoff and every parent mutation, the parent refreshes the read-only
-`workflow_operator_decision_get` projection, summarizes only its bounded semantic result, and routes
-from its state-provable decision. Worker prose, earlier summaries, dirty-path inference, and stale
-state never grant authority. The parent reads `workflow_parent_get` only for exact mutation inputs
-and version or an explicit debug/status request. This routing distinction adds no
-Workflow MCP phase, schema, persistence, or authority change.
+`workflow_operator_decision_get` projection and uses its versioned `execution` descriptor as the
+first routing discriminator. The semantic projection remains the user-facing summary and
+authorization boundary. Worker prose, earlier summaries, dirty-path inference, and stale state never
+grant authority. This routing distinction adds no Workflow MCP phase, schema, persistence, or
+authority change.
 
-The read-only `workflow_operator_decision_get` projection is the normal semantic refresh above the
-parent view. It is bounded to one workflow and validated explicit linked lineage, derives only
-state-provable decisions and existing permitted actions, and never writes, authorizes, persists
-routing state, or creates a second state machine. It reports automatic `no_user_action` routes for
-implementation, review, re-review, and commit preparation; exact repair, recovery, bounded linked
-continuation, scope/new-intent, final reconciliation, and commit authorization remain explicit
-boundaries. Its semantic summary omits phases, audits, receipts, capabilities, and opaque authority
-material; its versioned executable guidance may identify exact typed operations and fixed bindings
-needed for a later parent call, but is neither authorization nor a bearer capability. Raw IDs and
-full mutation inputs remain available through explicit exact reads as needed. The projection is not
-authorization and does not create a proposal: the parent resolves a concrete safe proposal from the
-projection plus an exact `workflow_parent_get`, presents its consequence and deterministic exact
-repository-relative visible paths, and asks only for a genuine semantic user choice. Natural-language
-responses such as contextual `yes`, `continue`, `go ahead`, and `commit it` are acceptable without a
-magic phrase or `Reply ...` syntax. Negative, ambiguous, unrelated, changed, or stale responses fail
-closed. After affirmative input, the parent re-reads authoritative state, verifies proposal, scope,
-findings, lineage, plan binding, permitted action, runtime authority, and version, then encodes exactly that
-proposal in the existing mutation. No durable proposal state, natural-language parser, or replacement
-authority is added. Ordinary summaries do not expose internal action/phase names or raw action/tool names;
-preserved semantic enum values include `approve_recovery`, `adopt_dirty_scope`, `retry_commit`,
-`approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review`.
+The descriptor is guidance, not authorization or a bearer capability. Its `descriptor_version` must
+be exactly `3` before interpretation. Any other, missing, malformed, contradictory, or incomplete
+descriptor is a fail-closed stop without fallback mutation or dispatch; the parent must not
+reconstruct a route from semantic decisions, raw phases, parent state, or conversation memory.
 
-Every explicit parent mutation is authorized only by an affirmative response to the exact semantic
-proposal currently presented, and authorization is bound to that proposal and mutation class rather
-than transferable between distinct mutations. In particular, a negative, ambiguous, unrelated,
-changed, or stale response to a repair proposal authorizes nothing: the parent may perform only
-permitted read-only refreshes, with no mutation and no worker dispatch. A rejection explanation,
-including an intentional dogfood-sentinel explanation, is rejection context only and cannot become
-adjudication authority or `user_authorization`. If adjudication is warranted, the Orchestrator must
-present a separate semantic proposal with bounded rationale and consequence and obtain a fresh
-affirmative tied to that adjudication proposal before calling `workflow_adjudicate_findings`.
-This is an Orchestrator proposal/authorization discipline, not a Workflow MCP phase, state-machine,
+For `dispatch`, the parent delegates only the returned route with the exact workflow ID. For
+`parent_mutation`, it selects one advertised invocation, passes its fixed arguments, obtains only
+declared inputs from their declared sources, applies the declared authorization representation, and
+invokes the exact typed operation. For `collect_evidence`, it gathers only the declared inspection,
+uses the returned observed-outcome mutation, and treats unavailable evidence as `wait`. `wait` and
+`terminal` perform no mutation or worker dispatch. After a successful mutation, the parent uses the
+advertised `committed_execution` when present or refetches a fresh descriptor; `on_success.expected`
+and mutation success alone never authorize routing.
+
+For a `parent_mutation`, the Orchestrator follows the invocation's advertised authorization metadata.
+When `authorization.required` is `true`, it presents the exact semantic proposal and requires a
+fresh affirmative response bound to that proposal and mutation class. Negative, ambiguous,
+unrelated, changed, or stale responses authorize nothing and produce no mutation or worker
+dispatch. When `authorization.required` is `false`, it does not invent an authorization question or
+block the advertised operation. Authorization requirements are not inferred from operation names,
+phases, or prompt policy. A rejection explanation, including an intentional dogfood-sentinel
+explanation, is rejection context only and cannot become adjudication authority. Adjudication
+requires a separate descriptor-backed semantic proposal and a fresh affirmative response. This is
+an Orchestrator proposal/authorization discipline, not a Workflow MCP phase, state-machine,
 persistence, finding-semantic, or bookkeeping change.
 
-For exact repair, `approve_exact_repairs` also carries `authorization_required: true` and a bounded
-derived semantic proposal containing the required outcome, strategy constraints, conditional fallback,
-and exact path constraints. The parent presents this proposal before encoding the explicit
-`RepairDirective`; it remains read-only and does not replace the existing finding, version, scope, or
-cycle authority.
+For exact repair, the descriptor carries the bounded proposal and exact eligible/selected finding
+binding. The parent presents it before requesting authorization and supplies only the descriptor's
+declared inputs. The committed or freshly refetched descriptor determines whether implementation may
+follow. The existing finding, version, scope, and cycle authority remain server-owned.
 
-### Repair authorization/delegation invariant
-
-For an authorized repair, the parent follows one exact sequence: user affirmative response -> immediate
-exact current `workflow_parent_get` -> successful `workflow_authorize_repair` -> refreshed
-`workflow_operator_decision_get` -> repair `implementer` task dispatch. The affirmative response is
-necessary semantic authorization but is not dispatch authority. No implementer task may be dispatched
-while the parent read or authorization is pending, failed, stale, rejected, unavailable, or materially
-changed. A stale proposal or version, changed repair scope, MCP outage, failed or unavailable mutation,
-or any other mismatch therefore produces no implementer dispatch. The parent routes only from the
-refreshed projection and dispatches the implementer only when it authoritatively routes implementation
-for the authorized repair; a non-implementation route stops without dispatch and uses the existing
-bounded recovery or clarification behavior. This is a delegation invariant only: it adds no phase,
-schema field, dispatch-attempt record, retry persistence, or new MCP tool.
-
-The projection cannot classify a newly supplied request: the parent compares objective, outcome,
+The descriptor cannot classify a newly supplied request: the parent compares objective, outcome,
 criteria, and logical-change scope at the input boundary. A material change requires a new bounded
 workflow, not repair, adjudication, expansion, or a generic follow-up. Explicit linked lineage may
 provide an existing combined-review boundary, but separately created workflows are never joined by
@@ -323,10 +300,10 @@ authorize it. Adjudication preserves the finding snapshot and requires a fresh r
 dispatches an implementer and never approves the workflow. Remaining effective blockers
 enter `REPAIRING` via `workflow_authorize_repair` and become terminal
 `STOPPED_REPAIR_EXHAUSTED` via `workflow_finalize_repair_exhausted` only when the repair cycle equals
-the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can spawn a fresh linked cycle-0
-workflow with the legacy direct-contract `workflow_create_linked_followup` or the identity-only
-`workflow_create_linked_followup_from_plan`. The latter resolves the exact current approved child
-PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is recoverable with
+the maximum. `STOPPED_APPROVED` and `STOPPED_REPAIR_EXHAUSTED` can expose a fresh linked cycle-0
+workflow via the descriptor-selected linked-follow-up mutation. The server resolves any exact current
+approved child PlanArtifact server-side. `INCONCLUSIVE` becomes `STOPPED_INCONCLUSIVE` and is
+recoverable with
 `workflow_resume_review`. If review-blocking parent-owned inspection evidence is pending, the parent
 records concrete evidence while stopped first; resume remains explicit and is gated by the shared
 pending-evidence predicate. The complete change-workflow failed-required-validation exemption still
@@ -560,49 +537,31 @@ active linked leaf can eventually authorize and prepare a commit.
 ### Transition-summary convention
 
 After every terminal subagent handoff, the parent must refresh `workflow_operator_decision_get` before
-summarizing or routing. The summary is a concise user-visible decision record sourced only from that
-refreshed semantic projection: report its decision, semantic outcome, blocker summaries, recovery
-choice, available authority boundaries, and material linked-workflow summary when present. It must
-not dump raw workflow or plan identity, phase/action names, receipts, audit events, capabilities,
-validation logs, or a complete worker report. Use `workflow_parent_get` only for exact mutation
-inputs/version or an explicit debug/status request.
+summarizing or routing. The summary is a concise user-visible record sourced from the refreshed
+semantic projection, while its `execution` descriptor is the first mechanical routing discriminator.
+Report only its semantic decision, outcome, blocker summaries, recovery choice, available authority
+boundaries, and material linked-workflow summary. Do not dump raw workflow or plan identity,
+phase/action names, receipts, audit events, capabilities, validation logs, or a complete worker report.
 
-The semantic decision is the first discriminator after this refresh. After a terminal implementation
-handoff, including completion of an authorized repair, `no_user_action/review` or
-`no_user_action/re_review` routes directly to a fresh `code_reviewer` even when blocker summaries
-still retain an earlier blocker such as `REV-X-001`. Retained blockers are history/remediation
-context only; a non-empty retained list is not a fresh review result and never authorizes, requests,
-or invokes repair by itself. Only a fresh review whose projection reports `approve_exact_repairs`
-with its authority boundary available may lead to an exact-ID repair-authorization prompt. The
-parent then reads the full view for the current exact blocking finding IDs, version, and
-permitted mutation action. If that action is absent, fail closed without prompting or invoking
-repair. This convention changes neither Workflow MCP authority nor phases, schema, persistence,
-transition semantics, repair-cycle policy, or attempt bookkeeping.
+The descriptor mode is the first routing discriminator after this refresh. Only descriptor version 3
+is executable and it supports the current five modes and committed-state result. Any other, missing,
+unknown, malformed, contradictory, or incomplete descriptor fails closed without fallback mutation
+or dispatch.
 
-The summary must cover the following transitions without changing their existing semantics:
+For `dispatch`, delegate only the returned route with the exact workflow ID. For `parent_mutation`,
+use only the advertised operation, fixed arguments, declared inputs, and authorization representation.
+For `collect_evidence`, use only the declared inspection outcome and treat unavailable evidence as
+`wait`. After mutation, use the advertised `committed_execution` or refetch a fresh descriptor;
+`on_success.expected`, mutation success alone, retained findings, and stale prose never authorize
+routing.
 
-- Implementation completion, incomplete continuation, concern, context, and block outcomes identify
-  the result and the available review, continuation, or recovery decision. Incomplete work never
-  routes through concern acceptance or review.
-- A `CHANGES_REQUESTED` review surfaces every blocking finding identifier and a bounded human-readable
-  reason before repair authorization or implementer redispatch. Repair authorization communicates the
-  current repair cycle and next role; exhaustion communicates the terminal stop and forbids another
-  cycle.
-- An approval communicates approval and optional findings before requesting explicit commit
-  authorization; optional findings do not automatically dispatch remediation.
-- Inconclusive review, implementation stop, commit-preparation recovery, and commit-failure stops
-  communicate the bounded stop/recovery decision without implying authorization.
-- Commit outcomes communicate the authoritative result and material linked follow-ups communicate
-  their linked metadata and narrow purpose.
-
-After every parent mutation, the parent must refresh `workflow_operator_decision_get` again and issue
-a fresh semantic summary before redispatching a role or requesting the next authorization. This is a
-presentation and routing convention only: it does not change Workflow MCP phases, persisted
-presentation fields, worker-attempt bookkeeping, authorization rules, the state machine, persistence
-schema, or worker isolation. The parent still owns all parent mutations and authorization; workers
-still receive only their exact workflow ID and use their dedicated authoritative getter. Read
-`workflow_parent_get` again only when the next explicit mutation needs exact inputs/version or the
-user requests debug/status detail.
+If an advertised input has source `parent_context`, `workflow_parent_get` supplies its exact current
+value from the authoritative parent view. It remains available for explicit debug/status inspection.
+It must not reconstruct operation selection, payload shape, authorization placement, routing, or other
+descriptor-declared protocol knowledge. An undeclared required input fails closed. These are
+presentation and routing conventions only: they do not change Workflow MCP phases, persistence,
+authorization rules, transition semantics, attempt bookkeeping, or worker isolation. Workers still
+receive only their exact workflow ID and use their dedicated authoritative getter.
 
 ## MCP outage recovery (explanatory guidance)
 

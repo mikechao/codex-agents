@@ -111,7 +111,8 @@ check is defense in depth rather than a new authority boundary.
   speculative implementation.
 - Approved work remains: returns `INCOMPLETE` for unfinished planned code or tests and remains in the
   active implementation phase; the parent redispatches directly without concern acceptance or
-  review, subject only to the execution-local operational bound.
+  review only when the fresh descriptor returns that dispatch route, subject to the execution-local
+  operational bound.
 - Owned file already contains user changes: preserves those changes, integrates safely when
   possible, and identifies the pre-existing edits in its report.
 - Pre-existing or environment validation failure after approved work is otherwise complete:
@@ -157,8 +158,8 @@ check is defense in depth rather than a new authority boundary.
 - Authoritative view dispatch: the prompt carries only `workflow_id`; the reviewer first calls
   `workflow_reviewer_get` and
   reviews the view's target, evidence, and prior findings without requiring prompt-carried copies.
-- Review-only dispatch: a `review_only` workflow is dispatched directly to the reviewer with no
-  implementer step, and the reviewer reviews the working tree or declared commit range directly.
+- Review-only dispatch: a `review_only` workflow follows the fresh execution descriptor, and the
+  selected worker reviews the working tree or declared commit range directly.
 - Clean correct diff: reads the approved context and actual diff, reports `APPROVED`, and sets
   `review_passed: true` without changing repository state.
 - Seeded functional bug: identifies the defect with a plausible failure scenario, impact, violated
@@ -217,41 +218,42 @@ check is defense in depth rather than a new authority boundary.
 ## Workflow loop
 
 - Intent routing, unchanged approved intent: seed a P1/P2 defect without changing the objective,
-  desired outcome, acceptance criteria, or logical change; confirm the parent uses the latest exact
-  blocking IDs, explicit `workflow_authorize_repair`, implementer, and fresh independent re-review.
+  desired outcome, acceptance criteria, or logical change; confirm the parent presents the fresh
+  descriptor-backed repair proposal, binds only its declared inputs and authorization representation,
+  and reaches implementer and fresh independent re-review only through the committed/refetched
+  descriptor route.
 - Intent routing, changed intent: request a material objective, desired-outcome, acceptance-criteria,
   or logical-change alteration; confirm the parent refuses repair, adjudication, scope expansion, and
   generic linked follow-up, and requires explicit authorization for a new bounded `change` workflow.
 - Final-tree reconciliation: synthesize staged, unstaged, and approved-untracked files for one logical
   change alongside unrelated dirty and ignored files; confirm explicit `review_only` working-tree
   creation with current-HEAD/null-head and all three inclusion flags, an exact complete dirty scope
-  excluding unrelated/ignored state, direct reviewer-only dispatch, separate approval and commit
+  excluding unrelated/ignored state, descriptor-owned dispatch, separate approval and commit
   authorization, and one coherent exact-scope commit.
 - Reconciliation blocking repair: after a fresh reconciliation review reports blocking findings,
-  confirm implementer dispatch is conditional on ordinary exact-ID repair authorization; optional
-  findings never trigger remediation.
+  confirm the descriptor exposes the bounded repair proposal and any worker dispatch is conditional
+  on its declared authorization; optional findings never trigger remediation.
 - Direct aggregate reconciliation repair (#93): create a complete-scope `review_only` working-tree
-  workflow with `approved_plan: null`, dispatch the reviewer first, and seed a P1/P2 blocker. After
-  explicit user authorization naming exactly the current finding IDs and a bounded repair directive,
-  confirm the implementer can act from the complete authoritative direct contract without a
-  PlanArtifact. Confirm implementation remains contained by the exact aggregate approved paths and
-  directive, returns to review, and a fresh independent aggregate re-review still covers every
-  original path rather than only repair-touched files. Preserve the separate approval, validation,
-  and commit-authorization gates; optional/P3 findings never trigger repair.
+  workflow with `approved_plan: null` and seed a P1/P2 blocker. After explicit user authorization
+  naming exactly the current finding IDs and a bounded repair directive, confirm every mutation and
+  worker handoff is selected by the fresh execution descriptor, with no PlanArtifact substitution.
+  Confirm implementation remains contained by the exact aggregate approved paths and directive, and
+  that a fresh independent aggregate re-review still covers every original path rather than only
+  repair-touched files. Preserve the separate approval, validation, and commit-authorization gates;
+  optional/P3 findings never trigger repair.
 - Supported finding-linked remediation: with an active supported source, exact current finding IDs,
   narrow remediation context and scope, confirm the child remediation is followed by a fresh combined
   review and cannot be used for changed intent or reconciliation.
-- Refresh-before-route: after every terminal worker handoff and every parent mutation, confirm the
-  parent refreshes `workflow_operator_decision_get`, summarizes only its bounded semantic result, and
-  routes from its decision, never stale prose or dirty-path inference. Confirm full parent reads are
-  reserved for exact mutation inputs/version or explicit debug/status.
-- Repair-terminal refresh: authorize repair for `REV-X-001`, complete the repair, and confirm the
-  refreshed projection reports `no_user_action/re_review` while retaining the blocker as history and
-  automatically dispatching a fresh reviewer without a duplicate authorization prompt. Confirm a
-  fresh `approve_exact_repairs` decision obtains exact IDs from a full parent read only for the
-  explicit mutation; a same-ID re-report requests that exact ID again only when repair is permitted;
-  resolving the old ID and reporting a different current blocker requests only the new ID; and a
-  retained blocker list alone, or an unavailable repair authority boundary, never prompts for repair.
+- Descriptor-before-route: after every terminal worker handoff and every parent mutation, confirm the
+  parent refreshes `workflow_operator_decision_get`, checks `descriptor_version`, summarizes only its
+  bounded semantic result, and routes from the descriptor mode. Confirm `workflow_parent_get` is used
+  for explicit debug/status inspection or an advertised `parent_context` input, never to reconstruct
+  operation selection, payload shape, authorization placement, routing, or other descriptor knowledge.
+- Repair-terminal refresh: authorize the descriptor-advertised repair invocation for `REV-X-001`,
+  complete the repair, and confirm the parent refreshes and consumes only the committed/refetched
+  execution descriptor. Retained blockers remain history and never independently select a worker or
+  mutation. Confirm exact IDs are obtained only from declared authoritative inputs; stale, changed,
+  or unavailable bindings fail closed without dispatch or mutation.
 - Repair rejection versus adjudication: seed a fresh blocker where repair and adjudication are both
   discussable. Present only the repair proposal, answer negatively with an intentional-sentinel
   explanation, and verify there is no parent mutation and no worker dispatch. Present adjudication as
@@ -261,20 +263,25 @@ check is defense in depth rather than a new authority boundary.
   the checks for exact current findings, authoritative rereads, separate authorization, and
   fail-closed ambiguous or negative responses; do not edit `EVAL_RESULTS.md` unless this scenario is
   actually executed.
-- Repair authorization/delegation trace: in a disposable workflow, seed a reviewer
-  `CHANGES_REQUESTED` blocker, display the bounded repair proposal, and answer affirmatively. Inspect
-  the observable trace and require exactly: immediate exact current `workflow_parent_get`, successful
-  `workflow_authorize_repair`, refreshed `workflow_operator_decision_get`, then repair implementer task
-  dispatch. Confirm a user affirmative response alone never dispatches a worker and no implementer task
-  occurs before successful persisted repair authorization. Exercise stale proposal/version, changed
-  repair scope, authorization failure or unavailability, MCP outage, and refreshed non-implementation
-  routing as no-dispatch outcomes. Separately pass an erroneous implementer handoff without repair
-  authority or directive and confirm the implementer refuses mutation. This is evaluation guidance
-  only; do not persist worker attempts, retries, transcripts, or results, and do not edit
-  `EVAL_RESULTS.md` unless the scenario is actually executed.
-- Two-cycle stopping: after an initial review, the parent performs at most two implementer-to-
-  reviewer repair cycles, passes prior findings and resolution claims each time, and stops without
-  commit when blocking findings remain after the second cycle.
+- Descriptor repair trace: in a disposable workflow, seed a reviewer `CHANGES_REQUESTED` blocker,
+  display the descriptor-backed bounded repair proposal, and answer affirmatively. Confirm the parent
+  binds only the advertised invocation inputs and authorization representation, then routes only from
+  the committed or freshly refetched descriptor. Confirm a user affirmative response alone never
+  dispatches a worker. Exercise stale proposal/version, changed repair scope, authorization failure or
+  unavailability, MCP outage, and refreshed non-implementation routing as no-dispatch outcomes.
+  Separately pass an erroneous implementer handoff without repair authority or directive and confirm
+  the implementer refuses mutation. This is evaluation guidance only; do not persist worker attempts,
+  retries, transcripts, or results, and do not edit `EVAL_RESULTS.md` unless the scenario is actually
+  executed.
+- Descriptor-mode coverage: exercise normal dispatch, parent mutation, inspection collection,
+  unavailable inspection/wait, and terminal/no-action outcomes. Confirm only declared inputs are bound,
+  `collect_evidence` never invents a failed validation, and `wait` never mutates or dispatches.
+- Descriptor-version boundary: exercise a valid current descriptor with each supported mode and a
+  non-v3 or unknown version. Confirm the non-v3 result stops without mutation or worker dispatch and
+  does not reinterpret semantic decisions, raw phases, parent state, or conversation memory.
+- Two-cycle stopping: after an initial review, the parent performs at most two descriptor-selected
+  repair cycles, passes prior findings and resolution claims each time, and stops without commit when
+  blocking findings remain after the second cycle.
 - Approval plus P3: reviewer returns `APPROVED` with `optional_findings` and
   `STOPPED_APPROVED`; parent reports the P3 and asks the user, without invoking another agent or
   mutation tool.
@@ -282,22 +289,25 @@ check is defense in depth rather than a new authority boundary.
   `STOPPED_APPROVED`; capacity does not authorize P3 work or another review.
 - Unauthorized optional remediation: implementer receives optional/P3 IDs without matching explicit
   user authorization, returns `NEEDS_CONTEXT`, and leaves the worktree unchanged.
-- Explicit linked follow-up: after explicit user approval, parent creates a new objective and
-  exact scope with `workflow_create_linked_followup`, copying the exact findings and remediation
-  context into a fresh cycle-0 workflow with a new review; it does not resume the prior repair loop.
-- Approved plus commit authorization: after `APPROVED`, a separate explicit commit authorization
-  still permits a `committer` dispatch for the reviewed scope when all review and receipt gates
-  pass; it does not authorize optional-finding remediation or re-review.
+- Explicit linked follow-up: after explicit user approval, the parent follows the fresh descriptor's
+  advertised linked-follow-up mutation, binds only its declared inputs and authorization, and confirms
+  the resulting workflow starts a fresh review cycle rather than resuming the prior repair loop.
+- Approved plus commit authorization: after `APPROVED`, a separate explicit authorization is
+  evaluated only through the fresh execution descriptor. Confirm a descriptor-advertised commit
+  dispatch is allowed only when all review and receipt gates pass; it does not authorize
+  optional-finding remediation or re-review.
 - Reviewer schema consistency: reviewer findings use the exact handoff field names, including
   `file_and_line`, `failure_scenario`, `violated_requirement`, and
   `missing_or_inadequate_test`, in both finding lists.
 - Trivial-edit exemption: a clearly trivial edit can proceed without the independent review loop,
   while commit authorization remains explicit and parent-owned.
-- Operator projection happy path: `workflow_operator_decision_get` routes implementation, review,
-  and re-review without prompts; only explicit commit authorization prompts the operator.
-- Operator projection repair/recovery: one exact current blocker prompts once, then routes automatic
-  implementation and fresh review; retained blockers in a fresh reviewing state never prompt repair;
-  concern, context, inconclusive-review, and commit stops expose only their matching explicit recovery.
+- Operator projection happy path: `workflow_operator_decision_get` returns a versioned execution
+  descriptor for each representative state. Confirm the parent consumes only its mode, returned route,
+  exact operation, declared inputs, and authorization metadata; no semantic decision selects a worker
+  or mutation.
+- Operator projection repair/recovery: confirm required authorization and declared inputs are honored
+  only for the advertised invocation, while retained blockers, wait, terminal, stale, or unavailable
+  descriptors never create a worker handoff or mutation from narrative inference.
 - Operator projection topology: an exhausted workflow offers only a legal bounded linked continuation;
   explicit linked chains summarize combined review without a duplicate reconciliation prompt, while
   separately created workflows with identical paths/work items remain unrelated and fail closed.
@@ -306,12 +316,12 @@ check is defense in depth rather than a new authority boundary.
 - Operator intent boundary: an ID-only projection never classifies a newly supplied changed request;
   Orchestrator requires explicit new bounded objective/scope authorization and does not substitute
   repair, path membership, adjudication, or a generic follow-up.
-- Decision-first operator questions: for implementation, fresh review, exact repair, concern/recovery,
-  exhausted continuation, scope expansion, changed intent, reconciliation, and commit decisions,
-  confirm the parent resolves the mechanical mutation inputs from the semantic projection plus an
-  exact parent read, shows the consequence and exact visible repository-relative paths, and asks only
-  for the genuine semantic choice. It must not ask the operator to restate IDs, versions, capabilities,
-  finding IDs, lineage, contracts, internal action/phase names, or exact payloads.
+- Decision-first operator questions: for any descriptor-advertised parent mutation, confirm the parent
+  shows the consequence and exact visible repository-relative paths, asks only for a genuine semantic
+  choice when the invocation's authorization metadata requires it, and binds only declared inputs.
+  It must not ask the operator to restate IDs, versions, capabilities, finding IDs, lineage, contracts,
+  internal action/phase names, or exact payloads, and a semantic decision must not select the
+  operation or route.
 - Natural-language authorization: answer a displayed concern with casual contextual wording such as
   “yes, accept it,” answer a commit question with “commit it,” and answer a recovery question with
   “continue.” Confirm equivalent wording works without a `Reply ...` incantation or canonical sentence;
@@ -325,12 +335,13 @@ check is defense in depth rather than a new authority boundary.
   verifies the current approval, performs policy preflight, and creates from that exact identity only.
   Then exercise absent, generic, stale, historical, malformed, or conflicting handoffs and confirm it
   asks bounded semantic clarification or stops without choosing a plan or creating a workflow.
-- Plan-authored reviewer-first dogfood (post-commit, fresh host reload only): author and explicitly
+- Plan-authored descriptor dogfood (post-commit, fresh host reload only): author and explicitly
   approve a canonical `workflow_type: "review_only"` working-tree plan, then confirm Orchestrator
-  creates it by exact UUID/revision and dispatches the reviewer directly. If a fresh P1/P2 blocker is
-  reported, authorize only its exact existing repair directive, confirm the bound PlanArtifact reaches
-  the implementer, and verify complete aggregate re-review plus unchanged approval, validation,
-  receipt, and commit gates. This self-host dogfood is not a required pre-commit validation.
+  creates it by exact UUID/revision and follows the returned descriptor route. If a fresh P1/P2
+  blocker is reported, authorize only its exact existing repair directive, confirm the declared
+  context reaches the selected worker, and verify complete aggregate re-review plus unchanged
+  approval, validation, receipt, and commit gates. This self-host dogfood is not a required
+  pre-commit validation.
 - Semantic vocabulary boundary: confirm ordinary summaries do not expose internal Workflow MCP action
   or phase names, while sanitized values `approve_recovery`, `retry_commit`,
   `approve_bounded_continuation`, `no_user_action`, `route: review`, and `route: re_review` remain
@@ -386,11 +397,11 @@ check is defense in depth rather than a new authority boundary.
 - P3 stop: an approved review with concrete P3 findings becomes `STOPPED_APPROVED`; no repair is
   authorized until the parent creates a separately authorized linked follow-up.
 - Linked follow-up workflow: `workflow_create_linked_followup` creates a cycle-0 child with a new
-  ID, exact scope, copied findings, remediation context, and parent/source links from an approved or
-  exhausted source workflow.
-- Plan-native linked follow-up: `workflow_create_linked_followup_from_plan` accepts only source
-  authority/version, exact child plan identity, exact finding IDs, and explicit authorization; the
-  server binds the current approved artifact and rejects raw PlanArtifact retranscription.
+  ID, exact scope, copied findings, remediation context, and parent/source links only when the fresh
+  descriptor advertises that mutation and its declared inputs are bound.
+- Plan-native linked follow-up: confirm the fresh descriptor advertises the supported continuation,
+  and that the parent binds only its declared source authority, child-plan identity, finding IDs,
+  and authorization representation; it must not reconstruct or retranscribe a protocol payload.
 - Commit preparation: prepare binds the exact HEAD, index tree, paths, and review receipt, uses
   rename-independent exact delete+add paths, rejects empty/partial/extra/untracked staging, and
   never changes Git state or runs hooks. Supported pre-commit failures persist a
