@@ -4,6 +4,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "../lineage.js";
+import { ACTION_DESCRIPTOR_METADATA } from "../operator-action-descriptor.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { WorkflowStore } from "../store.js";
 import {
@@ -263,6 +264,166 @@ test("every workflow action has an explicit #141 precondition classification", (
   }
 });
 
+test("every workflow action has explicit descriptor treatment and authorization metadata", () => {
+  assert.deepEqual(
+    Object.keys(ACTION_DESCRIPTOR_METADATA).sort(),
+    [...WORKFLOW_ACTION_VALUES].sort(),
+  );
+  for (const [action, metadata] of Object.entries(ACTION_DESCRIPTOR_METADATA)) {
+    assert.ok(
+      metadata.classification === "descriptorized_in_142" ||
+        metadata.classification === "deferred_to_143" ||
+        metadata.classification === "deferred_to_144" ||
+        metadata.classification === "protocol_or_query_only",
+      action,
+    );
+    if (metadata.authorization.required) {
+      assert.ok(
+        metadata.authorization.representation.kind === "field" ||
+          metadata.authorization.representation.kind === "metadata_only",
+        action,
+      );
+    } else {
+      assert.deepEqual(metadata.authorization, {
+        required: false,
+        representation: { kind: "none" },
+        binding: { kind: "none" },
+      });
+    }
+    const alternatives =
+      "input_alternatives" in metadata ? (metadata.input_alternatives ?? []) : [];
+    const binding = metadata.authorization.required ? metadata.authorization.binding : null;
+    const boundPaths =
+      binding === null ? [] : binding.kind === "all" ? binding.paths : binding.common_paths;
+    const boundAlternatives = binding?.kind === "exclusive_one_of" ? binding.alternatives : [];
+    for (const path of [...boundPaths, ...boundAlternatives]) {
+      assert.ok(
+        metadata.inputs.some(
+          (requiredInput) => JSON.stringify(requiredInput.path) === JSON.stringify(path),
+        ) ||
+          alternatives.some((alternative) =>
+            alternative.paths.some(
+              (alternativePath) => JSON.stringify(alternativePath) === JSON.stringify(path),
+            ),
+          ),
+        `${action} authorization binding is not an input path`,
+      );
+    }
+  }
+});
+
+test("descriptor authorization metadata distinguishes payload fields from metadata-only approval", () => {
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.inputs, [
+    { path: ["reason"], source: "parent_context", required: true },
+  ]);
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.input_alternatives, [
+    {
+      paths: [["added_paths"], ["adopted_paths"]],
+      source: "user",
+      required: true,
+    },
+  ]);
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.authorization, {
+    required: true,
+    representation: { kind: "field", path: ["user_authorization"] },
+    binding: {
+      kind: "exclusive_one_of",
+      common_paths: [["reason"]],
+      alternatives: [["added_paths"], ["adopted_paths"]],
+    },
+  });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_expand_scope.authorization, {
+    required: true,
+    representation: { kind: "field", path: ["user_authorization"] },
+    binding: { kind: "all", paths: [["added_paths"], ["reason"]] },
+  });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_finalize_repair_exhausted.authorization, {
+    required: true,
+    representation: { kind: "metadata_only" },
+    binding: { kind: "all", paths: [] },
+  });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_reconcile_commit_result.authorization, {
+    required: true,
+    representation: { kind: "metadata_only" },
+    binding: { kind: "all", paths: [] },
+  });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_resume_review.authorization, {
+    required: true,
+    representation: { kind: "metadata_only" },
+    binding: { kind: "all", paths: [["resume_context"]] },
+  });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_authorize_repair.authorization, {
+    required: true,
+    representation: { kind: "field", path: ["repair_directive", "user_authorization"] },
+    binding: {
+      kind: "all",
+      paths: [
+        ["finding_ids"],
+        ["repair_directive", "required_outcome"],
+        ["repair_directive", "strategy_constraints"],
+        ["repair_directive", "fallbacks"],
+        ["repair_directive", "required_paths"],
+        ["repair_directive", "forbidden_paths"],
+      ],
+    },
+  });
+});
+
+test("descriptor exposes secondary legal parent actions without changing primary precedence", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-descriptor-secondary.sqlite");
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const created = create(store, git);
+    const approved = structuredClone(created) as any;
+    approved.phase = "STOPPED_APPROVED";
+    approved.validation_results = [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }];
+    approved.review_receipt = {};
+    approved.blocking_findings = [finding("BLOCKER-SECONDARY")];
+    const decision = deriveOperatorDecision(approved, [
+      {
+        state: approved,
+        readiness: {
+          head: { status: "readable", current_head: approved.base_head },
+          approved_review: { status: "current" },
+        },
+      },
+    ]);
+    assert.equal(decision.primary.kind, "approve_commit");
+    assert.deepEqual(decision.execution.parent_actions.map((item) => item.action).sort(), [
+      "workflow_authorize_commit",
+      "workflow_create_linked_followup",
+      "workflow_create_linked_followup_from_plan",
+    ]);
+    assert.equal(
+      decision.execution.parent_actions.every((item) => item.status === "executable"),
+      true,
+    );
+    const linked = decision.execution.parent_actions.find(
+      (item) => item.action === "workflow_create_linked_followup",
+    );
+    assert.ok(linked && linked.status === "executable");
+    assert.deepEqual(linked.descriptor.invocations[0]?.authorization, {
+      required: true,
+      representation: { kind: "field", path: ["user_authorization"] },
+      binding: {
+        kind: "all",
+        paths: [
+          ["objective"],
+          ["approved_plan"],
+          ["approved_paths"],
+          ["acceptance_criteria"],
+          ["validation_requirements"],
+          ["finding_ids"],
+        ],
+      },
+    });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("operator projection matches direct action derivation across representative states", () => {
   const { root, git } = fixture();
   const databasePath = join(root, "operator-direct-actions.sqlite");
@@ -502,10 +663,18 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.deepEqual(first.primary, { kind: "no_user_action", route: "implement" });
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
+    assert.equal(first.execution.descriptor_version, 1);
+    assert.equal(first.execution.primary.mode, "dispatch");
+    assert.deepEqual(first.execution.primary, {
+      mode: "dispatch",
+      route: "implement",
+      operation: "workflow_submit_implementation",
+      workflow_id: id,
+      expected_version: before.version,
+    });
     assert.equal(JSON.stringify(first).includes("permitted_next_actions"), false);
     const serialized = JSON.stringify(first);
     for (const internal of [
-      id ?? "",
       "workflow_authorize_commit",
       "workflow_retry_commit",
       "STOPPED_APPROVED",
@@ -1149,6 +1318,20 @@ test("operator projection routes reconciliation and classifies committed state f
       reason: "an existing commit requires server-owned result reconciliation",
     });
 
+    const commitResult = deriveOperatorDecision(prepared, [
+      {
+        state: prepared,
+        readiness: { commit_result: { status: "ready", authority: "committer" } },
+      },
+    ]);
+    assert.deepEqual(commitResult.execution.primary, {
+      mode: "dispatch",
+      route: "commit",
+      operation: "workflow_submit_commit_result",
+      workflow_id: prepared.workflow_id,
+      expected_version: prepared.version,
+    });
+
     const committed = structuredClone(base);
     committed.phase = "COMMITTED";
     const terminal = deriveOperatorDecision(committed);
@@ -1470,12 +1653,33 @@ test("operator projection rejects branch merges, divergent order, and extra unre
     const unrelated = structuredClone(valid.root) as any;
     unrelated.workflow_id = "unrelated-workflow";
     unrelated.superseded_by_workflow_id = null;
-    const extraDecision = deriveOperatorDecision(valid.root, [
-      { state: valid.root },
+    const active = structuredClone(valid.root) as any;
+    active.superseded_by_workflow_id = null;
+    active.linked_continuation = null;
+    const readiness = {
+      head: { status: "readable" as const, current_head: active.base_head },
+      implementation_submission: { status: "ready" as const },
+    };
+    const extraDecision = deriveOperatorDecision(active, [
+      {
+        state: active,
+        readiness,
+      },
       { state: valid.child },
       { state: unrelated },
     ]);
     assert.equal(extraDecision.primary.kind, "operator_intervention");
+    assert.deepEqual(extraDecision.execution.primary, {
+      mode: "dispatch",
+      route: "implement",
+      operation: "workflow_submit_implementation",
+      workflow_id: active.workflow_id,
+      expected_version: active.version,
+    });
+    assert.deepEqual(
+      extraDecision.execution.parent_actions.map((item) => item.action),
+      workflowLegality(active, readiness).actions.parent,
+    );
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

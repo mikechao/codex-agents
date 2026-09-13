@@ -28,7 +28,7 @@ import {
 type JsonSchema = Record<string, JSONValue>;
 
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v3 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The parent may use the read-only workflow_operator_decision_get projection for bounded semantic routing; it never authorizes or mutates state. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v3 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The read-only workflow_operator_decision_get projection returns the human-facing semantic decision plus versioned executable next-action guidance; it never authorizes, dispatches, or mutates state, and its descriptor is not a bearer capability. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -530,7 +530,7 @@ export const toolDefinitions = [
   {
     name: "workflow_operator_decision_get",
     description:
-      "Read a bounded semantic operator decision for one workflow and its validated explicit linked lineage; this projection never authorizes or mutates state.",
+      "Read a bounded semantic operator decision plus versioned executable next-action guidance for one workflow and its validated explicit linked lineage; this read-only projection never authorizes, dispatches, or mutates state, and its guidance is not a bearer capability.",
     inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
     annotations: {
       title: "Get operator decision",

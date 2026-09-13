@@ -204,10 +204,12 @@ state-provable decisions and existing permitted actions, and never writes, autho
 routing state, or creates a second state machine. It reports automatic `no_user_action` routes for
 implementation, review, re-review, and commit preparation; exact repair, recovery, bounded linked
 continuation, scope/new-intent, final reconciliation, and commit authorization remain explicit
-boundaries. Raw IDs, phases, actions, audits, receipts, and PlanArtifact identity
-remain available only through explicit debug/status reads or exact mutation-input reads. The projection
-is not authorization and does not create a proposal: the parent resolves a concrete safe proposal from
-the projection plus an exact `workflow_parent_get`, presents its consequence and deterministic exact
+boundaries. Its semantic summary omits phases, audits, receipts, capabilities, and opaque authority
+material; its versioned executable guidance may identify exact typed operations and fixed bindings
+needed for a later parent call, but is neither authorization nor a bearer capability. Raw IDs and
+full mutation inputs remain available through explicit exact reads as needed. The projection is not
+authorization and does not create a proposal: the parent resolves a concrete safe proposal from the
+projection plus an exact `workflow_parent_get`, presents its consequence and deterministic exact
 repository-relative visible paths, and asks only for a genuine semantic user choice. Natural-language
 responses such as contextual `yes`, `continue`, `go ahead`, and `commit it` are acceptable without a
 magic phrase or `Reply ...` syntax. Negative, ambiguous, unrelated, changed, or stale responses fail

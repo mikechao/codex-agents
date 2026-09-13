@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { ACTION_DESCRIPTOR_METADATA } from "../operator-action-descriptor.js";
 import {
   DISPATCH_TOOL_NAMES,
   PARENT_PLANNING_OPERATIONS,
@@ -171,6 +172,16 @@ test("closed protocol registry and schema contract exposes workflow actions with
     "user_authorization",
     "workflow_id",
   ]);
+  assert.deepEqual([...adoptionSchema.required].sort(), [
+    "expected_version",
+    "reason",
+    "user_authorization",
+    "workflow_id",
+  ]);
+  assert.deepEqual(adoptionSchema.oneOf, [
+    { required: ["added_paths"] },
+    { required: ["adopted_paths"] },
+  ]);
   assert.ok(reconciliation);
   assert.deepEqual(PLANNER_PLANNING_OPERATIONS, ["plan_create", "plan_get", "plan_revise"]);
   assert.deepEqual(PARENT_PLANNING_OPERATIONS, [
@@ -260,8 +271,41 @@ test("closed protocol source contract retains only the live protocol instruction
     /parent capability|workflow_id, capability, expected_version|authoritative view with workflow_get/u,
   );
   assert.doesNotMatch(serverSource, /Capabilities are defense-in-depth/u);
-  assert.doesNotMatch(serverSource, /\bworkflow_get\b|\bbearer\b/u);
+  assert.doesNotMatch(serverSource, /\bworkflow_get\b/u);
+  assert.match(serverSource, /versioned executable next-action guidance/u);
   assert.equal(protocolInstructions.includes("workflow_get"), false);
   assert.equal(protocolInstructions.includes("role capability"), false);
+  assert.match(protocolInstructions, /not a bearer capability/u);
   assert.match(protocolInstructions, /PlanArtifact/);
+});
+
+test("descriptorized parent metadata matches the unchanged MCP tool schemas", () => {
+  for (const [action, metadata] of Object.entries(ACTION_DESCRIPTOR_METADATA)) {
+    if (metadata.mode !== "parent_mutation") continue;
+    const tool = tools.find((candidate) => candidate.name === metadata.operation);
+    assert.ok(tool, action);
+    const inputSchema = tool.inputSchema as any;
+    const authorizationPath =
+      metadata.authorization.required && metadata.authorization.representation.kind === "field"
+        ? metadata.authorization.representation.path
+        : [];
+    const fixedFields = ["workflow_id", "expected_version"];
+    if (metadata.operation === "workflow_reconcile_commit_result") fixedFields.push("attempt_id");
+    const semanticFields = metadata.inputs.map((requiredInput) => requiredInput.path[0]);
+    assert.deepEqual(
+      [...new Set([...fixedFields, ...semanticFields, authorizationPath[0]])]
+        .filter((field): field is string => field !== undefined)
+        .sort(),
+      [...inputSchema.required].sort(),
+      action,
+    );
+    if (metadata.authorization.required && metadata.authorization.representation.kind === "field") {
+      assert.equal(metadata.authorization.representation.path.length, 1, action);
+      assert.equal(
+        metadata.authorization.representation.path[0] in inputSchema.properties,
+        true,
+        action,
+      );
+    }
+  }
 });

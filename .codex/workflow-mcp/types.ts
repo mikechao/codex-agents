@@ -138,9 +138,10 @@ export type WorktreePlanResult = WorktreePlan;
 // Phase-driven workflow action names. Planning tool names remain a separate domain.
 export type WorkflowAction = TupleValue<typeof WORKFLOW_ACTION_VALUES>;
 
-// Read-only semantic projection used by the parent orchestrator. These types intentionally
+// Read-only semantic projection used by the parent orchestrator. Semantic fields intentionally
 // contain no workflow or PlanArtifact identity, capabilities, receipts, audit data, or raw phase
-// and action names. The persisted WorkflowState remains the sole authority.
+// names; the versioned execution guidance carries only fixed invocation metadata and exact typed
+// operation names. The persisted WorkflowState remains the sole authority.
 export type OperatorRoute = "implement" | "review" | "re_review" | "commit";
 export type OperatorRecovery =
   | "accept_concerns"
@@ -150,6 +151,191 @@ export type OperatorRecovery =
   | "retry_commit"
   | "retry_commit_preparation"
   | "return_commit_to_review";
+
+export type OperatorParentMutationOperation =
+  | "workflow_adopt_dirty_scope"
+  | "workflow_expand_scope"
+  | "workflow_record_manual_validation"
+  | "workflow_resume_implementation"
+  | "workflow_accept_concerns"
+  | "workflow_authorize_repair"
+  | "workflow_adjudicate_findings"
+  | "workflow_resume_review"
+  | "workflow_finalize_repair_exhausted"
+  | "workflow_create_linked_followup"
+  | "workflow_create_linked_followup_from_plan"
+  | "workflow_authorize_commit"
+  | "workflow_retry_commit_preparation"
+  | "workflow_return_commit_to_review"
+  | "workflow_reconcile_commit_result"
+  | "workflow_retry_commit";
+
+export type OperatorWorkerDispatchOperation =
+  | "workflow_submit_implementation"
+  | "workflow_begin_review"
+  | "workflow_submit_review"
+  | "workflow_prepare_commit"
+  | "workflow_submit_commit_result";
+
+export type OperatorInputSource = "user" | "parent_context" | "server_derived";
+
+export interface OperatorRequiredInput {
+  path: string[];
+  source: OperatorInputSource;
+  required: true;
+}
+
+export interface OperatorInputAlternative {
+  paths: string[][];
+  source: OperatorInputSource;
+  required: true;
+}
+
+export type OperatorAuthorizationBinding =
+  | { kind: "none" }
+  | { kind: "all"; paths: string[][] }
+  | { kind: "exclusive_one_of"; common_paths: string[][]; alternatives: string[][] };
+
+export type OperatorAuthorizationMetadata =
+  | {
+      required: false;
+      representation: { kind: "none" };
+      binding: { kind: "none" };
+    }
+  | {
+      required: true;
+      representation: { kind: "field"; path: string[] };
+      binding: Exclude<OperatorAuthorizationBinding, { kind: "none" }>;
+    }
+  | {
+      required: true;
+      representation: { kind: "metadata_only" };
+      binding: Exclude<OperatorAuthorizationBinding, { kind: "none" }>;
+    };
+
+export type OperatorDescriptorClassification =
+  | "descriptorized_in_142"
+  | "deferred_to_143"
+  | "deferred_to_144"
+  | "protocol_or_query_only";
+
+export type OperatorActionDescriptorMetadata =
+  | {
+      classification: "protocol_or_query_only";
+      mode: "non_projectable";
+      authorization: OperatorAuthorizationMetadata;
+      inputs: OperatorRequiredInput[];
+      input_alternatives?: OperatorInputAlternative[];
+    }
+  | {
+      classification: "descriptorized_in_142";
+      mode: "dispatch";
+      operation: WorkflowAction;
+      authorization: OperatorAuthorizationMetadata;
+      inputs: OperatorRequiredInput[];
+      input_alternatives?: OperatorInputAlternative[];
+    }
+  | {
+      classification: "descriptorized_in_142";
+      mode: "parent_mutation";
+      operation: OperatorParentMutationOperation;
+      authorization: OperatorAuthorizationMetadata;
+      inputs: OperatorRequiredInput[];
+      input_alternatives?: OperatorInputAlternative[];
+    }
+  | {
+      classification: "deferred_to_143" | "deferred_to_144";
+      mode: "deferred";
+      deferred_to: "recovery_inspection" | "repair";
+      operation: OperatorParentMutationOperation;
+      authorization: OperatorAuthorizationMetadata;
+      inputs: OperatorRequiredInput[];
+      input_alternatives?: OperatorInputAlternative[];
+    };
+
+export type OperatorBindingReference =
+  | { kind: "finding"; finding_ids: FindingId[] }
+  | { kind: "validation"; validation_ids: ValidationRequirementId[] }
+  | { kind: "plan"; plan_id: PlanId; revision: PlanRevision }
+  | { kind: "scope"; paths: ExactRepoPath[] }
+  | { kind: "commit_attempt"; attempt_id: CommitAttemptId }
+  | { kind: "review_result"; version: WorkflowVersion }
+  | { kind: "repair_cycle"; cycle: number; maximum: number };
+
+export interface OperatorStaleBinding {
+  workflow_id: WorkflowId;
+  expected_version: WorkflowVersion;
+  references: OperatorBindingReference[];
+}
+
+export type OperatorExpectedNext =
+  | "implement"
+  | "review"
+  | "re_review"
+  | "commit"
+  | "bounded_continuation"
+  | "terminal_committed"
+  | "terminal_commit_mismatch"
+  | "wait";
+
+export interface OperatorMutationInvocation {
+  operation: OperatorParentMutationOperation;
+  fixed_arguments: Record<string, string | number>;
+  required_inputs: OperatorRequiredInput[];
+  authorization: OperatorAuthorizationMetadata;
+  stale_binding: OperatorStaleBinding;
+  on_success: {
+    kind: "refresh_required";
+    expected: OperatorExpectedNext[];
+    dispatch_authority: false;
+  };
+}
+
+export type OperatorNextActionDescriptor =
+  | {
+      mode: "dispatch";
+      route: OperatorRoute;
+      operation: OperatorWorkerDispatchOperation;
+      workflow_id: WorkflowId;
+      expected_version: WorkflowVersion;
+    }
+  | {
+      mode: "parent_mutation";
+      selection: "single" | "choose_one";
+      invocations: OperatorMutationInvocation[];
+    }
+  | {
+      mode: "collect_evidence";
+      validation_ids: ValidationRequirementId[];
+      specialization: "recovery_inspection";
+    }
+  | {
+      mode: "wait";
+      reason: string;
+      deferred_to?: "recovery_inspection" | "repair";
+    }
+  | {
+      mode: "terminal";
+      outcome: "committed" | "approved_no_commit_required" | "commit_mismatch";
+    };
+
+export type OperatorParentActionDescriptor =
+  | {
+      action: WorkflowAction;
+      status: "executable";
+      descriptor: Extract<OperatorNextActionDescriptor, { mode: "parent_mutation" }>;
+    }
+  | {
+      action: WorkflowAction;
+      status: "deferred";
+      descriptor: Extract<OperatorNextActionDescriptor, { mode: "wait" }>;
+    };
+
+export interface OperatorExecutionDescriptor {
+  descriptor_version: 1;
+  primary: OperatorNextActionDescriptor;
+  parent_actions: OperatorParentActionDescriptor[];
+}
 
 export interface OperatorBlocker {
   severity: FindingSeverity;
@@ -211,6 +397,7 @@ export interface OperatorAuthorityBoundary {
 
 export interface OperatorDecision {
   primary: OperatorPrimaryDecision;
+  execution: OperatorExecutionDescriptor;
   optional_findings: OperatorFinding[];
   recovery_summary: OperatorRecoverySummary;
   authority_boundaries: {

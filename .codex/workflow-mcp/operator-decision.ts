@@ -1,4 +1,5 @@
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
+import { descriptorForLegality } from "./operator-action-descriptor.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
@@ -167,9 +168,12 @@ function semanticFields(
   };
 }
 
-function primaryDecision(record: OperatorLineageRecord): OperatorDecision["primary"] {
+function primaryDecision(
+  record: OperatorLineageRecord,
+  legality: WorkflowLegality = legalityFor(record),
+): OperatorDecision["primary"] {
   const { state } = record;
-  const next = legalityFor(record).next;
+  const next = legality.next;
   switch (next.kind) {
     case "worker_route":
       return { kind: "no_user_action", route: next.route };
@@ -395,10 +399,13 @@ export function deriveOperatorDecision(
   const requestedRecord = records.find(
     (candidate) => candidate.state.workflow_id === requested.workflow_id,
   ) ?? { state: requested };
+  const record = requestedRecord;
+  const legality = legalityFor(record);
   const lineageError = validateLineage(requested, records);
   if (lineageError) {
     return {
       primary: { kind: "operator_intervention", reason: lineageError },
+      execution: descriptorForLegality(record.state, legality),
       ...semanticFields(requested, { kind: "operator_intervention", reason: lineageError }),
       authority_boundaries: {
         approve_scope_change: { availability: "unavailable", basis: "lineage is inconsistent" },
@@ -422,8 +429,7 @@ export function deriveOperatorDecision(
       commit: { eligible: false, authorization: "unavailable" },
     };
   }
-  const record = requestedRecord;
-  const primary = primaryDecision(record);
+  const primary = primaryDecision(record, legality);
   const boundaries = boundaryDecision(record, records);
   const explicit = records.some((candidate) => candidate.state.linked_continuation !== null);
   const combined = records.some(
@@ -455,9 +461,10 @@ export function deriveOperatorDecision(
     requested.phase === "STOPPED_APPROVED" &&
     requested.review_target.review_mode === "working_tree" &&
     allRequiredValidationsPassed(requested) &&
-    legalityFor(record).actions.parent.includes("workflow_authorize_commit");
+    legality.actions.parent.includes("workflow_authorize_commit");
   return {
     primary,
+    execution: descriptorForLegality(record.state, legality),
     ...semanticFields(requested, primary),
     authority_boundaries: boundaries,
     intent: {

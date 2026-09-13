@@ -63,7 +63,9 @@ they do not move domain ownership into the facade.
 `store.ts` owns persistence and runtime-ownership enforcement plus adapter orchestration.
 `operator-decision.ts` derives a semantic operator projection from state and query helpers. These
 source boundaries do not replace or reproduce the runtime and workflow authority described by the
-authoritative documentation.
+authoritative documentation. `operator-action-descriptor.ts` adds the versioned executable guidance
+projection from the `WorkflowLegality` result and the exhaustive action-classification registry; it
+does not calculate legality, readiness, or precedence and does not execute mutations.
 
 When changing this directory, preserve these ownership and downward-dependency boundaries unless
 an architecture change is explicitly in scope.

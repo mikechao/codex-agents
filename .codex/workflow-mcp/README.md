@@ -38,12 +38,22 @@ v10 state field described below.
 
 `workflow_operator_decision_get` is a read-only, idempotent semantic parent refresh. It derives a
 bounded decision from one authoritative workflow, existing permitted actions, and only reciprocal
-explicit linked-continuation references. Its output is sanitized: normal summaries omit workflow
-and PlanArtifact identity, phases, raw action names, audits, capabilities, receipts, and opaque
-authority material. The projection never writes state, authorizes a transition, persists routing
-state, or adds a logical-change/umbrella model. It covers automatic implementation/review/re-review
-routing and reports explicit repair, recovery, continuation, scope/new-intent, reconciliation, and
-commit boundaries separately.
+explicit linked-continuation references. Its semantic summary remains sanitized: it omits phases,
+audits, capabilities, receipts, and opaque authority material. The versioned execution guidance
+may include exact operation names and fixed invocation bindings needed to act through the existing
+typed tools, but it never authorizes, dispatches, mutates state, persists routing state, or creates
+a bearer capability. It covers automatic implementation/review/re-review routing and reports
+explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
+separately.
+
+The execution guidance is versioned and contains a primary descriptor plus every currently legal
+parent action. Worker routes carry only the workflow identity and expected version. Parent mutation
+descriptors identify the existing typed tool, fixed server-derived arguments, remaining semantic
+input paths and sources, stale state bindings, and the expected post-success refresh routes. An
+affirmative authorization is represented either by the exact existing mutation field or as required
+metadata-only approval when the typed schema has no authorization field; it always binds the exact
+operation and the listed semantic input paths. No descriptor dispatches or authorizes a mutation,
+and no proposal or binding is persisted by this projection.
 
 Lineage traversal is exact and bounded. Workflows with matching work items, paths, branches, or
 finding locations remain unrelated. An explicit linked chain may summarize its combined-review
