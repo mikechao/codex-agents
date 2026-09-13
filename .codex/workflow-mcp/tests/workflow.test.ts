@@ -136,6 +136,23 @@ function category(action: () => unknown): string {
   assert.fail("expected workflow error");
 }
 
+function repairDirectiveFor(
+  store: any,
+  workflowId: string,
+  findingIds: string[],
+  userAuthorization = "authorize this bounded repair",
+) {
+  const decision = store.operatorDecisionGet(workflowId, findingIds);
+  assert.equal(decision.primary.kind, "approve_exact_repairs");
+  if (decision.primary.kind !== "approve_exact_repairs")
+    throw new Error("expected repair proposal");
+  return {
+    selected_finding_ids: [...decision.execution.primary.repair_binding.selected_finding_ids],
+    ...decision.primary.proposal,
+    user_authorization: userAuthorization,
+  };
+}
+
 function rawState(store: any, workflowId: string): any {
   const row = store.db
     .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
@@ -282,14 +299,7 @@ test("incomplete implementation attempts stay active and preserve repair authori
       workflow_id: id,
       expected_version: store.parentGet(id).version,
       finding_ids: ["REPAIR-1"],
-      repair_directive: {
-        required_outcome: "resolve blocker",
-        strategy_constraints: "preserve approved intent",
-        fallbacks: [],
-        required_paths: [],
-        forbidden_paths: [],
-        user_authorization: "authorize repair",
-      },
+      repair_directive: repairDirectiveFor(store, id, ["REPAIR-1"], "authorize repair"),
     });
     const repairBefore = store.parentGet(id);
     const repairing = submit({
@@ -468,14 +478,7 @@ test("repair and re-review use authoritative expected versions", () => {
         workflow_id: id,
         expected_version: store.parentGet(id).version,
         finding_ids: ["REPAIR-1"],
-        repair_directive: {
-          required_outcome: "resolve blocker",
-          strategy_constraints: "preserve approved intent",
-          fallbacks: [],
-          required_paths: [],
-          forbidden_paths: [],
-          user_authorization: "authorize repair",
-        },
+        repair_directive: repairDirectiveFor(store, id, ["REPAIR-1"], "authorize repair"),
       }).phase,
       "REPAIRING",
     );
@@ -534,18 +537,17 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
       "workflow_authorize_repair",
       "workflow_expand_scope",
     ]);
+    assert.equal(adjudicated.committed_execution.descriptor_version, 3);
+    assert.deepEqual(adjudicated.committed_execution.primary.repair_binding, {
+      eligible_finding_ids: ["REPAIR-1"],
+      selected_finding_ids: ["REPAIR-1"],
+      proposal: adjudicated.committed_execution.primary.repair_binding.proposal,
+    });
     store.authorizeRepair({
       workflow_id: id,
       expected_version: store.parentGet(id).version,
       finding_ids: ["REPAIR-1"],
-      repair_directive: {
-        required_outcome: "resolve blocker",
-        strategy_constraints: "preserve approved intent",
-        fallbacks: [],
-        required_paths: [],
-        forbidden_paths: [],
-        user_authorization: "authorize repair",
-      },
+      repair_directive: repairDirectiveFor(store, id, ["REPAIR-1"], "authorize repair"),
     });
     assert.equal(
       implementation(store, created, undefined, "DONE", { "REPAIR-1": "resolved" }).phase,
@@ -581,17 +583,43 @@ test("repair authorization persists a bounded directive and rejects scope expans
     implementation(store, created);
     writeFileSync(join(root, "note.txt"), "reviewed\n");
     review(store, created, undefined, "CHANGES_REQUESTED", [finding("DIRECTIVE-1")]);
-    const valid = {
-      required_outcome: "resolve the reviewed blocker",
-      strategy_constraints: "retain the approved public contract",
-      fallbacks: [
-        { strategy: "stop for context", condition: "the primary strategy is infeasible" },
-      ],
-      required_paths: ["note.txt"],
-      forbidden_paths: [],
-      user_authorization: "authorize this bounded repair",
-    };
+    const valid = repairDirectiveFor(store, id, ["DIRECTIVE-1"]);
     const version = store.parentGet(id).version;
+    const events = store.audit(id).length;
+    const altered = { ...valid, required_outcome: `${valid.required_outcome} altered` };
+    assert.equal(
+      category(() =>
+        store.authorizeRepair({
+          workflow_id: id,
+          expected_version: version,
+          finding_ids: ["DIRECTIVE-1"],
+          repair_directive: altered,
+        }),
+      ),
+      "ERROR_INVALID_REPAIR",
+    );
+    assert.equal(store.parentGet(id).version, version);
+    assert.equal(store.audit(id).length, events);
+    for (const changed of [
+      { strategy_constraints: `${valid.strategy_constraints} altered` },
+      { fallbacks: [{ strategy: "different", condition: "still bounded" }] },
+      { required_paths: ["note.txt"] },
+      { forbidden_paths: ["note.txt"] },
+    ]) {
+      assert.equal(
+        category(() =>
+          store.authorizeRepair({
+            workflow_id: id,
+            expected_version: version,
+            finding_ids: ["DIRECTIVE-1"],
+            repair_directive: { ...valid, ...changed },
+          }),
+        ),
+        "ERROR_INVALID_REPAIR",
+      );
+      assert.equal(store.parentGet(id).version, version);
+      assert.equal(store.audit(id).length, events);
+    }
     assert.equal(
       category(() =>
         store.authorizeRepair({
@@ -610,10 +638,18 @@ test("repair authorization persists a bounded directive and rejects scope expans
       finding_ids: ["DIRECTIVE-1"],
       repair_directive: valid,
     });
-    assert.deepEqual(repairing.repair_directive, valid);
-    assert.deepEqual(store.implementerGet(id).repair_directive, valid);
+    const { selected_finding_ids: _selectedFindingIds, ...persistedDirective } = valid;
+    assert.deepEqual(repairing.repair_directive, persistedDirective);
+    assert.deepEqual(store.implementerGet(id).repair_directive, persistedDirective);
     assert.deepEqual(store.reviewerGet(id).repair_authorized_ids, ["DIRECTIVE-1"]);
-    assert.deepEqual(store.reviewerGet(id).repair_directive, valid);
+    assert.deepEqual(store.reviewerGet(id).repair_directive, persistedDirective);
+    assert.deepEqual(repairing.committed_execution.primary, {
+      mode: "dispatch",
+      route: "implement",
+      operation: "workflow_submit_implementation",
+      workflow_id: id,
+      expected_version: version + 1,
+    });
     store.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -632,17 +668,71 @@ test("repair authorization accepts an exact subset of multiple current blockers"
       finding("SUBSET-1"),
       finding("SUBSET-2"),
     ]);
+    const eligible = store.operatorDecisionGet(id);
+    assert.equal(eligible.primary.kind, "approve_exact_repairs");
+    if (eligible.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected all-blocker repair proposal");
+    assert.deepEqual(eligible.execution.primary.repair_binding.eligible_finding_ids, [
+      "SUBSET-1",
+      "SUBSET-2",
+    ]);
+    const selected = store.operatorDecisionGet(id, ["SUBSET-1"]);
+    assert.equal(selected.primary.kind, "approve_exact_repairs");
+    if (selected.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected selected repair proposal");
+    assert.equal(
+      selected.primary.proposal.required_outcome,
+      "Resolve the selected blocking finding without changing the approved intent.",
+    );
+    const version = store.parentGet(id).version;
+    const events = store.audit(id).length;
+    const selectedForFirstBlocker = {
+      selected_finding_ids: selected.execution.primary.repair_binding.selected_finding_ids,
+      ...selected.primary.proposal,
+      user_authorization: "authorize subset",
+    };
+    assert.deepEqual(
+      selected.primary.proposal,
+      store.operatorDecisionGet(id, ["SUBSET-2"]).primary.proposal,
+    );
+    assert.equal(
+      category(() =>
+        store.authorizeRepair({
+          workflow_id: id,
+          expected_version: version,
+          finding_ids: ["SUBSET-2"],
+          repair_directive: selectedForFirstBlocker,
+        }),
+      ),
+      "ERROR_INVALID_REPAIR",
+    );
+    assert.equal(store.parentGet(id).version, version);
+    assert.equal(store.audit(id).length, events);
+    assert.equal(
+      category(() =>
+        store.authorizeRepair({
+          workflow_id: id,
+          expected_version: version,
+          finding_ids: ["SUBSET-1"],
+          repair_directive: {
+            selected_finding_ids: eligible.execution.primary.repair_binding.selected_finding_ids,
+            ...eligible.primary.proposal,
+            user_authorization: "authorize subset",
+          },
+        }),
+      ),
+      "ERROR_INVALID_REPAIR",
+    );
+    assert.equal(store.parentGet(id).version, version);
+    assert.equal(store.audit(id).length, events);
     const repairing = store.authorizeRepair({
       workflow_id: id,
-      expected_version: store.parentGet(id).version,
+      expected_version: version,
       finding_ids: ["SUBSET-1"],
       repair_directive: {
-        required_outcome: "resolve the selected blocker",
-        strategy_constraints: "preserve approved intent",
-        fallbacks: [],
-        required_paths: [],
-        forbidden_paths: [],
-        user_authorization: "authorize this bounded repair",
+        selected_finding_ids: selected.execution.primary.repair_binding.selected_finding_ids,
+        ...selected.primary.proposal,
+        user_authorization: "authorize subset",
       },
     });
     assert.equal(repairing.phase, "REPAIRING");
@@ -666,14 +756,7 @@ test("repair re-review requires explicit conforming evidence before approval", (
       workflow_id: id,
       expected_version: store.parentGet(id).version,
       finding_ids: ["CONFORMANCE-1"],
-      repair_directive: {
-        required_outcome: "resolve the reviewed blocker",
-        strategy_constraints: "preserve approved intent",
-        fallbacks: [],
-        required_paths: ["note.txt"],
-        forbidden_paths: [],
-        user_authorization: "authorize this bounded repair",
-      },
+      repair_directive: repairDirectiveFor(store, id, ["CONFORMANCE-1"]),
     });
     implementation(store, created, undefined, "DONE", { "CONFORMANCE-1": "resolved" });
     const begin = store.parentGet(id).version;

@@ -10,13 +10,14 @@ import {
 } from "../operator-action-descriptor.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { WorkflowStore } from "../store.js";
+import type { WorkflowLegality } from "../transitions/queries.js";
 import {
   hasFailedRequiredValidation,
   permittedNextActions,
   resumeImplementation,
   workflowLegality,
 } from "../transitions.js";
-import type { WorkflowAction, WorkflowId, WorkflowState } from "../types.js";
+import type { FindingId, WorkflowAction, WorkflowId, WorkflowState } from "../types.js";
 import { MAX_PATHS, objectDigest } from "../validation.js";
 import { WORKFLOW_ACTION_VALUES } from "../values.js";
 import { fixture } from "./test-fixtures.js";
@@ -276,7 +277,7 @@ test("every workflow action has explicit descriptor treatment and authorization 
     assert.ok(
       metadata.classification === "descriptorized_in_142" ||
         metadata.classification === "descriptorized_in_143" ||
-        metadata.classification === "deferred_to_144" ||
+        metadata.classification === "descriptorized_in_144" ||
         metadata.classification === "protocol_or_query_only",
       action,
     );
@@ -367,6 +368,7 @@ test("descriptor authorization metadata distinguishes payload fields from metada
       kind: "all",
       paths: [
         ["finding_ids"],
+        ["repair_directive", "selected_finding_ids"],
         ["repair_directive", "required_outcome"],
         ["repair_directive", "strategy_constraints"],
         ["repair_directive", "fallbacks"],
@@ -469,6 +471,150 @@ test("#143 recovery descriptors preserve exact operations, inputs, authorization
         ]);
       }
     }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("#144 repair descriptors bind eligible and selected blockers to a subset proposal", () => {
+  const { root, git } = fixture();
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = create(store, git);
+    const state = structuredClone(created) as any;
+    state.phase = "REPAIR_REQUIRED";
+    state.review_result_version = 1;
+    state.blocking_findings = [
+      finding("REPAIR-A"),
+      { ...finding("REPAIR-B"), remediation: "repair the second finding" },
+    ];
+    const legality: WorkflowLegality = {
+      actions: {
+        parent: ["workflow_adjudicate_findings", "workflow_authorize_repair"],
+        implementer: [],
+        reviewer: [],
+        committer: [],
+      },
+      next: { kind: "repair_required" },
+    };
+    const all = descriptorForLegality(state, legality);
+    assert.equal(all.descriptor_version, 3);
+    assert.equal(all.primary.mode, "parent_mutation");
+    if (all.primary.mode !== "parent_mutation") throw new Error("expected repair mutation");
+    assert.equal("specialization" in all.primary, true);
+    assert.deepEqual((all.primary as any).repair_binding, {
+      eligible_finding_ids: ["REPAIR-A", "REPAIR-B"],
+      selected_finding_ids: ["REPAIR-A", "REPAIR-B"],
+      proposal: {
+        required_outcome:
+          "Resolve the selected blocking findings without changing the approved intent.",
+        strategy_constraints: "use the available semantic route; repair the second finding",
+        fallbacks: [
+          {
+            strategy: "Stop and request bounded context",
+            condition:
+              "the requested repair strategy is infeasible without changing approved intent",
+          },
+        ],
+        required_paths: [],
+        forbidden_paths: [],
+      },
+    });
+    const subset = descriptorForLegality(state, legality, ["REPAIR-B"] as FindingId[]);
+    assert.equal(subset.primary.mode, "parent_mutation");
+    if (subset.primary.mode !== "parent_mutation") throw new Error("expected subset mutation");
+    assert.deepEqual((subset.primary as any).repair_binding, {
+      eligible_finding_ids: ["REPAIR-A", "REPAIR-B"],
+      selected_finding_ids: ["REPAIR-B"],
+      proposal: {
+        required_outcome:
+          "Resolve the selected blocking finding without changing the approved intent.",
+        strategy_constraints: "repair the second finding",
+        fallbacks: [
+          {
+            strategy: "Stop and request bounded context",
+            condition:
+              "the requested repair strategy is infeasible without changing approved intent",
+          },
+        ],
+        required_paths: [],
+        forbidden_paths: [],
+      },
+    });
+    const invocation = (subset.primary as any).invocations[0];
+    assert.deepEqual(invocation.required_inputs, [
+      { path: ["finding_ids"], source: "server_derived", required: true },
+      {
+        path: ["repair_directive", "selected_finding_ids"],
+        source: "server_derived",
+        required: true,
+      },
+      {
+        path: ["repair_directive", "required_outcome"],
+        source: "server_derived",
+        required: true,
+      },
+      {
+        path: ["repair_directive", "strategy_constraints"],
+        source: "server_derived",
+        required: true,
+      },
+      { path: ["repair_directive", "fallbacks"], source: "server_derived", required: true },
+      {
+        path: ["repair_directive", "required_paths"],
+        source: "server_derived",
+        required: true,
+      },
+      {
+        path: ["repair_directive", "forbidden_paths"],
+        source: "server_derived",
+        required: true,
+      },
+    ]);
+    assert.deepEqual(invocation.repair_binding.selected_finding_ids, ["REPAIR-B"]);
+    assert.deepEqual(
+      invocation.stale_binding.references.find(
+        (reference: any) => reference.kind === "repair_selection",
+      ),
+      {
+        kind: "repair_selection",
+        eligible_finding_ids: ["REPAIR-A", "REPAIR-B"],
+        selected_finding_ids: ["REPAIR-B"],
+        proposal: {
+          required_outcome:
+            "Resolve the selected blocking finding without changing the approved intent.",
+          strategy_constraints: "repair the second finding",
+          fallbacks: [
+            {
+              strategy: "Stop and request bounded context",
+              condition:
+                "the requested repair strategy is infeasible without changing approved intent",
+            },
+          ],
+          required_paths: [],
+          forbidden_paths: [],
+        },
+      },
+    );
+    assert.equal(invocation.on_success.dispatch_authority, false);
+    assert.deepEqual(invocation.on_success.committed_result, {
+      response_path: ["committed_execution"],
+      dispatch_authority: false,
+    });
+    assert.equal(
+      (all.parent_actions as Array<{ status: string }>).some(
+        (action) => action.status === "deferred",
+      ),
+      false,
+    );
+    const adjudication = all.parent_actions.find(
+      (action) => action.action === "workflow_adjudicate_findings",
+    );
+    assert.ok(adjudication && adjudication.status === "executable");
+    if (adjudication?.status !== "executable")
+      throw new Error("expected executable adjudication descriptor");
+    assert.equal(adjudication.descriptor.invocations[0]?.operation, "workflow_adjudicate_findings");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -590,7 +736,7 @@ test("operator projection requests parent-owned manual evidence before review", 
     const collection = store.operatorDecisionGet(id).execution.primary;
     assert.equal(collection.mode, "collect_evidence");
     if (collection.mode !== "collect_evidence") throw new Error("expected evidence collection");
-    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 2);
+    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 3);
     assert.equal(collection.validation_id, "VAL-002");
     assert.equal(collection.outcomes.unavailable.mode, "wait");
     assert.equal(collection.outcomes.observed.passed.invocations.length, 1);
@@ -901,7 +1047,7 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.deepEqual(first.primary, { kind: "no_user_action", route: "implement" });
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
-    assert.equal(first.execution.descriptor_version, 2);
+    assert.equal(first.execution.descriptor_version, 3);
     assert.equal(first.execution.primary.mode, "dispatch");
     assert.deepEqual(first.execution.primary, {
       mode: "dispatch",

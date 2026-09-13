@@ -78,6 +78,11 @@ export const RESOLUTION_STATUSES: ReadonlySet<FindingResolution> = RESOLUTION_ST
 export const ACCEPTANCE_STATUSES: ReadonlySet<AcceptanceStatus> = ACCEPTANCE_STATUS_SET;
 export const VALIDATION_STATUSES: ReadonlySet<ValidationStatus> = VALIDATION_STATUS_SET;
 
+export interface ValidatedRepairDirective {
+  directive: RepairDirective;
+  selected_finding_ids: FindingId[];
+}
+
 export const ROLES: readonly Role[] = ROLE_VALUES;
 
 function hasWorkItemControl(value: string): boolean {
@@ -429,10 +434,11 @@ export function repairDirective(
   value: unknown,
   repositoryRoot: string,
   approvedPaths: ReadonlyArray<ExactRepoPath>,
-): RepairDirective {
+): ValidatedRepairDirective {
   const record = exactKeys(
     value,
     [
+      "selected_finding_ids",
       "required_outcome",
       "strategy_constraints",
       "fallbacks",
@@ -441,6 +447,11 @@ export function repairDirective(
       "user_authorization",
     ],
     "repair directive",
+  );
+  const selectedFindingIds = findingIdList(
+    record.selected_finding_ids,
+    "selected_finding_ids",
+    "ERROR_INVALID_REPAIR",
   );
   const requiredPaths = exactPaths(record.required_paths, repositoryRoot, true);
   const forbiddenPaths = exactPaths(record.forbidden_paths, repositoryRoot, true);
@@ -462,16 +473,19 @@ export function repairDirective(
     };
   });
   return {
-    required_outcome: boundedString(record.required_outcome, "required_outcome", MAX_DETAIL),
-    strategy_constraints: boundedString(
-      record.strategy_constraints,
-      "strategy_constraints",
-      MAX_DETAIL,
-    ),
-    fallbacks,
-    required_paths: requiredPaths,
-    forbidden_paths: forbiddenPaths,
-    user_authorization: userAuthorization(record.user_authorization),
+    selected_finding_ids: selectedFindingIds,
+    directive: {
+      required_outcome: boundedString(record.required_outcome, "required_outcome", MAX_DETAIL),
+      strategy_constraints: boundedString(
+        record.strategy_constraints,
+        "strategy_constraints",
+        MAX_DETAIL,
+      ),
+      fallbacks,
+      required_paths: requiredPaths,
+      forbidden_paths: forbiddenPaths,
+      user_authorization: userAuthorization(record.user_authorization),
+    },
   };
 }
 

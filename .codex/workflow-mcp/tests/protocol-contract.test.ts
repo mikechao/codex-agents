@@ -153,7 +153,12 @@ test("closed protocol registry and schema contract exposes workflow actions with
   ]) {
     const getter = tools.find((tool) => tool.name === name);
     assert.ok(getter);
-    assert.deepEqual(Object.keys((getter.inputSchema as any).properties).sort(), ["workflow_id"]);
+    assert.deepEqual(
+      Object.keys((getter.inputSchema as any).properties).sort(),
+      name === "workflow_operator_decision_get"
+        ? ["repair_finding_ids", "workflow_id"]
+        : ["workflow_id"],
+    );
   }
   const expansionSchema = expansion.inputSchema as any;
   assert.deepEqual(Object.keys(expansionSchema.properties).sort(), [
@@ -300,7 +305,7 @@ test("descriptorized parent metadata matches the unchanged MCP tool schemas", ()
       action,
     );
     if (metadata.authorization.required && metadata.authorization.representation.kind === "field") {
-      assert.equal(metadata.authorization.representation.path.length, 1, action);
+      assert.ok(metadata.authorization.representation.path.length >= 1, action);
       assert.equal(
         metadata.authorization.representation.path[0] in inputSchema.properties,
         true,

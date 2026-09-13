@@ -1,5 +1,6 @@
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { descriptorForLegality } from "./operator-action-descriptor.js";
+import { repairProposalForFindings, repairProposalSelection } from "./repair-proposal.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
@@ -10,6 +11,7 @@ import {
 } from "./transitions/queries.js";
 import type {
   BlockingFinding,
+  FindingId,
   OperatorDecision,
   OperatorRecovery,
   OptionalFinding,
@@ -74,9 +76,12 @@ function blockerSummary(finding: BlockingFinding | OptionalFinding): string {
   return bounded(finding.impact || finding.remediation || finding.violated_requirement);
 }
 
-function repairDecision(state: WorkflowState): OperatorDecision["primary"] {
-  const blockers = effectiveBlockingFindings(state);
-  if (blockers.length === 0) {
+function repairDecision(
+  state: WorkflowState,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
+): OperatorDecision["primary"] {
+  const selection = repairProposalSelection(state, selectedFindingIds);
+  if (selection.selected_findings.length === 0) {
     return {
       kind: "operator_intervention",
       reason: "current blocker state is unavailable or contradictory",
@@ -84,27 +89,12 @@ function repairDecision(state: WorkflowState): OperatorDecision["primary"] {
   }
   return {
     kind: "approve_exact_repairs",
-    blocker_count: blockers.length,
-    blockers: blockers.map((finding) => ({
+    blocker_count: selection.selected_findings.length,
+    blockers: selection.selected_findings.map((finding) => ({
       severity: finding.severity,
       summary: blockerSummary(finding),
     })),
-    proposal: {
-      required_outcome:
-        "Resolve all current blocking findings without changing the approved intent.",
-      strategy_constraints: bounded(
-        blockers.map((finding) => finding.remediation).join("; "),
-        MAX_SUMMARY,
-      ),
-      fallbacks: [
-        {
-          strategy: "Stop and request bounded context",
-          condition: "the requested repair strategy is infeasible without changing approved intent",
-        },
-      ],
-      required_paths: [],
-      forbidden_paths: [],
-    },
+    proposal: repairProposalForFindings(selection.selected_findings),
     authorization_required: true,
   };
 }
@@ -171,6 +161,7 @@ function semanticFields(
 function primaryDecision(
   record: OperatorLineageRecord,
   legality: WorkflowLegality = legalityFor(record),
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorDecision["primary"] {
   const { state } = record;
   const next = legality.next;
@@ -186,7 +177,7 @@ function primaryDecision(
         })),
       };
     case "repair_required":
-      return repairDecision(state);
+      return repairDecision(state, selectedFindingIds);
     case "finalize_repair_exhausted":
       return {
         kind: "finalize_repair_exhausted",
@@ -395,6 +386,7 @@ function boundaryDecision(
 export function deriveOperatorDecision(
   requested: WorkflowState,
   records: OperatorLineageRecord[] = [{ state: requested }],
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorDecision {
   const requestedRecord = records.find(
     (candidate) => candidate.state.workflow_id === requested.workflow_id,
@@ -405,7 +397,7 @@ export function deriveOperatorDecision(
   if (lineageError) {
     return {
       primary: { kind: "operator_intervention", reason: lineageError },
-      execution: descriptorForLegality(record.state, legality),
+      execution: descriptorForLegality(record.state, legality, selectedFindingIds),
       ...semanticFields(requested, { kind: "operator_intervention", reason: lineageError }),
       authority_boundaries: {
         approve_scope_change: { availability: "unavailable", basis: "lineage is inconsistent" },
@@ -429,7 +421,7 @@ export function deriveOperatorDecision(
       commit: { eligible: false, authorization: "unavailable" },
     };
   }
-  const primary = primaryDecision(record, legality);
+  const primary = primaryDecision(record, legality, selectedFindingIds);
   const boundaries = boundaryDecision(record, records);
   const explicit = records.some((candidate) => candidate.state.linked_continuation !== null);
   const combined = records.some(
@@ -464,7 +456,7 @@ export function deriveOperatorDecision(
     legality.actions.parent.includes("workflow_authorize_commit");
   return {
     primary,
-    execution: descriptorForLegality(record.state, legality),
+    execution: descriptorForLegality(record.state, legality, selectedFindingIds),
     ...semanticFields(requested, primary),
     authority_boundaries: boundaries,
     intent: {

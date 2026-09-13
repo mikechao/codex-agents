@@ -101,6 +101,7 @@ import type {
   GitCommitSha,
   IsoTimestamp,
   OperatorDecision,
+  ParentMutationResult,
   ParentView,
   PlannerPlanRead,
   PlanRead,
@@ -120,6 +121,7 @@ import {
   exactKeys,
   exactPaths,
   expectedVersion,
+  findingIdList,
   isoNow,
   objectDigest,
   repairCycle,
@@ -1357,12 +1359,32 @@ export class WorkflowStore {
     return this.#get(workflowIdValue, "parent") as ParentView;
   }
 
+  #withCommittedExecution(view: ParentView): ParentMutationResult {
+    if (!view.workflow_id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
+    const committedRow = this.#row(view.workflow_id);
+    if (committedRow.version !== view.version) {
+      fail("ERROR_VERSION_CONFLICT", "workflow advanced before committed execution was derived");
+    }
+    const committedState = parseState(committedRow);
+    return {
+      ...view,
+      committed_execution: this.#deriveOperatorDecision(
+        committedState,
+        committedRow,
+        this.#legalityReadiness(committedState),
+      ).execution,
+    };
+  }
+
   /**
    * Return the bounded semantic parent projection. This intentionally does not accept a
    * capability or mutation input: runtime ownership is the same read boundary as parentGet,
    * while privileged details remain available only through the explicit parent/audit surfaces.
    */
-  operatorDecisionGet(workflowIdValue: unknown): OperatorDecision {
+  operatorDecisionGet(
+    workflowIdValue: unknown,
+    repairFindingIdsValue: unknown = undefined,
+  ): OperatorDecision {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
     const state = parseState(row);
@@ -1370,13 +1392,23 @@ export class WorkflowStore {
     else this.#assertRuntimeOwnership(row);
     if (!state.workflow_id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
 
-    return this.#deriveOperatorDecision(state, row, this.#legalityReadiness(state));
+    const readiness = this.#legalityReadiness(state);
+    const legality = workflowLegality(state, readiness);
+    const repairFindingIds =
+      repairFindingIdsValue === undefined
+        ? undefined
+        : findingIdList(repairFindingIdsValue, "repair selection", "ERROR_INVALID_REPAIR");
+    if (repairFindingIds && legality.next.kind !== "repair_required") {
+      fail("ERROR_INVALID_REPAIR", "repair selection requires a repair authorization decision");
+    }
+    return this.#deriveOperatorDecision(state, row, readiness, repairFindingIds);
   }
 
   #deriveOperatorDecision(
     state: WorkflowState,
     row: WorkflowRow,
     readiness: WorkflowLegalityReadiness,
+    selectedFindingIds?: ReadonlyArray<import("./types.js").FindingId>,
   ): OperatorDecision {
     const records = new Map<string, OperatorLineageRecord>();
     const currentWorkflowId = state.workflow_id;
@@ -1400,7 +1432,7 @@ export class WorkflowStore {
         if (!records.has(reference)) pending.push(reference);
       }
     }
-    return deriveOperatorDecision(state, [...records.values()]);
+    return deriveOperatorDecision(state, [...records.values()], selectedFindingIds);
   }
 
   reconciliationPermittedActions(workflowIdValue: unknown): WorkflowAction[] {
@@ -2239,20 +2271,21 @@ export class WorkflowStore {
     );
   }
 
-  authorizeRepair(input: unknown): RoleView {
+  authorizeRepair(input: unknown): ParentMutationResult {
     const args = parentFindingIdsMutation(input);
-    return this.#mutate(
+    const result = this.#mutate(
       args.workflow_id,
       "parent",
       args.expected_version,
       "REPAIR_AUTHORIZED",
       (state) => authorizeRepair(state, args, this.root),
     );
+    return this.#withCommittedExecution(result as ParentView);
   }
 
-  adjudicateFindings(input: unknown): RoleView {
+  adjudicateFindings(input: unknown): ParentMutationResult {
     const args = parentMutation(input);
-    return this.#mutate(
+    const result = this.#mutate(
       args.workflow_id,
       "parent",
       args.expected_version,
@@ -2265,6 +2298,7 @@ export class WorkflowStore {
         ),
       }),
     );
+    return this.#withCommittedExecution(result as ParentView);
   }
 
   resumeReview(input: unknown): RoleView {

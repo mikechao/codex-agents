@@ -89,14 +89,6 @@ test("SDK direct review-only repair keeps null-plan provenance and exact aggrega
     remediation: "repair the defect",
     missing_or_inadequate_test: "direct repair regression",
   };
-  const directive = {
-    required_outcome: "resolve the direct blocker",
-    strategy_constraints: "preserve the complete aggregate scope",
-    fallbacks: [],
-    required_paths: [],
-    forbidden_paths: [],
-    user_authorization: "explicitly authorize the exact direct repair",
-  };
   try {
     const created = await session.call(
       "workflow_create",
@@ -133,6 +125,27 @@ test("SDK direct review-only repair keeps null-plan provenance and exact aggrega
       optional_findings: [],
       prior_finding_classifications: {},
     });
+    const proposalDecision = await session.call("workflow_operator_decision_get", {
+      workflow_id: created.workflow_id,
+      repair_finding_ids: [blocker.finding_id],
+    });
+    assert.equal(proposalDecision.primary.kind, "approve_exact_repairs");
+    if (proposalDecision.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected an exact repair proposal");
+    assert.deepEqual(proposalDecision.execution.primary.repair_binding, {
+      eligible_finding_ids: [blocker.finding_id],
+      selected_finding_ids: [blocker.finding_id],
+      proposal: proposalDecision.primary.proposal,
+    });
+    const directive = {
+      selected_finding_ids: proposalDecision.execution.primary.repair_binding.selected_finding_ids,
+      ...proposalDecision.primary.proposal,
+      user_authorization: "explicitly authorize the exact direct repair",
+    };
+    const persistedDirective = {
+      ...proposalDecision.primary.proposal,
+      user_authorization: directive.user_authorization,
+    };
 
     const beforeRejectedAuthorization = await session.version(created.workflow_id);
     const missingDirective = await session.callRaw("workflow_authorize_repair", {
@@ -195,6 +208,13 @@ test("SDK direct review-only repair keeps null-plan provenance and exact aggrega
       repair_directive: directive,
     });
     assert.equal(repairing.phase, "REPAIRING");
+    assert.deepEqual(repairing.committed_execution.primary, {
+      mode: "dispatch",
+      route: "implement",
+      operation: "workflow_submit_implementation",
+      workflow_id: created.workflow_id,
+      expected_version: beforeRejectedAuthorization + 1,
+    });
     const implementer = await session.call("workflow_implementer_get", {
       workflow_id: created.workflow_id,
     });
@@ -208,7 +228,7 @@ test("SDK direct review-only repair keeps null-plan provenance and exact aggrega
     assert.deepEqual(implementer.blocking_findings, [blocker]);
     assert.deepEqual(implementer.repair_authorized_ids, [blocker.finding_id]);
     assert.deepEqual(implementer.remediation_context, null);
-    assert.deepEqual(implementer.repair_directive, directive);
+    assert.deepEqual(implementer.repair_directive, persistedDirective);
 
     const beforeOutOfScope = await session.version(created.workflow_id);
     const outOfScope = await session.callRaw("workflow_submit_implementation", {

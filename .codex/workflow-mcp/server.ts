@@ -28,7 +28,7 @@ import {
 type JsonSchema = Record<string, JSONValue>;
 
 export const protocolInstructions =
-  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v3 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The read-only workflow_operator_decision_get projection returns the human-facing semantic decision plus versioned executable next-action guidance; it never authorizes, dispatches, or mutates state, and its descriptor is not a bearer capability. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
+  "Authoritative local workflow state. Planning is a separate pre-workflow domain: canonical schema-v3 revisions explicitly author change or review_only, revisions are complete and immutable, exact revision approval is parent-only, and only the current approved revision may seed a workflow. Retained pre-change PlanArtifacts require a reset and recreation. Parent control-plane mutations and audit are bound to exact persisted runtime ownership and launch attestation; workers receive only workflow_id and call dedicated capability-free getters before versioned mutations. The read-only workflow_operator_decision_get projection returns the human-facing semantic decision plus versioned executable next-action guidance; repair guidance binds eligible and selected blocker IDs to an exact server-derived proposal, and the projection never authorizes, dispatches, or mutates state. Its descriptor is not a bearer capability. Plan-native linked follow-ups accept exact child plan identity only; the server resolves the current approved PlanArtifact.";
 
 const common: {
   type: "object";
@@ -109,6 +109,12 @@ const findingSchema: JsonSchema = {
 const repairDirectiveSchema: JsonSchema = {
   type: "object",
   properties: {
+    selected_finding_ids: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 1,
+      maxItems: 200,
+    },
     required_outcome: { type: "string", minLength: 1, maxLength: 2000 },
     strategy_constraints: { type: "string", minLength: 1, maxLength: 2000 },
     fallbacks: {
@@ -129,6 +135,7 @@ const repairDirectiveSchema: JsonSchema = {
     user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
   },
   required: [
+    "selected_finding_ids",
     "required_outcome",
     "strategy_constraints",
     "fallbacks",
@@ -530,8 +537,19 @@ export const toolDefinitions = [
   {
     name: "workflow_operator_decision_get",
     description:
-      "Read a bounded semantic operator decision plus versioned executable next-action guidance for one workflow and its validated explicit linked lineage; this read-only projection never authorizes, dispatches, or mutates state, and its guidance is not a bearer capability.",
-    inputSchema: schema({ workflow_id: { type: "string" } }, ["workflow_id"]),
+      "Read a bounded semantic operator decision plus versioned executable next-action guidance for one workflow and its validated explicit linked lineage; an optional repair_finding_ids selection derives an exact subset repair proposal; this read-only projection never authorizes, dispatches, or mutates state, and its guidance is not a bearer capability.",
+    inputSchema: schema(
+      {
+        workflow_id: { type: "string" },
+        repair_finding_ids: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 200,
+        },
+      },
+      ["workflow_id"],
+    ),
     annotations: {
       title: "Get operator decision",
       readOnlyHint: true,
@@ -1103,7 +1121,8 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_expand_scope: (args) => store.expandScope(args),
     workflow_create: (args) => store.create(args),
     workflow_parent_get: (args) => store.parentGet(args.workflow_id),
-    workflow_operator_decision_get: (args) => store.operatorDecisionGet(args.workflow_id),
+    workflow_operator_decision_get: (args) =>
+      store.operatorDecisionGet(args.workflow_id, args.repair_finding_ids),
     workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
     workflow_reviewer_get: (args) => store.reviewerGet(args.workflow_id),
     workflow_committer_get: (args) => store.committerGet(args.workflow_id),

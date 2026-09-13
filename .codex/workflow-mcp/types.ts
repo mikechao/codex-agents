@@ -216,7 +216,7 @@ export type OperatorAuthorizationMetadata =
 export type OperatorDescriptorClassification =
   | "descriptorized_in_142"
   | "descriptorized_in_143"
-  | "deferred_to_144"
+  | "descriptorized_in_144"
   | "protocol_or_query_only";
 
 export type OperatorActionDescriptorMetadata =
@@ -236,7 +236,7 @@ export type OperatorActionDescriptorMetadata =
       input_alternatives?: OperatorInputAlternative[];
     }
   | {
-      classification: "descriptorized_in_142" | "descriptorized_in_143";
+      classification: "descriptorized_in_142" | "descriptorized_in_143" | "descriptorized_in_144";
       mode: "parent_mutation";
       operation: OperatorParentMutationOperation;
       authorization: OperatorAuthorizationMetadata;
@@ -249,19 +249,16 @@ export type OperatorActionDescriptorMetadata =
       operation: "workflow_record_manual_validation";
       authorization: OperatorAuthorizationMetadata;
       inputs: OperatorRequiredInput[];
-    }
-  | {
-      classification: "deferred_to_144";
-      mode: "deferred";
-      deferred_to: "recovery_inspection" | "repair";
-      operation: OperatorParentMutationOperation;
-      authorization: OperatorAuthorizationMetadata;
-      inputs: OperatorRequiredInput[];
-      input_alternatives?: OperatorInputAlternative[];
     };
 
 export type OperatorBindingReference =
   | { kind: "finding"; finding_ids: FindingId[] }
+  | {
+      kind: "repair_selection";
+      eligible_finding_ids: FindingId[];
+      selected_finding_ids: FindingId[];
+      proposal: OperatorRepairProposal;
+    }
   | { kind: "validation"; validation_ids: ValidationRequirementId[] }
   | { kind: "plan"; plan_id: PlanId; revision: PlanRevision }
   | { kind: "scope"; paths: ExactRepoPath[] }
@@ -296,10 +293,15 @@ export interface OperatorMutationInvocation {
   input_alternatives?: OperatorInputAlternative[];
   authorization: OperatorAuthorizationMetadata;
   stale_binding: OperatorStaleBinding;
+  repair_binding?: OperatorRepairBinding;
   on_success: {
     kind: "refresh_required";
     expected: OperatorExpectedNext[];
     dispatch_authority: false;
+    committed_result?: {
+      response_path: ["committed_execution"];
+      dispatch_authority: false;
+    };
   };
 }
 
@@ -309,10 +311,20 @@ export interface OperatorParentMutationDescriptor {
   invocations: OperatorMutationInvocation[];
 }
 
+export interface OperatorRepairBinding {
+  eligible_finding_ids: FindingId[];
+  selected_finding_ids: FindingId[];
+  proposal: OperatorRepairProposal;
+}
+
+export interface OperatorRepairAuthorizationDescriptor extends OperatorParentMutationDescriptor {
+  specialization: "repair_authorization";
+  repair_binding: OperatorRepairBinding;
+}
+
 export interface OperatorWaitDescriptor {
   mode: "wait";
   reason: string;
-  deferred_to?: "recovery_inspection" | "repair";
 }
 
 export interface OperatorInspectionCollection {
@@ -342,6 +354,7 @@ export type OperatorNextActionDescriptor =
       expected_version: WorkflowVersion;
     }
   | OperatorParentMutationDescriptor
+  | OperatorRepairAuthorizationDescriptor
   | OperatorCollectEvidenceDescriptor
   | OperatorWaitDescriptor
   | {
@@ -359,15 +372,10 @@ export type OperatorParentActionDescriptor =
       action: "workflow_record_manual_validation";
       status: "evidence_required";
       descriptor: OperatorCollectEvidenceDescriptor;
-    }
-  | {
-      action: WorkflowAction;
-      status: "deferred";
-      descriptor: Extract<OperatorNextActionDescriptor, { mode: "wait" }>;
     };
 
 export interface OperatorExecutionDescriptor {
-  descriptor_version: 2;
+  descriptor_version: 3;
   primary: OperatorNextActionDescriptor;
   parent_actions: OperatorParentActionDescriptor[];
 }
@@ -384,6 +392,10 @@ export interface OperatorRepairProposal {
   required_paths: string[];
   forbidden_paths: string[];
 }
+
+export type ParentMutationResult = ParentView & {
+  committed_execution: OperatorExecutionDescriptor;
+};
 
 export type OperatorFinding = OperatorBlocker;
 

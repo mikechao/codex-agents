@@ -46,14 +46,18 @@ a bearer capability. It covers automatic implementation/review/re-review routing
 explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
 separately.
 
-The current execution guidance is descriptor version 2 and contains a primary descriptor plus every currently legal
+The current execution guidance is descriptor version 3 and contains a primary descriptor plus every currently legal
 parent action. Worker routes carry only the workflow identity and expected version. Parent mutation
 descriptors identify the existing typed tool, fixed server-derived arguments, remaining semantic
-input paths and sources, stale state bindings, and the expected post-success refresh routes. An
+input paths and sources, stale state bindings, and the expected post-success refresh routes. Repair
+authorization descriptors additionally bind the complete eligible blocker set, the exact selected
+non-empty subset, and the server-derived proposal that the mutation must reproduce. An
 affirmative authorization is represented either by the exact existing mutation field or as required
 metadata-only approval when the typed schema has no authorization field; it always binds the exact
 operation and the listed semantic input paths. No descriptor dispatches or authorizes a mutation,
-and no proposal or binding is persisted by this projection.
+and no proposal or binding is persisted by this projection. Successful repair-domain parent
+mutations add a committed execution descriptor derived only after the transaction commits; failed
+or rejected mutations expose no worker route.
 
 When parent-owned inspection evidence is required, the descriptor selects exactly the first pending
 inspection requirement in requirement order. Its outcome contract maps observed `passed` or `failed`
@@ -64,9 +68,9 @@ to recovery/review routing. Unavailable observations are execution-local and are
 later fresh decision may select the same inspection again.
 
 Older unfinished workflows may continue under their owning historical runtime and return descriptor
-version 1 with the earlier execution shape. Consumers must branch on `descriptor_version` before
-interpreting execution guidance; version 1 and version 2 are not wire-compatible for inspection
-collection.
+version 1 or version 2 with an earlier execution shape. Consumers must branch on `descriptor_version`
+before interpreting execution guidance; versions 1, 2, and 3 are not wire-compatible for repair
+authorization or inspection collection.
 
 Lineage traversal is exact and bounded. Workflows with matching work items, paths, branches, or
 finding locations remain unrelated. An explicit linked chain may summarize its combined-review

@@ -458,16 +458,16 @@ function doReview(ctx: any, _version: number, options: any = {}) {
 
 function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
   const workflow = ctx.created;
+  const decision = ctx.store.operatorDecisionGet(workflow.workflow_id, ids);
+  if (decision.primary.kind !== "approve_exact_repairs")
+    throw new Error("expected an exact repair proposal");
   ctx.store.authorizeRepair({
     workflow_id: workflow.workflow_id,
     expected_version: ctx.store.parentGet(workflow.workflow_id).version,
     finding_ids: ids,
     repair_directive: {
-      required_outcome: "resolve blockers",
-      strategy_constraints: "preserve approved intent",
-      fallbacks: [],
-      required_paths: [],
-      forbidden_paths: [],
+      selected_finding_ids: decision.execution.primary.repair_binding.selected_finding_ids,
+      ...decision.primary.proposal,
       user_authorization: "authorize repair",
     },
   });
@@ -806,16 +806,18 @@ test("plan-bound review-only repair preserves authored type and plan authority",
         { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
       ],
     });
+    const proposalDecision = store.operatorDecisionGet(id, ["PLAN-REVIEW-1"]);
+    assert.equal(proposalDecision.primary.kind, "approve_exact_repairs");
+    if (proposalDecision.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected an exact repair proposal");
     store.authorizeRepair({
       workflow_id: id,
       expected_version: 2,
       finding_ids: ["PLAN-REVIEW-1"],
       repair_directive: {
-        required_outcome: "resolve the blocker",
-        strategy_constraints: "preserve the approved review plan",
-        fallbacks: [],
-        required_paths: [],
-        forbidden_paths: [],
+        selected_finding_ids:
+          proposalDecision.execution.primary.repair_binding.selected_finding_ids,
+        ...proposalDecision.primary.proposal,
         user_authorization: "authorize exact planned repair",
       },
     });

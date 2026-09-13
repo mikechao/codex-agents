@@ -1,5 +1,11 @@
-import { pendingInspectionValidations, type WorkflowLegality } from "./transitions/queries.js";
+import { repairProposalForFindings, repairProposalSelection } from "./repair-proposal.js";
+import {
+  effectiveBlockingFindings,
+  pendingInspectionValidations,
+  type WorkflowLegality,
+} from "./transitions/queries.js";
 import type {
+  FindingId,
   OperatorActionDescriptorMetadata,
   OperatorAuthorizationBinding,
   OperatorAuthorizationMetadata,
@@ -13,6 +19,7 @@ import type {
   OperatorNextActionDescriptor,
   OperatorParentActionDescriptor,
   OperatorParentMutationOperation,
+  OperatorRepairAuthorizationDescriptor,
   OperatorRequiredInput,
   OperatorStaleBinding,
   OperatorWorkerDispatchOperation,
@@ -190,14 +197,14 @@ export const ACTION_DESCRIPTOR_METADATA = {
     inputs: [],
   },
   workflow_authorize_repair: {
-    classification: "deferred_to_144",
-    mode: "deferred",
-    deferred_to: "repair",
+    classification: "descriptorized_in_144",
+    mode: "parent_mutation",
     operation: "workflow_authorize_repair",
     authorization: fieldAuthorization(
       ["repair_directive", "user_authorization"],
       [
         ["finding_ids"],
+        ["repair_directive", "selected_finding_ids"],
         ["repair_directive", "required_outcome"],
         ["repair_directive", "strategy_constraints"],
         ["repair_directive", "fallbacks"],
@@ -207,17 +214,17 @@ export const ACTION_DESCRIPTOR_METADATA = {
     ),
     inputs: [
       input(["finding_ids"], "server_derived"),
-      input(["repair_directive", "required_outcome"], "parent_context"),
-      input(["repair_directive", "strategy_constraints"], "parent_context"),
-      input(["repair_directive", "fallbacks"], "parent_context"),
-      input(["repair_directive", "required_paths"], "parent_context"),
-      input(["repair_directive", "forbidden_paths"], "parent_context"),
+      input(["repair_directive", "selected_finding_ids"], "server_derived"),
+      input(["repair_directive", "required_outcome"], "server_derived"),
+      input(["repair_directive", "strategy_constraints"], "server_derived"),
+      input(["repair_directive", "fallbacks"], "server_derived"),
+      input(["repair_directive", "required_paths"], "server_derived"),
+      input(["repair_directive", "forbidden_paths"], "server_derived"),
     ],
   },
   workflow_adjudicate_findings: {
-    classification: "deferred_to_144",
-    mode: "deferred",
-    deferred_to: "repair",
+    classification: "descriptorized_in_144",
+    mode: "parent_mutation",
     operation: "workflow_adjudicate_findings",
     authorization: fieldAuthorization(["user_authorization"], [["findings"]]),
     inputs: [input(["findings"], "parent_context")],
@@ -332,7 +339,11 @@ function identity(
   return { workflow_id: state.workflow_id, version: state.version };
 }
 
-function referencesFor(state: WorkflowState, action: WorkflowAction): OperatorBindingReference[] {
+function referencesFor(
+  state: WorkflowState,
+  action: WorkflowAction,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
+): OperatorBindingReference[] {
   const references: OperatorBindingReference[] = [];
   if (state.review_result_version !== null) {
     references.push({ kind: "review_result", version: state.review_result_version });
@@ -362,6 +373,28 @@ function referencesFor(state: WorkflowState, action: WorkflowAction): OperatorBi
       maximum: state.max_repair_cycles,
     });
   }
+  if (action === "workflow_authorize_repair") {
+    const selection = repairProposalSelection(state, selectedFindingIds);
+    const proposal = repairProposalForFindings(selection.selected_findings);
+    references.push({ kind: "scope", paths: [...state.approved_paths] });
+    references.push({
+      kind: "repair_selection",
+      eligible_finding_ids: selection.eligible_finding_ids,
+      selected_finding_ids: selection.selected_finding_ids,
+      proposal,
+    });
+    references.push({
+      kind: "repair_cycle",
+      cycle: state.repair_cycle,
+      maximum: state.max_repair_cycles,
+    });
+  }
+  if (action === "workflow_adjudicate_findings") {
+    references.push({
+      kind: "finding",
+      finding_ids: effectiveBlockingFindings(state).map((finding) => finding.finding_id),
+    });
+  }
   if (action === "workflow_reconcile_commit_result" && state.commit_preparation) {
     references.push({
       kind: "commit_attempt",
@@ -381,13 +414,14 @@ function staleBinding(
   state: WorkflowState,
   action: WorkflowAction,
   additionalReferences: OperatorBindingReference[] = [],
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorStaleBinding {
   const current = identity(state);
   if (!current) throw new Error("descriptor requires a persisted workflow identity");
   return {
     workflow_id: current.workflow_id,
     expected_version: state.version,
-    references: [...referencesFor(state, action), ...additionalReferences],
+    references: [...referencesFor(state, action, selectedFindingIds), ...additionalReferences],
   };
 }
 
@@ -426,6 +460,10 @@ function expectedAfter(action: OperatorParentMutationOperation): OperatorExpecte
       return ["implement", "review", "re_review", "wait"];
     case "workflow_finalize_repair_exhausted":
       return ["bounded_continuation", "wait"];
+    case "workflow_authorize_repair":
+      return ["implement", "wait"];
+    case "workflow_adjudicate_findings":
+      return ["review", "re_review", "wait"];
     case "workflow_create_linked_followup":
     case "workflow_create_linked_followup_from_plan":
       return ["implement", "wait"];
@@ -466,11 +504,17 @@ function workerOperation(
 function invocation(
   state: WorkflowState,
   action: OperatorParentMutationOperation,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorMutationInvocation {
   const metadata = ACTION_DESCRIPTOR_METADATA[action];
   if (metadata.mode !== "parent_mutation")
     throw new Error(`action ${action} is not descriptorized as a parent mutation`);
-  return {
+  const selection =
+    action === "workflow_authorize_repair"
+      ? repairProposalSelection(state, selectedFindingIds)
+      : null;
+  const proposal = selection ? repairProposalForFindings(selection.selected_findings) : null;
+  const descriptor: OperatorMutationInvocation = {
     operation: action,
     fixed_arguments: fixedArguments(state, action),
     required_inputs: metadata.inputs.map((requiredInput) => ({
@@ -488,13 +532,31 @@ function invocation(
         }
       : {}),
     authorization: metadata.authorization,
-    stale_binding: staleBinding(state, action),
+    ...(selection && proposal
+      ? {
+          repair_binding: {
+            eligible_finding_ids: selection.eligible_finding_ids,
+            selected_finding_ids: selection.selected_finding_ids,
+            proposal,
+          },
+        }
+      : {}),
+    stale_binding: staleBinding(state, action, [], selectedFindingIds),
     on_success: {
       kind: "refresh_required",
       expected: expectedAfter(action),
       dispatch_authority: false,
+      ...(action === "workflow_authorize_repair" || action === "workflow_adjudicate_findings"
+        ? {
+            committed_result: {
+              response_path: ["committed_execution"],
+              dispatch_authority: false as const,
+            },
+          }
+        : {}),
     },
   };
+  return descriptor;
 }
 
 function inspectionInvocation(
@@ -553,21 +615,28 @@ function inspectionDescriptor(state: WorkflowState): OperatorCollectEvidenceDesc
   };
 }
 
-function deferredDescriptor(
-  action: WorkflowAction,
-): Extract<OperatorNextActionDescriptor, { mode: "wait" }> {
-  const metadata = ACTION_DESCRIPTOR_METADATA[action];
-  if (metadata.mode !== "deferred") throw new Error(`action ${action} is not deferred`);
+function repairAuthorizationDescriptor(
+  state: WorkflowState,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
+): OperatorRepairAuthorizationDescriptor {
+  const selection = repairProposalSelection(state, selectedFindingIds);
   return {
-    mode: "wait",
-    reason: `${action} is deferred to the ${metadata.deferred_to} descriptor specialization`,
-    deferred_to: metadata.deferred_to,
+    mode: "parent_mutation",
+    specialization: "repair_authorization",
+    selection: "single",
+    repair_binding: {
+      eligible_finding_ids: selection.eligible_finding_ids,
+      selected_finding_ids: selection.selected_finding_ids,
+      proposal: repairProposalForFindings(selection.selected_findings),
+    },
+    invocations: [invocation(state, "workflow_authorize_repair", selectedFindingIds)],
   };
 }
 
 function parentActionDescriptor(
   state: WorkflowState,
   action: WorkflowAction,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorParentActionDescriptor {
   const metadata = ACTION_DESCRIPTOR_METADATA[action];
   if (metadata.mode === "collect_evidence") {
@@ -575,6 +644,13 @@ function parentActionDescriptor(
       action: "workflow_record_manual_validation",
       status: "evidence_required",
       descriptor: inspectionDescriptor(state),
+    };
+  }
+  if (action === "workflow_authorize_repair") {
+    return {
+      action,
+      status: "executable",
+      descriptor: repairAuthorizationDescriptor(state, selectedFindingIds),
     };
   }
   if (metadata.mode === "parent_mutation") {
@@ -587,9 +663,6 @@ function parentActionDescriptor(
         invocations: [],
       },
     };
-  }
-  if (metadata.mode === "deferred") {
-    return { action, status: "deferred", descriptor: deferredDescriptor(action) };
   }
   throw new Error(`parent action ${action} has no parent descriptor treatment`);
 }
@@ -604,7 +677,15 @@ function completeParentInvocation(
     ...descriptor,
     descriptor: {
       ...descriptor.descriptor,
-      invocations: [invocation(state, action)],
+      invocations: [
+        invocation(
+          state,
+          action,
+          "repair_binding" in descriptor.descriptor
+            ? descriptor.descriptor.repair_binding.selected_finding_ids
+            : undefined,
+        ),
+      ],
     },
   };
 }
@@ -612,6 +693,7 @@ function completeParentInvocation(
 function primaryDescriptor(
   state: WorkflowState,
   legality: WorkflowLegality,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorNextActionDescriptor {
   const current = identity(state);
   if (!current) return { mode: "wait", reason: "workflow identity is unavailable" };
@@ -630,7 +712,7 @@ function primaryDescriptor(
     case "inspection_required":
       return inspectionDescriptor(state);
     case "repair_required":
-      return deferredDescriptor("workflow_authorize_repair");
+      return repairAuthorizationDescriptor(state, selectedFindingIds);
     case "finalize_repair_exhausted":
       return {
         mode: "parent_mutation",
@@ -674,13 +756,14 @@ function primaryDescriptor(
 export function descriptorForLegality(
   state: WorkflowState,
   legality: WorkflowLegality,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
 ): OperatorExecutionDescriptor {
   const parentActions = legality.actions.parent.map((action) =>
-    completeParentInvocation(state, parentActionDescriptor(state, action)),
+    completeParentInvocation(state, parentActionDescriptor(state, action, selectedFindingIds)),
   );
   return {
-    descriptor_version: 2,
-    primary: primaryDescriptor(state, legality),
+    descriptor_version: 3,
+    primary: primaryDescriptor(state, legality, selectedFindingIds),
     parent_actions: parentActions,
   };
 }

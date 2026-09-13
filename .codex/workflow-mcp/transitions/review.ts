@@ -1,4 +1,5 @@
 import { fail, WorkflowError } from "../errors.js";
+import { repairDirectiveMatchesProposal, repairProposalForFindings } from "../repair-proposal.js";
 import type {
   BlockingFinding,
   ChangeReceipt,
@@ -398,7 +399,22 @@ export function authorizeRepair(
   const existing = new Set(effective.map((item) => item.finding_id));
   if (ids.some((id) => !existing.has(id)))
     fail("ERROR_INVALID_REPAIR", "finding ID is not a blocker");
-  const directive = repairDirective(args.repair_directive, repositoryRoot, state.approved_paths);
+  const selected = effective.filter((finding) => ids.includes(finding.finding_id));
+  const parsedDirective = repairDirective(
+    args.repair_directive,
+    repositoryRoot,
+    state.approved_paths,
+  );
+  if (
+    parsedDirective.selected_finding_ids.length !== ids.length ||
+    parsedDirective.selected_finding_ids.some((id) => !ids.includes(id))
+  ) {
+    fail("ERROR_INVALID_REPAIR", "repair directive finding IDs do not match the authorization");
+  }
+  const directive = parsedDirective.directive;
+  if (!repairDirectiveMatchesProposal(directive, repairProposalForFindings(selected))) {
+    fail("ERROR_INVALID_REPAIR", "repair directive does not match the current repair proposal");
+  }
   const next = clone<WorkflowState>(state);
   next.repair_cycle += 1;
   next.repair_authorized_ids = [...ids].sort();
