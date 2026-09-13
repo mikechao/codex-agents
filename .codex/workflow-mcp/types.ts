@@ -215,7 +215,7 @@ export type OperatorAuthorizationMetadata =
 
 export type OperatorDescriptorClassification =
   | "descriptorized_in_142"
-  | "deferred_to_143"
+  | "descriptorized_in_143"
   | "deferred_to_144"
   | "protocol_or_query_only";
 
@@ -236,7 +236,7 @@ export type OperatorActionDescriptorMetadata =
       input_alternatives?: OperatorInputAlternative[];
     }
   | {
-      classification: "descriptorized_in_142";
+      classification: "descriptorized_in_142" | "descriptorized_in_143";
       mode: "parent_mutation";
       operation: OperatorParentMutationOperation;
       authorization: OperatorAuthorizationMetadata;
@@ -244,7 +244,14 @@ export type OperatorActionDescriptorMetadata =
       input_alternatives?: OperatorInputAlternative[];
     }
   | {
-      classification: "deferred_to_143" | "deferred_to_144";
+      classification: "descriptorized_in_143";
+      mode: "collect_evidence";
+      operation: "workflow_record_manual_validation";
+      authorization: OperatorAuthorizationMetadata;
+      inputs: OperatorRequiredInput[];
+    }
+  | {
+      classification: "deferred_to_144";
       mode: "deferred";
       deferred_to: "recovery_inspection" | "repair";
       operation: OperatorParentMutationOperation;
@@ -273,6 +280,10 @@ export type OperatorExpectedNext =
   | "review"
   | "re_review"
   | "commit"
+  | "collect_evidence"
+  | "accept_concerns"
+  | "adopt_dirty_scope"
+  | "resume_review"
   | "bounded_continuation"
   | "terminal_committed"
   | "terminal_commit_mismatch"
@@ -282,6 +293,7 @@ export interface OperatorMutationInvocation {
   operation: OperatorParentMutationOperation;
   fixed_arguments: Record<string, string | number>;
   required_inputs: OperatorRequiredInput[];
+  input_alternatives?: OperatorInputAlternative[];
   authorization: OperatorAuthorizationMetadata;
   stale_binding: OperatorStaleBinding;
   on_success: {
@@ -289,6 +301,36 @@ export interface OperatorMutationInvocation {
     expected: OperatorExpectedNext[];
     dispatch_authority: false;
   };
+}
+
+export interface OperatorParentMutationDescriptor {
+  mode: "parent_mutation";
+  selection: "single" | "choose_one";
+  invocations: OperatorMutationInvocation[];
+}
+
+export interface OperatorWaitDescriptor {
+  mode: "wait";
+  reason: string;
+  deferred_to?: "recovery_inspection" | "repair";
+}
+
+export interface OperatorInspectionCollection {
+  validation_id: ValidationRequirementId;
+  outcomes: {
+    observed: {
+      passed: OperatorParentMutationDescriptor;
+      failed: OperatorParentMutationDescriptor;
+    };
+    unavailable: OperatorWaitDescriptor;
+  };
+}
+
+export interface OperatorCollectEvidenceDescriptor {
+  mode: "collect_evidence";
+  validation_id: ValidationRequirementId;
+  outcomes: OperatorInspectionCollection["outcomes"];
+  specialization: "recovery_inspection";
 }
 
 export type OperatorNextActionDescriptor =
@@ -299,21 +341,9 @@ export type OperatorNextActionDescriptor =
       workflow_id: WorkflowId;
       expected_version: WorkflowVersion;
     }
-  | {
-      mode: "parent_mutation";
-      selection: "single" | "choose_one";
-      invocations: OperatorMutationInvocation[];
-    }
-  | {
-      mode: "collect_evidence";
-      validation_ids: ValidationRequirementId[];
-      specialization: "recovery_inspection";
-    }
-  | {
-      mode: "wait";
-      reason: string;
-      deferred_to?: "recovery_inspection" | "repair";
-    }
+  | OperatorParentMutationDescriptor
+  | OperatorCollectEvidenceDescriptor
+  | OperatorWaitDescriptor
   | {
       mode: "terminal";
       outcome: "committed" | "approved_no_commit_required" | "commit_mismatch";
@@ -326,13 +356,18 @@ export type OperatorParentActionDescriptor =
       descriptor: Extract<OperatorNextActionDescriptor, { mode: "parent_mutation" }>;
     }
   | {
+      action: "workflow_record_manual_validation";
+      status: "evidence_required";
+      descriptor: OperatorCollectEvidenceDescriptor;
+    }
+  | {
       action: WorkflowAction;
       status: "deferred";
       descriptor: Extract<OperatorNextActionDescriptor, { mode: "wait" }>;
     };
 
 export interface OperatorExecutionDescriptor {
-  descriptor_version: 1;
+  descriptor_version: 2;
   primary: OperatorNextActionDescriptor;
   parent_actions: OperatorParentActionDescriptor[];
 }

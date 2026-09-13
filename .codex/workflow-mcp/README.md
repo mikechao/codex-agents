@@ -46,7 +46,7 @@ a bearer capability. It covers automatic implementation/review/re-review routing
 explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
 separately.
 
-The execution guidance is versioned and contains a primary descriptor plus every currently legal
+The current execution guidance is descriptor version 2 and contains a primary descriptor plus every currently legal
 parent action. Worker routes carry only the workflow identity and expected version. Parent mutation
 descriptors identify the existing typed tool, fixed server-derived arguments, remaining semantic
 input paths and sources, stale state bindings, and the expected post-success refresh routes. An
@@ -54,6 +54,19 @@ affirmative authorization is represented either by the exact existing mutation f
 metadata-only approval when the typed schema has no authorization field; it always binds the exact
 operation and the listed semantic input paths. No descriptor dispatches or authorizes a mutation,
 and no proposal or binding is persisted by this projection.
+
+When parent-owned inspection evidence is required, the descriptor selects exactly the first pending
+inspection requirement in requirement order. Its outcome contract maps observed `passed` or `failed`
+evidence to the exact `workflow_record_manual_validation` mutation with no separate user-authorization
+field; unavailable or unobserved evidence maps to `wait` with no mutation. After a terminal evidence
+write, the parent refreshes the operator decision before collecting another inspection or continuing
+to recovery/review routing. Unavailable observations are execution-local and are not persisted, so a
+later fresh decision may select the same inspection again.
+
+Older unfinished workflows may continue under their owning historical runtime and return descriptor
+version 1 with the earlier execution shape. Consumers must branch on `descriptor_version` before
+interpreting execution guidance; version 1 and version 2 are not wire-compatible for inspection
+collection.
 
 Lineage traversal is exact and bounded. Workflows with matching work items, paths, branches, or
 finding locations remain unrelated. An explicit linked chain may summarize its combined-review

@@ -4,7 +4,10 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "../lineage.js";
-import { ACTION_DESCRIPTOR_METADATA } from "../operator-action-descriptor.js";
+import {
+  ACTION_DESCRIPTOR_METADATA,
+  descriptorForLegality,
+} from "../operator-action-descriptor.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { WorkflowStore } from "../store.js";
 import {
@@ -272,7 +275,7 @@ test("every workflow action has explicit descriptor treatment and authorization 
   for (const [action, metadata] of Object.entries(ACTION_DESCRIPTOR_METADATA)) {
     assert.ok(
       metadata.classification === "descriptorized_in_142" ||
-        metadata.classification === "deferred_to_143" ||
+        metadata.classification === "descriptorized_in_143" ||
         metadata.classification === "deferred_to_144" ||
         metadata.classification === "protocol_or_query_only",
       action,
@@ -352,6 +355,11 @@ test("descriptor authorization metadata distinguishes payload fields from metada
     representation: { kind: "metadata_only" },
     binding: { kind: "all", paths: [["resume_context"]] },
   });
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_record_manual_validation.authorization, {
+    required: false,
+    representation: { kind: "none" },
+    binding: { kind: "none" },
+  });
   assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_authorize_repair.authorization, {
     required: true,
     representation: { kind: "field", path: ["repair_directive", "user_authorization"] },
@@ -367,6 +375,104 @@ test("descriptor authorization metadata distinguishes payload fields from metada
       ],
     },
   });
+});
+
+test("#143 recovery descriptors preserve exact operations, inputs, authorization, and routes", () => {
+  const { root, git } = fixture();
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = create(store, git);
+    const cases = [
+      {
+        action: "workflow_adopt_dirty_scope" as const,
+        inputs: [{ path: ["reason"], source: "parent_context", required: true }],
+        expected: ["adopt_dirty_scope", "collect_evidence", "resume_review", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.authorization,
+      },
+      {
+        action: "workflow_resume_implementation" as const,
+        inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+        expected: ["implement", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_resume_implementation.authorization,
+      },
+      {
+        action: "workflow_accept_concerns" as const,
+        inputs: [],
+        expected: ["collect_evidence", "review", "re_review", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_accept_concerns.authorization,
+      },
+      {
+        action: "workflow_resume_review" as const,
+        inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+        expected: ["re_review", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_resume_review.authorization,
+      },
+      {
+        action: "workflow_retry_commit_preparation" as const,
+        inputs: [{ path: ["retry_context"], source: "parent_context", required: true }],
+        expected: ["commit", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_retry_commit_preparation.authorization,
+      },
+      {
+        action: "workflow_return_commit_to_review" as const,
+        inputs: [{ path: ["review_context"], source: "parent_context", required: true }],
+        expected: ["re_review", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_return_commit_to_review.authorization,
+      },
+      {
+        action: "workflow_retry_commit" as const,
+        inputs: [{ path: ["retry_context"], source: "parent_context", required: true }],
+        expected: ["commit", "wait"],
+        authorization: ACTION_DESCRIPTOR_METADATA.workflow_retry_commit.authorization,
+      },
+    ];
+
+    for (const item of cases) {
+      const state = structuredClone(created) as any;
+      state.version = 7;
+      if (item.action === "workflow_retry_commit") {
+        state.commit_preparation = { attempt_id: "attempt-143" };
+      }
+      const descriptor = descriptorForLegality(state, {
+        actions: {
+          parent: [item.action],
+          implementer: [],
+          reviewer: [],
+          committer: [],
+        },
+        next: { kind: "recovery", action: item.action },
+      });
+      assert.equal(descriptor.primary.mode, "parent_mutation", item.action);
+      if (descriptor.primary.mode !== "parent_mutation") continue;
+      const invocation = descriptor.primary.invocations[0];
+      assert.ok(invocation, item.action);
+      assert.equal(invocation.operation, item.action, item.action);
+      assert.deepEqual(invocation.fixed_arguments, {
+        workflow_id: created.workflow_id,
+        expected_version: 7,
+      });
+      assert.deepEqual(invocation.required_inputs, item.inputs, item.action);
+      assert.deepEqual(invocation.authorization, item.authorization, item.action);
+      assert.deepEqual(invocation.on_success.expected, item.expected, item.action);
+      if (item.action === "workflow_adopt_dirty_scope") {
+        assert.deepEqual(invocation.input_alternatives, [
+          {
+            paths: [["added_paths"], ["adopted_paths"]],
+            source: "user",
+            required: true,
+          },
+        ]);
+      }
+      if (item.action === "workflow_retry_commit") {
+        assert.deepEqual(invocation.stale_binding.references, [
+          { kind: "commit_attempt", attempt_id: "attempt-143" },
+        ]);
+      }
+    }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("descriptor exposes secondary legal parent actions without changing primary precedence", () => {
@@ -481,6 +587,39 @@ test("operator projection requests parent-owned manual evidence before review", 
       kind: "inspection_required",
       validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
     });
+    const collection = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(collection.mode, "collect_evidence");
+    if (collection.mode !== "collect_evidence") throw new Error("expected evidence collection");
+    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 2);
+    assert.equal(collection.validation_id, "VAL-002");
+    assert.equal(collection.outcomes.unavailable.mode, "wait");
+    assert.equal(collection.outcomes.observed.passed.invocations.length, 1);
+    const passed = collection.outcomes.observed.passed.invocations[0];
+    assert.deepEqual(passed?.fixed_arguments, {
+      workflow_id: id,
+      expected_version: 1,
+      validation_id: "VAL-002",
+      status: "passed",
+    });
+    assert.deepEqual(passed?.required_inputs, [
+      { path: ["evidence"], source: "parent_context", required: true },
+    ]);
+    assert.deepEqual(passed?.authorization, {
+      required: false,
+      representation: { kind: "none" },
+      binding: { kind: "none" },
+    });
+    assert.deepEqual(passed?.stale_binding.references, [
+      { kind: "validation", validation_ids: ["VAL-002"] },
+    ]);
+    const manualActions = store.operatorDecisionGet(id).execution.parent_actions as Array<{
+      action: string;
+      status: string;
+    }>;
+    const manualAction = manualActions.find(
+      (item) => item.action === "workflow_record_manual_validation",
+    );
+    assert.equal(manualAction?.status, "evidence_required");
     assert.deepEqual(store.reviewerGet(id).permitted_next_actions, []);
 
     const stopped = JSON.parse(
@@ -499,6 +638,12 @@ test("operator projection requests parent-owned manual evidence before review", 
       kind: "inspection_required",
       validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
     });
+    const stoppedCollection = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(stoppedCollection.mode, "collect_evidence");
+    if (stoppedCollection.mode !== "collect_evidence")
+      throw new Error("expected stopped evidence collection");
+    assert.equal(stoppedCollection.validation_id, "VAL-002");
+    assert.equal(stoppedCollection.outcomes.unavailable.mode, "wait");
     store.recordManualValidation({
       workflow_id: id,
       expected_version: 1,
@@ -512,6 +657,99 @@ test("operator projection requests parent-owned manual evidence before review", 
       recovery: "resume_review",
       authorization_required: true,
     });
+    const recovery = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(recovery.mode, "parent_mutation");
+    if (recovery.mode !== "parent_mutation") throw new Error("expected recovery mutation");
+    assert.deepEqual(recovery.invocations[0], {
+      operation: "workflow_resume_review",
+      fixed_arguments: { workflow_id: id, expected_version: 2 },
+      required_inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+      authorization: {
+        required: true,
+        representation: { kind: "metadata_only" },
+        binding: { kind: "all", paths: [["resume_context"]] },
+      },
+      stale_binding: {
+        workflow_id: id,
+        expected_version: 2,
+        references: [],
+      },
+      on_success: {
+        kind: "refresh_required",
+        expected: ["re_review", "wait"],
+        dispatch_authority: false,
+      },
+    });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("inspection collection selects one pending validation and refreshes between writes", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "operator-inspection-sequence.sqlite");
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath });
+  try {
+    const created = create(store, git, "change", [
+      { description: "manual inspection one", kind: "inspection" },
+      { description: "manual inspection two", kind: "inspection" },
+    ]);
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implemented",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "pending" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+
+    const first = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(first.mode, "collect_evidence");
+    if (first.mode !== "collect_evidence") throw new Error("expected first collection");
+    assert.equal(first.validation_id, "VAL-001");
+    assert.equal(first.outcomes.unavailable.mode, "wait");
+    assert.equal("invocations" in first.outcomes.unavailable, false);
+
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 1,
+      validation_id: "VAL-001",
+      status: "passed",
+      evidence: "observed first inspection",
+    });
+    const second = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(second.mode, "collect_evidence");
+    if (second.mode !== "collect_evidence") throw new Error("expected second collection");
+    assert.equal(second.validation_id, "VAL-002");
+    assert.equal(second.outcomes.observed.passed.invocations[0]?.fixed_arguments.status, "passed");
+    assert.equal(second.outcomes.observed.failed.invocations[0]?.fixed_arguments.status, "failed");
+    assert.equal(
+      second.outcomes.observed.passed.invocations[0]?.fixed_arguments.expected_version,
+      2,
+    );
+    assert.deepEqual(second.outcomes.observed.passed.invocations[0]?.stale_binding.references, [
+      { kind: "validation", validation_ids: ["VAL-002"] },
+    ]);
+
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: 2,
+      validation_id: "VAL-002",
+      status: "failed",
+      evidence: "observed second inspection failure",
+    });
+    const complete = store.operatorDecisionGet(id).execution.primary;
+    assert.equal(complete.mode, "dispatch");
+    if (complete.mode !== "dispatch") throw new Error("expected review dispatch");
+    assert.equal(complete.route, "review");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -663,7 +901,7 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.deepEqual(first.primary, { kind: "no_user_action", route: "implement" });
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
-    assert.equal(first.execution.descriptor_version, 1);
+    assert.equal(first.execution.descriptor_version, 2);
     assert.equal(first.execution.primary.mode, "dispatch");
     assert.deepEqual(first.execution.primary, {
       mode: "dispatch",

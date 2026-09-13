@@ -307,5 +307,43 @@ test("descriptorized parent metadata matches the unchanged MCP tool schemas", ()
         action,
       );
     }
+    if ("input_alternatives" in metadata && metadata.input_alternatives) {
+      assert.deepEqual(
+        inputSchema.oneOf,
+        metadata.input_alternatives.flatMap((alternative) =>
+          alternative.paths.map((path) => ({ required: [path[0]] })),
+        ),
+        action,
+      );
+    }
   }
+});
+
+test("inspection metadata has no semantic user-authorization requirement", () => {
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_record_manual_validation, {
+    classification: "descriptorized_in_143",
+    mode: "collect_evidence",
+    operation: "workflow_record_manual_validation",
+    authorization: {
+      required: false,
+      representation: { kind: "none" },
+      binding: { kind: "none" },
+    },
+    inputs: [{ path: ["evidence"], source: "parent_context", required: true }],
+  });
+});
+
+test("inspection mutation branches match the terminal evidence tool schema", () => {
+  const manualValidation = tools.find((tool) => tool.name === "workflow_record_manual_validation");
+  assert.ok(manualValidation);
+  const schema = manualValidation.inputSchema as any;
+  assert.deepEqual([...schema.required].sort(), [
+    "evidence",
+    "expected_version",
+    "status",
+    "validation_id",
+    "workflow_id",
+  ]);
+  assert.deepEqual(schema.properties.status.enum, ["passed", "failed"]);
+  assert.equal("user_authorization" in schema.properties, false);
 });

@@ -4,6 +4,7 @@ import type {
   OperatorAuthorizationBinding,
   OperatorAuthorizationMetadata,
   OperatorBindingReference,
+  OperatorCollectEvidenceDescriptor,
   OperatorExecutionDescriptor,
   OperatorExpectedNext,
   OperatorInputAlternative,
@@ -15,6 +16,7 @@ import type {
   OperatorRequiredInput,
   OperatorStaleBinding,
   OperatorWorkerDispatchOperation,
+  ValidationRequirementId,
   WorkflowAction,
   WorkflowId,
   WorkflowState,
@@ -97,9 +99,8 @@ export const ACTION_DESCRIPTOR_METADATA = {
     inputs: [],
   },
   workflow_adopt_dirty_scope: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_adopt_dirty_scope",
     authorization: fieldAuthorization(
       ["user_authorization"],
@@ -154,29 +155,22 @@ export const ACTION_DESCRIPTOR_METADATA = {
     inputs: [],
   },
   workflow_record_manual_validation: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "collect_evidence",
     operation: "workflow_record_manual_validation",
-    authorization: metadataAuthorization([["validation_id"], ["status"], ["evidence"]]),
-    inputs: [
-      input(["validation_id"], "server_derived"),
-      input(["status"], "parent_context"),
-      input(["evidence"], "parent_context"),
-    ],
+    authorization: noAuthorization(),
+    inputs: [input(["evidence"], "parent_context")],
   },
   workflow_resume_implementation: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_resume_implementation",
     authorization: metadataAuthorization([["resume_context"]]),
     inputs: [input(["resume_context"], "parent_context")],
   },
   workflow_accept_concerns: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_accept_concerns",
     authorization: fieldAuthorization(["user_authorization"], []),
     inputs: [],
@@ -229,9 +223,8 @@ export const ACTION_DESCRIPTOR_METADATA = {
     inputs: [input(["findings"], "parent_context")],
   },
   workflow_resume_review: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_resume_review",
     authorization: metadataAuthorization([["resume_context"]]),
     inputs: [input(["resume_context"], "parent_context")],
@@ -310,25 +303,22 @@ export const ACTION_DESCRIPTOR_METADATA = {
     inputs: [],
   },
   workflow_retry_commit_preparation: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_retry_commit_preparation",
     authorization: metadataAuthorization([["retry_context"]]),
     inputs: [input(["retry_context"], "parent_context")],
   },
   workflow_return_commit_to_review: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_return_commit_to_review",
     authorization: metadataAuthorization([["review_context"]]),
     inputs: [input(["review_context"], "parent_context")],
   },
   workflow_retry_commit: {
-    classification: "deferred_to_143",
-    mode: "deferred",
-    deferred_to: "recovery_inspection",
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
     operation: "workflow_retry_commit",
     authorization: metadataAuthorization([["retry_context"]]),
     inputs: [input(["retry_context"], "parent_context")],
@@ -378,16 +368,26 @@ function referencesFor(state: WorkflowState, action: WorkflowAction): OperatorBi
       attempt_id: state.commit_preparation.attempt_id,
     });
   }
+  if (action === "workflow_retry_commit" && state.commit_preparation) {
+    references.push({
+      kind: "commit_attempt",
+      attempt_id: state.commit_preparation.attempt_id,
+    });
+  }
   return references;
 }
 
-function staleBinding(state: WorkflowState, action: WorkflowAction): OperatorStaleBinding {
+function staleBinding(
+  state: WorkflowState,
+  action: WorkflowAction,
+  additionalReferences: OperatorBindingReference[] = [],
+): OperatorStaleBinding {
   const current = identity(state);
   if (!current) throw new Error("descriptor requires a persisted workflow identity");
   return {
     workflow_id: current.workflow_id,
     expected_version: state.version,
-    references: referencesFor(state, action),
+    references: [...referencesFor(state, action), ...additionalReferences],
   };
 }
 
@@ -409,6 +409,19 @@ function fixedArguments(
 
 function expectedAfter(action: OperatorParentMutationOperation): OperatorExpectedNext[] {
   switch (action) {
+    case "workflow_adopt_dirty_scope":
+      return ["adopt_dirty_scope", "collect_evidence", "resume_review", "wait"];
+    case "workflow_resume_implementation":
+      return ["implement", "wait"];
+    case "workflow_accept_concerns":
+      return ["collect_evidence", "review", "re_review", "wait"];
+    case "workflow_resume_review":
+      return ["re_review", "wait"];
+    case "workflow_retry_commit_preparation":
+    case "workflow_retry_commit":
+      return ["commit", "wait"];
+    case "workflow_return_commit_to_review":
+      return ["re_review", "wait"];
     case "workflow_expand_scope":
       return ["implement", "review", "re_review", "wait"];
     case "workflow_finalize_repair_exhausted":
@@ -465,6 +478,15 @@ function invocation(
       source: requiredInput.source,
       required: true,
     })),
+    ...("input_alternatives" in metadata && metadata.input_alternatives
+      ? {
+          input_alternatives: metadata.input_alternatives.map((alternative) => ({
+            paths: alternative.paths.map((path) => [...path]),
+            source: alternative.source,
+            required: true,
+          })),
+        }
+      : {}),
     authorization: metadata.authorization,
     stale_binding: staleBinding(state, action),
     on_success: {
@@ -472,6 +494,62 @@ function invocation(
       expected: expectedAfter(action),
       dispatch_authority: false,
     },
+  };
+}
+
+function inspectionInvocation(
+  state: WorkflowState,
+  validationId: ValidationRequirementId,
+  status: "passed" | "failed",
+): OperatorMutationInvocation {
+  return {
+    operation: "workflow_record_manual_validation",
+    fixed_arguments: {
+      ...fixedArguments(state, "workflow_record_manual_validation"),
+      validation_id: validationId,
+      status,
+    },
+    required_inputs: [input(["evidence"], "parent_context")],
+    authorization: noAuthorization(),
+    stale_binding: staleBinding(state, "workflow_record_manual_validation", [
+      { kind: "validation", validation_ids: [validationId] },
+    ]),
+    on_success: {
+      kind: "refresh_required",
+      expected:
+        status === "passed"
+          ? ["collect_evidence", "accept_concerns", "resume_review", "review", "re_review", "wait"]
+          : ["collect_evidence", "resume_review", "review", "re_review", "wait"],
+      dispatch_authority: false,
+    },
+  };
+}
+
+function inspectionDescriptor(state: WorkflowState): OperatorCollectEvidenceDescriptor {
+  const requirement = pendingInspectionValidations(state)[0];
+  if (!requirement) throw new Error("inspection descriptor requires pending evidence");
+  return {
+    mode: "collect_evidence",
+    validation_id: requirement.validation_id,
+    outcomes: {
+      observed: {
+        passed: {
+          mode: "parent_mutation",
+          selection: "single",
+          invocations: [inspectionInvocation(state, requirement.validation_id, "passed")],
+        },
+        failed: {
+          mode: "parent_mutation",
+          selection: "single",
+          invocations: [inspectionInvocation(state, requirement.validation_id, "failed")],
+        },
+      },
+      unavailable: {
+        mode: "wait",
+        reason: `inspection evidence for ${requirement.validation_id} is unavailable or unobserved`,
+      },
+    },
+    specialization: "recovery_inspection",
   };
 }
 
@@ -487,8 +565,18 @@ function deferredDescriptor(
   };
 }
 
-function parentActionDescriptor(action: WorkflowAction): OperatorParentActionDescriptor {
+function parentActionDescriptor(
+  state: WorkflowState,
+  action: WorkflowAction,
+): OperatorParentActionDescriptor {
   const metadata = ACTION_DESCRIPTOR_METADATA[action];
+  if (metadata.mode === "collect_evidence") {
+    return {
+      action: "workflow_record_manual_validation",
+      status: "evidence_required",
+      descriptor: inspectionDescriptor(state),
+    };
+  }
   if (metadata.mode === "parent_mutation") {
     return {
       action,
@@ -540,13 +628,7 @@ function primaryDescriptor(
       };
     }
     case "inspection_required":
-      return {
-        mode: "collect_evidence",
-        validation_ids: pendingInspectionValidations(state).map(
-          (requirement) => requirement.validation_id,
-        ),
-        specialization: "recovery_inspection",
-      };
+      return inspectionDescriptor(state);
     case "repair_required":
       return deferredDescriptor("workflow_authorize_repair");
     case "finalize_repair_exhausted":
@@ -565,7 +647,11 @@ function primaryDescriptor(
         ],
       };
     case "recovery":
-      return deferredDescriptor(legality.next.action);
+      return {
+        mode: "parent_mutation",
+        selection: "single",
+        invocations: [invocation(state, legality.next.action as OperatorParentMutationOperation)],
+      };
     case "authorize_commit":
       return {
         mode: "parent_mutation",
@@ -590,10 +676,10 @@ export function descriptorForLegality(
   legality: WorkflowLegality,
 ): OperatorExecutionDescriptor {
   const parentActions = legality.actions.parent.map((action) =>
-    completeParentInvocation(state, parentActionDescriptor(action)),
+    completeParentInvocation(state, parentActionDescriptor(state, action)),
   );
   return {
-    descriptor_version: 1,
+    descriptor_version: 2,
     primary: primaryDescriptor(state, legality),
     parent_actions: parentActions,
   };
