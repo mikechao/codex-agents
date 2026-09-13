@@ -2,13 +2,13 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { diagnosticsDirectory } from "../diagnostics.js";
 import { WorkflowStore } from "../store.js";
 import {
-  closeProtocol,
   connectProtocol,
+  disposeProtocolFixture,
   SERVER,
   workflowCreateInput,
 } from "./protocol-fixtures.js";
@@ -123,7 +123,7 @@ test("opt-in child diagnostics correlate tool receipt and result without touchin
   try {
     const created = await session.call("workflow_create", workflowCreateInput(git));
     await session.call("workflow_parent_get", { workflow_id: created.workflow_id });
-    const directory = diagnosticsDirectory(root);
+    const directory = diagnosticsDirectory(root, root);
     const files = readdirSync(directory).filter((entry) => /^runtime-\d+\.jsonl$/u.test(entry));
     assert.equal(files.length, 1);
     const records = readFileSync(join(directory, files[0]), "utf8")
@@ -140,8 +140,6 @@ test("opt-in child diagnostics correlate tool receipt and result without touchin
       ),
     );
   } finally {
-    await closeProtocol(session);
-    rmSync(diagnosticsDirectory(root), { recursive: true, force: true });
-    disposeFixture(root);
+    await disposeProtocolFixture(root, session);
   }
 });

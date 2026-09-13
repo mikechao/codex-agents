@@ -86,9 +86,9 @@ export function diagnosticRequestContext(): DiagnosticRequestContext | undefined
   return requestContext;
 }
 
-export function diagnosticsDirectory(repositoryRoot: string): string {
+export function diagnosticsDirectory(repositoryRoot: string, homeDirectory = homedir()): string {
   const digest = createHash("sha256").update(repositoryRoot, "utf8").digest("hex").slice(0, 24);
-  return join(homedir(), ".codex", "state", "workflow-mcp", digest, "diagnostics");
+  return join(homeDirectory, ".codex", "state", "workflow-mcp", digest, "diagnostics");
 }
 
 function boundedText(value: string): string {

@@ -88,7 +88,13 @@ export async function connectProtocol(root: string, diagnostics = false): Promis
     env: {
       ...process.env,
       WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite"),
-      ...(diagnostics ? { WORKFLOW_MCP_DIAGNOSTICS: "1" } : {}),
+      ...(diagnostics
+        ? {
+            HOME: root,
+            USERPROFILE: root,
+            WORKFLOW_MCP_DIAGNOSTICS: "1",
+          }
+        : {}),
     },
     stderr: "pipe",
   });

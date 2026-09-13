@@ -1,14 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { type DiagnosticEvent, DiagnosticRecorder, withDiagnosticRequest } from "../diagnostics.js";
+import {
+  type DiagnosticEvent,
+  DiagnosticRecorder,
+  diagnosticsDirectory,
+  withDiagnosticRequest,
+} from "../diagnostics.js";
 import { WorkflowError } from "../errors.js";
 import { WorkflowStore } from "../store.js";
 import { fixture } from "./test-fixtures.js";
 
 describe("Workflow MCP diagnostics", () => {
+  test("uses the production home-state path by default and supports an explicit home", () => {
+    const repositoryRoot = "/repository";
+    const digest = "f0eee72bfd3dfcfd9022eeb2";
+    const suffix = [".codex", "state", "workflow-mcp", digest, "diagnostics"];
+
+    expect(diagnosticsDirectory(repositoryRoot)).toBe(join(homedir(), ...suffix));
+    expect(diagnosticsDirectory(repositoryRoot, "/fixture-home")).toBe(
+      join("/fixture-home", ...suffix),
+    );
+  });
+
   test("is disabled by default and writes bounded per-process JSONL only when opted in", () => {
     const directory = mkdtempSync(join(tmpdir(), "workflow-diagnostics-"));
     try {
