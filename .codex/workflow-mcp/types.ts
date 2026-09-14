@@ -150,6 +150,7 @@ export type OperatorRecovery =
   | "resume_review"
   | "retry_commit"
   | "retry_commit_preparation"
+  | "reconcile_staged_scope"
   | "return_commit_to_review";
 
 export type OperatorParentMutationOperation =
@@ -166,6 +167,7 @@ export type OperatorParentMutationOperation =
   | "workflow_create_linked_followup_from_plan"
   | "workflow_authorize_commit"
   | "workflow_retry_commit_preparation"
+  | "workflow_reconcile_staged_scope"
   | "workflow_return_commit_to_review"
   | "workflow_reconcile_commit_result"
   | "workflow_retry_commit";
@@ -177,17 +179,25 @@ export type OperatorWorkerDispatchOperation =
   | "workflow_prepare_commit"
   | "workflow_submit_commit_result";
 
-export type OperatorInputSource = "user" | "parent_context" | "server_derived";
+export type OperatorInputSource =
+  | "user_authored"
+  | "parent_context"
+  | "server_derived"
+  | "observed_evidence";
 
 export interface OperatorRequiredInput {
   path: string[];
   source: OperatorInputSource;
+  /** Exact source path in ParentView when source is parent_context. */
+  source_path?: string[];
   required: true;
 }
 
 export interface OperatorInputAlternative {
   paths: string[][];
   source: OperatorInputSource;
+  /** Exact source path in ParentView when source is parent_context. */
+  source_path?: string[];
   required: true;
 }
 
@@ -288,12 +298,21 @@ export type OperatorExpectedNext =
 
 export interface OperatorMutationInvocation {
   operation: OperatorParentMutationOperation;
-  fixed_arguments: Record<string, string | number>;
+  semantic_choice: {
+    id: string;
+    label: string;
+    summary: string;
+  };
+  fixed_arguments: Record<string, string | number | null>;
   required_inputs: OperatorRequiredInput[];
   input_alternatives?: OperatorInputAlternative[];
   authorization: OperatorAuthorizationMetadata;
   stale_binding: OperatorStaleBinding;
   repair_binding?: OperatorRepairBinding;
+  adjudication_binding?: OperatorAdjudicationBinding;
+  linked_followup_binding?: OperatorLinkedFollowupBinding;
+  scope_reconciliation_binding?: OperatorScopeReconciliationBinding;
+  plan_binding?: OperatorPlanBinding;
   on_success: {
     kind: "refresh_required";
     expected: OperatorExpectedNext[];
@@ -315,6 +334,35 @@ export interface OperatorRepairBinding {
   eligible_finding_ids: FindingId[];
   selected_finding_ids: FindingId[];
   proposal: OperatorRepairProposal;
+}
+
+export interface OperatorScopeReconciliationBinding {
+  reviewed_paths: ExactRepoPath[];
+  added_paths: ExactRepoPath[];
+}
+
+export interface OperatorAdjudicationBinding {
+  finding_ids: FindingId[];
+  user_input_paths: string[][];
+}
+
+export interface OperatorLinkedFollowupFinding {
+  finding_id: FindingId;
+  severity: FindingSeverity;
+  summary: string;
+}
+
+export interface OperatorLinkedFollowupBinding {
+  /** Select a non-empty subset from exactly one of these authoritative buckets. */
+  selection_rule: "nonempty_subset_from_one_bucket";
+  blocking_findings: OperatorLinkedFollowupFinding[];
+  optional_findings: OperatorLinkedFollowupFinding[];
+}
+
+export interface OperatorPlanBinding {
+  plan_id: PlanId;
+  revision: PlanRevision;
+  source: "approved_child_plan_context";
 }
 
 export interface OperatorRepairAuthorizationDescriptor extends OperatorParentMutationDescriptor {
@@ -375,7 +423,7 @@ export type OperatorParentActionDescriptor =
     };
 
 export interface OperatorExecutionDescriptor {
-  descriptor_version: 3;
+  descriptor_version: 4;
   primary: OperatorNextActionDescriptor;
   parent_actions: OperatorParentActionDescriptor[];
 }
@@ -427,6 +475,11 @@ export type OperatorPrimaryDecision =
   | { kind: "finalize_repair_exhausted"; reason: string }
   | { kind: "approve_bounded_continuation"; reason: string; authorization_required: true }
   | { kind: "approve_recovery"; recovery: OperatorRecovery; authorization_required: true }
+  | {
+      kind: "choose_recovery";
+      recoveries: OperatorRecovery[];
+      authorization_required: true;
+    }
   | { kind: "approve_commit"; authorization_required: true }
   | { kind: "operator_intervention"; reason: string };
 
@@ -643,6 +696,7 @@ export type AuditEventType =
   | "COMMIT_PREPARATION_FAILED"
   | "COMMIT_PREPARATION_RETRY_AUTHORIZED"
   | "COMMIT_PREPARATION_REVIEW_AUTHORIZED"
+  | "STAGED_SCOPE_RECONCILED"
   | "COMMIT_RESULT_SUBMITTED"
   | "COMMIT_RETRY_AUTHORIZED"
   | "LINKED_FOLLOWUP_CREATED";
@@ -901,7 +955,9 @@ export type StopContext =
       status: "COMMIT_PREPARATION_FAILED";
       category: CommitPreparationFailureCategory;
       summary: string;
-      recovery: "retry" | "review";
+      recovery: "retry" | "review" | "choose";
+      /** Exact staged paths outside reviewed authority captured at failure time. */
+      reconciliation_paths?: ExactRepoPath[];
       failed_at: IsoTimestamp;
       failed_version: WorkflowVersion;
       stopped_from: "COMMIT_AUTHORIZED";

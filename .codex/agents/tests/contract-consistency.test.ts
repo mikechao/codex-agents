@@ -619,6 +619,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_create_linked_followup_from_plan",
     "workflow_authorize_commit",
     "workflow_retry_commit_preparation",
+    "workflow_reconcile_staged_scope",
     "workflow_return_commit_to_review",
     "workflow_retry_commit",
   ]) {
@@ -760,7 +761,7 @@ test("orchestrator presents semantic proposals and consumes descriptor inputs", 
   assert.match(orchestrator, /workflow_create_from_plan` by identity and supported options only/u);
 });
 
-test("descriptor version 3 is the only executable descriptor", () => {
+test("descriptor version 4 is the only executable descriptor", () => {
   const orchestratorSource = opencode("orchestrator.md");
   const orchestrator = orchestratorSource.replace(/\s+/gu, " ");
   const guide = readFileSync(
@@ -771,7 +772,7 @@ test("descriptor version 3 is the only executable descriptor", () => {
 
   for (const contract of [orchestrator, guide, workflow]) {
     assert.match(contract, /descriptor_version/u);
-    assert.match(contract, /descriptor version 3|v3/u);
+    assert.match(contract, /descriptor version.{0,20}(?:4|`4`)|v4/u);
     assert.match(contract, /fail(?:s)? closed/u);
     assert.match(contract, /(?:no|without fallback) (?:fallback )?mutation or dispatch/u);
     assert.match(contract, /unknown/iu);
@@ -783,10 +784,14 @@ test("descriptor version 3 is the only executable descriptor", () => {
     );
   }
 
-  const descriptor = (descriptor_version: unknown, primary: Record<string, unknown>) => ({
+  const descriptor = (
+    descriptor_version: unknown,
+    primary: Record<string, unknown>,
+    parent_actions: unknown[] = [],
+  ) => ({
     descriptor_version,
     primary,
-    parent_actions: [],
+    parent_actions,
   });
   // These are host worker-route capabilities, not route-to-operation protocol knowledge.
   const hostDispatchRoutes = new Set(["implement", "review", "re_review", "commit"]);
@@ -815,9 +820,13 @@ test("descriptor version 3 is the only executable descriptor", () => {
   };
   const parentInvocation = {
     operation: "workflow_authorize_commit",
+    semantic_choice: {
+      id: "authorize_commit_preparation",
+      label: "Authorize commit preparation",
+      summary: "Give fresh authorization for commit preparation of the currently reviewed change.",
+    },
     fixed_arguments: { workflow_id: "wf-current", expected_version: 7 },
     required_inputs: [],
-    input_alternatives: [{ paths: [["choice_a"], ["choice_b"]], source: "user", required: true }],
     authorization: {
       required: true,
       representation: { kind: "field", path: ["user_authorization"] },
@@ -836,13 +845,18 @@ test("descriptor version 3 is the only executable descriptor", () => {
   };
   const inspectionInvocation = (status: "passed" | "failed") => ({
     operation: "workflow_record_manual_validation",
+    semantic_choice: {
+      id: "record_observed_validation",
+      label: "Record observed validation evidence",
+      summary: "Record only evidence from the declared validation inspection.",
+    },
     fixed_arguments: {
       workflow_id: "wf-current",
       expected_version: 7,
       validation_id: "VAL-001",
       status,
     },
-    required_inputs: [{ path: ["evidence"], source: "parent_context", required: true }],
+    required_inputs: [{ path: ["evidence"], source: "observed_evidence", required: true }],
     authorization: noAuthorization,
     stale_binding: {
       workflow_id: "wf-current",
@@ -855,11 +869,115 @@ test("descriptor version 3 is the only executable descriptor", () => {
       dispatch_authority: false,
     },
   });
+  const completeParentAction = {
+    action: "workflow_authorize_commit",
+    status: "executable",
+    descriptor: {
+      mode: "parent_mutation",
+      selection: "single",
+      invocations: [parentInvocation],
+    },
+  };
+  const linkedPlanInvocation = {
+    ...parentInvocation,
+    operation: "workflow_create_linked_followup_from_plan",
+    semantic_choice: {
+      id: "start_approved_plan_followup",
+      label: "Create a linked follow-up from the approved child plan",
+      summary: "Use the exact approved child plan and select bound current findings.",
+    },
+    fixed_arguments: {
+      workflow_id: "wf-current",
+      expected_version: 7,
+      plan_id: "plan-current",
+      revision: 2,
+    },
+    required_inputs: [{ path: ["finding_ids"], source: "server_derived", required: true }],
+    authorization: {
+      required: true,
+      representation: { kind: "field", path: ["user_authorization"] },
+      binding: {
+        kind: "all",
+        paths: [["plan_id"], ["revision"], ["finding_ids"]],
+      },
+    },
+    linked_followup_binding: {
+      selection_rule: "nonempty_subset_from_one_bucket",
+      blocking_findings: [],
+      optional_findings: [
+        { finding_id: "F-1", severity: "P2", summary: "A current optional concern." },
+      ],
+    },
+    plan_binding: {
+      plan_id: "plan-current",
+      revision: 2,
+      source: "approved_child_plan_context",
+    },
+    on_success: {
+      kind: "refresh_required",
+      expected: ["implement", "wait"],
+      dispatch_authority: false,
+    },
+  };
+  const completeLinkedPlanAction = {
+    action: "workflow_create_linked_followup_from_plan",
+    status: "executable",
+    descriptor: {
+      mode: "parent_mutation",
+      selection: "single",
+      invocations: [linkedPlanInvocation],
+    },
+  };
+  const linkedDirectInvocation = {
+    ...parentInvocation,
+    operation: "workflow_create_linked_followup",
+    semantic_choice: {
+      id: "start_direct_followup",
+      label: "Create a directly authored linked follow-up",
+      summary: "Use user-authored work fields with null-plan authority.",
+    },
+    fixed_arguments: {
+      workflow_id: "wf-current",
+      expected_version: 7,
+      approved_plan: null,
+    },
+    required_inputs: [
+      { path: ["objective"], source: "user_authored", required: true },
+      { path: ["approved_paths"], source: "user_authored", required: true },
+      { path: ["acceptance_criteria"], source: "user_authored", required: true },
+      { path: ["validation_requirements"], source: "user_authored", required: true },
+      { path: ["finding_ids"], source: "server_derived", required: true },
+    ],
+    authorization: {
+      required: true,
+      representation: { kind: "field", path: ["user_authorization"] },
+      binding: {
+        kind: "all",
+        paths: [
+          ["objective"],
+          ["approved_paths"],
+          ["acceptance_criteria"],
+          ["validation_requirements"],
+          ["finding_ids"],
+        ],
+      },
+    },
+    linked_followup_binding: linkedPlanInvocation.linked_followup_binding,
+  };
+  const completeLinkedDirectAction = {
+    action: "workflow_create_linked_followup",
+    status: "executable",
+    descriptor: {
+      mode: "parent_mutation",
+      selection: "single",
+      invocations: [linkedDirectInvocation],
+    },
+  };
 
-  const v3Fixtures = [
+  const v4Fixtures = [
     {
       name: "dispatch",
-      descriptor: descriptor(3, {
+      descriptor: descriptor(4, {
         mode: "dispatch",
         route: "implement",
         operation: "workflow_submit_implementation",
@@ -870,16 +988,27 @@ test("descriptor version 3 is the only executable descriptor", () => {
     },
     {
       name: "parent mutation with required authorization",
-      descriptor: descriptor(3, {
-        mode: "parent_mutation",
-        selection: "single",
-        invocations: [parentInvocation],
-      }),
+      descriptor: descriptor(
+        4,
+        {
+          mode: "parent_mutation",
+          selection: "single",
+          invocations: [parentInvocation],
+        },
+        [completeParentAction],
+      ),
       expected: "parent_mutation",
     },
     {
+      name: "direct linked follow-up with server-fixed null plan authority",
+      descriptor: descriptor(4, { mode: "wait", reason: "awaiting direct follow-up selection" }, [
+        completeLinkedDirectAction,
+      ]),
+      expected: "wait",
+    },
+    {
       name: "collect evidence observed",
-      descriptor: descriptor(3, {
+      descriptor: descriptor(4, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         outcomes: {
@@ -904,7 +1033,7 @@ test("descriptor version 3 is the only executable descriptor", () => {
     },
     {
       name: "collect evidence unavailable",
-      descriptor: descriptor(3, {
+      descriptor: descriptor(4, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         outcomes: {
@@ -929,19 +1058,24 @@ test("descriptor version 3 is the only executable descriptor", () => {
     },
     {
       name: "wait",
-      descriptor: descriptor(3, { mode: "wait", reason: "authoritative action is unavailable" }),
+      descriptor: descriptor(4, { mode: "wait", reason: "authoritative action is unavailable" }),
       expected: "wait",
     },
     {
       name: "terminal",
-      descriptor: descriptor(3, { mode: "terminal", outcome: "committed" }),
+      descriptor: descriptor(4, { mode: "terminal", outcome: "committed" }),
       expected: "terminal",
     },
   ] as const;
 
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
-  const inputSources = new Set(["user", "parent_context", "server_derived"]);
+  const inputSources = new Set([
+    "user_authored",
+    "parent_context",
+    "server_derived",
+    "observed_evidence",
+  ]);
   const isStringArray = (value: unknown): value is string[] =>
     Array.isArray(value) &&
     value.length > 0 &&
@@ -974,7 +1108,10 @@ test("descriptor version 3 is the only executable descriptor", () => {
     value.required === true &&
     isStringArray(value.path) &&
     typeof value.source === "string" &&
-    inputSources.has(value.source);
+    inputSources.has(value.source) &&
+    (value.source === "parent_context"
+      ? isStringArray(value.source_path)
+      : value.source_path === undefined);
   const isAlternative = (value: unknown): boolean =>
     isRecord(value) &&
     value.required === true &&
@@ -982,25 +1119,196 @@ test("descriptor version 3 is the only executable descriptor", () => {
     value.paths.length > 0 &&
     value.paths.every(isStringArray) &&
     typeof value.source === "string" &&
-    inputSources.has(value.source);
+    inputSources.has(value.source) &&
+    (value.source === "parent_context"
+      ? isStringArray(value.source_path)
+      : value.source_path === undefined);
+  const isLinkedFollowupBinding = (value: unknown): boolean => {
+    const isFindingList = (findings: unknown): boolean =>
+      Array.isArray(findings) &&
+      findings.every(
+        (finding) =>
+          isRecord(finding) &&
+          typeof finding.finding_id === "string" &&
+          finding.finding_id.length > 0 &&
+          typeof finding.severity === "string" &&
+          typeof finding.summary === "string" &&
+          finding.summary.length > 0,
+      );
+    if (
+      !isRecord(value) ||
+      value.selection_rule !== "nonempty_subset_from_one_bucket" ||
+      !isFindingList(value.blocking_findings) ||
+      !isFindingList(value.optional_findings)
+    ) {
+      return false;
+    }
+    return (
+      (value.blocking_findings as unknown[]).length > 0 ||
+      (value.optional_findings as unknown[]).length > 0
+    );
+  };
+  const pathIs = (path: unknown, expected: string[]): boolean =>
+    Array.isArray(path) &&
+    path.length === expected.length &&
+    path.every((part: unknown, index: number) => part === expected[index]);
+  const isInputResolvable = (invocation: Record<string, unknown>, input: unknown): boolean => {
+    if (!isRecord(input) || !Array.isArray(input.path)) return false;
+    if (input.source === "user_authored") return input.source_path === undefined;
+    if (input.source === "parent_context") {
+      return (
+        invocation.operation === "workflow_create_linked_followup" &&
+        pathIs(input.path, ["approved_plan"]) &&
+        pathIs(input.source_path, ["approved_plan"])
+      );
+    }
+    if (input.source === "observed_evidence") {
+      return (
+        invocation.operation === "workflow_record_manual_validation" &&
+        pathIs(input.path, ["evidence"]) &&
+        isRecord(invocation.fixed_arguments) &&
+        typeof invocation.fixed_arguments.validation_id === "string" &&
+        (invocation.fixed_arguments.status === "passed" ||
+          invocation.fixed_arguments.status === "failed")
+      );
+    }
+    if (input.source !== "server_derived") return false;
+    if (pathIs(input.path, ["finding_ids"])) {
+      return (
+        (isRecord(invocation.repair_binding) &&
+          isStringArray(invocation.repair_binding.selected_finding_ids)) ||
+        isLinkedFollowupBinding(invocation.linked_followup_binding)
+      );
+    }
+    if (pathIs(input.path, ["findings", "*", "finding_id"])) {
+      return (
+        isRecord(invocation.adjudication_binding) &&
+        isStringArray(invocation.adjudication_binding.finding_ids) &&
+        Array.isArray(invocation.adjudication_binding.user_input_paths) &&
+        invocation.adjudication_binding.user_input_paths.some((path) =>
+          pathIs(path, ["findings", "*", "disposition"]),
+        ) &&
+        invocation.adjudication_binding.user_input_paths.some((path) =>
+          pathIs(path, ["findings", "*", "reason"]),
+        )
+      );
+    }
+    if (pathIs(input.path, ["added_paths"])) {
+      return (
+        isRecord(invocation.scope_reconciliation_binding) &&
+        isStringArray(invocation.scope_reconciliation_binding.added_paths) &&
+        isStringArray(invocation.scope_reconciliation_binding.reviewed_paths)
+      );
+    }
+    if (isRecord(invocation.repair_binding)) {
+      const proposal = invocation.repair_binding.proposal;
+      if (!isRecord(proposal)) return false;
+      const repairPaths: Record<string, unknown> = {
+        finding_ids: invocation.repair_binding.selected_finding_ids,
+        selected_finding_ids: invocation.repair_binding.selected_finding_ids,
+        required_outcome: proposal.required_outcome,
+        strategy_constraints: proposal.strategy_constraints,
+        fallbacks: proposal.fallbacks,
+        required_paths: proposal.required_paths,
+        forbidden_paths: proposal.forbidden_paths,
+      };
+      if (input.path[0] === "repair_directive" && input.path.length === 2) {
+        const key = input.path[1];
+        return typeof key === "string" && repairPaths[key] !== undefined;
+      }
+    }
+    return false;
+  };
+  const authorizationPaths = (authorization: Record<string, unknown>): unknown[] => {
+    const binding = authorization.binding;
+    if (!isRecord(binding)) return [];
+    if (binding.kind === "all") return Array.isArray(binding.paths) ? binding.paths : [];
+    if (binding.kind === "exclusive_one_of") {
+      return [
+        ...(Array.isArray(binding.common_paths) ? binding.common_paths : []),
+        ...(Array.isArray(binding.alternatives) ? binding.alternatives.flat() : []),
+      ];
+    }
+    return [];
+  };
   const isInvocation = (value: unknown): boolean => {
     if (!isRecord(value)) return false;
     const success = value.on_success;
+    const inputs = Array.isArray(value.required_inputs) ? value.required_inputs : [];
+    const alternatives = Array.isArray(value.input_alternatives) ? value.input_alternatives : [];
+    const declaredInputPaths = [
+      ...inputs.filter(isInput).map((input) => input.path),
+      ...alternatives.filter(isAlternative).flatMap((alternative) => alternative.paths),
+    ];
+    const authorization = isRecord(value.authorization) ? value.authorization : null;
+    const boundPaths = authorization ? authorizationPaths(authorization) : [];
+    const isPlanBinding =
+      isRecord(value.plan_binding) &&
+      typeof value.plan_binding.plan_id === "string" &&
+      value.plan_binding.plan_id.length > 0 &&
+      typeof value.plan_binding.revision === "number" &&
+      Number.isInteger(value.plan_binding.revision) &&
+      value.plan_binding.revision > 0 &&
+      value.plan_binding.source === "approved_child_plan_context" &&
+      isRecord(value.fixed_arguments) &&
+      value.fixed_arguments.plan_id === value.plan_binding.plan_id &&
+      value.fixed_arguments.revision === value.plan_binding.revision;
+    const isLinkedFollowupOperation =
+      value.operation === "workflow_create_linked_followup" ||
+      value.operation === "workflow_create_linked_followup_from_plan";
+    const everyAuthorizationInputIsDeclared = boundPaths.every(
+      (path) =>
+        (Array.isArray(path) &&
+          declaredInputPaths.some(
+            (declared) =>
+              declared.length === path.length &&
+              declared.every((part: unknown, index: number) => part === path[index]),
+          )) ||
+        (Array.isArray(path) &&
+          path.length === 1 &&
+          isRecord(value.fixed_arguments) &&
+          Object.hasOwn(value.fixed_arguments, path[0] as string)),
+    );
     return (
       typeof value.operation === "string" &&
       hostParentTools.has(value.operation) &&
+      isRecord(value.semantic_choice) &&
+      typeof value.semantic_choice.id === "string" &&
+      value.semantic_choice.id.length > 0 &&
+      typeof value.semantic_choice.label === "string" &&
+      value.semantic_choice.label.length > 0 &&
+      typeof value.semantic_choice.summary === "string" &&
+      value.semantic_choice.summary.length > 0 &&
       isRecord(value.fixed_arguments) &&
       Object.values(value.fixed_arguments).every(
         (argument) =>
+          argument === null ||
           (typeof argument === "string" && argument.length > 0) ||
           (typeof argument === "number" && Number.isFinite(argument)),
       ) &&
       Array.isArray(value.required_inputs) &&
-      value.required_inputs.every(isInput) &&
+      value.required_inputs.every((input) => isInput(input) && isInputResolvable(value, input)) &&
       (value.input_alternatives === undefined ||
         (Array.isArray(value.input_alternatives) &&
-          value.input_alternatives.every(isAlternative))) &&
+          value.input_alternatives.every(
+            (alternative) =>
+              isAlternative(alternative) &&
+              alternative.paths.every((path: unknown) =>
+                alternative.source === "parent_context"
+                  ? value.operation === "workflow_create_linked_followup" &&
+                    pathIs(path, ["approved_plan"]) &&
+                    pathIs(alternative.source_path, ["approved_plan"])
+                  : alternative.source === "user_authored" && alternative.source_path === undefined,
+              ),
+          ))) &&
+      (isLinkedFollowupOperation
+        ? isLinkedFollowupBinding(value.linked_followup_binding)
+        : value.linked_followup_binding === undefined) &&
+      (value.operation === "workflow_create_linked_followup_from_plan"
+        ? isPlanBinding
+        : value.plan_binding === undefined) &&
       isAuthorization(value.authorization) &&
+      everyAuthorizationInputIsDeclared &&
       isRecord(value.stale_binding) &&
       typeof value.stale_binding.workflow_id === "string" &&
       value.stale_binding.workflow_id.length > 0 &&
@@ -1022,22 +1330,88 @@ test("descriptor version 3 is the only executable descriptor", () => {
     (value.selection === "single" || value.selection === "choose_one") &&
     Array.isArray(value.invocations) &&
     value.invocations.length > 0 &&
-    value.invocations.every(isInvocation);
+    (value.selection !== "single" || value.invocations.length === 1) &&
+    value.invocations.every(isInvocation) &&
+    (value.specialization === undefined ||
+      (value.specialization === "repair_authorization" &&
+        isRecord(value.repair_binding) &&
+        isStringArray(value.repair_binding.eligible_finding_ids) &&
+        isStringArray(value.repair_binding.selected_finding_ids) &&
+        isRecord(value.repair_binding.proposal) &&
+        Array.isArray(value.invocations) &&
+        value.invocations.length === 1 &&
+        isRecord(value.invocations[0]) &&
+        isRecord(value.invocations[0].repair_binding) &&
+        JSON.stringify(value.invocations[0].repair_binding) ===
+          JSON.stringify(value.repair_binding)));
   const isWait = (value: unknown): boolean =>
     isRecord(value) &&
     value.mode === "wait" &&
     typeof value.reason === "string" &&
     value.reason.length > 0;
+  const isCollectEvidence = (value: unknown): boolean => {
+    if (!isRecord(value) || !isRecord(value.outcomes)) return false;
+    const outcomes = value.outcomes;
+    if (
+      value.mode !== "collect_evidence" ||
+      typeof value.validation_id !== "string" ||
+      value.validation_id.length === 0 ||
+      value.specialization !== "recovery_inspection" ||
+      !isRecord(outcomes.observed) ||
+      !isRecord(outcomes.unavailable) ||
+      !isWait(outcomes.unavailable)
+    ) {
+      return false;
+    }
+    const observed = outcomes.observed;
+    return (["passed", "failed"] as const).every((outcome) => {
+      const mutation = observed[outcome];
+      if (!isMutation(mutation) || !isRecord(mutation) || !Array.isArray(mutation.invocations)) {
+        return false;
+      }
+      const invocation = mutation.invocations[0];
+      return (
+        mutation.selection === "single" &&
+        mutation.invocations.length === 1 &&
+        isRecord(invocation) &&
+        invocation.operation === "workflow_record_manual_validation" &&
+        isRecord(invocation.fixed_arguments) &&
+        invocation.fixed_arguments.validation_id === value.validation_id &&
+        invocation.fixed_arguments.status === outcome
+      );
+    });
+  };
+  const isParentAction = (value: unknown): boolean => {
+    if (!isRecord(value) || typeof value.action !== "string") return false;
+    if (value.status === "executable") {
+      const descriptor = value.descriptor;
+      return (
+        hostParentTools.has(value.action) &&
+        isMutation(descriptor) &&
+        isRecord(descriptor) &&
+        Array.isArray(descriptor.invocations) &&
+        descriptor.selection === "single" &&
+        descriptor.invocations.length === 1 &&
+        descriptor.invocations[0]?.operation === value.action
+      );
+    }
+    return (
+      value.status === "evidence_required" &&
+      value.action === "workflow_record_manual_validation" &&
+      hostParentTools.has(value.action) &&
+      isCollectEvidence(value.descriptor)
+    );
+  };
   const classify = (
     value: unknown,
     observed?: "passed" | "failed" | "unavailable",
   ): "dispatch" | "parent_mutation" | "wait" | "terminal" | "fail_closed" => {
     if (
       !isRecord(value) ||
-      value.descriptor_version !== 3 ||
+      value.descriptor_version !== 4 ||
       !isRecord(value.primary) ||
       !Array.isArray(value.parent_actions) ||
-      !value.parent_actions.every(isRecord)
+      !value.parent_actions.every(isParentAction)
     ) {
       return "fail_closed";
     }
@@ -1064,29 +1438,16 @@ test("descriptor version 3 is the only executable descriptor", () => {
         ? "terminal"
         : "fail_closed";
     }
-    if (
-      primary.mode !== "collect_evidence" ||
-      typeof primary.validation_id !== "string" ||
-      primary.validation_id.length === 0 ||
-      primary.specialization !== "recovery_inspection" ||
-      !isRecord(primary.outcomes) ||
-      !isRecord(primary.outcomes.observed) ||
-      !isRecord(primary.outcomes.unavailable) ||
-      !isMutation(primary.outcomes.observed.passed) ||
-      !isMutation(primary.outcomes.observed.failed) ||
-      !isWait(primary.outcomes.unavailable)
-    ) {
-      return "fail_closed";
-    }
+    if (!isCollectEvidence(primary)) return "fail_closed";
     if (observed === "unavailable") return "wait";
     return observed === "passed" || observed === "failed" ? "parent_mutation" : "fail_closed";
   };
 
-  for (const fixture of v3Fixtures) {
+  for (const fixture of v4Fixtures) {
     const observed = "observed" in fixture ? fixture.observed : undefined;
     assert.equal(classify(fixture.descriptor, observed), fixture.expected, fixture.name);
   }
-  for (const version of [undefined, null, 0, 1, 2, 4, "3"]) {
+  for (const version of [undefined, null, 0, 1, 2, 3, 5, "4"]) {
     assert.equal(
       classify(
         descriptor(version, {
@@ -1103,7 +1464,7 @@ test("descriptor version 3 is the only executable descriptor", () => {
   }
   assert.equal(
     classify(
-      descriptor(3, {
+      descriptor(4, {
         mode: "dispatch",
         route: "bogus",
         operation: "workflow_submit_implementation",
@@ -1112,11 +1473,11 @@ test("descriptor version 3 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "malformed v3 dispatch",
+    "malformed v4 dispatch",
   );
   assert.equal(
     classify(
-      descriptor(3, {
+      descriptor(4, {
         mode: "dispatch",
         route: "implement",
         operation: "bogus",
@@ -1125,22 +1486,22 @@ test("descriptor version 3 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unusable v3 dispatch operation",
+    "unusable v4 dispatch operation",
   );
   assert.equal(
     classify(
-      descriptor(3, {
+      descriptor(4, {
         mode: "parent_mutation",
         selection: "single",
         invocations: [{ ...parentInvocation, authorization: { required: true } }],
       }),
     ),
     "fail_closed",
-    "malformed v3 authorization",
+    "malformed v4 authorization",
   );
   assert.equal(
     classify(
-      descriptor(3, {
+      descriptor(4, {
         mode: "parent_mutation",
         selection: "single",
         invocations: [
@@ -1152,26 +1513,128 @@ test("descriptor version 3 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unusable v3 input source",
+    "unusable v4 input source",
   );
-  assert.equal(classify(descriptor(3, { mode: "unknown" })), "fail_closed", "unsupported v3 mode");
+  assert.equal(classify(descriptor(4, { mode: "unknown" })), "fail_closed", "unsupported v4 mode");
   assert.equal(
-    classify(descriptor(3, { mode: "wait" })),
+    classify(descriptor(4, { mode: "wait" })),
     "fail_closed",
-    "incomplete v3 wait descriptor",
+    "incomplete v4 wait descriptor",
   );
   assert.equal(
     classify({
-      descriptor_version: 3,
-      primary: { mode: "wait", reason: "stop" },
-      parent_actions: [null],
+      descriptor_version: 4,
+      primary: {
+        mode: "dispatch",
+        route: "implement",
+        operation: "workflow_submit_implementation",
+        workflow_id: "wf-current",
+        expected_version: 7,
+      },
+      parent_actions: [{}],
     }),
     "fail_closed",
-    "malformed v3 parent actions",
+    "incomplete parent action is not executable beside a valid primary",
   );
   assert.equal(
     classify(
-      descriptor(3, {
+      descriptor(4, { mode: "wait", reason: "stop" }, [
+        { ...completeParentAction, action: "workflow_reconcile_staged_scope" },
+      ]),
+    ),
+    "fail_closed",
+    "parent-action identity must match its host-allowlisted invocation",
+  );
+  assert.equal(
+    classify(
+      descriptor(4, { mode: "wait", reason: "stop" }, [
+        {
+          action: "workflow_submit_review",
+          status: "executable",
+          descriptor: {
+            mode: "parent_mutation",
+            selection: "single",
+            invocations: [
+              {
+                ...parentInvocation,
+                operation: "workflow_submit_review",
+              },
+            ],
+          },
+        },
+      ]),
+    ),
+    "fail_closed",
+    "parent action operations outside the Orchestrator host allowlist fail closed",
+  );
+  assert.equal(
+    classify(descriptor(4, { mode: "wait", reason: "stop" }, [completeLinkedPlanAction])),
+    "wait",
+    "complete plan-native alternative binds its exact child identity and finding candidates",
+  );
+  assert.equal(
+    classify(
+      descriptor(4, { mode: "wait", reason: "stop" }, [
+        {
+          ...completeLinkedPlanAction,
+          descriptor: {
+            ...completeLinkedPlanAction.descriptor,
+            invocations: [
+              {
+                ...linkedPlanInvocation,
+                linked_followup_binding: undefined,
+              },
+            ],
+          },
+        },
+      ]),
+    ),
+    "fail_closed",
+    "linked-follow-up finding_ids require their named exact-source binding",
+  );
+  const unresolvedReconciliationInput = {
+    ...parentInvocation,
+    operation: "workflow_reconcile_staged_scope",
+    semantic_choice: {
+      id: "authorize_scope_reconciliation",
+      label: "Reconcile staged scope",
+      summary: "Authorize exact staged paths and require fresh review.",
+    },
+    required_inputs: [
+      { path: ["added_paths"], source: "server_derived", required: true },
+      { path: ["review_context"], source: "user_authored", required: true },
+    ],
+    authorization: {
+      required: true,
+      representation: { kind: "field", path: ["user_authorization"] },
+      binding: { kind: "all", paths: [["added_paths"], ["review_context"]] },
+    },
+    on_success: {
+      kind: "refresh_required",
+      expected: ["re_review", "wait"],
+      dispatch_authority: false,
+    },
+  };
+  assert.equal(
+    classify(
+      descriptor(4, { mode: "wait", reason: "stop" }, [
+        {
+          action: "workflow_reconcile_staged_scope",
+          status: "executable",
+          descriptor: {
+            mode: "parent_mutation",
+            selection: "single",
+            invocations: [unresolvedReconciliationInput],
+          },
+        },
+      ]),
+    ),
+    "fail_closed",
+    "server-derived alternative input requires its exact binding",
+  );
+  assert.equal(
+    classify(
+      descriptor(4, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         specialization: "deferred",
@@ -1185,9 +1648,10 @@ test("descriptor version 3 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unsupported v3 specialization",
+    "unsupported v4 specialization",
   );
-  assert.match(orchestrator, /descriptor_version.*exactly `3`/u);
+  assert.equal(classify(descriptor(3, { mode: "wait", reason: "old descriptor" })), "fail_closed");
+  assert.match(orchestrator, /descriptor_version.*exactly `4`/u);
   assert.match(orchestrator, /input_alternatives/u);
   assert.match(orchestrator, /authorization\.required.*false.*(?:do not invent|block)/u);
   assert.match(orchestrator, /contradictory.*descriptor.*fail(?:s)? closed/iu);
@@ -1226,6 +1690,18 @@ test("descriptor routing preserves worker and mutation fail-closed boundaries", 
   );
 });
 
+test("orchestrator selects separately authorized parent actions from descriptors", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  assert.match(orchestrator, /execution\.parent_actions.*execution\.primary/u);
+  assert.match(orchestrator, /semantic_choice\.label.*semantic_choice\.summary/u);
+  assert.match(orchestrator, /user selects one.*exact descriptor entry/u);
+  assert.match(orchestrator, /Do not refetch expecting the rejected primary to change/u);
+  assert.match(
+    orchestrator,
+    /never identify an alternative by interpreting operation\/tool names/u,
+  );
+});
+
 test("orchestrator and flow guide do not duplicate descriptor protocol maps", () => {
   const orchestratorSource = opencode("orchestrator.md");
   const orchestrator = orchestratorSource.slice(orchestratorSource.indexOf("\n---\n") + 5);
@@ -1254,9 +1730,9 @@ test("orchestrator and flow guide do not duplicate descriptor protocol maps", ()
   }
 
   assert.match(orchestrator, /execution\.primary/u);
-  assert.match(orchestrator, /fixed arguments/u);
-  assert.match(orchestrator, /declared inputs/u);
-  assert.match(orchestrator, /committed_execution/u);
+  assert.match(compactOrchestrator, /server-fixed arguments/u);
+  assert.match(compactOrchestrator, /declared inputs/u);
+  assert.match(compactOrchestrator, /committed_execution/u);
   assert.match(compactOrchestrator, /workflow_parent_get.*parent_context/u);
   assert.match(compactOrchestrator, /If an advertised input.*source `parent_context`/u);
   assert.match(
@@ -1800,6 +2276,15 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
   assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
+  const contract = readFileSync(resolve(agentsDir, "contracts/committer.md"), "utf8");
+  assert.match(
+    contract.replace(/\s+/gu, " "),
+    /If any local staged-scope, approved-path residue, or freshness check fails, do not commit, restage, unstage, or repair the index\. If the current committer view permits `workflow_prepare_commit`, call it exactly once so Workflow MCP can persist/u,
+  );
+  assert.match(
+    contract.replace(/\s+/gu, " "),
+    /staged changes outside the approved scope, do not unstage or commit them\. When `workflow_prepare_commit` is permitted, call it once to persist the staged-scope failure/u,
+  );
 });
 
 test("committer references are authoritative, neutral, and non-closing", () => {

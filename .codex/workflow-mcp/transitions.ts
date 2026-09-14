@@ -23,7 +23,9 @@ export {
   adoptDirtyScope,
   expandScope,
   IMPLEMENTATION_STOP_PHASES,
+  reconcileStagedScope,
   resumeImplementation,
+  stagedScopeReconciliationFeasible,
   submitImplementation,
 } from "./transitions/implementation.js";
 export type {

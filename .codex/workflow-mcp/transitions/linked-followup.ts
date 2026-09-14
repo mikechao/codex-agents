@@ -84,13 +84,20 @@ export function linkedFollowupInput(
     {
       workflow_type: "change",
       objective: boundedString(args.objective, "objective"),
-      approved_plan: approvedPlan(args.approved_plan),
+      approved_plan: directFollowupPlan(args.approved_plan),
       execution_brief: null,
       plan_provenance: null,
       acceptance_criteria: args.acceptance_criteria as string[],
       validation_requirements: args.validation_requirements as ValidationAuthoringRequirement[],
     },
   );
+}
+
+function directFollowupPlan(value: unknown): null {
+  if (approvedPlan(value) !== null) {
+    fail("ERROR_INVALID_FOLLOWUP", "direct linked follow-ups cannot carry approved plan authority");
+  }
+  return null;
 }
 
 /** Adapt a server-resolved approved PlanArtifact to the shared linked-follow-up checks. */

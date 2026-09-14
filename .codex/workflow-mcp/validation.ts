@@ -51,6 +51,7 @@ import {
 } from "./values.js";
 
 export const MAX_PATHS = 200;
+export const MAX_REPO_PATH_LENGTH = 300;
 export const MAX_FINDINGS = 200;
 export const MAX_CONTRACTS = 999;
 export const MAX_TEXT = 4000;
@@ -609,7 +610,8 @@ export function exactPaths(
       relativePath === "" ||
       relativePath === ".." ||
       relativePath.startsWith(`..${sep}`) ||
-      isAbsolute(relativePath)
+      isAbsolute(relativePath) ||
+      relativePath.length > MAX_REPO_PATH_LENGTH
     ) {
       fail("ERROR_INVALID_PATHS", "path is unsafe");
     }

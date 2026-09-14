@@ -277,7 +277,7 @@ check is defense in depth rather than a new authority boundary.
   unavailable inspection/wait, and terminal/no-action outcomes. Confirm only declared inputs are bound,
   `collect_evidence` never invents a failed validation, and `wait` never mutates or dispatches.
 - Descriptor-version boundary: exercise a valid current descriptor with each supported mode and a
-  non-v3 or unknown version. Confirm the non-v3 result stops without mutation or worker dispatch and
+  non-v4 or unknown version. Confirm the non-v4 result stops without mutation or worker dispatch and
   does not reinterpret semantic decisions, raw phases, parent state, or conversation memory.
 - Two-cycle stopping: after an initial review, the parent performs at most two descriptor-selected
   repair cycles, passes prior findings and resolution claims each time, and stops without commit when

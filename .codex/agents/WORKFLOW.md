@@ -199,7 +199,7 @@ grant authority. This routing distinction adds no Workflow MCP phase, schema, pe
 authority change.
 
 The descriptor is guidance, not authorization or a bearer capability. Its `descriptor_version` must
-be exactly `3` before interpretation. Any other, missing, malformed, contradictory, or incomplete
+be exactly `4` before interpretation. Any other, missing, malformed, contradictory, or incomplete
 descriptor is a fail-closed stop without fallback mutation or dispatch; the parent must not
 reconstruct a route from semantic decisions, raw phases, parent state, or conversation memory.
 
@@ -211,6 +211,19 @@ uses the returned observed-outcome mutation, and treats unavailable evidence as 
 `terminal` perform no mutation or worker dispatch. After a successful mutation, the parent uses the
 advertised `committed_execution` when present or refetches a fresh descriptor; `on_success.expected`
 and mutation success alone never authorize routing.
+
+The input sources are explicit: `user_authored` is supplied by the current user request or a fresh
+semantic answer (never synthesized from workflow prose); `parent_context` is read from its exact
+declared `source_path` in the parent view; `server_derived` is copied from its named descriptor
+binding; and `observed_evidence` comes only from performing the declared inspection. A missing or
+unresolvable source fails closed. Separately advertised alternatives are presented and selected using
+each invocation's semantic choice label and summary, not its operation/tool name.
+
+Every v4 `parent_actions` entry is itself complete executable guidance: its status and action must
+match the descriptor mode and advertised operation, and the operation must be available at the host
+permission boundary. Linked-follow-up `finding_ids` come from `linked_followup_binding`, which exposes
+current semantic finding summaries and exact IDs in separate blocking/optional buckets; select a
+non-empty subset from one bucket without asking the user for IDs or consulting stale bindings.
 
 For a `parent_mutation`, the Orchestrator follows the invocation's advertised authorization metadata.
 When `authorization.required` is `true`, it presents the exact semantic proposal and requires a
@@ -426,7 +439,11 @@ an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
 stop (cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
 `STOPPED_COMMIT_MISMATCH`. A supported preparation failure before a commit exists is persisted as
 `STOPPED_COMMIT_PREPARATION` with its category, bounded diagnostic, failure version/timestamp, and
-recovery class. Retryable scope/content failures expose only
+recovery class. Scope/content failures with staged paths outside reviewed authority expose a bounded
+choice between `workflow_retry_commit_preparation` and
+`workflow_reconcile_staged_scope`: retry preserves scope and is accepted only after the extra staged
+paths are removed; reconciliation adds only the exact observed paths and requires fresh review and
+fresh commit authorization. Other retryable scope/content failures expose only
 `workflow_retry_commit_preparation`; stale receipt failures expose only
 `workflow_return_commit_to_review`, which clears authorization and requires a fresh review and
 fresh authorization. The committer has no permitted action while stopped. The server never changes
@@ -543,7 +560,7 @@ Report only its semantic decision, outcome, blocker summaries, recovery choice, 
 boundaries, and material linked-workflow summary. Do not dump raw workflow or plan identity,
 phase/action names, receipts, audit events, capabilities, validation logs, or a complete worker report.
 
-The descriptor mode is the first routing discriminator after this refresh. Only descriptor version 3
+The descriptor mode is the first routing discriminator after this refresh. Only descriptor version 4
 is executable and it supports the current five modes and committed-state result. Any other, missing,
 unknown, malformed, contradictory, or incomplete descriptor fails closed without fallback mutation
 or dispatch.
@@ -555,10 +572,14 @@ For `collect_evidence`, use only the declared inspection outcome and treat unava
 `on_success.expected`, mutation success alone, retained findings, and stale prose never authorize
 routing.
 
-If an advertised input has source `parent_context`, `workflow_parent_get` supplies its exact current
-value from the authoritative parent view. It remains available for explicit debug/status inspection.
-It must not reconstruct operation selection, payload shape, authorization placement, routing, or other
-descriptor-declared protocol knowledge. An undeclared required input fails closed. These are
+If an advertised input has source `parent_context`, its exact `source_path` identifies the value in
+the authoritative parent view returned by `workflow_parent_get`. Inputs with source `user_authored` are
+bounded model/user-authored semantic values; recovery contexts are not synthesized from stop prose
+or reconstructed state. Inputs with source `observed_evidence` must be the actual result of the
+declared inspection and never a value copied from `ParentView` or conversation memory. It remains
+available for explicit debug/status inspection. It must not reconstruct operation selection, payload
+shape, authorization placement, routing, or other descriptor-declared protocol knowledge. An
+undeclared required input fails closed. These are
 presentation and routing conventions only: they do not change Workflow MCP phases, persistence,
 authorization rules, transition semantics, attempt bookkeeping, or worker isolation. Workers still
 receive only their exact workflow ID and use their dedicated authoritative getter.

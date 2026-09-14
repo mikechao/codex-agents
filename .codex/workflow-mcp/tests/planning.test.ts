@@ -811,12 +811,48 @@ test("plan-native linked follow-up binds only the exact current approved child a
       revision: 1,
       user_authorization: "approve child remediation plan",
     });
-    const child = store.createLinkedFollowupFromPlan({
+    const decision = store.operatorDecisionGet(id, undefined, draft.plan_id, 1);
+    const planFollowup = decision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_create_linked_followup_from_plan",
+    );
+    assert.ok(planFollowup && planFollowup.status === "executable");
+    if (planFollowup?.status !== "executable")
+      throw new Error("expected descriptor-bound approved child plan follow-up");
+    const invocation = planFollowup.descriptor.invocations[0];
+    assert.deepEqual(invocation?.fixed_arguments, {
       workflow_id: id,
       expected_version: 3,
       plan_id: draft.plan_id,
       revision: 1,
-      finding_ids: [optional.finding_id],
+    });
+    assert.deepEqual(invocation?.plan_binding, {
+      plan_id: draft.plan_id,
+      revision: 1,
+      source: "approved_child_plan_context",
+    });
+    assert.deepEqual(invocation?.authorization.binding, {
+      kind: "all",
+      paths: [["plan_id"], ["revision"], ["finding_ids"]],
+    });
+    assert.deepEqual(invocation?.linked_followup_binding, {
+      selection_rule: "nonempty_subset_from_one_bucket",
+      blocking_findings: [],
+      optional_findings: [
+        {
+          finding_id: optional.finding_id,
+          severity: optional.severity,
+          summary: optional.impact,
+        },
+      ],
+    });
+    const currentFindingIds = invocation?.linked_followup_binding.optional_findings.map(
+      (finding: any) => finding.finding_id,
+    );
+    assert.deepEqual(currentFindingIds, [optional.finding_id]);
+    assert.equal(store.parentGet(id).plan_provenance, null);
+    const child = store.createLinkedFollowupFromPlan({
+      ...invocation?.fixed_arguments,
+      finding_ids: currentFindingIds,
       user_authorization: "authorize exact child plan remediation",
     });
     const childView = store.parentGet(child.workflow_id);
@@ -846,6 +882,103 @@ test("plan-native linked follow-up binds only the exact current approved child a
     assert.equal(childView.repair_cycle, 0);
     assert.equal(childView.remediation_context.authorized_finding_ids[0], optional.finding_id);
     assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow_id);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("direct linked follow-up from a plan-backed source remains null-plan", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const sourcePlan = store.planCreate({
+      ...revisionInput(),
+      objective: "source PlanArtifact objective",
+      full_plan: "stale source plan that must not reach a direct child",
+    });
+    store.planApprove({
+      plan_id: sourcePlan.plan_id,
+      revision: 1,
+      user_authorization: "approve exact source plan",
+    });
+    const source = store.createFromPlan({ plan_id: sourcePlan.plan_id, revision: 1 });
+    const sourceId = source.workflow_id;
+    store.submitImplementation({
+      workflow_id: sourceId,
+      expected_version: 0,
+      status: "DONE",
+      summary: "source implementation",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "done" }],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    writeFileSync(join(target.root, "note.txt"), "source change\n");
+    store.beginReview({ workflow_id: sourceId, expected_version: 1 });
+    const optional = {
+      finding_id: "DIRECT-FOLLOWUP-OPTIONAL",
+      severity: "P3",
+      blocking: false,
+      file_and_line: "note.txt:1",
+      failure_scenario: "scenario",
+      impact: "impact",
+      violated_requirement: "requirement",
+      remediation: "remediation",
+      missing_or_inadequate_test: "test",
+    };
+    store.submitReview({
+      workflow_id: sourceId,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [optional],
+      prior_finding_classifications: {},
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "reviewed" }],
+    });
+
+    const sourceView = store.parentGet(sourceId);
+    assert.equal(sourceView.approved_plan, "stale source plan that must not reach a direct child");
+    assert.ok(sourceView.plan_provenance);
+    const decision = store.operatorDecisionGet(sourceId);
+    const direct = decision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_create_linked_followup",
+    );
+    assert.ok(direct && direct.status === "executable");
+    if (direct?.status !== "executable") throw new Error("expected direct follow-up");
+    const invocation = direct.descriptor.invocations[0];
+    assert.equal(
+      invocation?.required_inputs.some((item: any) => item.path.join(".") === "approved_plan"),
+      false,
+    );
+    assert.equal(invocation?.fixed_arguments.approved_plan, null);
+
+    const childInputs = {
+      ...invocation?.fixed_arguments,
+      objective: "directly authored remediation",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["address the selected finding"],
+      validation_requirements: [
+        { description: "verify remediation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
+      finding_ids: [optional.finding_id],
+      user_authorization: "authorize directly authored remediation",
+    };
+    assert.equal(
+      category(() =>
+        store.createLinkedFollowup({ ...childInputs, approved_plan: sourceView.approved_plan }),
+      ),
+      "ERROR_INVALID_FOLLOWUP",
+    );
+    assert.equal(store.parentGet(sourceId).version, 3);
+
+    const child = store.createLinkedFollowup(childInputs);
+    const childView = store.parentGet(child.workflow_id);
+    assert.equal(childView.objective, "directly authored remediation");
+    assert.equal(childView.approved_plan, null);
+    assert.equal(childView.execution_brief, null);
+    assert.equal(childView.plan_provenance, null);
   } finally {
     store.close();
     disposeFixture(target.root);

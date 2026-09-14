@@ -69,6 +69,71 @@ test("SDK dispatch exposes exact role tools and serializes a representative life
       (await session.call("workflow_reviewer_get", { workflow_id: created.workflow_id })).phase,
       "STOPPED_APPROVED",
     );
+
+    await session.call("workflow_authorize_commit", {
+      workflow_id: created.workflow_id,
+      expected_version: await session.version(created.workflow_id),
+      user_authorization: "authorize the reviewed change for preparation",
+    });
+    writeFileSync(join(root, "unrelated.txt"), "accidental staged content\n");
+    git("add", "note.txt", "unrelated.txt");
+    const committer = await session.call("workflow_committer_get", {
+      workflow_id: created.workflow_id,
+    });
+    assert.deepEqual(committer.permitted_next_actions, ["workflow_prepare_commit"]);
+
+    const stopped = await session.call("workflow_prepare_commit", {
+      workflow_id: created.workflow_id,
+      expected_version: await session.version(created.workflow_id),
+    });
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.stop_context.recovery, "choose");
+    assert.deepEqual(stopped.stop_context.reconciliation_paths, ["unrelated.txt"]);
+
+    const decision = await session.call("workflow_operator_decision_get", {
+      workflow_id: created.workflow_id,
+    });
+    assert.equal(decision.execution.primary.mode, "parent_mutation");
+    assert.equal(decision.execution.primary.selection, "choose_one");
+    const retry = decision.execution.primary.invocations.find(
+      (invocation: any) => invocation.operation === "workflow_retry_commit_preparation",
+    );
+    const reconcile = decision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_reconcile_staged_scope",
+    );
+    assert.ok(retry);
+    assert.equal(reconcile?.status, "executable");
+    assert.deepEqual(reconcile?.descriptor.invocations[0].scope_reconciliation_binding, {
+      reviewed_paths: ["note.txt"],
+      added_paths: ["unrelated.txt"],
+    });
+
+    const failedRetry = await session.callRaw("workflow_retry_commit_preparation", {
+      ...retry?.fixed_arguments,
+      retry_context: "keep the reviewed scope after correcting accidental staging",
+    });
+    assert.equal(failedRetry.result.isError, true);
+    assert.equal(failedRetry.body.category, "ERROR_INVALID_TRANSITION");
+    assert.equal(await session.version(created.workflow_id), stopped.version);
+
+    git("reset", "-q", "--", "unrelated.txt");
+    const retried = await session.call("workflow_retry_commit_preparation", {
+      ...retry?.fixed_arguments,
+      retry_context: "keep the reviewed scope after correcting accidental staging",
+    });
+    assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    const refreshed = await session.call("workflow_operator_decision_get", {
+      workflow_id: created.workflow_id,
+    });
+    assert.equal(refreshed.execution.primary.mode, "dispatch");
+    assert.equal(refreshed.execution.primary.route, "commit");
+    assert.equal(refreshed.execution.primary.operation, "workflow_prepare_commit");
+    const prepared = await session.call(refreshed.execution.primary.operation, {
+      workflow_id: refreshed.execution.primary.workflow_id,
+      expected_version: refreshed.execution.primary.expected_version,
+    });
+    assert.equal(prepared.phase, "COMMIT_PREPARED");
   } finally {
     await disposeProtocolFixture(root, session);
   }

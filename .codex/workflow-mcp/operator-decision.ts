@@ -13,6 +13,7 @@ import type {
   BlockingFinding,
   FindingId,
   OperatorDecision,
+  OperatorPlanBinding,
   OperatorRecovery,
   OptionalFinding,
   WorkflowAction,
@@ -107,6 +108,7 @@ function recoveryDecision(action: WorkflowAction): OperatorDecision["primary"] {
     ["workflow_resume_review", "resume_review"],
     ["workflow_retry_commit", "retry_commit"],
     ["workflow_retry_commit_preparation", "retry_commit_preparation"],
+    ["workflow_reconcile_staged_scope", "reconcile_staged_scope"],
     ["workflow_return_commit_to_review", "return_commit_to_review"],
   ]);
   const recovery = candidates.get(action);
@@ -191,6 +193,14 @@ function primaryDecision(
       };
     case "recovery":
       return recoveryDecision(next.action);
+    case "recovery_choice":
+      return {
+        kind: "choose_recovery",
+        recoveries: next.actions
+          .map((action) => recoveryDecision(action))
+          .flatMap((decision) => (decision.kind === "approve_recovery" ? [decision.recovery] : [])),
+        authorization_required: true,
+      };
     case "authorize_commit":
       return { kind: "approve_commit", authorization_required: true };
     case "reconcile_commit":
@@ -387,6 +397,7 @@ export function deriveOperatorDecision(
   requested: WorkflowState,
   records: OperatorLineageRecord[] = [{ state: requested }],
   selectedFindingIds?: ReadonlyArray<FindingId>,
+  planIdentity?: OperatorPlanBinding,
 ): OperatorDecision {
   const requestedRecord = records.find(
     (candidate) => candidate.state.workflow_id === requested.workflow_id,
@@ -397,7 +408,7 @@ export function deriveOperatorDecision(
   if (lineageError) {
     return {
       primary: { kind: "operator_intervention", reason: lineageError },
-      execution: descriptorForLegality(record.state, legality, selectedFindingIds),
+      execution: descriptorForLegality(record.state, legality, selectedFindingIds, planIdentity),
       ...semanticFields(requested, { kind: "operator_intervention", reason: lineageError }),
       authority_boundaries: {
         approve_scope_change: { availability: "unavailable", basis: "lineage is inconsistent" },
@@ -456,7 +467,7 @@ export function deriveOperatorDecision(
     legality.actions.parent.includes("workflow_authorize_commit");
   return {
     primary,
-    execution: descriptorForLegality(record.state, legality, selectedFindingIds),
+    execution: descriptorForLegality(record.state, legality, selectedFindingIds, planIdentity),
     ...semanticFields(requested, primary),
     authority_boundaries: boundaries,
     intent: {

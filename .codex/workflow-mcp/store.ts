@@ -11,12 +11,14 @@ import {
 } from "./diagnostics.js";
 import { fail, WorkflowError } from "./errors.js";
 import {
+  baselineReceiptPaths,
   createReceipt,
   currentHead,
   prepareCommitReceipt,
   repositoryRoot,
   reviewRange,
   stagedAdoptionStates,
+  stagedPathsOutsideScope,
   stagedScopeChanges,
   verifyCommitResult,
   verifyPreparedCommit,
@@ -66,6 +68,7 @@ import {
   linkedFollowupStateReadiness,
   prepareCommit,
   rangeDirtyBaselinePaths,
+  reconcileStagedScope,
   recordManualValidation,
   resumeImplementation,
   resumeReview,
@@ -77,6 +80,7 @@ import {
   reviewTargetStateReady,
   roleView,
   scopeMutationReadiness,
+  stagedScopeReconciliationFeasible,
   submitCommitResult,
   submitImplementation,
   submitReview,
@@ -97,14 +101,17 @@ import type {
   DirtyScopeAdoptionAudit,
   DirtyScopeAdoptionIndexState,
   DirtyScopeAdoptionState,
+  ExactRepoPath,
   FindingAdjudication,
   GitCommitSha,
   IsoTimestamp,
   OperatorDecision,
   ParentMutationResult,
   ParentView,
+  PlanId,
   PlannerPlanRead,
   PlanRead,
+  PlanRevision,
   PlanRevisionArtifact,
   Role,
   RoleView,
@@ -124,6 +131,8 @@ import {
   findingIdList,
   isoNow,
   objectDigest,
+  planId,
+  planRevision,
   repairCycle,
   workItems,
 } from "./validation.js";
@@ -673,7 +682,12 @@ type ReconciliationPreflight = {
 type CommitPreparationPreflight = {
   readiness: { status: "ready" | "unavailable" };
   evidence: CommitPreparationEvidence | null;
-  failure: { category: CommitPreparationFailureCategory; detail: string } | null;
+  failure: {
+    category: CommitPreparationFailureCategory;
+    detail: string;
+    recovery: "retry" | "review" | "choose";
+    reconciliationPaths: ExactRepoPath[];
+  } | null;
   error?: unknown;
 };
 
@@ -1168,14 +1182,36 @@ export class WorkflowStore {
       };
     } catch (error) {
       const failure = supportedPreparationFailure(error);
-      return failure
-        ? { readiness: { status: "ready" }, evidence: null, failure }
-        : {
-            readiness: { status: "unavailable" },
-            evidence: null,
-            failure: null,
-            error,
-          };
+      if (failure) {
+        const observedReconciliationPaths =
+          failure.category === "ERROR_STAGED_SCOPE"
+            ? stagedPathsOutsideScope(
+                this.root,
+                state.review_target.approved_paths ?? state.approved_paths,
+              )
+            : [];
+        const canReconcile =
+          failure.category === "ERROR_STAGED_SCOPE" &&
+          stagedScopeReconciliationFeasible(state, observedReconciliationPaths, this.root);
+        const reconciliationPaths = canReconcile ? observedReconciliationPaths : [];
+        const recovery =
+          failure.category === "ERROR_STALE_RECEIPT" ? "review" : canReconcile ? "choose" : "retry";
+        return {
+          readiness: { status: "ready" },
+          evidence: null,
+          failure: {
+            ...failure,
+            recovery,
+            reconciliationPaths,
+          },
+        };
+      }
+      return {
+        readiness: { status: "unavailable" },
+        evidence: null,
+        failure: null,
+        error,
+      };
     }
   }
 
@@ -1384,6 +1420,8 @@ export class WorkflowStore {
   operatorDecisionGet(
     workflowIdValue: unknown,
     repairFindingIdsValue: unknown = undefined,
+    childPlanIdValue: unknown = undefined,
+    childPlanRevisionValue: unknown = undefined,
   ): OperatorDecision {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
@@ -1401,7 +1439,17 @@ export class WorkflowStore {
     if (repairFindingIds && legality.next.kind !== "repair_required") {
       fail("ERROR_INVALID_REPAIR", "repair selection requires a repair authorization decision");
     }
-    return this.#deriveOperatorDecision(state, row, readiness, repairFindingIds);
+    const hasChildPlanContext =
+      childPlanIdValue !== undefined || childPlanRevisionValue !== undefined;
+    const childPlan = hasChildPlanContext
+      ? {
+          plan_id: planId(childPlanIdValue),
+          revision: planRevision(childPlanRevisionValue, "child_plan_revision"),
+          source: "approved_child_plan_context" as const,
+        }
+      : undefined;
+    if (childPlan) this.planStore.resolveApprovedPlan(childPlan.plan_id, childPlan.revision);
+    return this.#deriveOperatorDecision(state, row, readiness, repairFindingIds, childPlan);
   }
 
   #deriveOperatorDecision(
@@ -1409,6 +1457,7 @@ export class WorkflowStore {
     row: WorkflowRow,
     readiness: WorkflowLegalityReadiness,
     selectedFindingIds?: ReadonlyArray<import("./types.js").FindingId>,
+    childPlan?: { plan_id: PlanId; revision: PlanRevision; source: "approved_child_plan_context" },
   ): OperatorDecision {
     const records = new Map<string, OperatorLineageRecord>();
     const currentWorkflowId = state.workflow_id;
@@ -1432,7 +1481,7 @@ export class WorkflowStore {
         if (!records.has(reference)) pending.push(reference);
       }
     }
-    return deriveOperatorDecision(state, [...records.values()], selectedFindingIds);
+    return deriveOperatorDecision(state, [...records.values()], selectedFindingIds, childPlan);
   }
 
   reconciliationPermittedActions(workflowIdValue: unknown): WorkflowAction[] {
@@ -1685,7 +1734,10 @@ export class WorkflowStore {
       };
       if (rawSummary.dirty_scope_adoption)
         result.dirty_scope_adoption = rawSummary.dirty_scope_adoption;
-      if (result.event_type === "SCOPE_EXPANDED") {
+      if (
+        result.event_type === "SCOPE_EXPANDED" ||
+        result.event_type === "STAGED_SCOPE_RECONCILED"
+      ) {
         const expansion = state.scope_expansions.find(
           (candidate) => candidate.resulting_version === result.version,
         );
@@ -2098,7 +2150,10 @@ export class WorkflowStore {
         assertWorkItemsUnchanged(current, next);
         const resolvedEventType = typeof eventType === "function" ? eventType(next) : eventType;
         assertFindingAdjudicationsAppendOnly(current, next, resolvedEventType);
-        if (resolvedEventType === "SCOPE_EXPANDED") {
+        if (
+          resolvedEventType === "SCOPE_EXPANDED" ||
+          resolvedEventType === "STAGED_SCOPE_RECONCILED"
+        ) {
           if (
             next.scope_expansions.length !== current.scope_expansions.length + 1 ||
             canonicalJson(next.scope_expansions.slice(0, -1)) !==
@@ -2378,6 +2433,8 @@ export class WorkflowStore {
             state,
             preflight.failure.category,
             preflight.failure.detail,
+            preflight.failure.recovery,
+            preflight.failure.reconciliationPaths,
           );
         if (preflight.error) throw preflight.error;
         fail("ERROR_GIT", "commit preparation readiness is unavailable");
@@ -2392,8 +2449,37 @@ export class WorkflowStore {
       "parent",
       args.expected_version,
       "COMMIT_PREPARATION_RETRY_AUTHORIZED",
-      (state) => retryCommitPreparation(state, args),
+      (state) => {
+        const reviewedPaths = state.review_target.approved_paths ?? state.approved_paths;
+        const stagedScopeWithinReviewedPaths =
+          state.stop_context?.status === "COMMIT_PREPARATION_FAILED" &&
+          state.stop_context.recovery === "choose" &&
+          stagedPathsOutsideScope(this.root, reviewedPaths).length === 0;
+        return retryCommitPreparation(state, args, stagedScopeWithinReviewedPaths);
+      },
       "retry",
+    );
+  }
+
+  reconcileStagedScope(input: unknown): RoleView {
+    const args = parentMutation(input);
+    return this.#mutate(
+      args.workflow_id,
+      "parent",
+      args.expected_version,
+      "STAGED_SCOPE_RECONCILED",
+      (state) => {
+        const reviewedPaths = state.review_target.approved_paths;
+        const observedPaths = stagedPathsOutsideScope(this.root, reviewedPaths);
+        const addedPaths = exactPaths(args.added_paths, this.root);
+        const receipt = createReceipt(this.root, addedPaths, true);
+        const baselineReceipt = {
+          ...receipt,
+          paths: baselineReceiptPaths(this.root, addedPaths, state.base_head),
+        };
+        return reconcileStagedScope(state, args, baselineReceipt, this.root, observedPaths);
+      },
+      (next) => next.phase,
     );
   }
 

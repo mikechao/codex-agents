@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { fail } from "../errors.js";
 import type {
   ChangeReceipt,
+  ExactRepoPath,
   StoppingImplementationStatus,
   WorkflowPhase,
   WorkflowState,
@@ -307,6 +308,127 @@ export function expandScope(
   repositoryRoot: string,
 ): WorkflowState {
   return scopeExpansion(state, input, addedReceipt, repositoryRoot);
+}
+
+/** Reconcile exact staged paths that were outside the reviewed authority before a fresh review. */
+export function reconcileStagedScope(
+  state: WorkflowState,
+  input: unknown,
+  addedReceipt: ChangeReceipt,
+  repositoryRoot: string,
+  observedStagedPaths: ReadonlyArray<string>,
+): WorkflowState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    fail("ERROR_INVALID_SHAPE", "staged scope reconciliation input is invalid");
+  }
+  const args = exactKeys(
+    input,
+    ["workflow_id", "expected_version", "added_paths", "review_context", "user_authorization"],
+    "staged scope reconciliation",
+  );
+  ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
+  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
+    fail(
+      "ERROR_UNSUPPORTED_WORKFLOW_TYPE",
+      "staged scope reconciliation requires a change workflow",
+    );
+  }
+  if (
+    state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
+    state.stop_context.category !== "ERROR_STAGED_SCOPE" ||
+    state.stop_context.recovery !== "choose"
+  ) {
+    fail("ERROR_INVALID_TRANSITION", "staged scope reconciliation is not currently authorized");
+  }
+  const addedPaths = exactPaths(args.added_paths, repositoryRoot);
+  const expectedPaths = state.stop_context.reconciliation_paths ?? [];
+  if (!samePathList(addedPaths, expectedPaths)) {
+    fail("ERROR_INVALID_PATHS", "reconciliation paths do not match the observed staged scope");
+  }
+  if (!samePathList(addedPaths, observedStagedPaths)) {
+    fail("ERROR_STALE_RECEIPT", "staged scope changed before reconciliation");
+  }
+  if (addedPaths.some((path) => state.approved_paths.includes(path))) {
+    fail("ERROR_INVALID_PATHS", "reconciliation path is already approved");
+  }
+  if (addedReceipt.base_head !== state.base_head) {
+    fail("ERROR_STALE_BASE", "reconciliation baseline is stale");
+  }
+  if (
+    addedReceipt.approved_paths.length !== addedPaths.length ||
+    addedReceipt.approved_paths.some((path, index) => path !== addedPaths[index])
+  ) {
+    fail("ERROR_INVALID_PATHS", "reconciliation baseline scope is invalid");
+  }
+  if (!stagedScopeReconciliationFeasible(state, addedPaths, repositoryRoot)) {
+    fail("ERROR_INVALID_PATHS", "staged scope reconciliation exceeds persisted state limits");
+  }
+  const priorVersion = state.version;
+  const next = clone<WorkflowState>(state);
+  const resultingPaths = [...new Set([...state.approved_paths, ...addedPaths])].sort();
+  next.approved_paths = resultingPaths;
+  const combinedPaths = next.linked_continuation?.combined_review_paths ?? resultingPaths;
+  if (next.linked_continuation) {
+    next.linked_continuation.combined_review_paths = [
+      ...new Set([...combinedPaths, ...addedPaths]),
+    ].sort();
+  }
+  next.review_target = {
+    ...next.review_target,
+    approved_paths:
+      next.linked_continuation?.review_stage === "combined"
+        ? next.linked_continuation.combined_review_paths
+        : resultingPaths,
+  };
+  next.scope_expansions.push({
+    expansion_id: randomUUID(),
+    added_paths: addedPaths,
+    reason: boundedString(args.review_context, "review_context", MAX_DETAIL),
+    user_authorization: userAuthorization(args.user_authorization),
+    prior_version: priorVersion,
+    resulting_version: (priorVersion + 1) as WorkflowVersion,
+    authorized_at: isoNow(),
+  });
+  next.approved_path_baselines.push(
+    ...addedReceipt.paths.map((entry) => ({
+      path: entry.path,
+      approved_at_version: (priorVersion + 1) as WorkflowVersion,
+      baseline: clone(entry),
+    })),
+  );
+  clearStaleReviewEvidence(next);
+  clearFullCommitEvidence(next);
+  applyRecovery(next, "REVIEWING", "review", args.review_context, "review_context");
+  return next;
+}
+
+/** Whether an exact staged-scope expansion can be persisted without exceeding state caps. */
+export function stagedScopeReconciliationFeasible(
+  state: WorkflowState,
+  addedPaths: ReadonlyArray<string>,
+  repositoryRoot: string,
+): boolean {
+  let validatedPaths: ExactRepoPath[];
+  try {
+    validatedPaths = exactPaths(addedPaths, repositoryRoot);
+  } catch {
+    return false;
+  }
+  const approvedPaths = new Set<string>(state.approved_paths);
+  if (
+    validatedPaths.some((path) => approvedPaths.has(path)) ||
+    state.scope_expansions.length >= MAX_PATHS ||
+    state.approved_path_baselines.length + validatedPaths.length > MAX_PATHS
+  ) {
+    return false;
+  }
+  const resultingPaths = new Set([...state.approved_paths, ...validatedPaths]);
+  if (resultingPaths.size > MAX_PATHS) return false;
+  const combinedPaths = new Set([
+    ...(state.linked_continuation?.combined_review_paths ?? state.approved_paths),
+    ...validatedPaths,
+  ]);
+  return combinedPaths.size <= MAX_PATHS;
 }
 
 export function adoptDirtyScope(

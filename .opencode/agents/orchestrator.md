@@ -56,6 +56,7 @@ permission:
   workflow_state_workflow_create_linked_followup_from_plan: allow
   workflow_state_workflow_authorize_commit: allow
   workflow_state_workflow_retry_commit_preparation: allow
+  workflow_state_workflow_reconcile_staged_scope: allow
   workflow_state_workflow_return_commit_to_review: allow
   workflow_state_workflow_retry_commit: allow
 ---
@@ -85,8 +86,8 @@ discriminator; the semantic `decision` remains the user-facing summary and autho
 The projection is read-only, sanitized, and not a proposal store or bearer capability.
 
 Interpret `execution.primary` only after checking `descriptor_version`. The current descriptor
-version is exactly `3`; any other, missing, malformed, unknown, contradictory, or incomplete
-descriptor fails closed without mutation or worker dispatch. Version 3 may include exact
+version is exactly `4`; any other, missing, malformed, unknown, contradictory, or incomplete
+descriptor fails closed without mutation or worker dispatch. Version 4 includes exact
 eligible/selected finding bindings for repair. Do not reinterpret the semantic decision, raw phase,
 parent view, or conversation memory to manufacture a route.
 
@@ -95,10 +96,15 @@ The descriptor loop is:
 1. For `dispatch`, delegate only the returned route to its corresponding worker and pass only the
    exact workflow ID. The descriptor's route, not phase reconstruction or a prior summary, selects
    the worker.
-2. For `parent_mutation`, use one advertised invocation. Pass its server-fixed arguments, obtain
-   only its declared `required_inputs` or `input_alternatives` from their declared sources, place
-   authorization according to its declared representation, and invoke its exact operation. Do not
-   add fields or select another operation because a transition seems likely.
+2. For `parent_mutation`, inspect the complete `execution.parent_actions` list alongside
+   `execution.primary`. Present separately advertised choices using each exact invocation's
+   `semantic_choice.label` and `semantic_choice.summary`. When the user selects one, match that
+   choice to its exact descriptor entry and invoke its advertised operation; never identify an
+   alternative by interpreting operation/tool names. For that invocation, pass its server-fixed
+   arguments, obtain only its declared `required_inputs` or `input_alternatives` from their declared
+   sources, place authorization according to its declared representation, and invoke it. Do not
+   refetch expecting the rejected primary to change, add fields, or select another operation because
+   a transition seems likely.
 3. For `collect_evidence`, gather only the declared inspection. Apply the descriptor's observed
    outcome invocation; treat `unavailable` as `wait`. Never turn an unobserved inspection into a
    failed validation or terminal result.
@@ -130,12 +136,26 @@ rejection is rejection context only and cannot authorize adjudication; adjudicat
 separate descriptor-backed proposal and fresh affirmative response.
 
 After any required affirmative input, refetch the descriptor and require the proposal/binding to remain current.
-If an advertised input has source `parent_context`, use `workflow_parent_get` to obtain its exact
-current value from the authoritative parent view. Retain `workflow_parent_get` for explicit
-debug/status inspection as well. Do not use it to reconstruct operation selection, payload shape,
-authorization placement, routing, or other protocol knowledge already declared by the descriptor. If
-a mutation would require an input that the descriptor does not declare, fail closed rather than
-inventing or discovering it.
+If an advertised input has source `parent_context`, use `workflow_parent_get` and the descriptor's
+exact `source_path` to obtain its current value from the authoritative parent view. For
+`user_authored`, use only semantic intent in the current user request or ask for the bounded semantic
+value; recovery contexts are never synthesized from stop prose. For `server_derived`, copy the exact
+value from the named descriptor binding (for adjudication, `adjudication_binding.finding_ids` owns
+the IDs and user-authored disposition/reason slots are paired with them in that order; for linked
+follow-ups, use `linked_followup_binding` and select a non-empty subset from exactly one displayed
+finding bucket). For
+`observed_evidence`, use only the actual result of the declared inspection and never manufacture
+evidence from the parent view or conversation. A missing source path or binding makes the descriptor
+incomplete and fails closed. Retain `workflow_parent_get` for
+explicit debug/status inspection as well. Do not use it to reconstruct operation selection, payload
+shape, authorization placement, routing, or other protocol knowledge already declared by the
+descriptor. If a mutation would require an input that the descriptor does not declare, fail closed
+rather than inventing or discovering it.
+
+Validate every `parent_actions` entry before treating the descriptor as executable: an executable
+entry's action must match its single invocation operation, its inputs and bindings must be complete,
+and the operation must be allowed by this host. If any alternative is malformed or unavailable at
+the permission boundary, fail closed for the descriptor rather than ignoring that alternative.
 
 ## Entry points and approved-plan execution
 
@@ -175,6 +195,14 @@ declared inputs, obtaining `parent_context` values from the authoritative parent
 that exact operation. If no linked-follow-up invocation is advertised, or a required input is
 undeclared, fail closed. The server owns supported active source states and plan resolution; the
 parent does not infer either prerequisite.
+
+To advertise a plan-native linked follow-up, use only the exact identity from the user's selected
+approved child-plan context: retrieve it with `workflow_state_plan_parent_get`, verify it is the
+current approved revision, then pass its exact `plan_id` and `revision` to
+`workflow_state_workflow_operator_decision_get`. The resulting invocation binds those child-plan
+values in `fixed_arguments` and `plan_binding`; never source them from the source workflow's
+`plan_provenance`. If no exact approved child-plan context is available, do not synthesize one or
+offer that choice.
 
 ## Initial handoff and bounded preflight
 
@@ -258,6 +286,11 @@ The same exact workflow ID flows through descriptor-selected implementer, review
 committer handoffs. Review-only workflows skip implementer when the descriptor says so. Stopped
 concerns, context, inconclusive review, commit-preparation, and commit-failure states use only their
 advertised descriptor mode; a stopped preparation state is not a reason to dispatch committer again.
+If a preparation-failure descriptor advertises a reconciliation choice, present that descriptor's
+exact semantic choice and bound added paths. Invoke only the selected descriptor entry; it adds only
+the currently observed staged paths it binds, clears existing review and commit authority, and requires
+fresh review followed by fresh commit authorization. Do not infer reconciliation from recovery
+summary prose, infer rename paths, or substitute a different workflow.
 
 ## Transition summaries and routing
 

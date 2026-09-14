@@ -34,6 +34,14 @@ Rules:
   the managed submission: Workflow MCP observes and verifies authoritative Git HEAD itself. You may
   report the observed hash in your human-readable final report. Submit a result after every attempt,
   whether it succeeded or failed. Pass your current `expected_version` on every mutation.
+- If any local staged-scope, approved-path residue, or freshness check fails, do not commit, restage,
+  unstage, or repair the index. If the current committer view permits
+  `workflow_prepare_commit`, call it exactly once so Workflow MCP can persist and classify the
+  failure, then stop and report that result; the parent refreshes the operator descriptor. If the
+  committer view withholds the operation or Workflow MCP is unavailable, stop without mutation. This
+  applies even when a staged path is outside the reviewed scope. Never infer that such a path is a
+  rename source: only the parent can separately authorize exact descriptor-bound scope
+  reconciliation, which requires fresh review and fresh commit authorization.
 - If `workflow_prepare_commit` returns `STOPPED_COMMIT_PREPARATION`, treat its persisted stop
   context and permitted parent action as authoritative. Stop immediately, report the category and
   bounded diagnostic summary, and do not call `workflow_submit_commit_result`; no commit attempt
@@ -56,7 +64,10 @@ Rules:
 - Check applicable AGENTS.md instructions for generated or prohibited files before staging.
 - If an untracked file appears intentional and clearly belongs to the current change, include it.
 - If it is unclear whether a file belongs in the commit, leave it uncommitted and report it to the parent agent.
-- If the index already contains staged changes outside the approved scope, do not unstage or commit them. Stop and report the conflicting staged paths to the parent agent.
+- If the index already contains staged changes outside the approved scope, do not unstage or commit
+  them. When `workflow_prepare_commit` is permitted, call it once to persist the staged-scope failure,
+  then report the returned bounded stop summary to the parent agent. If it is not permitted, stop
+  without invoking it.
 - Never amend an existing commit unless explicitly instructed.
 - Never force push, push, rebase, reset, checkout, switch branches, or rewrite Git history.
 - Do not create multiple commits unless explicitly instructed.
@@ -82,16 +93,18 @@ Managed-mode commit references:
   equivalent tracker-completion keyword. Work-item provenance does not authorize tracker mutation.
 - Do not add a runtime commit-message formatter or call GitHub, Jira, Linear, or another tracker API.
 - Immediately before staging, inspect the sanitized committer view; receipt JSON and digest
-  comparisons are internal to Workflow MCP. If the internal freshness gate fails, stop without
-  modifying the index and request re-review. Define `intended_changed_paths` as the exact approved
+  comparisons are internal to Workflow MCP. If the internal freshness gate fails, do not modify the
+  index; if `workflow_prepare_commit` is permitted, call it once so the server persists the
+  stale-receipt stop, then stop and request re-review. Otherwise stop without invoking it. Define
+  `intended_changed_paths` as the exact approved
   paths recorded by the internal review receipt whose state is `added`, `modified`, or `deleted`.
   After staging and before the post-stage freshness check, verify that no approved-path unstaged
   differences or untracked approved paths remain
   (`git diff --quiet -- <approved paths>` and
   `git ls-files --others --exclude-standard -- <approved paths>`), and that the complete staged
   path set exactly equals `intended_changed_paths` (`git diff --cached --no-renames --name-only`). If either
-  check fails, stop without committing and report the mismatch. Do not invent reset, repair, or
-  unstage behavior.
+  check fails, call `workflow_prepare_commit` once to persist the mismatch, then stop without
+  committing. Do not invent reset, repair, or unstage behavior.
 
 Commit message:
 - Generate the message from the actual diff, not merely from filenames.

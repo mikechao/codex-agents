@@ -5,6 +5,7 @@ import type {
   CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
+  ExactRepoPath,
   GitCommitSha,
   WorkflowState,
   WorkflowVersion,
@@ -85,6 +86,8 @@ export function commitPreparationFailed(
   state: WorkflowState,
   category: CommitPreparationFailureCategory,
   summary: string,
+  recovery: "retry" | "review" | "choose" = category === "ERROR_STALE_RECEIPT" ? "review" : "retry",
+  reconciliationPaths: ReadonlyArray<ExactRepoPath> = [],
 ): WorkflowState {
   ensurePhase(state, "COMMIT_AUTHORIZED");
   const next = clone<WorkflowState>(state);
@@ -93,7 +96,8 @@ export function commitPreparationFailed(
     status: "COMMIT_PREPARATION_FAILED",
     category,
     summary: boundedString(summary, "preparation failure summary", 2000),
-    recovery: category === "ERROR_STALE_RECEIPT" ? "review" : "retry",
+    recovery,
+    ...(reconciliationPaths.length > 0 ? { reconciliation_paths: [...reconciliationPaths] } : {}),
     failed_at: isoNow(),
     failed_version: (state.version + 1) as WorkflowVersion,
     stopped_from: "COMMIT_AUTHORIZED",
@@ -122,7 +126,11 @@ export function prepareCommit(
   return next;
 }
 
-export function retryCommitPreparation(state: WorkflowState, input: unknown): WorkflowState {
+export function retryCommitPreparation(
+  state: WorkflowState,
+  input: unknown,
+  stagedScopeWithinReviewedPaths = false,
+): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("ERROR_INVALID_SHAPE", "commit preparation retry input is invalid");
   }
@@ -132,11 +140,18 @@ export function retryCommitPreparation(state: WorkflowState, input: unknown): Wo
     "commit preparation retry",
   );
   ensurePhase(state, "STOPPED_COMMIT_PREPARATION");
+  const recovery =
+    state.stop_context?.status === "COMMIT_PREPARATION_FAILED" ? state.stop_context.recovery : null;
   if (
-    state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
-    state.stop_context.recovery !== "retry"
+    recovery === null ||
+    (recovery !== "retry" && !(recovery === "choose" && stagedScopeWithinReviewedPaths))
   ) {
-    fail("ERROR_INVALID_TRANSITION", "preparation failure requires review recovery");
+    fail(
+      "ERROR_INVALID_TRANSITION",
+      recovery === "choose"
+        ? "out-of-scope staged paths must be removed before retrying preparation"
+        : "preparation failure requires the advertised recovery",
+    );
   }
   const next = clone<WorkflowState>(state);
   clearRetryablePreparedAttempt(next);

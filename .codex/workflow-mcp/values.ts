@@ -84,6 +84,7 @@ export const WORKFLOW_ACTION_VALUES = [
   "workflow_submit_commit_result",
   "workflow_reconcile_commit_result",
   "workflow_retry_commit_preparation",
+  "workflow_reconcile_staged_scope",
   "workflow_return_commit_to_review",
   "workflow_retry_commit",
 ] as const;

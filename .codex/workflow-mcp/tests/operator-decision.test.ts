@@ -245,6 +245,12 @@ const ACTION_PRECONDITION_AUDIT = {
     projection_readiness: [],
     payload_or_mutation_time: ["retry context"],
   },
+  workflow_reconcile_staged_scope: {
+    surface: "projected_transition",
+    durable_state: ["staged-scope recovery choice"],
+    projection_readiness: ["exact captured staged paths outside review authority"],
+    payload_or_mutation_time: ["review context", "user authorization"],
+  },
   workflow_return_commit_to_review: {
     surface: "projected_transition",
     durable_state: ["review-recovery preparation stop context"],
@@ -301,11 +307,16 @@ test("every workflow action has explicit descriptor treatment and authorization 
     const boundPaths =
       binding === null ? [] : binding.kind === "all" ? binding.paths : binding.common_paths;
     const boundAlternatives = binding?.kind === "exclusive_one_of" ? binding.alternatives : [];
+    const fixedArgumentPaths =
+      action === "workflow_create_linked_followup_from_plan" ? [["plan_id"], ["revision"]] : [];
     for (const path of [...boundPaths, ...boundAlternatives]) {
       assert.ok(
         metadata.inputs.some(
           (requiredInput) => JSON.stringify(requiredInput.path) === JSON.stringify(path),
         ) ||
+          fixedArgumentPaths.some(
+            (fixedPath) => JSON.stringify(fixedPath) === JSON.stringify(path),
+          ) ||
           alternatives.some((alternative) =>
             alternative.paths.some(
               (alternativePath) => JSON.stringify(alternativePath) === JSON.stringify(path),
@@ -319,12 +330,12 @@ test("every workflow action has explicit descriptor treatment and authorization 
 
 test("descriptor authorization metadata distinguishes payload fields from metadata-only approval", () => {
   assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.inputs, [
-    { path: ["reason"], source: "parent_context", required: true },
+    { path: ["reason"], source: "user_authored", required: true },
   ]);
   assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.input_alternatives, [
     {
       paths: [["added_paths"], ["adopted_paths"]],
-      source: "user",
+      source: "user_authored",
       required: true,
     },
   ]);
@@ -388,13 +399,13 @@ test("#143 recovery descriptors preserve exact operations, inputs, authorization
     const cases = [
       {
         action: "workflow_adopt_dirty_scope" as const,
-        inputs: [{ path: ["reason"], source: "parent_context", required: true }],
+        inputs: [{ path: ["reason"], source: "user_authored", required: true }],
         expected: ["adopt_dirty_scope", "collect_evidence", "resume_review", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_adopt_dirty_scope.authorization,
       },
       {
         action: "workflow_resume_implementation" as const,
-        inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+        inputs: [{ path: ["resume_context"], source: "user_authored", required: true }],
         expected: ["implement", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_resume_implementation.authorization,
       },
@@ -406,25 +417,25 @@ test("#143 recovery descriptors preserve exact operations, inputs, authorization
       },
       {
         action: "workflow_resume_review" as const,
-        inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+        inputs: [{ path: ["resume_context"], source: "user_authored", required: true }],
         expected: ["re_review", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_resume_review.authorization,
       },
       {
         action: "workflow_retry_commit_preparation" as const,
-        inputs: [{ path: ["retry_context"], source: "parent_context", required: true }],
+        inputs: [{ path: ["retry_context"], source: "user_authored", required: true }],
         expected: ["commit", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_retry_commit_preparation.authorization,
       },
       {
         action: "workflow_return_commit_to_review" as const,
-        inputs: [{ path: ["review_context"], source: "parent_context", required: true }],
+        inputs: [{ path: ["review_context"], source: "user_authored", required: true }],
         expected: ["re_review", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_return_commit_to_review.authorization,
       },
       {
         action: "workflow_retry_commit" as const,
-        inputs: [{ path: ["retry_context"], source: "parent_context", required: true }],
+        inputs: [{ path: ["retry_context"], source: "user_authored", required: true }],
         expected: ["commit", "wait"],
         authorization: ACTION_DESCRIPTOR_METADATA.workflow_retry_commit.authorization,
       },
@@ -461,7 +472,7 @@ test("#143 recovery descriptors preserve exact operations, inputs, authorization
         assert.deepEqual(invocation.input_alternatives, [
           {
             paths: [["added_paths"], ["adopted_paths"]],
-            source: "user",
+            source: "user_authored",
             required: true,
           },
         ]);
@@ -475,6 +486,60 @@ test("#143 recovery descriptors preserve exact operations, inputs, authorization
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("descriptor inputs identify user, observed, and exact parent-context sources", () => {
+  assert.equal(
+    ACTION_DESCRIPTOR_METADATA.workflow_resume_review.inputs[0]?.source,
+    "user_authored",
+  );
+  assert.equal(
+    ACTION_DESCRIPTOR_METADATA.workflow_retry_commit_preparation.inputs[0]?.source,
+    "user_authored",
+  );
+  assert.equal(
+    ACTION_DESCRIPTOR_METADATA.workflow_return_commit_to_review.inputs[0]?.source,
+    "user_authored",
+  );
+  assert.equal(
+    ACTION_DESCRIPTOR_METADATA.workflow_record_manual_validation.inputs[0]?.source,
+    "observed_evidence",
+  );
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_create_linked_followup.inputs, [
+    { path: ["objective"], source: "user_authored", required: true },
+    { path: ["approved_paths"], source: "user_authored", required: true },
+    { path: ["acceptance_criteria"], source: "user_authored", required: true },
+    { path: ["validation_requirements"], source: "user_authored", required: true },
+    { path: ["finding_ids"], source: "server_derived", required: true },
+  ]);
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_create_linked_followup_from_plan.inputs, [
+    { path: ["finding_ids"], source: "server_derived", required: true },
+  ]);
+  assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_adjudicate_findings.inputs, [
+    { path: ["findings", "*", "finding_id"], source: "server_derived", required: true },
+    { path: ["findings", "*", "disposition"], source: "user_authored", required: true },
+    { path: ["findings", "*", "reason"], source: "user_authored", required: true },
+  ]);
+  for (const metadata of Object.values(ACTION_DESCRIPTOR_METADATA)) {
+    for (const requiredInput of metadata.inputs) {
+      if (requiredInput.source === "parent_context") {
+        assert.ok(
+          requiredInput.source_path?.length,
+          "parent_context must name an exact source path",
+        );
+      }
+    }
+    const inputAlternatives =
+      "input_alternatives" in metadata ? (metadata.input_alternatives ?? []) : [];
+    for (const alternative of inputAlternatives) {
+      if (alternative.source === "parent_context") {
+        assert.ok(
+          alternative.source_path?.length,
+          "parent_context alternative must name a source path",
+        );
+      }
+    }
   }
 });
 
@@ -500,7 +565,7 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       next: { kind: "repair_required" },
     };
     const all = descriptorForLegality(state, legality);
-    assert.equal(all.descriptor_version, 3);
+    assert.equal(all.descriptor_version, 4);
     assert.equal(all.primary.mode, "parent_mutation");
     if (all.primary.mode !== "parent_mutation") throw new Error("expected repair mutation");
     assert.equal("specialization" in all.primary, true);
@@ -615,7 +680,21 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
     assert.ok(adjudication && adjudication.status === "executable");
     if (adjudication?.status !== "executable")
       throw new Error("expected executable adjudication descriptor");
-    assert.equal(adjudication.descriptor.invocations[0]?.operation, "workflow_adjudicate_findings");
+    const adjudicationInvocation = adjudication.descriptor.invocations[0];
+    assert.equal(adjudicationInvocation?.operation, "workflow_adjudicate_findings");
+    assert.deepEqual(adjudicationInvocation?.semantic_choice, {
+      id: "resolve_inconsistent_findings",
+      label: "Adjudicate the current blocking findings",
+      summary:
+        "Record user-authored dispositions for current blockers inconsistent with the approved contract or outside approved scope; this does not authorize repair.",
+    });
+    assert.deepEqual(adjudicationInvocation?.adjudication_binding, {
+      finding_ids: ["REPAIR-A", "REPAIR-B"],
+      user_input_paths: [
+        ["findings", "*", "disposition"],
+        ["findings", "*", "reason"],
+      ],
+    });
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -646,7 +725,6 @@ test("descriptor exposes secondary legal parent actions without changing primary
     assert.deepEqual(decision.execution.parent_actions.map((item) => item.action).sort(), [
       "workflow_authorize_commit",
       "workflow_create_linked_followup",
-      "workflow_create_linked_followup_from_plan",
     ]);
     assert.equal(
       decision.execution.parent_actions.every((item) => item.status === "executable"),
@@ -663,13 +741,33 @@ test("descriptor exposes secondary legal parent actions without changing primary
         kind: "all",
         paths: [
           ["objective"],
-          ["approved_plan"],
           ["approved_paths"],
           ["acceptance_criteria"],
           ["validation_requirements"],
           ["finding_ids"],
         ],
       },
+    });
+    assert.deepEqual(linked.descriptor.invocations[0]?.fixed_arguments, {
+      workflow_id: approved.workflow_id,
+      expected_version: approved.version,
+      approved_plan: null,
+    });
+    assert.deepEqual(linked.descriptor.invocations[0]?.semantic_choice, {
+      id: "start_direct_followup",
+      label: "Create a directly authored linked follow-up",
+      summary: "Authorize a narrow follow-up using the declared user-authored work fields.",
+    });
+    assert.deepEqual(linked.descriptor.invocations[0]?.linked_followup_binding, {
+      selection_rule: "nonempty_subset_from_one_bucket",
+      blocking_findings: [
+        {
+          finding_id: "BLOCKER-SECONDARY",
+          severity: "P1",
+          summary: "the operator needs a deterministic bounded decision",
+        },
+      ],
+      optional_findings: [],
     });
   } finally {
     store.close();
@@ -737,7 +835,7 @@ test("operator projection requests parent-owned manual evidence before review", 
     const collection = store.operatorDecisionGet(id).execution.primary;
     assert.equal(collection.mode, "collect_evidence");
     if (collection.mode !== "collect_evidence") throw new Error("expected evidence collection");
-    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 3);
+    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 4);
     assert.equal(collection.validation_id, "VAL-002");
     assert.equal(collection.outcomes.unavailable.mode, "wait");
     assert.equal(collection.outcomes.observed.passed.invocations.length, 1);
@@ -749,7 +847,7 @@ test("operator projection requests parent-owned manual evidence before review", 
       status: "passed",
     });
     assert.deepEqual(passed?.required_inputs, [
-      { path: ["evidence"], source: "parent_context", required: true },
+      { path: ["evidence"], source: "observed_evidence", required: true },
     ]);
     assert.deepEqual(passed?.authorization, {
       required: false,
@@ -809,8 +907,13 @@ test("operator projection requests parent-owned manual evidence before review", 
     if (recovery.mode !== "parent_mutation") throw new Error("expected recovery mutation");
     assert.deepEqual(recovery.invocations[0], {
       operation: "workflow_resume_review",
+      semantic_choice: {
+        id: "continue_review",
+        label: "Resume review with context",
+        summary: "Supply bounded context and resume the current review.",
+      },
       fixed_arguments: { workflow_id: id, expected_version: 2 },
-      required_inputs: [{ path: ["resume_context"], source: "parent_context", required: true }],
+      required_inputs: [{ path: ["resume_context"], source: "user_authored", required: true }],
       authorization: {
         required: true,
         representation: { kind: "metadata_only" },
@@ -1048,7 +1151,7 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.deepEqual(first.primary, { kind: "no_user_action", route: "implement" });
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
-    assert.equal(first.execution.descriptor_version, 3);
+    assert.equal(first.execution.descriptor_version, 4);
     assert.equal(first.execution.primary.mode, "dispatch");
     assert.deepEqual(first.execution.primary, {
       mode: "dispatch",

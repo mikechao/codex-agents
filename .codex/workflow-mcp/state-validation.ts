@@ -13,6 +13,7 @@ import {
   MAX_DETAIL,
   MAX_FINDINGS,
   MAX_PATHS,
+  MAX_REPO_PATH_LENGTH,
   MAX_TEXT,
   workItems,
 } from "./validation.js";
@@ -178,7 +179,12 @@ function pathList(value: unknown, allowEmpty: boolean): void {
   }
   let previous: string | null = null;
   for (const path of value) {
-    if (typeof path !== "string" || path.length === 0 || path.length > 300 || path.includes("\0")) {
+    if (
+      typeof path !== "string" ||
+      path.length === 0 ||
+      path.length > MAX_REPO_PATH_LENGTH ||
+      path.includes("\0")
+    ) {
       corrupt();
     }
     if (previous !== null && previous >= path) corrupt();
@@ -565,15 +571,11 @@ function stopContextShape(value: unknown): void {
   if (value === null || value === undefined) return;
   if (!isObject(value)) corrupt();
   if (value.status === "COMMIT_PREPARATION_FAILED") {
-    checkKeys(value, [
-      "status",
-      "category",
-      "summary",
-      "recovery",
-      "failed_at",
-      "failed_version",
-      "stopped_from",
-    ]);
+    checkKeys(
+      value,
+      ["status", "category", "summary", "recovery", "failed_at", "failed_version", "stopped_from"],
+      ["reconciliation_paths"],
+    );
     if (
       value.category !== "ERROR_STAGED_SCOPE" &&
       value.category !== "ERROR_STAGED_CONTENT" &&
@@ -581,17 +583,23 @@ function stopContextShape(value: unknown): void {
     ) {
       corrupt();
     }
-    if (value.recovery !== "retry" && value.recovery !== "review") corrupt();
+    if (value.recovery !== "retry" && value.recovery !== "review" && value.recovery !== "choose")
+      corrupt();
     if (value.stopped_from !== "COMMIT_AUTHORIZED") corrupt();
     if (!Number.isSafeInteger(value.failed_version) || (value.failed_version as number) < 0) {
       corrupt();
     }
     if (
       (value.category === "ERROR_STALE_RECEIPT" && value.recovery !== "review") ||
-      (value.category !== "ERROR_STALE_RECEIPT" && value.recovery !== "retry")
+      (value.category === "ERROR_STAGED_CONTENT" && value.recovery !== "retry") ||
+      (value.recovery === "choose" &&
+        (value.category !== "ERROR_STAGED_SCOPE" ||
+          !Array.isArray(value.reconciliation_paths) ||
+          (value.reconciliation_paths as unknown[]).length === 0))
     ) {
       corrupt();
     }
+    if (value.reconciliation_paths !== undefined) pathList(value.reconciliation_paths, true);
     bounded(value.summary, 2000);
     bounded(value.failed_at, 64);
     return;

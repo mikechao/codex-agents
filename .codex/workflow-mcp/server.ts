@@ -303,6 +303,7 @@ export const SERVER_TOOL_NAMES = [
   "workflow_create_from_plan",
   "workflow_adopt_dirty_scope",
   "workflow_expand_scope",
+  "workflow_reconcile_staged_scope",
   "workflow_create",
   "workflow_parent_get",
   "workflow_operator_decision_get",
@@ -485,7 +486,9 @@ export const toolDefinitions = [
         workflow_type: { type: "string", enum: [...WORKFLOW_TYPE_VALUES] },
         objective: { type: "string", minLength: 1, maxLength: 4000 },
         approved_plan: {
-          oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 1048576 }],
+          type: "null",
+          description:
+            "Direct linked follow-ups are null-plan; use the plan-native route for PlanArtifact authority.",
         },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
         acceptance_criteria: {
@@ -537,7 +540,7 @@ export const toolDefinitions = [
   {
     name: "workflow_operator_decision_get",
     description:
-      "Read a bounded semantic operator decision plus versioned executable next-action guidance for one workflow and its validated explicit linked lineage; an optional repair_finding_ids selection derives an exact subset repair proposal; this read-only projection never authorizes, dispatches, or mutates state, and its guidance is not a bearer capability.",
+      "Read a bounded semantic operator decision plus versioned executable next-action guidance for one workflow and its validated explicit linked lineage; optional repair_finding_ids derives an exact subset repair proposal, and optional child_plan_id/child_plan_revision bind a separately approved child PlanArtifact for the plan-native follow-up action; this read-only projection never authorizes, dispatches, or mutates state, and its guidance is not a bearer capability.",
     inputSchema: schema(
       {
         workflow_id: { type: "string" },
@@ -547,6 +550,8 @@ export const toolDefinitions = [
           minItems: 1,
           maxItems: 200,
         },
+        child_plan_id: planIdentityProperties.plan_id,
+        child_plan_revision: planIdentityProperties.revision,
       },
       ["workflow_id"],
     ),
@@ -890,7 +895,9 @@ export const toolDefinitions = [
         ...common.properties,
         objective: { type: "string", minLength: 1, maxLength: 4000 },
         approved_plan: {
-          oneOf: [{ type: "null" }, { type: "string", minLength: 1, maxLength: 1048576 }],
+          type: "null",
+          description:
+            "Direct linked follow-ups are null-plan; use the plan-native route for PlanArtifact authority.",
         },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
         acceptance_criteria: {
@@ -995,6 +1002,27 @@ export const toolDefinitions = [
       title: "Retry commit preparation",
       readOnlyHint: false,
       destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_reconcile_staged_scope",
+    description:
+      "Authorize the exact staged paths outside the reviewed scope, append them to workflow authority, and force a fresh review before commit authorization.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        added_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        review_context: { type: "string", minLength: 1, maxLength: 2000 },
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "added_paths", "review_context", "user_authorization"],
+    ),
+    annotations: {
+      title: "Reconcile staged scope",
+      readOnlyHint: false,
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: false,
     },
@@ -1122,7 +1150,12 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_create: (args) => store.create(args),
     workflow_parent_get: (args) => store.parentGet(args.workflow_id),
     workflow_operator_decision_get: (args) =>
-      store.operatorDecisionGet(args.workflow_id, args.repair_finding_ids),
+      store.operatorDecisionGet(
+        args.workflow_id,
+        args.repair_finding_ids,
+        args.child_plan_id,
+        args.child_plan_revision,
+      ),
     workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
     workflow_reviewer_get: (args) => store.reviewerGet(args.workflow_id),
     workflow_committer_get: (args) => store.committerGet(args.workflow_id),
@@ -1142,6 +1175,7 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_authorize_commit: (args) => store.authorizeCommit(args),
     workflow_prepare_commit: (args) => store.prepareCommit(args),
     workflow_retry_commit_preparation: (args) => store.retryCommitPreparation(args),
+    workflow_reconcile_staged_scope: (args) => store.reconcileStagedScope(args),
     workflow_return_commit_to_review: (args) => store.returnCommitToReview(args),
     workflow_submit_commit_result: (args) => store.submitCommitResult(args),
     workflow_reconcile_commit_result: (args) => store.reconcileCommitResult(args),

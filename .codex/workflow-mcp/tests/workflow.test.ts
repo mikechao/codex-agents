@@ -13,10 +13,10 @@ import {
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
-import { permittedNextActions } from "../transitions.js";
-import { objectDigest } from "../validation.js";
+import { permittedNextActions, stagedScopeReconciliationFeasible } from "../transitions.js";
+import { MAX_PATHS, MAX_REPO_PATH_LENGTH, objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
-import { deterministicReadiness } from "./workflow-state-fixtures.js";
+import { deterministicReadiness, workflowState } from "./workflow-state-fixtures.js";
 
 function input(git: (...args: string[]) => string, options: any = {}) {
   const paths = options.approved_paths ?? ["note.txt"];
@@ -561,7 +561,7 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
       "workflow_authorize_repair",
       "workflow_expand_scope",
     ]);
-    assert.equal(adjudicated.committed_execution.descriptor_version, 3);
+    assert.equal(adjudicated.committed_execution.descriptor_version, 4);
     assert.deepEqual(adjudicated.committed_execution.primary.repair_binding, {
       eligible_finding_ids: ["REPAIR-1"],
       selected_finding_ids: ["REPAIR-1"],
@@ -827,17 +827,31 @@ test("all blockers can be adjudicated directly into a fresh review", () => {
     writeFileSync(join(root, "note.txt"), "reviewed\n");
     const blocker = finding("PLAN-ONLY");
     review(store, created, undefined, "CHANGES_REQUESTED", [blocker]);
+    const decision = store.operatorDecisionGet(id);
+    const adjudication = decision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_adjudicate_findings",
+    );
+    assert.ok(adjudication && adjudication.status === "executable");
+    if (adjudication?.status !== "executable")
+      throw new Error("expected separately advertised adjudication alternative");
+    const invocation = adjudication.descriptor.invocations[0];
+    assert.deepEqual(invocation?.adjudication_binding?.finding_ids, ["PLAN-ONLY"]);
+    assert.deepEqual(invocation?.required_inputs, [
+      { path: ["findings", "*", "finding_id"], source: "server_derived", required: true },
+      { path: ["findings", "*", "disposition"], source: "user_authored", required: true },
+      { path: ["findings", "*", "reason"], source: "user_authored", required: true },
+    ]);
+    const serverBoundFindings = invocation?.adjudication_binding?.finding_ids.map(
+      (finding_id: string) => ({
+        finding_id,
+        disposition: "OUTSIDE_APPROVED_SCOPE",
+        reason: "the requested work is outside the approved scope",
+      }),
+    );
     assert.equal(
       store.adjudicateFindings({
-        workflow_id: id,
-        expected_version: store.parentGet(id).version,
-        findings: [
-          {
-            finding_id: "PLAN-ONLY",
-            disposition: "OUTSIDE_APPROVED_SCOPE",
-            reason: "the requested work is outside the approved scope",
-          },
-        ],
+        ...invocation?.fixed_arguments,
+        findings: serverBoundFindings,
         user_authorization: "User explicitly authorized this disposition",
       }).phase,
       "REVIEWING",
@@ -1923,6 +1937,357 @@ test("commit preparation failures distinguish staged scope, stale review, and re
   }
 });
 
+test("incomplete reviewed rename authority reconciles exact staged paths before fresh review", () => {
+  const { root, git } = fixture();
+  try {
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(
+      input(git, {
+        objective: "incomplete rename authority",
+        approved_paths: ["moved.txt"],
+      }),
+    );
+    implementation(store, created);
+    renameSync(join(root, "note.txt"), join(root, "moved.txt"));
+    writeFileSync(join(root, "moved.txt"), "complete rewrite with no rename similarity\n");
+    git("add", "-A");
+    assert.deepEqual(git("diff", "--cached", "--no-renames", "--name-status").split("\n"), [
+      "A\tmoved.txt",
+      "D\tnote.txt",
+    ]);
+    review(store, created);
+    store.authorizeCommit({
+      workflow_id: created.workflow_id,
+      expected_version: currentVersion(store, created.workflow_id),
+      user_authorization: "authorize reviewed destination",
+    });
+
+    const stopped = store.prepareCommit({
+      workflow_id: created.workflow_id,
+      expected_version: currentVersion(store, created.workflow_id),
+    });
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.stop_context.recovery, "choose");
+    assert.deepEqual(stopped.stop_context.reconciliation_paths, ["note.txt"]);
+    assert.deepEqual(deterministicParentActions(store, created.workflow_id), [
+      "workflow_reconcile_staged_scope",
+      "workflow_retry_commit_preparation",
+    ]);
+    const execution = store.operatorDecisionGet(created.workflow_id).execution;
+    assert.equal(execution.primary.mode, "parent_mutation");
+    if (execution.primary.mode !== "parent_mutation") throw new Error("expected recovery mutation");
+    assert.equal(execution.primary.selection, "choose_one");
+    const retry = execution.primary.invocations.find(
+      (invocation: any) => invocation.operation === "workflow_retry_commit_preparation",
+    );
+    assert.ok(retry);
+    const reconciliation = execution.primary.invocations.find(
+      (invocation: any) => invocation.operation === "workflow_reconcile_staged_scope",
+    );
+    assert.ok(reconciliation);
+    assert.deepEqual(reconciliation?.scope_reconciliation_binding, {
+      reviewed_paths: ["moved.txt"],
+      added_paths: ["note.txt"],
+    });
+    assert.deepEqual(reconciliation?.required_inputs, [
+      { path: ["added_paths"], source: "server_derived", required: true },
+      { path: ["review_context"], source: "user_authored", required: true },
+    ]);
+    const versionBeforeBlockedRetry = currentVersion(store, created.workflow_id);
+    assert.equal(
+      category(() =>
+        store.retryCommitPreparation({
+          ...retry?.fixed_arguments,
+          retry_context: "repeat the incomplete reviewed scope",
+        }),
+      ),
+      "ERROR_INVALID_TRANSITION",
+    );
+    assert.equal(currentVersion(store, created.workflow_id), versionBeforeBlockedRetry);
+    const retryAction = store
+      .operatorDecisionGet(created.workflow_id)
+      .execution.parent_actions.find((action: any) => action.action === retry?.operation);
+    assert.equal(retryAction?.status, "executable");
+    const reconciliationMutation = {
+      ...reconciliation?.fixed_arguments,
+      added_paths: reconciliation?.scope_reconciliation_binding.added_paths,
+      review_context: "reconcile the complete move scope",
+      user_authorization: "authorize the source and destination paths",
+    };
+    store.reconcileStagedScope(reconciliationMutation);
+    assert.deepEqual(store.parentGet(created.workflow_id).approved_paths, [
+      "moved.txt",
+      "note.txt",
+    ]);
+    assert.equal(store.parentGet(created.workflow_id).phase, "REVIEWING");
+    review(store, created);
+    store.authorizeCommit({
+      workflow_id: created.workflow_id,
+      expected_version: currentVersion(store, created.workflow_id),
+      user_authorization: "authorize the freshly reviewed move",
+    });
+    assert.equal(
+      store.prepareCommit({
+        workflow_id: created.workflow_id,
+        expected_version: currentVersion(store, created.workflow_id),
+      }).phase,
+      "COMMIT_PREPARED",
+    );
+    assert.equal(
+      category(() =>
+        store.retryCommitPreparation({
+          workflow_id: created.workflow_id,
+          expected_version: currentVersion(store, created.workflow_id),
+          retry_context: "repeat the incomplete reviewed scope",
+        }),
+      ),
+      "ERROR_INVALID_TRANSITION",
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reconciliation feasibility respects persisted and combined path caps", () => {
+  const state = workflowState() as any;
+  assert.equal(stagedScopeReconciliationFeasible(state, ["outside.txt"], "/repo"), true);
+
+  const fullApprovedScope = structuredClone(state);
+  fullApprovedScope.approved_paths = Array.from(
+    { length: MAX_PATHS },
+    (_, index) => `approved-${index}.txt`,
+  );
+  assert.equal(
+    stagedScopeReconciliationFeasible(fullApprovedScope, ["outside.txt"], "/repo"),
+    false,
+  );
+
+  const fullCombinedScope = structuredClone(state);
+  fullCombinedScope.linked_continuation = {
+    combined_review_paths: Array.from({ length: MAX_PATHS }, (_, index) => `combined-${index}.txt`),
+  };
+  assert.equal(
+    stagedScopeReconciliationFeasible(fullCombinedScope, ["outside.txt"], "/repo"),
+    false,
+  );
+
+  const fullExpansionHistory = structuredClone(state);
+  fullExpansionHistory.scope_expansions = Array.from({ length: MAX_PATHS }, () => ({}));
+  assert.equal(
+    stagedScopeReconciliationFeasible(fullExpansionHistory, ["outside.txt"], "/repo"),
+    false,
+  );
+
+  const fullBaselineHistory = structuredClone(state);
+  fullBaselineHistory.approved_path_baselines = Array.from({ length: MAX_PATHS }, () => ({}));
+  assert.equal(
+    stagedScopeReconciliationFeasible(fullBaselineHistory, ["outside.txt"], "/repo"),
+    false,
+  );
+
+  assert.equal(
+    stagedScopeReconciliationFeasible(
+      state,
+      Array.from({ length: MAX_PATHS + 1 }, (_, index) => `outside-${index}.txt`),
+      "/repo",
+    ),
+    false,
+  );
+});
+
+test("non-persistable staged paths retain retry-only recovery without reconciliation", () => {
+  const longPath = `${"a".repeat(100)}/${"b".repeat(100)}/${"c".repeat(100)}/unsupported.txt`;
+  assert.ok(longPath.length > MAX_REPO_PATH_LENGTH);
+  const invalidPaths = [
+    { label: "over-length", path: longPath },
+    { label: "backslash", path: "bad\\name.txt" },
+    { label: "asterisk", path: "bad*.txt" },
+    { label: "question mark", path: "bad?.txt" },
+    { label: "brackets", path: "bad[1].txt" },
+  ];
+
+  for (const candidate of invalidPaths) {
+    const { root, git } = fixture();
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    try {
+      const workflow = authorized(store, root, git);
+      const parentDirectory = candidate.path.slice(0, candidate.path.lastIndexOf("/"));
+      if (parentDirectory) mkdirSync(join(root, parentDirectory), { recursive: true });
+      writeFileSync(join(root, candidate.path), "unsupported staged path\n");
+      git("add", "-A");
+
+      const stopped = store.prepareCommit({
+        workflow_id: workflow.id,
+        expected_version: currentVersion(store, workflow.id),
+      });
+      assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION", candidate.label);
+      assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE", candidate.label);
+      assert.equal(stopped.stop_context.recovery, "retry", candidate.label);
+      assert.equal("reconciliation_paths" in stopped.stop_context, false, candidate.label);
+
+      const decision = store.operatorDecisionGet(workflow.id);
+      assert.deepEqual(
+        decision.execution.parent_actions.map((action: any) => action.action),
+        ["workflow_retry_commit_preparation"],
+        candidate.label,
+      );
+      assert.deepEqual(
+        decision.execution.primary.invocations.map((invocation: any) => invocation.operation),
+        ["workflow_retry_commit_preparation"],
+        candidate.label,
+      );
+
+      git("--literal-pathspecs", "reset", "-q", "--", candidate.path);
+      const retry = decision.execution.primary.invocations[0];
+      const retried = store.retryCommitPreparation({
+        ...retry.fixed_arguments,
+        retry_context: "remove unsupported accidental staging and preserve reviewed authority",
+      });
+      assert.equal(retried.phase, "COMMIT_AUTHORIZED", candidate.label);
+      assert.equal(
+        store.prepareCommit({
+          workflow_id: workflow.id,
+          expected_version: currentVersion(store, workflow.id),
+        }).phase,
+        "COMMIT_PREPARED",
+        candidate.label,
+      );
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("infeasible staged reconciliation advertises retry after accidental staging is removed", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const approvedPaths = [
+      "note.txt",
+      ...Array.from({ length: MAX_PATHS - 1 }, (_, index) => `capacity-${index}.txt`),
+    ];
+    const workflow = authorized(store, root, git, { approved_paths: approvedPaths });
+    writeFileSync(join(root, "outside.txt"), "accidental staged content\n");
+    git("add", "--", ...approvedPaths, "outside.txt");
+
+    const stopped = store.prepareCommit({
+      workflow_id: workflow.id,
+      expected_version: currentVersion(store, workflow.id),
+    });
+    assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.stop_context.recovery, "retry");
+    assert.equal("reconciliation_paths" in stopped.stop_context, false);
+    const decision = store.operatorDecisionGet(workflow.id);
+    assert.deepEqual(
+      decision.execution.parent_actions.map((action: any) => action.action),
+      ["workflow_retry_commit_preparation"],
+    );
+    assert.deepEqual(
+      decision.execution.primary.invocations.map((invocation: any) => invocation.operation),
+      ["workflow_retry_commit_preparation"],
+    );
+
+    git("reset", "-q", "--", "outside.txt");
+    const retry = decision.execution.primary.invocations[0];
+    const retried = store.retryCommitPreparation({
+      ...retry.fixed_arguments,
+      retry_context: "remove accidental out-of-scope staging and preserve reviewed authority",
+    });
+    assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    assert.equal(
+      store.prepareCommit({
+        workflow_id: workflow.id,
+        expected_version: currentVersion(store, workflow.id),
+      }).phase,
+      "COMMIT_PREPARED",
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("combined-review path overflow suppresses reconciliation and preserves unchanged retry", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const sourcePaths = Array.from({ length: MAX_PATHS - 1 }, (_, index) => `source-${index}.txt`);
+    const source = store.create(input(git, { approved_paths: sourcePaths }));
+    implementation(store, source);
+    for (const path of sourcePaths) writeFileSync(join(root, path), `${path}\n`);
+    const optional = finding("COMBINED-LIMIT-OPTIONAL", "P3", false);
+    review(store, source, undefined, "APPROVED", [], [optional]);
+
+    const child = store.createLinkedFollowup({
+      workflow_id: source.workflow_id,
+      expected_version: currentVersion(store, source.workflow_id),
+      objective: "bounded child remediation",
+      approved_plan: null,
+      approved_paths: ["remediation.txt"],
+      acceptance_criteria: ["resolve the selected finding"],
+      validation_requirements: [
+        { description: "verify remediation", kind: "command", argv: ["bun", "run", "check"] },
+      ],
+      finding_ids: [optional.finding_id],
+      user_authorization: "authorize bounded remediation",
+    });
+    implementation(store, child, undefined, "DONE", { [optional.finding_id]: "resolved" });
+    writeFileSync(join(root, "remediation.txt"), "remediated\n");
+    assert.equal(
+      review(store, child, undefined, "APPROVED", [], [], {
+        [optional.finding_id]: "resolved",
+      }).phase,
+      "REVIEWING",
+    );
+    assert.equal(review(store, child).phase, "STOPPED_APPROVED");
+    assert.equal(
+      store.parentGet(child.workflow_id).linked_continuation.combined_review_paths.length,
+      MAX_PATHS,
+    );
+    store.authorizeCommit({
+      workflow_id: child.workflow_id,
+      expected_version: currentVersion(store, child.workflow_id),
+      user_authorization: "authorize the freshly combined-reviewed change",
+    });
+
+    writeFileSync(join(root, "outside.txt"), "accidental staged content\n");
+    git("add", "--", ...sourcePaths, "remediation.txt", "outside.txt");
+    const stopped = store.prepareCommit({
+      workflow_id: child.workflow_id,
+      expected_version: currentVersion(store, child.workflow_id),
+    });
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.equal(stopped.stop_context.recovery, "retry");
+    assert.equal("reconciliation_paths" in stopped.stop_context, false);
+    assert.deepEqual(
+      store
+        .operatorDecisionGet(child.workflow_id)
+        .execution.parent_actions.map((action: any) => action.action),
+      ["workflow_retry_commit_preparation"],
+    );
+
+    git("reset", "-q", "--", "outside.txt");
+    store.retryCommitPreparation({
+      workflow_id: child.workflow_id,
+      expected_version: currentVersion(store, child.workflow_id),
+      retry_context: "remove accidental staging and preserve the approved combined scope",
+    });
+    assert.equal(
+      store.prepareCommit({
+        workflow_id: child.workflow_id,
+        expected_version: currentVersion(store, child.workflow_id),
+      }).phase,
+      "COMMIT_PREPARED",
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("commit preparation store matrix preserves Git state and routes every failure", () => {
   const scopeCases = [
     {
@@ -1963,15 +2328,22 @@ test("commit preparation store matrix preserves Git state and routes every failu
       });
       assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION", candidate.name);
       assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE", candidate.name);
-      assert.equal(stopped.stop_context.recovery, "retry", candidate.name);
+      assert.equal(
+        stopped.stop_context.recovery,
+        candidate.name === "extra and untracked" ? "choose" : "retry",
+        candidate.name,
+      );
       assert.equal(stopped.commit_preparation, null);
       assert.equal(stopped.commit_result, null);
       assert.equal(git("rev-parse", "HEAD"), headBefore, candidate.name);
       assert.equal(git("status", "--porcelain"), statusBefore, candidate.name);
       assert.equal(git("diff", "--cached", "--name-status"), stagedBefore, candidate.name);
-      assert.deepEqual(deterministicParentActions(store, id), [
-        "workflow_retry_commit_preparation",
-      ]);
+      assert.deepEqual(
+        deterministicParentActions(store, id),
+        candidate.name === "extra and untracked"
+          ? ["workflow_reconcile_staged_scope", "workflow_retry_commit_preparation"]
+          : ["workflow_retry_commit_preparation"],
+      );
       if (candidate.name === "empty") {
         const version = stopped.version;
         store.close();
@@ -1982,12 +2354,36 @@ test("commit preparation store matrix preserves Git state and routes every failu
         assert.equal(currentVersion(store, id), version);
         assert.equal(store.audit(id).at(-1).event_type, "COMMIT_PREPARATION_FAILED");
       }
+      if (candidate.name === "extra and untracked") {
+        const versionBeforeBlockedRetry = currentVersion(store, id);
+        assert.equal(
+          category(() =>
+            store.retryCommitPreparation({
+              workflow_id: id,
+              expected_version: versionBeforeBlockedRetry,
+              retry_context: "preserve approved scope after accidental staging",
+            }),
+          ),
+          "ERROR_INVALID_TRANSITION",
+        );
+        assert.equal(currentVersion(store, id), versionBeforeBlockedRetry);
+        git("reset", "-q", "--", "untracked.txt");
+      }
       const retried = store.retryCommitPreparation({
         workflow_id: id,
         expected_version: currentVersion(store, id),
         retry_context: `repair ${candidate.name}`,
       });
       assert.equal(retried.phase, "COMMIT_AUTHORIZED", candidate.name);
+      if (candidate.name === "extra and untracked") {
+        assert.equal(
+          store.prepareCommit({
+            workflow_id: id,
+            expected_version: currentVersion(store, id),
+          }).phase,
+          "COMMIT_PREPARED",
+        );
+      }
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -2061,6 +2457,15 @@ test("commit preparation store matrix preserves Git state and routes every failu
       });
       assert.equal(stopped.stop_context.category, "ERROR_STALE_RECEIPT", candidate.name);
       assert.equal(stopped.stop_context.recovery, "review", candidate.name);
+      assert.equal("reconciliation_paths" in stopped.stop_context, false, candidate.name);
+      assert.doesNotMatch(stopped.stop_context.summary, /rename|reconcil/iu, candidate.name);
+      const staleDecision = store.operatorDecisionGet(workflow.id);
+      assert.equal(
+        staleDecision.recovery_summary.choice,
+        "return_commit_to_review",
+        candidate.name,
+      );
+      assert.doesNotMatch(JSON.stringify(staleDecision), /rename reconciliation/iu, candidate.name);
       assert.deepEqual(deterministicParentActions(store, workflow.id), [
         "workflow_return_commit_to_review",
       ]);

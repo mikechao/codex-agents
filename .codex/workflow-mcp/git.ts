@@ -762,8 +762,38 @@ export function createReceipt(
   }
 }
 
+/** Return clean HEAD-side entries for newly authorized paths, including deleted move sources. */
+export function baselineReceiptPaths(
+  root: string,
+  expectedPaths: ReadonlyArray<ExactRepoPath>,
+  baseHead: GitCommitSha,
+): ChangeReceipt["paths"] {
+  const paths = [...expectedPaths].sort();
+  return paths.map((path) => {
+    const head = treeEntry(root, baseHead, path);
+    return head
+      ? {
+          path,
+          state: "unchanged" as const,
+          kind: head.mode === "120000" ? ("symlink" as const) : ("file" as const),
+          mode: head.mode as GitFileMode,
+          digest: blobDigest(root, head.object as GitBlobSha),
+        }
+      : { path, state: "absent" as const, kind: "missing" as const };
+  });
+}
+
 export function stagedPaths(root: string): ExactRepoPath[] {
   return exactChangedPaths(root, ["diff", "--cached"]);
+}
+
+/** Return exact staged paths outside the reviewed authority, independent of Git rename detection. */
+export function stagedPathsOutsideScope(
+  root: string,
+  reviewedPaths: ReadonlyArray<ExactRepoPath>,
+): ExactRepoPath[] {
+  const reviewed = new Set(reviewedPaths);
+  return stagedPaths(root).filter((path) => !reviewed.has(path));
 }
 
 /** Return approved paths whose index entry differs from HEAD, including staged-only changes. */

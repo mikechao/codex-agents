@@ -38,6 +38,7 @@ import {
   stagedEntriesAsync,
   stagedPaths,
   stagedPathsAsync,
+  stagedPathsOutsideScope,
   verifyBranchName,
   verifyPreparedCommit,
   verifyRange,
@@ -717,6 +718,7 @@ test("stagedPaths preserves both sides of byte-identical renames", () => {
     git("add", ".");
     git("commit", "-qm", "base");
     git("mv", "old.ts", "new.ts");
+    write("new.ts", "completely rewritten\n");
 
     assert.deepEqual(stagedPaths(root), ["new.ts", "old.ts"]);
 
@@ -725,6 +727,34 @@ test("stagedPaths preserves both sides of byte-identical renames", () => {
     git("config", "diff.renames", "true");
     git("config", "diff.renamelimit", "1");
     assert.deepEqual(stagedPaths(root), ["new.ts", "old.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stagedPathsOutsideScope preserves exact delete/add authority without rename detection", () => {
+  const { root, git, write } = fixture();
+  try {
+    write("old.ts", "same\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    git("mv", "old.ts", "new.ts");
+    write("new.ts", "complete rewrite with no rename similarity\n");
+    git("add", "-A");
+    assert.deepEqual(git("diff", "--cached", "--no-renames", "--name-status").split("\n"), [
+      "A\tnew.ts",
+      "D\told.ts",
+    ]);
+
+    assert.deepEqual(stagedPathsOutsideScope(root, ["new.ts" as ExactRepoPath]), ["old.ts"]);
+    assert.deepEqual(
+      stagedPathsOutsideScope(root, ["old.ts" as ExactRepoPath, "new.ts" as ExactRepoPath]),
+      [],
+    );
+    assert.deepEqual(stagedPathsOutsideScope(root, ["other.ts" as ExactRepoPath]), [
+      "new.ts",
+      "old.ts",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

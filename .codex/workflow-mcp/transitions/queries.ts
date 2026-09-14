@@ -275,6 +275,7 @@ const ACTION_MATRIX: Partial<
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
     STOPPED_COMMIT_PREPARATION: [
       "workflow_retry_commit_preparation",
+      "workflow_reconcile_staged_scope",
       "workflow_return_commit_to_review",
     ],
   },
@@ -315,6 +316,7 @@ export type WorkflowNextStep =
   | { kind: "finalize_repair_exhausted" }
   | { kind: "bounded_continuation" }
   | { kind: "recovery"; action: WorkflowAction }
+  | { kind: "recovery_choice"; actions: WorkflowAction[] }
   | { kind: "authorize_commit" }
   | { kind: "reconcile_commit" }
   | {
@@ -553,9 +555,15 @@ function actionsForRole(
     actions = actions.filter((action) =>
       recovery === "retry"
         ? action === "workflow_retry_commit_preparation"
-        : recovery === "review"
-          ? action === "workflow_return_commit_to_review"
-          : false,
+        : recovery === "choose"
+          ? (action === "workflow_reconcile_staged_scope" ||
+              action === "workflow_retry_commit_preparation") &&
+            (state.stop_context?.status === "COMMIT_PREPARATION_FAILED"
+              ? (state.stop_context.reconciliation_paths?.length ?? 0)
+              : 0) > 0
+          : recovery === "review"
+            ? action === "workflow_return_commit_to_review"
+            : false,
     );
     if (recovery === "review" && readiness.commit_review_return?.status !== "ready") actions = [];
   }
@@ -655,6 +663,7 @@ function nextStep(
     "workflow_resume_review",
     "workflow_retry_commit",
     "workflow_retry_commit_preparation",
+    "workflow_reconcile_staged_scope",
     "workflow_return_commit_to_review",
   ];
   if (
@@ -666,6 +675,16 @@ function nextStep(
     state.phase === "STOPPED_COMMIT_PREPARATION"
   ) {
     const available = actions.parent.filter((action) => recoveries.includes(action));
+    if (
+      state.phase === "STOPPED_COMMIT_PREPARATION" &&
+      state.stop_context?.status === "COMMIT_PREPARATION_FAILED" &&
+      state.stop_context.recovery === "choose" &&
+      available.length > 1
+    ) {
+      return available.length > 0
+        ? { kind: "recovery_choice", actions: available }
+        : { kind: "unsupported", reason: "no supported recovery is available" };
+    }
     return available.length === 1
       ? { kind: "recovery", action: available[0] as WorkflowAction }
       : {

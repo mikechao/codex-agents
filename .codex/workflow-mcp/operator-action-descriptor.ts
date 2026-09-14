@@ -7,6 +7,7 @@ import {
 import type {
   FindingId,
   OperatorActionDescriptorMetadata,
+  OperatorAdjudicationBinding,
   OperatorAuthorizationBinding,
   OperatorAuthorizationMetadata,
   OperatorBindingReference,
@@ -15,12 +16,15 @@ import type {
   OperatorExpectedNext,
   OperatorInputAlternative,
   OperatorInputSource,
+  OperatorLinkedFollowupBinding,
   OperatorMutationInvocation,
   OperatorNextActionDescriptor,
   OperatorParentActionDescriptor,
   OperatorParentMutationOperation,
+  OperatorPlanBinding,
   OperatorRepairAuthorizationDescriptor,
   OperatorRequiredInput,
+  OperatorScopeReconciliationBinding,
   OperatorStaleBinding,
   OperatorWorkerDispatchOperation,
   ValidationRequirementId,
@@ -83,6 +87,17 @@ const input = (path: string[], source: OperatorInputSource): OperatorRequiredInp
   required: true,
 });
 
+function linkedFindingSummary(finding: {
+  impact: string;
+  remediation: string;
+  violated_requirement: string;
+}): string {
+  const summary = (finding.impact || finding.remediation || finding.violated_requirement)
+    .replace(/\s+/gu, " ")
+    .trim();
+  return summary.length <= 240 ? summary : `${summary.slice(0, 239)}…`;
+}
+
 const inputAlternative = (
   paths: string[][],
   source: OperatorInputSource,
@@ -114,15 +129,15 @@ export const ACTION_DESCRIPTOR_METADATA = {
       [["reason"]],
       [["added_paths"], ["adopted_paths"]],
     ),
-    inputs: [input(["reason"], "parent_context")],
-    input_alternatives: [inputAlternative([["added_paths"], ["adopted_paths"]], "user")],
+    inputs: [input(["reason"], "user_authored")],
+    input_alternatives: [inputAlternative([["added_paths"], ["adopted_paths"]], "user_authored")],
   },
   workflow_expand_scope: {
     classification: "descriptorized_in_142",
     mode: "parent_mutation",
     operation: "workflow_expand_scope",
     authorization: fieldAuthorization(["user_authorization"], [["added_paths"], ["reason"]]),
-    inputs: [input(["added_paths"], "user"), input(["reason"], "parent_context")],
+    inputs: [input(["added_paths"], "user_authored"), input(["reason"], "user_authored")],
   },
   workflow_parent_get: {
     classification: "protocol_or_query_only",
@@ -166,14 +181,14 @@ export const ACTION_DESCRIPTOR_METADATA = {
     mode: "collect_evidence",
     operation: "workflow_record_manual_validation",
     authorization: noAuthorization(),
-    inputs: [input(["evidence"], "parent_context")],
+    inputs: [input(["evidence"], "observed_evidence")],
   },
   workflow_resume_implementation: {
     classification: "descriptorized_in_143",
     mode: "parent_mutation",
     operation: "workflow_resume_implementation",
     authorization: metadataAuthorization([["resume_context"]]),
-    inputs: [input(["resume_context"], "parent_context")],
+    inputs: [input(["resume_context"], "user_authored")],
   },
   workflow_accept_concerns: {
     classification: "descriptorized_in_143",
@@ -226,15 +241,26 @@ export const ACTION_DESCRIPTOR_METADATA = {
     classification: "descriptorized_in_144",
     mode: "parent_mutation",
     operation: "workflow_adjudicate_findings",
-    authorization: fieldAuthorization(["user_authorization"], [["findings"]]),
-    inputs: [input(["findings"], "parent_context")],
+    authorization: fieldAuthorization(
+      ["user_authorization"],
+      [
+        ["findings", "*", "finding_id"],
+        ["findings", "*", "disposition"],
+        ["findings", "*", "reason"],
+      ],
+    ),
+    inputs: [
+      input(["findings", "*", "finding_id"], "server_derived"),
+      input(["findings", "*", "disposition"], "user_authored"),
+      input(["findings", "*", "reason"], "user_authored"),
+    ],
   },
   workflow_resume_review: {
     classification: "descriptorized_in_143",
     mode: "parent_mutation",
     operation: "workflow_resume_review",
     authorization: metadataAuthorization([["resume_context"]]),
-    inputs: [input(["resume_context"], "parent_context")],
+    inputs: [input(["resume_context"], "user_authored")],
   },
   workflow_finalize_repair_exhausted: {
     classification: "descriptorized_in_142",
@@ -251,7 +277,6 @@ export const ACTION_DESCRIPTOR_METADATA = {
       ["user_authorization"],
       [
         ["objective"],
-        ["approved_plan"],
         ["approved_paths"],
         ["acceptance_criteria"],
         ["validation_requirements"],
@@ -259,11 +284,10 @@ export const ACTION_DESCRIPTOR_METADATA = {
       ],
     ),
     inputs: [
-      input(["objective"], "user"),
-      input(["approved_plan"], "parent_context"),
-      input(["approved_paths"], "user"),
-      input(["acceptance_criteria"], "user"),
-      input(["validation_requirements"], "user"),
+      input(["objective"], "user_authored"),
+      input(["approved_paths"], "user_authored"),
+      input(["acceptance_criteria"], "user_authored"),
+      input(["validation_requirements"], "user_authored"),
       input(["finding_ids"], "server_derived"),
     ],
   },
@@ -275,11 +299,7 @@ export const ACTION_DESCRIPTOR_METADATA = {
       ["user_authorization"],
       [["plan_id"], ["revision"], ["finding_ids"]],
     ),
-    inputs: [
-      input(["plan_id"], "parent_context"),
-      input(["revision"], "parent_context"),
-      input(["finding_ids"], "server_derived"),
-    ],
+    inputs: [input(["finding_ids"], "server_derived")],
   },
   workflow_authorize_commit: {
     classification: "descriptorized_in_142",
@@ -314,21 +334,31 @@ export const ACTION_DESCRIPTOR_METADATA = {
     mode: "parent_mutation",
     operation: "workflow_retry_commit_preparation",
     authorization: metadataAuthorization([["retry_context"]]),
-    inputs: [input(["retry_context"], "parent_context")],
+    inputs: [input(["retry_context"], "user_authored")],
+  },
+  workflow_reconcile_staged_scope: {
+    classification: "descriptorized_in_143",
+    mode: "parent_mutation",
+    operation: "workflow_reconcile_staged_scope",
+    authorization: fieldAuthorization(
+      ["user_authorization"],
+      [["added_paths"], ["review_context"]],
+    ),
+    inputs: [input(["added_paths"], "server_derived"), input(["review_context"], "user_authored")],
   },
   workflow_return_commit_to_review: {
     classification: "descriptorized_in_143",
     mode: "parent_mutation",
     operation: "workflow_return_commit_to_review",
     authorization: metadataAuthorization([["review_context"]]),
-    inputs: [input(["review_context"], "parent_context")],
+    inputs: [input(["review_context"], "user_authored")],
   },
   workflow_retry_commit: {
     classification: "descriptorized_in_143",
     mode: "parent_mutation",
     operation: "workflow_retry_commit",
     authorization: metadataAuthorization([["retry_context"]]),
-    inputs: [input(["retry_context"], "parent_context")],
+    inputs: [input(["retry_context"], "user_authored")],
   },
 } as const satisfies Record<WorkflowAction, DescriptorActionMetadata>;
 
@@ -351,7 +381,8 @@ function referencesFor(
   if (
     action === "workflow_expand_scope" ||
     action === "workflow_create_linked_followup" ||
-    action === "workflow_create_linked_followup_from_plan"
+    action === "workflow_create_linked_followup_from_plan" ||
+    action === "workflow_reconcile_staged_scope"
   ) {
     references.push({ kind: "scope", paths: [...state.approved_paths] });
     references.push({
@@ -428,16 +459,23 @@ function staleBinding(
 function fixedArguments(
   state: WorkflowState,
   action: WorkflowAction,
-): Record<string, string | number> {
+  planIdentity?: OperatorPlanBinding,
+): Record<string, string | number | null> {
   const current = identity(state);
   if (!current) throw new Error("descriptor requires a persisted workflow identity");
-  const fixed: Record<string, string | number> = {
+  const fixed: Record<string, string | number | null> = {
     workflow_id: current.workflow_id,
     expected_version: current.version,
   };
   if (action === "workflow_reconcile_commit_result" && state.commit_preparation) {
     fixed.attempt_id = state.commit_preparation.attempt_id;
   }
+  if (action === "workflow_create_linked_followup_from_plan") {
+    if (!planIdentity) throw new Error("plan-native follow-up requires an approved child plan");
+    fixed.plan_id = planIdentity.plan_id;
+    fixed.revision = planIdentity.revision;
+  }
+  if (action === "workflow_create_linked_followup") fixed.approved_plan = null;
   return fixed;
 }
 
@@ -455,6 +493,8 @@ function expectedAfter(action: OperatorParentMutationOperation): OperatorExpecte
     case "workflow_retry_commit":
       return ["commit", "wait"];
     case "workflow_return_commit_to_review":
+      return ["re_review", "wait"];
+    case "workflow_reconcile_staged_scope":
       return ["re_review", "wait"];
     case "workflow_expand_scope":
       return ["implement", "review", "re_review", "wait"];
@@ -505,6 +545,7 @@ function invocation(
   state: WorkflowState,
   action: OperatorParentMutationOperation,
   selectedFindingIds?: ReadonlyArray<FindingId>,
+  planIdentity?: OperatorPlanBinding,
 ): OperatorMutationInvocation {
   const metadata = ACTION_DESCRIPTOR_METADATA[action];
   if (metadata.mode !== "parent_mutation")
@@ -514,12 +555,52 @@ function invocation(
       ? repairProposalSelection(state, selectedFindingIds)
       : null;
   const proposal = selection ? repairProposalForFindings(selection.selected_findings) : null;
+  const adjudicationBinding: OperatorAdjudicationBinding | null =
+    action === "workflow_adjudicate_findings"
+      ? {
+          finding_ids: effectiveBlockingFindings(state).map((finding) => finding.finding_id),
+          user_input_paths: [
+            ["findings", "*", "disposition"],
+            ["findings", "*", "reason"],
+          ],
+        }
+      : null;
+  const reconciliationBinding: OperatorScopeReconciliationBinding | null =
+    action === "workflow_reconcile_staged_scope"
+      ? {
+          reviewed_paths: [...state.review_target.approved_paths],
+          added_paths: [
+            ...(state.stop_context?.status === "COMMIT_PREPARATION_FAILED"
+              ? (state.stop_context.reconciliation_paths ?? [])
+              : []),
+          ],
+        }
+      : null;
+  const linkedFollowupBinding: OperatorLinkedFollowupBinding | null =
+    action === "workflow_create_linked_followup" ||
+    action === "workflow_create_linked_followup_from_plan"
+      ? {
+          selection_rule: "nonempty_subset_from_one_bucket",
+          blocking_findings: effectiveBlockingFindings(state).map((finding) => ({
+            finding_id: finding.finding_id,
+            severity: finding.severity,
+            summary: linkedFindingSummary(finding),
+          })),
+          optional_findings: state.optional_findings.map((finding) => ({
+            finding_id: finding.finding_id,
+            severity: finding.severity,
+            summary: linkedFindingSummary(finding),
+          })),
+        }
+      : null;
   const descriptor: OperatorMutationInvocation = {
     operation: action,
-    fixed_arguments: fixedArguments(state, action),
+    semantic_choice: semanticChoice(action),
+    fixed_arguments: fixedArguments(state, action, planIdentity),
     required_inputs: metadata.inputs.map((requiredInput) => ({
       path: [...requiredInput.path],
       source: requiredInput.source,
+      ...(requiredInput.source_path ? { source_path: [...requiredInput.source_path] } : {}),
       required: true,
     })),
     ...("input_alternatives" in metadata && metadata.input_alternatives
@@ -527,6 +608,7 @@ function invocation(
           input_alternatives: metadata.input_alternatives.map((alternative) => ({
             paths: alternative.paths.map((path) => [...path]),
             source: alternative.source,
+            ...(alternative.source_path ? { source_path: [...alternative.source_path] } : {}),
             required: true,
           })),
         }
@@ -540,6 +622,12 @@ function invocation(
             proposal,
           },
         }
+      : {}),
+    ...(adjudicationBinding ? { adjudication_binding: adjudicationBinding } : {}),
+    ...(linkedFollowupBinding ? { linked_followup_binding: linkedFollowupBinding } : {}),
+    ...(reconciliationBinding ? { scope_reconciliation_binding: reconciliationBinding } : {}),
+    ...(action === "workflow_create_linked_followup_from_plan" && planIdentity
+      ? { plan_binding: planIdentity }
       : {}),
     stale_binding: staleBinding(state, action, [], selectedFindingIds),
     on_success: {
@@ -559,6 +647,108 @@ function invocation(
   return descriptor;
 }
 
+function semanticChoice(action: OperatorParentMutationOperation): {
+  id: string;
+  label: string;
+  summary: string;
+} {
+  const ids: Record<OperatorParentMutationOperation, string> = {
+    workflow_adopt_dirty_scope: "adopt_existing_changes",
+    workflow_expand_scope: "authorize_more_paths",
+    workflow_record_manual_validation: "record_observed_validation",
+    workflow_resume_implementation: "continue_implementation",
+    workflow_accept_concerns: "accept_bounded_concerns",
+    workflow_authorize_repair: "authorize_bounded_repair",
+    workflow_adjudicate_findings: "resolve_inconsistent_findings",
+    workflow_resume_review: "continue_review",
+    workflow_finalize_repair_exhausted: "stop_at_repair_limit",
+    workflow_create_linked_followup: "start_direct_followup",
+    workflow_create_linked_followup_from_plan: "start_approved_plan_followup",
+    workflow_authorize_commit: "authorize_commit_preparation",
+    workflow_retry_commit_preparation: "retry_preparation",
+    workflow_reconcile_staged_scope: "authorize_scope_reconciliation",
+    workflow_return_commit_to_review: "refresh_review_authority",
+    workflow_reconcile_commit_result: "resolve_commit_result",
+    workflow_retry_commit: "retry_commit_attempt",
+  };
+  const choices: Record<OperatorParentMutationOperation, { label: string; summary: string }> = {
+    workflow_adopt_dirty_scope: {
+      label: "Adopt the selected dirty paths",
+      summary: "Add the exact selected existing dirty paths to the current workflow authority.",
+    },
+    workflow_expand_scope: {
+      label: "Expand the approved scope",
+      summary: "Authorize additional paths for implementation and subsequent review.",
+    },
+    workflow_record_manual_validation: {
+      label: "Record observed validation evidence",
+      summary: "Record only evidence from the declared validation inspection.",
+    },
+    workflow_resume_implementation: {
+      label: "Resume implementation with context",
+      summary: "Supply bounded context and resume the currently authorized implementation.",
+    },
+    workflow_accept_concerns: {
+      label: "Accept the implementation concerns",
+      summary: "Accept the current bounded concerns and continue to review.",
+    },
+    workflow_authorize_repair: {
+      label: "Authorize the selected repair",
+      summary:
+        "Authorize the exact selected blocking findings under the displayed repair proposal.",
+    },
+    workflow_adjudicate_findings: {
+      label: "Adjudicate the current blocking findings",
+      summary:
+        "Record user-authored dispositions for current blockers inconsistent with the approved contract or outside approved scope; this does not authorize repair.",
+    },
+    workflow_resume_review: {
+      label: "Resume review with context",
+      summary: "Supply bounded context and resume the current review.",
+    },
+    workflow_finalize_repair_exhausted: {
+      label: "Stop the exhausted repair cycle",
+      summary: "Finalize the current bounded repair limit without authorizing more work.",
+    },
+    workflow_create_linked_followup: {
+      label: "Create a directly authored linked follow-up",
+      summary: "Authorize a narrow follow-up using the declared user-authored work fields.",
+    },
+    workflow_create_linked_followup_from_plan: {
+      label: "Create a linked follow-up from the approved child plan",
+      summary: "Use the exact approved child PlanArtifact bound in this invocation.",
+    },
+    workflow_authorize_commit: {
+      label: "Authorize commit preparation",
+      summary: "Give fresh authorization for commit preparation of the currently reviewed change.",
+    },
+    workflow_retry_commit_preparation: {
+      label: "Retry commit preparation",
+      summary:
+        "Keep the reviewed scope unchanged and retry only after any out-of-scope staged paths are removed; this does not authorize new paths.",
+    },
+    workflow_reconcile_staged_scope: {
+      label: "Reconcile the staged change scope",
+      summary:
+        "Authorize exactly the newly observed staged paths, then require fresh review and fresh commit authorization.",
+    },
+    workflow_return_commit_to_review: {
+      label: "Return the change to review",
+      summary: "Discard stale review and commit authority and obtain a fresh review.",
+    },
+    workflow_reconcile_commit_result: {
+      label: "Reconcile the commit result",
+      summary: "Resolve the exact recorded commit attempt from authoritative repository state.",
+    },
+    workflow_retry_commit: {
+      label: "Retry the commit attempt",
+      summary: "Retry the exact recorded commit attempt using the supplied bounded context.",
+    },
+  };
+  const choice = choices[action];
+  return { id: ids[action], ...choice };
+}
+
 function inspectionInvocation(
   state: WorkflowState,
   validationId: ValidationRequirementId,
@@ -566,12 +756,13 @@ function inspectionInvocation(
 ): OperatorMutationInvocation {
   return {
     operation: "workflow_record_manual_validation",
+    semantic_choice: semanticChoice("workflow_record_manual_validation"),
     fixed_arguments: {
       ...fixedArguments(state, "workflow_record_manual_validation"),
       validation_id: validationId,
       status,
     },
-    required_inputs: [input(["evidence"], "parent_context")],
+    required_inputs: [input(["evidence"], "observed_evidence")],
     authorization: noAuthorization(),
     stale_binding: staleBinding(state, "workflow_record_manual_validation", [
       { kind: "validation", validation_ids: [validationId] },
@@ -670,6 +861,7 @@ function parentActionDescriptor(
 function completeParentInvocation(
   state: WorkflowState,
   descriptor: OperatorParentActionDescriptor,
+  planIdentity?: OperatorPlanBinding,
 ): OperatorParentActionDescriptor {
   if (descriptor.status !== "executable") return descriptor;
   const action = descriptor.action as OperatorParentMutationOperation;
@@ -684,6 +876,7 @@ function completeParentInvocation(
           "repair_binding" in descriptor.descriptor
             ? descriptor.descriptor.repair_binding.selected_finding_ids
             : undefined,
+          planIdentity,
         ),
       ],
     },
@@ -694,6 +887,7 @@ function primaryDescriptor(
   state: WorkflowState,
   legality: WorkflowLegality,
   selectedFindingIds?: ReadonlyArray<FindingId>,
+  planIdentity?: OperatorPlanBinding,
 ): OperatorNextActionDescriptor {
   const current = identity(state);
   if (!current) return { mode: "wait", reason: "workflow identity is unavailable" };
@@ -725,7 +919,16 @@ function primaryDescriptor(
         selection: "choose_one",
         invocations: [
           invocation(state, "workflow_create_linked_followup"),
-          invocation(state, "workflow_create_linked_followup_from_plan"),
+          ...(planIdentity
+            ? [
+                invocation(
+                  state,
+                  "workflow_create_linked_followup_from_plan",
+                  undefined,
+                  planIdentity,
+                ),
+              ]
+            : []),
         ],
       };
     case "recovery":
@@ -733,6 +936,14 @@ function primaryDescriptor(
         mode: "parent_mutation",
         selection: "single",
         invocations: [invocation(state, legality.next.action as OperatorParentMutationOperation)],
+      };
+    case "recovery_choice":
+      return {
+        mode: "parent_mutation",
+        selection: "choose_one",
+        invocations: legality.next.actions.map((action) =>
+          invocation(state, action as OperatorParentMutationOperation),
+        ),
       };
     case "authorize_commit":
       return {
@@ -757,13 +968,23 @@ export function descriptorForLegality(
   state: WorkflowState,
   legality: WorkflowLegality,
   selectedFindingIds?: ReadonlyArray<FindingId>,
+  planIdentity?: OperatorPlanBinding,
 ): OperatorExecutionDescriptor {
-  const parentActions = legality.actions.parent.map((action) =>
-    completeParentInvocation(state, parentActionDescriptor(state, action, selectedFindingIds)),
-  );
+  const parentActions = legality.actions.parent
+    .filter(
+      (action) =>
+        action !== "workflow_create_linked_followup_from_plan" || planIdentity !== undefined,
+    )
+    .map((action) =>
+      completeParentInvocation(
+        state,
+        parentActionDescriptor(state, action, selectedFindingIds),
+        planIdentity,
+      ),
+    );
   return {
-    descriptor_version: 3,
-    primary: primaryDescriptor(state, legality, selectedFindingIds),
+    descriptor_version: 4,
+    primary: primaryDescriptor(state, legality, selectedFindingIds, planIdentity),
     parent_actions: parentActions,
   };
 }

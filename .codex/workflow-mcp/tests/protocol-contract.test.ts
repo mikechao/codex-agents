@@ -43,6 +43,7 @@ test("closed protocol registry and schema contract exposes workflow actions with
     "workflow_parent_get",
     "workflow_prepare_commit",
     "workflow_reconcile_commit_result",
+    "workflow_reconcile_staged_scope",
     "workflow_record_manual_validation",
     "workflow_resume_implementation",
     "workflow_resume_review",
@@ -156,7 +157,7 @@ test("closed protocol registry and schema contract exposes workflow actions with
     assert.deepEqual(
       Object.keys((getter.inputSchema as any).properties).sort(),
       name === "workflow_operator_decision_get"
-        ? ["repair_finding_ids", "workflow_id"]
+        ? ["child_plan_id", "child_plan_revision", "repair_finding_ids", "workflow_id"]
         : ["workflow_id"],
     );
   }
@@ -265,6 +266,14 @@ test("closed protocol registry and schema contract exposes workflow actions with
   assert.equal("acceptance_criteria" in linkedFromPlanSchema.properties, false);
   assert.equal("validation_requirements" in linkedFromPlanSchema.properties, false);
   assert.match(linkedFromPlan.description ?? "", /resolv.*approved.*PlanArtifact server-side/u);
+  const linkedDirect = tools.find((tool) => tool.name === "workflow_create_linked_followup");
+  assert.ok(linkedDirect);
+  const linkedDirectSchema = linkedDirect.inputSchema as any;
+  assert.deepEqual(linkedDirectSchema.properties.approved_plan, {
+    type: "null",
+    description:
+      "Direct linked follow-ups are null-plan; use the plan-native route for PlanArtifact authority.",
+  });
 });
 
 test("closed protocol source contract retains only the live protocol instructions", () => {
@@ -284,7 +293,7 @@ test("closed protocol source contract retains only the live protocol instruction
   assert.match(protocolInstructions, /PlanArtifact/);
 });
 
-test("descriptorized parent metadata matches the unchanged MCP tool schemas", () => {
+test("descriptorized parent metadata matches exact MCP tool schemas", () => {
   for (const [action, metadata] of Object.entries(ACTION_DESCRIPTOR_METADATA)) {
     if (metadata.mode !== "parent_mutation") continue;
     const tool = tools.find((candidate) => candidate.name === metadata.operation);
@@ -296,7 +305,12 @@ test("descriptorized parent metadata matches the unchanged MCP tool schemas", ()
         : [];
     const fixedFields = ["workflow_id", "expected_version"];
     if (metadata.operation === "workflow_reconcile_commit_result") fixedFields.push("attempt_id");
-    const semanticFields = metadata.inputs.map((requiredInput) => requiredInput.path[0]);
+    if (metadata.operation === "workflow_create_linked_followup") fixedFields.push("approved_plan");
+    if (metadata.operation === "workflow_create_linked_followup_from_plan")
+      fixedFields.push("plan_id", "revision");
+    const semanticFields = metadata.inputs
+      .map((requiredInput) => requiredInput.path[0])
+      .filter((field) => !["plan_id", "revision"].includes(field));
     assert.deepEqual(
       [...new Set([...fixedFields, ...semanticFields, authorizationPath[0]])]
         .filter((field): field is string => field !== undefined)
@@ -334,7 +348,7 @@ test("inspection metadata has no semantic user-authorization requirement", () =>
       representation: { kind: "none" },
       binding: { kind: "none" },
     },
-    inputs: [{ path: ["evidence"], source: "parent_context", required: true }],
+    inputs: [{ path: ["evidence"], source: "observed_evidence", required: true }],
   });
 });
 

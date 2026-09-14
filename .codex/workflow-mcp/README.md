@@ -46,8 +46,12 @@ a bearer capability. It covers automatic implementation/review/re-review routing
 explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
 separately.
 
-The current execution guidance is descriptor version 3 and contains a primary descriptor plus every currently legal
-parent action. Worker routes carry only the workflow identity and expected version. Parent mutation
+The current execution guidance is descriptor version 4 and contains a primary descriptor plus every currently legal
+parent action as a complete executable descriptor. Parent mutation invocations expose semantic choice
+labels and summaries, and input sources distinguish fresh `user_authored` meaning from exact parent
+context, server bindings, and observed evidence. Linked follow-ups bind their current blocking and
+optional finding candidates by bucket so `finding_ids` never come from stale-binding inference.
+Worker routes carry only the workflow identity and expected version. Parent mutation
 descriptors identify the existing typed tool, fixed server-derived arguments, remaining semantic
 input paths and sources, stale state bindings, and the expected post-success refresh routes. Repair
 authorization descriptors additionally bind the complete eligible blocker set, the exact selected
@@ -320,7 +324,11 @@ stop cleared by `workflow_retry_commit`; any verification mismatch enters the te
 `STOPPED_COMMIT_PREPARATION` with a bounded category/diagnostic, timestamp, failed version, and
 recovery class. Scope/content failures expose `workflow_retry_commit_preparation`; stale receipt
 failures expose `workflow_return_commit_to_review`, which clears authorization and requires fresh
-review and fresh commit authorization. No committer action is permitted while stopped.
+review and fresh commit authorization. When staged paths are observed outside reviewed authority,
+the parent descriptor offers both unchanged-scope retry and exact-path reconciliation. Retry is
+rejected until those outside paths are removed; reconciliation adds only the exact observed paths,
+then requires fresh review and fresh commit authorization. No committer action is permitted while
+stopped.
 
 ## Persistence schema
 

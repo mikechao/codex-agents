@@ -100,8 +100,9 @@ discriminator; the semantic `decision` remains the user-facing summary and autho
 The projection is bounded to the requested workflow and reciprocal explicit linked lineage, read-only,
 sanitized, and not a proposal store or bearer capability.
 
-Consumers check `descriptor_version` before interpreting execution guidance. Only descriptor version 3
-is executable and it supports all five modes and repair bindings. Any other, missing, malformed,
+Consumers check `descriptor_version` before interpreting execution guidance. Only descriptor version 4
+is executable and it supports all five modes, semantic action choices, and exact input provenance.
+Any other, missing, malformed,
 contradictory, or incomplete version stops with no fallback mutation or dispatch; the parent never
 reconstructs a route from semantic decisions, raw phases, parent state, or conversation memory.
 
@@ -109,9 +110,13 @@ The descriptor loop is:
 
 1. `dispatch` delegates only the returned route to its corresponding worker with the exact workflow
    ID.
-2. `parent_mutation` selects one advertised invocation, passes server-fixed arguments, obtains only
-   declared inputs from their declared sources, applies the declared authorization representation, and
-   invokes the exact operation.
+2. `parent_mutation` presents separately advertised alternatives using each invocation's
+   `semantic_choice.label` and `semantic_choice.summary`, then uses the exact selected descriptor
+   entry. It passes server-fixed arguments, obtains only declared inputs from their declared sources,
+   applies the declared authorization representation, and invokes the exact operation without
+   interpreting operation/tool names as choice semantics. Every alternative must be complete, match
+   its action to its invocation, and be host-allowlisted; one malformed or inaccessible alternative
+   makes the descriptor fail closed.
 3. `collect_evidence` gathers only the declared inspection, uses the returned observed outcome
    mutation, and treats unavailable evidence as `wait`; it never invents a failed validation.
 4. `wait` reports its bounded reason and performs no mutation or dispatch.
@@ -135,12 +140,17 @@ current before invoking the advertised mutation. Do not ask for internal action/
 payloads. Contextual `yes`, `continue`, `go ahead`, and `commit it` are valid when unambiguous;
 ordinary equivalent wording is also valid.
 
-If an advertised descriptor input has source `parent_context`, use `workflow_parent_get` to obtain its
-exact current value from the authoritative parent view. Retain `workflow_parent_get` for explicit
-debug/status inspection as well. Do not use it to reconstruct operation selection, payload shape,
-authorization placement, routing, or other protocol knowledge already declared by the descriptor. If
-a mutation would require an input that the descriptor does not declare, fail closed rather than
-inventing or discovering it.
+If an advertised descriptor input has source `parent_context`, use `workflow_parent_get` and its exact
+`source_path` to obtain the current value from the authoritative parent view. A `user_authored` input is a
+bounded model/user-authored semantic value, including recovery context; it is not synthesized from
+state prose. An `observed_evidence` input must come only from the actual declared inspection, never
+from `ParentView` or conversation memory. Retain `workflow_parent_get` for explicit debug/status
+inspection as well. Do not use it to reconstruct operation selection, payload shape, authorization
+placement, routing, or other protocol knowledge already declared by the descriptor. If a mutation
+would require an input that the descriptor does not declare, fail closed rather than inventing or
+discovering it. For linked follow-ups, `finding_ids` come from the explicit
+`linked_followup_binding`; select a non-empty subset of one current blocking or optional finding
+bucket using its semantic summaries, never stale-binding references.
 
 Exact repair, concern/context/review recovery, bounded linked continuation, scope expansion and
 changed-intent classification, final reconciliation, and commit authorization remain explicit parent
@@ -350,6 +360,12 @@ Approval is separate from commit authorization. The execution descriptor control
 commit-related action proceeds; no narrative lifecycle step dispatches a worker or invokes a mutation
 without that returned authority. Supported finding-linked follow-ups remain narrow: a supported active
 source, exact current finding IDs, narrow remediation context and scope, and a fresh combined review.
+When the preparation-failure descriptor advertises staged-scope reconciliation, its exact bound paths
+are the only paths that may be added to the current workflow scope. The authorized mutation clears
+existing review and commit authority and requires fresh review followed by fresh commit authorization.
+When outside-scope staged paths are present, the descriptor also offers retry without scope expansion;
+that retry is accepted only after those paths are removed. The parent does not infer a move from
+summary prose or substitute another workflow.
 They cannot serve as changed intent or reconciliation shortcuts. After every terminal worker handoff and parent mutation, refresh the
 read-only `workflow_operator_decision_get` projection, summarize only its bounded semantic result,
 and route from its fresh descriptor; stale prose and dirty-path inference grant no authority. Use
@@ -441,6 +457,13 @@ advertised operation, and routes only from its committed or freshly refetched de
 staleness, failure, unavailability, contradiction, or an undeclared required input produces no
 speculative mutation or worker dispatch. Repair rejection cannot authorize adjudication; adjudication
 requires a separate descriptor-backed proposal and fresh affirmative response.
+
+Input provenance is executable: `user_authored` comes only from the current user's semantic request or
+a fresh answer; `parent_context` must name an exact parent-view `source_path`; `server_derived` must be
+read from its named descriptor binding; and `observed_evidence` requires the declared inspection.
+Missing or unresolvable input provenance fails closed. For a plan-native linked follow-up, the child
+plan identity is obtained from the exact current approved child-plan view and is explicitly bound in
+the operator descriptor; the source workflow's plan provenance is never substituted.
 
 For reconciliation, the returned descriptor remains authoritative even when implementation files are
 already dirty. It determines whether the next step is a dispatch, mutation, wait, or terminal result;
