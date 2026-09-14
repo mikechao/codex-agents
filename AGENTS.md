@@ -97,8 +97,11 @@ match an authorized `argv` array exactly, including its length, ordering, and ev
 equivalent-but-unlisted scripts are not substitutes. Use `bun run test:agents` for focused
 receipt/contract checks, `bun run test:installer` for focused installer checks, and
 `bun run test:workflow-mcp` for focused server checks only when their exact commands are currently
-authorized by that policy. Run the full `bun run validate` gate before declaring any change
-complete.
+authorized by that policy. The reviewer-selectable validation surface is `generate:agents`, the
+three focused commands, `test:runtime`, `validate`, and `test:coverage`. `test:core`, `test`, and
+`test:stress` remain useful package-level owned-tier, composition, and diagnostic commands, but are
+not independently selectable reviewer validations. Run the full `bun run validate` gate before
+declaring any change complete.
 
 Target policies may explicitly authorize a read-only command with `purpose: evidence`; omitted purpose
 is backward-compatible validation. Evidence remains bounded, shell-free, and separate from workflow

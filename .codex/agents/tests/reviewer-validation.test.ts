@@ -254,10 +254,28 @@ test("project policy maps every required validation to its authoritative command
     ["bun", "run", "test:installer"],
     ["bun", "run", "test:workflow-mcp"],
     ["bun", "run", "test:runtime"],
-    ["bun", "run", "test"],
     ["bun", "run", "validate"],
     ["bun", "run", "test:coverage"],
   ]);
+});
+
+test("retained package helpers are not reviewer-selectable", () => {
+  const fixture = gitFixture();
+  const projectPolicy = loadReviewerValidationPolicy();
+  try {
+    for (const argv of [
+      ["bun", "run", "test"],
+      ["bun", "run", "test:core"],
+      ["bun", "run", "test:stress"],
+    ]) {
+      assert.throws(
+        () => runReviewerValidation(projectPolicy, "VAL-PACKAGE-HELPER", argv, fixture.root),
+        /not allowlisted/,
+      );
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
 });
 
 const coreTestGlobs = [
