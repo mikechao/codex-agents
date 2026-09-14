@@ -1179,6 +1179,119 @@ test("cross-runtime dirty adoption consumes the same aggregate recovery readines
   }
 });
 
+test("cross-runtime dirty adoption is atomic and revalidates pending evidence", () => {
+  const { root, git } = fixture();
+  const databasePath = join(root, "cross-runtime-adoption-recovery.sqlite");
+  const revision = git("rev-parse", "HEAD");
+  const ownerRuntimeId = "a".repeat(64);
+  const currentRuntimeId = "b".repeat(64);
+  const owner: any = new WorkflowStore({
+    repositoryRoot: root,
+    databasePath,
+    runtimeId: ownerRuntimeId,
+    runtimeRevision: revision,
+    ...runtimeAttestation(ownerRuntimeId, revision, "1".repeat(64)),
+  });
+  let current: any;
+  try {
+    const created = owner.create(input(git));
+    const id = created.workflow_id;
+    owner.expandScope({
+      workflow_id: id,
+      expected_version: 0,
+      added_paths: ["dirty.txt"],
+      reason: "planned dirty path",
+      user_authorization: "authorized",
+    });
+    implementation(owner, created, 1);
+    review(owner, created, 2, "INCONCLUSIVE");
+    writeFileSync(join(root, "dirty.txt"), "authorized\n");
+
+    current = new WorkflowStore({
+      repositoryRoot: root,
+      databasePath,
+      runtimeId: currentRuntimeId,
+      runtimeRevision: revision,
+      ...runtimeAttestation(currentRuntimeId, revision, "2".repeat(64)),
+    });
+    const before = rawState(current, id);
+    const auditBefore = current.db
+      .prepare(
+        "SELECT event_type, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+      )
+      .all(id);
+    current.db.exec(`
+      CREATE TRIGGER fail_cross_runtime_adoption_audit
+      BEFORE INSERT ON audit_events
+      BEGIN
+        SELECT RAISE(ABORT, 'test cross-runtime audit append failure');
+      END;
+    `);
+    assert.throws(() =>
+      current.adoptDirtyScopeCrossRuntime({
+        workflow_id: id,
+        expected_version: before.version,
+        adopted_paths: ["dirty.txt"],
+        reason: "recover dirty path",
+        user_authorization: "explicit recovery",
+      }),
+    );
+    assert.deepEqual(rawState(current, id), before);
+    assert.deepEqual(
+      current.db
+        .prepare(
+          "SELECT event_type, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
+        )
+        .all(id),
+      auditBefore,
+    );
+    current.db.exec("DROP TRIGGER fail_cross_runtime_adoption_audit");
+
+    const adopted = current.adoptDirtyScopeCrossRuntime({
+      workflow_id: id,
+      expected_version: before.version,
+      adopted_paths: ["dirty.txt"],
+      reason: "recover dirty path",
+      user_authorization: "explicit recovery",
+    });
+    assert.equal(adopted.version, before.version + 1);
+    assert.equal(adopted.phase, "STOPPED_INCONCLUSIVE");
+    assert.equal(
+      current.db
+        .prepare("SELECT event_type FROM audit_events WHERE workflow_id = ? ORDER BY event_id")
+        .all(id)
+        .at(-1).event_type,
+      "DIRTY_SCOPE_ADOPTED",
+    );
+
+    current.verifyPendingDirtyScope(id);
+    writeFileSync(join(root, "dirty.txt"), "changed after authorization\n");
+    assert.equal(
+      category(() => current.verifyPendingDirtyScope(id)),
+      "ERROR_STALE_ADOPTION",
+    );
+    writeFileSync(join(root, "dirty.txt"), "authorized\n");
+
+    const resumed = owner.resumeReview({
+      workflow_id: id,
+      expected_version: adopted.version,
+      resume_context: "resume after adoption",
+    });
+    assert.equal(resumed.version, adopted.version + 1);
+    assert.equal(resumed.phase, "REVIEWING");
+    const began = current.beginReviewCrossRuntime({
+      workflow_id: id,
+      expected_version: resumed.version,
+    });
+    assert.equal(began.version, resumed.version + 1);
+    assert.equal(began.phase, "REVIEWING");
+  } finally {
+    current?.close();
+    owner.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("linked remediation and combined review retain receipts through a committed result", () => {
   const { root, git } = fixture();
   try {

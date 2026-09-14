@@ -169,6 +169,14 @@ host restart the new default artifact is promoted for new workflows while affini
 workflows back to their owner. Missing, mismatched, corrupt, or unlaunchable artifacts fail closed
 with `ERROR_RUNTIME_ISOLATION` or `ERROR_RUNTIME_RECOVERY`, never as receipt errors.
 
+Historical routing first checks for an already-live child with the exact persisted
+`(runtime_id, runtime_revision)`. That child is the lifecycle trust unit: it was fully materialized,
+validated, and attested before launch, so repeated requests to it do not repeat artifact-cache
+validation. A missing, dead, killed, or removed child, a revision mismatch, supervisor restart, or
+relaunch returns to full owning-runtime resolution and artifact revalidation. Consequently,
+post-launch artifact tampering is detected at the next launch or relaunch boundary rather than on
+every request to an unchanged live child.
+
 The store is the runtime-ownership enforcement boundary. Parent control-plane operations are
 affined workflow may be read or mutated only by a store whose complete `WORKFLOW_MCP_RUNTIME_ID`
 and `WORKFLOW_MCP_RUNTIME_REVISION` match the persisted owner and which has a valid ephemeral

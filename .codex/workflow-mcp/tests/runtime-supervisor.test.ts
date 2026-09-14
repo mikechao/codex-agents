@@ -5,10 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { currentHead } from "../git.js";
+import type { ResolvedRuntime } from "../runtime-supervisor.js";
 import {
   augmentHistoricalRecovery,
   RuntimeSupervisor,
+  requestsCurrentRuntime,
   resolveOwningRuntime,
+  selectAffinedRuntime,
 } from "../runtime-supervisor.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
@@ -60,6 +63,10 @@ function operatorProjectionResponse(primary: Record<string, unknown>) {
   };
 }
 
+function resolvedRuntime(runtimeId: string, revision: string): ResolvedRuntime {
+  return { runtime_id: runtimeId, revision } as ResolvedRuntime;
+}
+
 const operatorProjectionRequest = {
   jsonrpc: "2.0",
   id: 1,
@@ -71,6 +78,193 @@ const operatorProjectionRequest = {
 };
 
 describe("Workflow MCP runtime supervision", () => {
+  test("classifies only reconciliation control requests as current-runtime routes", () => {
+    const reconciled = operatorProjectionRequest;
+    const worker = {
+      ...operatorProjectionRequest,
+      params: { ...operatorProjectionRequest.params, name: "workflow_implementer_get" },
+    };
+    const commitResult = {
+      ...operatorProjectionRequest,
+      params: {
+        ...operatorProjectionRequest.params,
+        name: "workflow_reconcile_commit_result",
+      },
+    };
+    let lookedUp = false;
+    const lookup = () => {
+      lookedUp = true;
+      return true;
+    };
+
+    assert.equal(requestsCurrentRuntime(commitResult, lookup), true);
+    assert.equal(lookedUp, false);
+    assert.equal(requestsCurrentRuntime(reconciled, lookup), true);
+    assert.equal(requestsCurrentRuntime(worker, lookup), false);
+    assert.equal(
+      requestsCurrentRuntime(
+        {
+          ...reconciled,
+          params: { ...reconciled.params, name: "workflow_operator_decision_get" },
+        },
+        () => false,
+      ),
+      false,
+    );
+  });
+
+  test("selects an exact live child before historical resolution", () => {
+    const defaultRuntime = resolvedRuntime("d".repeat(64), "default");
+    const historicalRuntime = resolvedRuntime("a".repeat(64), "revision-a");
+    const fallbackRuntime = resolvedRuntime("a".repeat(64), "revision-a");
+    const children = new Map([
+      [
+        `${historicalRuntime.runtime_id}\u0000${historicalRuntime.revision}`,
+        {
+          artifact: historicalRuntime,
+          dead: false,
+          killed: false,
+        },
+      ],
+    ]);
+    let resolutions = 0;
+    const resolveOwner = () => {
+      resolutions += 1;
+      return fallbackRuntime;
+    };
+    const lookup = (runtimeId: string, revision: string) =>
+      children.get(`${runtimeId}\u0000${revision}`);
+
+    assert.equal(
+      selectAffinedRuntime(
+        { runtime_id: historicalRuntime.runtime_id, runtime_revision: historicalRuntime.revision },
+        defaultRuntime,
+        lookup,
+        resolveOwner,
+      ),
+      historicalRuntime,
+    );
+    assert.equal(
+      selectAffinedRuntime(
+        { runtime_id: historicalRuntime.runtime_id, runtime_revision: historicalRuntime.revision },
+        defaultRuntime,
+        lookup,
+        resolveOwner,
+      ),
+      historicalRuntime,
+    );
+    assert.equal(resolutions, 0);
+  });
+
+  test("revalidates when the exact live child is unavailable or invalid", () => {
+    const defaultRuntime = resolvedRuntime("d".repeat(64), "default");
+    const runtimeId = "a".repeat(64);
+    const revisionA = "revision-a";
+    const revisionB = "revision-b";
+    const fallbackRuntime = resolvedRuntime(runtimeId, revisionB);
+    const candidates = new Map([
+      [
+        `${runtimeId}\u0000${revisionA}`,
+        {
+          artifact: resolvedRuntime(runtimeId, revisionA),
+          dead: false,
+          killed: false,
+        },
+      ],
+      [
+        `${runtimeId}\u0000dead`,
+        {
+          artifact: resolvedRuntime(runtimeId, "dead"),
+          dead: true,
+          killed: false,
+        },
+      ],
+      [
+        `${runtimeId}\u0000killed`,
+        {
+          artifact: resolvedRuntime(runtimeId, "killed"),
+          dead: false,
+          killed: true,
+        },
+      ],
+    ]);
+    const calls: string[] = [];
+    const lookup = (candidateRuntimeId: string, revision: string) =>
+      candidates.get(`${candidateRuntimeId}\u0000${revision}`);
+    const resolveOwner = (affinity: {
+      runtime_id: string | null;
+      runtime_revision: string | null;
+    }) => {
+      calls.push(`${affinity.runtime_id}\u0000${affinity.runtime_revision}`);
+      return fallbackRuntime;
+    };
+
+    for (const revision of ["missing", "dead", "killed", revisionB]) {
+      assert.equal(
+        selectAffinedRuntime(
+          { runtime_id: runtimeId, runtime_revision: revision },
+          defaultRuntime,
+          lookup,
+          resolveOwner,
+        ),
+        fallbackRuntime,
+      );
+    }
+
+    assert.deepEqual(calls, [
+      `${runtimeId}\u0000missing`,
+      `${runtimeId}\u0000dead`,
+      `${runtimeId}\u0000killed`,
+      `${runtimeId}\u0000${revisionB}`,
+    ]);
+  });
+
+  test("evicts a child whose historical initialization fails", async () => {
+    const artifact = resolvedRuntime("a".repeat(64), "revision-a");
+    const key = `${artifact.runtime_id}\u0000${artifact.revision}`;
+    let killed = false;
+    let readerClosed = false;
+    const child: any = {
+      artifact,
+      process: {
+        stdin: { write: () => true, destroy: () => undefined },
+        kill: () => {
+          killed = true;
+          return true;
+        },
+      },
+      reader: { close: () => (readerClosed = true) },
+      initialized: false,
+      initializing: null,
+      initId: null,
+      initializingResponseIds: new Set(),
+      initResolve: null,
+      initReject: null,
+      initializationRequestId: undefined,
+      pending: new Map(),
+      tools: null,
+      dead: false,
+    };
+    const supervisor: any = Object.create(RuntimeSupervisor.prototype);
+    supervisor.initialized = true;
+    supervisor.initializationLines = [
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+    ];
+    supervisor.children = new Map([[key, child]]);
+
+    const initializing = supervisor.initializeOwner(child);
+    child.initReject(new WorkflowError("ERROR_RUNTIME_RECOVERY", "test initialization failure"));
+    await assert.rejects(
+      initializing,
+      (error: unknown) =>
+        error instanceof WorkflowError && error.detail === "test initialization failure",
+    );
+    assert.equal(child.dead, true);
+    assert.equal(supervisor.children.has(key), false);
+    assert.equal(killed, true);
+    assert.equal(readerClosed, true);
+  });
+
   test("historical operator projection overrides only for legal reconciliation", () => {
     const owner = operatorProjectionResponse({ kind: "no_user_action", route: "commit" });
     const reconciliation = {
@@ -89,6 +283,41 @@ describe("Workflow MCP runtime supervision", () => {
       () => reconciliation,
     );
     assert.deepEqual(JSON.parse((routed.result as any).content[0].text), reconciliation);
+  });
+
+  test("historical parent projection preserves reconciliation actions", () => {
+    const request = {
+      ...operatorProjectionRequest,
+      params: { ...operatorProjectionRequest.params, name: "workflow_parent_get" },
+    };
+    const response = {
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              workflow_id: request.params.arguments.workflow_id,
+              phase: "COMMIT_PREPARED",
+              permitted_next_actions: [],
+            }),
+          },
+        ],
+      },
+    };
+    const routed = augmentHistoricalRecovery(
+      request,
+      response,
+      true,
+      () => ["workflow_reconcile_commit_result"],
+      () => ({ primary: { kind: "reconcile_commit" } }),
+    );
+    assert.deepEqual(JSON.parse((routed.result as any).content[0].text), {
+      workflow_id: request.params.arguments.workflow_id,
+      phase: "COMMIT_PREPARED",
+      permitted_next_actions: ["workflow_reconcile_commit_result"],
+    });
   });
 
   test("historical operator projection preserves the owner route when reconciliation changes", () => {
@@ -298,7 +527,7 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
-  test("requires launch attestation before cross-runtime review start", () => {
+  test("rejects missing, mismatched, and borrowed launch attestations", () => {
     const { root } = fixture();
     const path = join(root, "cross-runtime-review.sqlite");
     const revision = fixtureHead(root, "cross-repository setup");
@@ -316,10 +545,51 @@ describe("Workflow MCP runtime supervision", () => {
       });
       const created = create(owner, revision, "cross-runtime review attestation");
       owner.close();
+      assert.throws(
+        () =>
+          new WorkflowStore({
+            repositoryRoot: root,
+            databasePath: path,
+            runtimeId: foreignId,
+            runtimeRevision: revision,
+            runtimeAttestation: "malformed",
+            runtimeAttestationNonce: nonce,
+            runtimeAttestationKey: ownerKey,
+          }),
+        (error: unknown) =>
+          error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
+      );
       const cases = [
-        { name: "missing", options: { runtimeId: foreignId, runtimeRevision: revision } },
         {
-          name: "mismatched",
+          name: "same-owner missing",
+          options: { runtimeId: ownerId, runtimeRevision: revision },
+        },
+        {
+          name: "same-owner mismatched",
+          options: {
+            runtimeId: ownerId,
+            runtimeRevision: revision,
+            runtimeAttestation: "0".repeat(64),
+            runtimeAttestationNonce: nonce,
+            runtimeAttestationKey: ownerKey,
+          },
+        },
+        {
+          name: "same-owner borrowed",
+          options: {
+            runtimeId: ownerId,
+            runtimeRevision: revision,
+            runtimeAttestation: createRuntimeAttestation(ownerId, revision, nonce, "3".repeat(64)),
+            runtimeAttestationNonce: nonce,
+            runtimeAttestationKey: ownerKey,
+          },
+        },
+        {
+          name: "foreign missing",
+          options: { runtimeId: foreignId, runtimeRevision: revision },
+        },
+        {
+          name: "foreign mismatched",
           options: {
             runtimeId: foreignId,
             runtimeRevision: revision,
@@ -329,7 +599,7 @@ describe("Workflow MCP runtime supervision", () => {
           },
         },
         {
-          name: "borrowed",
+          name: "foreign borrowed",
           options: {
             runtimeId: foreignId,
             runtimeRevision: revision,
@@ -350,6 +620,12 @@ describe("Workflow MCP runtime supervision", () => {
           databasePath: path,
           ...candidate.options,
         });
+        assert.throws(
+          () => store.parentGet(created.workflow_id),
+          (error: unknown) =>
+            error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
+          candidate.name,
+        );
         assert.throws(
           () =>
             store.beginReviewCrossRuntime({

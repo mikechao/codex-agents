@@ -253,6 +253,8 @@ test("project policy maps every required validation to its authoritative command
     ["bun", "run", "test:agents"],
     ["bun", "run", "test:installer"],
     ["bun", "run", "test:workflow-mcp"],
+    ["bun", "run", "test:runtime"],
+    ["bun", "run", "test"],
     ["bun", "run", "validate"],
     ["bun", "run", "test:coverage"],
   ]);

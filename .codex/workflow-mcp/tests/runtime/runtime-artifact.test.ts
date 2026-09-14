@@ -19,9 +19,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { currentHead } from "../../git.js";
 import {
   isValidRuntimeArtifact,
+  localImportCandidates,
+  localImportPaths,
   materializeRuntimeArtifact,
   trustedRuntimeManifest,
 } from "../../runtime-artifact.js";
+import { resolveOwningRuntime } from "../../runtime-supervisor.js";
 
 function gitFixture(
   files: Record<string, string>,
@@ -65,109 +68,104 @@ function dependencyFile(root: string): string | undefined {
   return undefined;
 }
 
-const TRANSITION_PATHS = [
-  ".codex/workflow-mcp/transitions/commit.ts",
-  ".codex/workflow-mcp/transitions/implementation.ts",
-  ".codex/workflow-mcp/transitions/linked-followup.ts",
-  ".codex/workflow-mcp/transitions/queries.ts",
-  ".codex/workflow-mcp/transitions/receipts.ts",
-  ".codex/workflow-mcp/transitions/review.ts",
-  ".codex/workflow-mcp/transitions/shared.ts",
-  ".codex/workflow-mcp/transitions/state.ts",
-] as const;
-
-function workingTreeRuntimeFiles(root: string): Record<string, string> {
-  const files: Record<string, string> = {};
-  const collect = (path: string): void => {
-    const source = join(root, path);
-    const stat = lstatSync(source);
-    if (stat.isDirectory()) {
-      for (const name of readdirSync(source)) collect(join(path, name));
-    } else if (stat.isFile()) {
-      files[path] = readFileSync(source, "utf8");
-    }
-  };
-  collect(".codex/workflow-mcp");
-  for (const path of [
-    ".codex/agents/change-receipt.ts",
-    ".codex/agents/receipt.ts",
-    "bun.lock",
-    "package.json",
-  ]) {
-    collect(path);
-  }
-  return files;
-}
-
 describe("Workflow MCP runtime artifacts", () => {
-  test("fingerprints committed runtime closure and reuses a valid cache entry", () => {
+  test("keeps local import parsing and Bun candidate precedence deterministic", () => {
+    const source = `
+      import { extensionless } from "../../extensionless";
+      import { explicit } from "../../explicit.js";
+      const dynamic = await import("../../dynamic.js");
+    `;
+    expect(localImportPaths(source)).toEqual([
+      "../../dynamic.js",
+      "../../extensionless",
+      "../../explicit.js",
+    ]);
+    expect(localImportCandidates(".codex/workflow-mcp/server.ts", "../../preferred.js")).toEqual([
+      "preferred.ts",
+      "preferred.js",
+    ]);
+    expect(localImportCandidates(".codex/workflow-mcp/server.ts", "../../extensionless")).toEqual([
+      "extensionless",
+      "extensionless.ts",
+      "extensionless.js",
+    ]);
+    expect(() => localImportPaths("await import(moduleName);")).toThrow(
+      "trusted runtime dynamic import is unsupported",
+    );
+  });
+
+  test("includes the committed production runtime closure", () => {
     const root = process.cwd();
+    const revision = currentHead(root);
+    const manifest = trustedRuntimeManifest(root, revision);
+    const manifestPaths = manifest.files.map((entry) => entry.path);
+    expect(manifestPaths).toEqual(
+      expect.arrayContaining([
+        ".codex/workflow-mcp/server.ts",
+        ".codex/workflow-mcp/transitions/commit.ts",
+        ".codex/workflow-mcp/transitions/implementation.ts",
+        ".codex/workflow-mcp/transitions/linked-followup.ts",
+        ".codex/workflow-mcp/transitions/queries.ts",
+        ".codex/workflow-mcp/transitions/receipts.ts",
+        ".codex/workflow-mcp/transitions/review.ts",
+        ".codex/workflow-mcp/transitions/shared.ts",
+        ".codex/workflow-mcp/transitions/state.ts",
+        ".codex/agents/change-receipt.ts",
+      ]),
+    );
+    expect(manifest.package_metadata).toEqual(["bun.lock", "package.json"]);
+  });
+
+  test("materializes and reuses a valid tiny artifact", () => {
+    const fixture = gitFixture({
+      "package.json": '{"name":"runtime-cache-fixture","dependencies":{}}\n',
+      "bun.lock": "{}\n",
+      ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+      ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+      ".codex/workflow-mcp/server.ts": "export const server = true;\n",
+    });
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-cache-"));
     try {
-      const revision = currentHead(root);
-      const manifest = trustedRuntimeManifest(root, revision);
-      const manifestPaths = manifest.files.map((entry) => entry.path);
-      expect(manifestPaths).toContain(".codex/workflow-mcp/server.ts");
-      const workingTreeFixture = gitFixture(workingTreeRuntimeFiles(root));
-      try {
-        expect(
-          trustedRuntimeManifest(workingTreeFixture.root, workingTreeFixture.revision).files.map(
-            (entry) => entry.path,
-          ),
-        ).toEqual(expect.arrayContaining(TRANSITION_PATHS));
-      } finally {
-        rmSync(workingTreeFixture.root, { recursive: true, force: true });
-      }
-      expect(manifest.files.map((entry) => entry.path)).toContain(
-        ".codex/agents/change-receipt.ts",
-      );
-      expect(manifest.package_metadata).toEqual(["bun.lock", "package.json"]);
-
-      const diagnosticFixture = gitFixture({
-        "package.json": '{"name":"diagnostics-closure","dependencies":{}}\n',
-        "bun.lock": "{}\n",
-        ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
-        ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
-        ".codex/workflow-mcp/server.ts":
-          'import "./diagnostics.js";\nexport const server = true;\n',
-        ".codex/workflow-mcp/diagnostics.ts": "export const diagnostics = true;\n",
+      const manifest = trustedRuntimeManifest(fixture.root, fixture.revision);
+      const first = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot,
+        installDependencies: false,
       });
-      try {
-        expect(
-          trustedRuntimeManifest(diagnosticFixture.root, diagnosticFixture.revision).files.map(
-            (entry) => entry.path,
-          ),
-        ).toContain(".codex/workflow-mcp/diagnostics.ts");
-      } finally {
-        rmSync(diagnosticFixture.root, { recursive: true, force: true });
-      }
-
-      const first = materializeRuntimeArtifact(root, revision, { cacheRoot });
       expect(first.reused).toBe(false);
       expect(first.runtime_id).toMatch(/^[0-9a-f]{64}$/u);
       expect(first.runtimePath).toBe(join(first.cachePath, manifest.entrypoint));
-      expect(relative(root, first.cachePath)).toMatch(/^\.\.(?:\/|\\)/u);
+      expect(relative(fixture.root, first.cachePath)).toMatch(/^\.\.(?:\/|\\)/u);
       expect(isValidRuntimeArtifact(first)).toBe(true);
 
-      const second = materializeRuntimeArtifact(root, revision, { cacheRoot });
+      const second = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot,
+        installDependencies: false,
+      });
       expect(second.runtime_id).toBe(first.runtime_id);
       expect(second.runtimePath).toBe(first.runtimePath);
       expect(second.reused).toBe(true);
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 
-      const fixture = gitFixture({
-        "package.json":
-          '{"name":"runtime-rebuild-fixture","dependencies":{"fixture-dependency":"1.0.0"}}\n',
-        "bun.lock": "{}\n",
-        ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
-        ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
-        ".codex/workflow-mcp/server.ts": "export const server = true;\n",
-      });
-      const invocationState = join(cacheRoot, "fixture-installer-invocations");
-      const bunExecutable = join(cacheRoot, "fixture-bun");
-      writeFileSync(invocationState, "0\n");
-      writeFileSync(
-        bunExecutable,
-        `#!/usr/bin/env bun
+  test("rebuilds source- and dependency-tampered artifacts", () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-rebuild-cache-"));
+    const fixture = gitFixture({
+      "package.json":
+        '{"name":"runtime-rebuild-fixture","dependencies":{"fixture-dependency":"1.0.0"}}\n',
+      "bun.lock": "{}\n",
+      ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+      ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+      ".codex/workflow-mcp/server.ts": "export const server = true;\n",
+    });
+    const invocationState = join(cacheRoot, "fixture-installer-invocations");
+    const bunExecutable = join(cacheRoot, "fixture-bun");
+    writeFileSync(invocationState, "0\n");
+    writeFileSync(
+      bunExecutable,
+      `#!/usr/bin/env bun
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -181,69 +179,92 @@ writeFileSync(
   "export const fixtureDependency = true;" + String.fromCharCode(10),
 );
 `,
-        { mode: 0o755 },
+      { mode: 0o755 },
+    );
+    chmodSync(bunExecutable, 0o755);
+    try {
+      const fixtureOptions = { cacheRoot, bunExecutable };
+      const fixtureFirst = materializeRuntimeArtifact(
+        fixture.root,
+        fixture.revision,
+        fixtureOptions,
       );
-      chmodSync(bunExecutable, 0o755);
-      try {
-        const fixtureOptions = { cacheRoot, bunExecutable };
-        const fixtureFirst = materializeRuntimeArtifact(
-          fixture.root,
-          fixture.revision,
-          fixtureOptions,
-        );
-        const fixtureDependency = join(
-          fixtureFirst.cachePath,
-          "node_modules/fixture-dependency/index.js",
-        );
-        expect(fixtureFirst.reused).toBe(false);
-        expect(isValidRuntimeArtifact(fixtureFirst)).toBe(true);
-        expect(dependencyFile(fixtureFirst.cachePath)).toBe(fixtureDependency);
-        expect(existsSync(fixtureDependency)).toBe(true);
-        expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
+      const fixtureDependency = join(
+        fixtureFirst.cachePath,
+        "node_modules/fixture-dependency/index.js",
+      );
+      expect(fixtureFirst.reused).toBe(false);
+      expect(isValidRuntimeArtifact(fixtureFirst)).toBe(true);
+      expect(dependencyFile(fixtureFirst.cachePath)).toBe(fixtureDependency);
+      expect(existsSync(fixtureDependency)).toBe(true);
+      expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
 
-        const fixtureSecond = materializeRuntimeArtifact(
-          fixture.root,
-          fixture.revision,
-          fixtureOptions,
-        );
-        expect(fixtureSecond.runtime_id).toBe(fixtureFirst.runtime_id);
-        expect(fixtureSecond.runtimePath).toBe(fixtureFirst.runtimePath);
-        expect(fixtureSecond.reused).toBe(true);
-        expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
+      const fixtureSecond = materializeRuntimeArtifact(
+        fixture.root,
+        fixture.revision,
+        fixtureOptions,
+      );
+      expect(fixtureSecond.reused).toBe(true);
+      expect(readFileSync(invocationState, "utf8").trim()).toBe("1");
 
-        writeFileSync(fixtureFirst.runtimePath, "corrupt\n");
-        expect(isValidRuntimeArtifact(fixtureFirst)).toBe(false);
-        const sourceRebuilt = materializeRuntimeArtifact(
-          fixture.root,
-          fixture.revision,
-          fixtureOptions,
-        );
-        expect(sourceRebuilt.reused).toBe(false);
-        expect(readFileSync(sourceRebuilt.runtimePath, "utf8")).toBe(
-          "export const server = true;\n",
-        );
-        expect(existsSync(join(sourceRebuilt.cachePath, ".runtime-complete"))).toBe(true);
-        expect(existsSync(fixtureDependency)).toBe(true);
-        expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(true);
-        expect(readFileSync(invocationState, "utf8").trim()).toBe("2");
+      writeFileSync(fixtureFirst.runtimePath, "corrupt\n");
+      expect(isValidRuntimeArtifact(fixtureFirst)).toBe(false);
+      const sourceRebuilt = materializeRuntimeArtifact(
+        fixture.root,
+        fixture.revision,
+        fixtureOptions,
+      );
+      expect(sourceRebuilt.reused).toBe(false);
+      expect(readFileSync(sourceRebuilt.runtimePath, "utf8")).toBe("export const server = true;\n");
+      expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(true);
+      expect(readFileSync(invocationState, "utf8").trim()).toBe("2");
 
-        rmSync(fixtureDependency);
-        expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(false);
-        const dependencyRebuilt = materializeRuntimeArtifact(
-          fixture.root,
-          fixture.revision,
-          fixtureOptions,
-        );
-        expect(dependencyRebuilt.reused).toBe(false);
-        expect(existsSync(fixtureDependency)).toBe(true);
-        expect(existsSync(join(dependencyRebuilt.cachePath, ".runtime-complete"))).toBe(true);
-        expect(isValidRuntimeArtifact(dependencyRebuilt)).toBe(true);
-        expect(readFileSync(invocationState, "utf8").trim()).toBe("3");
-      } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
-      }
+      rmSync(fixtureDependency);
+      expect(isValidRuntimeArtifact(sourceRebuilt)).toBe(false);
+      const dependencyRebuilt = materializeRuntimeArtifact(
+        fixture.root,
+        fixture.revision,
+        fixtureOptions,
+      );
+      expect(dependencyRebuilt.reused).toBe(false);
+      expect(existsSync(fixtureDependency)).toBe(true);
+      expect(isValidRuntimeArtifact(dependencyRebuilt)).toBe(true);
+      expect(readFileSync(invocationState, "utf8").trim()).toBe("3");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("revalidates and recovers a tampered artifact on owning resolution", () => {
+    const fixture = gitFixture({
+      "package.json": '{"name":"runtime-owner-recovery","dependencies":{}}\n',
+      "bun.lock": "{}\n",
+      ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
+      ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
+      ".codex/workflow-mcp/server.ts": "export const server = true;\n",
+    });
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-owner-recovery-"));
+    try {
+      const artifact = materializeRuntimeArtifact(fixture.root, fixture.revision, {
+        cacheRoot,
+        installDependencies: false,
+      });
+      writeFileSync(artifact.runtimePath, "tampered\n");
+      expect(isValidRuntimeArtifact(artifact)).toBe(false);
+
+      const recovered = resolveOwningRuntime(
+        fixture.root,
+        { runtime_id: artifact.runtime_id, runtime_revision: fixture.revision },
+        { cacheRoot, installDependencies: false },
+      );
+      expect(recovered.runtime_id).toBe(artifact.runtime_id);
+      expect(recovered.revision).toBe(fixture.revision);
+      expect(recovered.reused).toBe(false);
+      expect(isValidRuntimeArtifact(recovered)).toBe(true);
     } finally {
       rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 
@@ -411,12 +432,11 @@ writeFileSync(
       ".codex/agents/change-receipt.ts": "export const receipt = true;\n",
       ".codex/agents/receipt.ts": "export const otherReceipt = true;\n",
       ".codex/workflow-mcp/server.ts":
-        'import { extensionless } from "../../extensionless";\nimport { explicit } from "../../explicit.js";\nimport { preferred } from "../../preferred.js";\nconst dynamic = await import("../../dynamic.js");\nexport { extensionless, explicit, preferred, dynamic };\n',
+        'import { extensionless } from "../../extensionless";\nimport { explicit } from "../../explicit.js";\nimport { preferred } from "../../preferred.js";\nexport { extensionless, explicit, preferred };\n',
       "extensionless.ts": "export const extensionless = true;\n",
       "explicit.js": "export const explicit = true;\n",
       "preferred.ts": 'export const preferred = "ts";\n',
       "preferred.js": 'export const preferred = "js";\n',
-      "dynamic.js": "export const dynamic = true;\n",
     };
     const fixture = gitFixture(files);
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-fixture-cache-"));
@@ -426,7 +446,6 @@ writeFileSync(
       expect(manifestPaths).toContain("extensionless.ts");
       expect(manifestPaths).toContain("explicit.js");
       expect(manifestPaths).toContain("preferred.ts");
-      expect(manifestPaths).toContain("dynamic.js");
       expect(manifestPaths).not.toContain("preferred.js");
       const artifact = materializeRuntimeArtifact(fixture.root, fixture.revision, {
         cacheRoot,
@@ -450,26 +469,13 @@ writeFileSync(
       } finally {
         rmSync(missing.root, { recursive: true, force: true });
       }
-
-      const unsupported = gitFixture({
-        ...files,
-        ".codex/workflow-mcp/server.ts":
-          'const moduleName = "../../dynamic.js";\nawait import(moduleName);\n',
-      });
-      try {
-        expect(() => trustedRuntimeManifest(unsupported.root, unsupported.revision)).toThrow(
-          "trusted runtime dynamic import is unsupported",
-        );
-      } finally {
-        rmSync(unsupported.root, { recursive: true, force: true });
-      }
     } finally {
       rmSync(cacheRoot, { recursive: true, force: true });
       rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 
-  test("rejects committed runtime symlinks and symlinked cache entries", () => {
+  test("rejects committed runtime symlinks", () => {
     for (const target of ["/tmp/workflow-runtime-outside.ts", "../../outside.ts"]) {
       const fixture = gitFixture(
         {
@@ -488,7 +494,9 @@ writeFileSync(
         rmSync(fixture.root, { recursive: true, force: true });
       }
     }
+  });
 
+  test("rejects symlinked cache entries", () => {
     const fixture = gitFixture({
       "package.json": '{"name":"fixture","dependencies":{}}\n',
       "bun.lock": '{"lockfileVersion":1}\n',

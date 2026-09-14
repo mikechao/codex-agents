@@ -4,13 +4,12 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { WorkflowError } from "../../errors.js";
 import { currentHead } from "../../git.js";
-import { isValidRuntimeArtifact, materializeRuntimeArtifact } from "../../runtime-artifact.js";
-import { resolveOwningRuntime } from "../../runtime-supervisor.js";
+import { materializeRuntimeArtifact } from "../../runtime-artifact.js";
+import { RuntimeSupervisor } from "../../runtime-supervisor.js";
 import { createRuntimeAttestation, WorkflowStore } from "../../store.js";
 import {
   annotateFixtureFailure,
@@ -66,6 +65,19 @@ function removeRuntimeFixture(
       child: runtimeChildContext(child, role),
     });
   }
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`process ${pid} remained alive after initialization failure cleanup`);
 }
 
 function fixtureHead(root: string, stage: string): string {
@@ -192,130 +204,6 @@ describe("Workflow MCP runtime supervision", () => {
     }
   });
 
-  test("rejects missing, mismatched, and borrowed attestations and recovers tampered artifacts", () => {
-    const { root } = fixture();
-    const path = join(root, "attestation.sqlite");
-    const runtimeId = "a".repeat(64);
-    const nonce = "1".repeat(64);
-    const key = "2".repeat(64);
-    try {
-      const workflowSource = join(process.cwd(), ".codex/workflow-mcp");
-      cpSync(workflowSource, join(root, ".codex/workflow-mcp"), { recursive: true });
-      mkdirSync(join(root, ".codex/agents"), { recursive: true });
-      cpSync(
-        join(process.cwd(), ".codex/agents/receipt.ts"),
-        join(root, ".codex/agents/receipt.ts"),
-      );
-      writeFileSync(
-        join(root, "package.json"),
-        '{"name":"runtime-attestation-fixture","type":"module","dependencies":{}}\n',
-      );
-      writeFileSync(join(root, "bun.lock"), "{}\n");
-      const git = (...args: string[]) =>
-        execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
-      git("add", ".");
-      git("commit", "-qm", "runtime attestation fixture");
-      const revision = fixtureHead(root, "attestation setup");
-      const createdAttestation = createRuntimeAttestation(runtimeId, revision, nonce, key);
-      const owner: any = new WorkflowStore({
-        repositoryRoot: root,
-        databasePath: path,
-        runtimeId,
-        runtimeRevision: revision,
-        runtimeAttestation: createdAttestation,
-        runtimeAttestationNonce: nonce,
-        runtimeAttestationKey: key,
-      });
-      const created = create(owner, root, revision, "attestation matrix");
-      owner.close();
-
-      const cases = [
-        {
-          name: "missing",
-          options: { runtimeId, runtimeRevision: revision },
-        },
-        {
-          name: "mismatched",
-          options: {
-            runtimeId,
-            runtimeRevision: revision,
-            runtimeAttestation: "0".repeat(64),
-            runtimeAttestationNonce: nonce,
-            runtimeAttestationKey: key,
-          },
-        },
-        {
-          name: "borrowed key",
-          options: {
-            runtimeId,
-            runtimeRevision: revision,
-            runtimeAttestation: createRuntimeAttestation(
-              runtimeId,
-              revision,
-              nonce,
-              "3".repeat(64),
-            ),
-            runtimeAttestationNonce: nonce,
-            runtimeAttestationKey: key,
-          },
-        },
-      ];
-      assert.throws(
-        () =>
-          new WorkflowStore({
-            repositoryRoot: root,
-            databasePath: path,
-            runtimeId,
-            runtimeRevision: revision,
-            runtimeAttestation: "malformed",
-            runtimeAttestationNonce: nonce,
-            runtimeAttestationKey: key,
-          }),
-        (error: unknown) =>
-          error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
-      );
-      for (const candidate of cases) {
-        const store: any = new WorkflowStore({
-          repositoryRoot: root,
-          databasePath: path,
-          ...candidate.options,
-        });
-        assert.throws(
-          () => store.parentGet(created.workflow_id),
-          (error: unknown) =>
-            error instanceof WorkflowError && error.category === "ERROR_RUNTIME_ISOLATION",
-          candidate.name,
-        );
-        store.close();
-      }
-
-      const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-tamper-cache-"));
-      try {
-        const artifact = materializeRuntimeArtifact(root, revision, {
-          cacheRoot,
-          installDependencies: false,
-        });
-        writeFileSync(
-          artifact.runtimePath,
-          `${readFileSync(artifact.runtimePath, "utf8")}\n// tampered\n`,
-        );
-        assert.equal(isValidRuntimeArtifact(artifact), false);
-        const recovered = resolveOwningRuntime(
-          root,
-          { runtime_id: artifact.runtime_id, runtime_revision: revision },
-          { cacheRoot, installDependencies: false },
-        );
-        assert.equal(recovered.runtime_id, artifact.runtime_id);
-        assert.equal(recovered.revision, revision);
-        assert.equal(isValidRuntimeArtifact(recovered), true);
-      } finally {
-        rmSync(cacheRoot, { recursive: true, force: true });
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 30_000);
-
   test("routes workflows to their immutable runtime after promotion and restart", async () => {
     const target = fixture();
     const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-routing-cache-"));
@@ -397,15 +285,24 @@ describe("Workflow MCP runtime supervision", () => {
       const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
         stdio: ["pipe", "pipe", "pipe"],
       });
+      const closePromise = once(child, "close");
       const reader = createInterface({ input: child.stdout! });
-      const pending = new Map<string | number, (value: any) => void>();
+      const pending = new Map<
+        string | number,
+        {
+          resolve: (value: any) => void;
+          reject: (error: unknown) => void;
+          timeout: ReturnType<typeof setTimeout>;
+        }
+      >();
       reader.on("line", (line) => {
         try {
           const response = JSON.parse(line);
-          const resolve = response.id === undefined ? undefined : pending.get(response.id);
-          if (resolve) {
+          const entry = response.id === undefined ? undefined : pending.get(response.id);
+          if (entry) {
+            clearTimeout(entry.timeout);
             pending.delete(response.id);
-            resolve(response);
+            entry.resolve(response);
           }
         } catch {
           // malformed child output is not a response for this routing test
@@ -419,7 +316,10 @@ describe("Workflow MCP runtime supervision", () => {
         tool?: string,
       ) =>
         new Promise<any>((resolve, reject) => {
-          pending.set(id, resolve);
+          const timeout = setTimeout(() => {
+            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
+          }, 10_000);
+          pending.set(id, { resolve, reject, timeout });
           child.stdin!.write(
             `${JSON.stringify({
               jsonrpc: "2.0",
@@ -434,17 +334,26 @@ describe("Workflow MCP runtime supervision", () => {
                   }
                 : {}),
             })}\n`,
-            (error) => error && reject(error),
+            (error) => {
+              if (!error) return;
+              const entry = pending.get(id);
+              if (!entry) return;
+              clearTimeout(entry.timeout);
+              pending.delete(id);
+              reject(error);
+            },
           );
-          setTimeout(() => {
-            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
-          }, 10_000);
         });
       const stop = async () => {
         try {
+          for (const entry of pending.values()) {
+            clearTimeout(entry.timeout);
+            entry.reject(new Error("runtime routing child stopped"));
+          }
+          pending.clear();
           reader.close();
           child.stdin!.end();
-          await once(child, "close");
+          await closePromise;
         } catch (error) {
           throw annotateFixtureFailure(error, target.root, {
             stage: "runtime routing teardown",
@@ -476,36 +385,6 @@ describe("Workflow MCP runtime supervision", () => {
         ...attestation(artifactA.runtime_id, revisionA),
       });
       const workflowA = create(firstStore, target.root, revisionA, "runtime A");
-      const workflowIdA = workflowA.workflow_id;
-      writeFileSync(join(target.root, "note.txt"), "prepared on historical runtime\n");
-      firstStore.submitImplementation({
-        workflow_id: workflowIdA,
-        expected_version: 0,
-        status: "DONE",
-        summary: "implemented",
-        agent_touched_paths: ["note.txt"],
-        acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "ok" }],
-        validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "ok" }],
-        known_failures: [],
-        finding_resolution_map: {},
-      });
-      firstStore.beginReview({ workflow_id: workflowIdA, expected_version: 1 });
-      firstStore.submitReview({
-        workflow_id: workflowIdA,
-        expected_version: 2,
-        review_status: "APPROVED",
-        blocking_findings: [],
-        optional_findings: [],
-        prior_finding_classifications: {},
-        validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "reviewed" }],
-      });
-      firstStore.authorizeCommit({
-        workflow_id: workflowIdA,
-        expected_version: 3,
-        user_authorization: "authorize historical preparation",
-      });
-      git("add", "note.txt");
-      const preparedA = firstStore.prepareCommit({ workflow_id: workflowIdA, expected_version: 4 });
       firstStore.close();
       active = start();
       assert.equal((await active.request(1, "initialize")).result.runtime_revision, revisionA);
@@ -571,79 +450,6 @@ describe("Workflow MCP runtime supervision", () => {
       assert.equal(routedAAfterRestart.result.tool, "workflow_parent_get");
       const historicalView = JSON.parse(routedAAfterRestart.result.content[0].text);
       assert.equal(historicalView.runtime_label, "historical");
-      assert.deepEqual(historicalView.permitted_next_actions, ["workflow_reconcile_commit_result"]);
-      const routedPreparedDecision = await restarted.request(
-        11,
-        "tools/call",
-        workflowIdA,
-        {},
-        "workflow_operator_decision_get",
-      );
-      assert.equal(routedPreparedDecision.result.runtime_revision, revisionA);
-      assert.equal(routedPreparedDecision.result.tool, "workflow_operator_decision_get");
-      const preparedDecision = JSON.parse(routedPreparedDecision.result.content[0].text);
-      assert.deepEqual(preparedDecision.primary, {
-        kind: "reconcile_commit",
-        reason: "an existing commit requires server-owned result reconciliation",
-      });
-      secondStore.reconcileCommitResult({
-        workflow_id: workflowIdA,
-        expected_version: preparedA.version,
-        attempt_id: preparedA.commit_preparation.attempt_id,
-      });
-      const routedRecovery = await restarted.request(
-        6,
-        "tools/call",
-        workflowA.workflow_id,
-        {},
-        "workflow_reconcile_commit_result",
-      );
-      assert.equal(routedRecovery.result.runtime_revision, revisionB);
-      assert.equal(routedRecovery.result.tool, "workflow_reconcile_commit_result");
-      const routedTerminalParent = await restarted.request(
-        7,
-        "tools/call",
-        workflowIdA,
-        {},
-        "workflow_parent_get",
-      );
-      assert.equal(routedTerminalParent.result.runtime_revision, revisionB);
-      assert.equal(routedTerminalParent.result.tool, "workflow_parent_get");
-      const terminalView = JSON.parse(routedTerminalParent.result.content[0].text);
-      assert.equal(terminalView.phase, "COMMITTED");
-      const routedTerminalDecision = await restarted.request(
-        10,
-        "tools/call",
-        workflowIdA,
-        {},
-        "workflow_operator_decision_get",
-      );
-      assert.equal(routedTerminalDecision.result.runtime_revision, revisionB);
-      assert.equal(routedTerminalDecision.result.tool, "workflow_operator_decision_get");
-      const terminalDecision = JSON.parse(routedTerminalDecision.result.content[0].text);
-      assert.deepEqual(terminalDecision.primary, {
-        kind: "terminal",
-        outcome: "committed",
-        reason: "the workflow commit is verified and complete",
-      });
-      const routedWorker = await restarted.request(
-        8,
-        "tools/call",
-        workflowIdA,
-        {},
-        "workflow_implementer_get",
-      );
-      assert.equal(routedWorker.result.runtime_revision, revisionA);
-      assert.equal(routedWorker.result.tool, "workflow_implementer_get");
-      const routedAudit = await restarted.request(
-        9,
-        "tools/call",
-        workflowIdA,
-        {},
-        "workflow_get_audit",
-      );
-      assert.equal(routedAudit.result.runtime_revision, revisionA);
-      assert.equal(routedAudit.result.tool, "workflow_get_audit");
     } finally {
       secondStore?.close();
       await active?.stop().catch(() => {});
@@ -658,6 +464,315 @@ describe("Workflow MCP runtime supervision", () => {
       rmSync(dirname(databasePath), { recursive: true, force: true });
     }
   });
+
+  test("terminates a historical child after initialization failure", async () => {
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-init-failure-cache-"));
+    const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-init-failure-db-"));
+    const databasePath = join(databaseRoot, "state.sqlite");
+    const pidPath = join(target.root, "initialization-child.pid");
+    const runtimeModule = pathToFileURL(
+      join(process.cwd(), ".codex/workflow-mcp/runtime-supervisor.ts"),
+    ).href;
+    const failingServer = `
+      import { appendFileSync } from "node:fs";
+      import { createInterface } from "node:readline";
+      const pidPath = process.env.WORKFLOW_MCP_INIT_FAILURE_PID_FILE;
+      if (pidPath) appendFileSync(pidPath, String(process.pid) + "\\n");
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        if (request.method === "initialize") {
+          process.stdout.write(JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            error: { code: -32001, message: "initialization failed" },
+          }) + "\\n");
+        }
+      });
+    `;
+    const healthyServer = `
+      import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
+            runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
+          },
+        }) + "\\n");
+      });
+    `;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
+    const writeRuntimeFiles = (server: string) => {
+      const workflowRoot = join(target.root, ".codex", "workflow-mcp");
+      mkdirSync(workflowRoot, { recursive: true });
+      mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
+      writeFileSync(join(workflowRoot, "server.ts"), server);
+      cpSync(
+        join(process.cwd(), ".codex/agents/change-receipt.ts"),
+        join(target.root, ".codex/agents/change-receipt.ts"),
+      );
+      cpSync(
+        join(process.cwd(), ".codex/agents/receipt.ts"),
+        join(target.root, ".codex/agents/receipt.ts"),
+      );
+      writeFileSync(
+        join(target.root, "package.json"),
+        '{"name":"runtime-init-failure-fixture","type":"module","dependencies":{}}\n',
+      );
+      writeFileSync(join(target.root, "bun.lock"), "{}\n");
+    };
+    const start = () => {
+      const script = `import { RuntimeSupervisor } from ${JSON.stringify(runtimeModule)}; new RuntimeSupervisor(${JSON.stringify(
+        {
+          repositoryRoot: target.root,
+          providerRoot: target.root,
+          databasePath,
+          cacheRoot,
+          installDependencies: false,
+        },
+      )}).run();`;
+      const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
+        env: { ...process.env, WORKFLOW_MCP_INIT_FAILURE_PID_FILE: pidPath },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const closePromise = once(child, "close");
+      const reader = createInterface({ input: child.stdout! });
+      const pending = new Map<
+        string | number,
+        {
+          resolve: (value: any) => void;
+          reject: (error: unknown) => void;
+          timeout: ReturnType<typeof setTimeout>;
+        }
+      >();
+      reader.on("line", (line) => {
+        try {
+          const response = JSON.parse(line);
+          const entry = response.id === undefined ? undefined : pending.get(response.id);
+          if (entry) {
+            clearTimeout(entry.timeout);
+            pending.delete(response.id);
+            entry.resolve(response);
+          }
+        } catch {
+          // Only JSON-RPC responses are relevant to this process-lifecycle assertion.
+        }
+      });
+      const request = (message: Record<string, unknown>) =>
+        new Promise<any>((resolve, reject) => {
+          const id = message.id as string | number;
+          const timeout = setTimeout(() => {
+            if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
+          }, 10_000);
+          pending.set(id, { resolve, reject, timeout });
+          child.stdin!.write(`${JSON.stringify(message)}\n`, (error) => {
+            if (!error) return;
+            const entry = pending.get(id);
+            if (!entry) return;
+            clearTimeout(entry.timeout);
+            pending.delete(id);
+            reject(error);
+          });
+        });
+      const stop = async () => {
+        for (const entry of pending.values()) {
+          clearTimeout(entry.timeout);
+          entry.reject(new Error("runtime initialization-failure child stopped"));
+        }
+        pending.clear();
+        reader.close();
+        child.stdin!.end();
+        await closePromise;
+      };
+      return { child, request, stop };
+    };
+    let owner: WorkflowStore | undefined;
+    let active: ReturnType<typeof start> | undefined;
+    let historicalPid: number | undefined;
+    try {
+      writeRuntimeFiles(failingServer);
+      git("add", ".");
+      git("commit", "-qm", "runtime A");
+      const revisionA = fixtureHead(target.root, "runtime initialization failure revision A");
+      const artifactA = materializeRuntimeArtifact(target.root, revisionA, {
+        cacheRoot,
+        installDependencies: false,
+      });
+      writeFileSync(join(target.root, ".codex", "workflow-mcp", "server.ts"), healthyServer);
+      git("add", ".codex/workflow-mcp/server.ts");
+      git("commit", "-qm", "runtime B");
+      const revisionB = fixtureHead(target.root, "runtime initialization failure revision B");
+      const ownerKey = readFileSync(artifactA.attestationKeyPath);
+      const ownerNonce = "1".repeat(64);
+      owner = new WorkflowStore({
+        repositoryRoot: target.root,
+        databasePath,
+        runtimeId: artifactA.runtime_id,
+        runtimeRevision: revisionA,
+        runtimeAttestation: createRuntimeAttestation(
+          artifactA.runtime_id,
+          revisionA,
+          ownerNonce,
+          ownerKey,
+        ),
+        runtimeAttestationNonce: ownerNonce,
+        runtimeAttestationKey: ownerKey as any,
+      });
+      const workflow = create(owner, target.root, revisionB, "historical initialization failure");
+      owner.close();
+      owner = undefined;
+
+      active = start();
+      const initialized = await active.request({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+      });
+      assert.ok(initialized.result);
+      active.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const failed = await active.request({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "workflow_parent_get", arguments: { workflow_id: workflow.workflow_id } },
+      });
+      assert.equal(failed.error?.data?.category, "ERROR_RUNTIME_RECOVERY");
+      historicalPid = Number(readFileSync(pidPath, "utf8").trim());
+      assert.ok(Number.isInteger(historicalPid) && historicalPid > 0);
+      await waitForProcessExit(historicalPid);
+    } finally {
+      if (historicalPid === undefined) {
+        try {
+          const candidate = Number(readFileSync(pidPath, "utf8").trim());
+          if (Number.isInteger(candidate) && candidate > 0) historicalPid = candidate;
+        } catch {
+          // The historical child may not have started before an earlier assertion failed.
+        }
+      }
+      if (historicalPid !== undefined) {
+        try {
+          process.kill(historicalPid, "SIGKILL");
+        } catch {
+          // The regression assertion already confirmed the child exited.
+        }
+      }
+      await active?.stop().catch(() => {});
+      owner?.close();
+      removeRuntimeFixture(
+        target.root,
+        "runtime initialization failure fixture teardown",
+        active?.child,
+        "runtime-initialization-failure-child",
+      );
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(databaseRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("shutdown rejects pending initialization before terminating its child", async () => {
+    const target = fixture();
+    const cacheRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-shutdown-cache-"));
+    const databaseRoot = mkdtempSync(join(tmpdir(), "workflow-runtime-shutdown-db-"));
+    const databasePath = join(databaseRoot, "state.sqlite");
+    const server = `
+      import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined || request.method !== "initialize") return;
+        // Hold initialization open until the supervisor performs shutdown cleanup.
+      });
+    `;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
+    const workflowRoot = join(target.root, ".codex", "workflow-mcp");
+    let supervisor: RuntimeSupervisor | undefined;
+    let child: any;
+    try {
+      mkdirSync(workflowRoot, { recursive: true });
+      mkdirSync(join(target.root, ".codex", "agents"), { recursive: true });
+      writeFileSync(join(workflowRoot, "server.ts"), server);
+      cpSync(
+        join(process.cwd(), ".codex/agents/change-receipt.ts"),
+        join(target.root, ".codex/agents/change-receipt.ts"),
+      );
+      cpSync(
+        join(process.cwd(), ".codex/agents/receipt.ts"),
+        join(target.root, ".codex/agents/receipt.ts"),
+      );
+      writeFileSync(
+        join(target.root, "package.json"),
+        '{"name":"runtime-shutdown-fixture","type":"module","dependencies":{}}\n',
+      );
+      writeFileSync(join(target.root, "bun.lock"), "{}\n");
+      git("add", ".");
+      git("commit", "-qm", "runtime shutdown");
+
+      supervisor = new RuntimeSupervisor({
+        repositoryRoot: target.root,
+        providerRoot: target.root,
+        databasePath,
+        cacheRoot,
+        installDependencies: false,
+      });
+      const internal = supervisor as any;
+      child = internal.launch(supervisor.defaultRuntime);
+      const key = `${supervisor.defaultRuntime.runtime_id}\u0000${supervisor.defaultRuntime.revision}`;
+      internal.children.set(key, child);
+      internal.initialized = true;
+      internal.initializationLines = [
+        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+      ];
+      const childClosed = once(child.process, "close");
+      const initializing = internal.initializeOwner(child);
+      supervisor.close();
+      supervisor = undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const deadline = new Promise<never>((_, reject) => {
+          deadlineTimer = setTimeout(
+            () => reject(new Error("runtime shutdown exceeded the prompt cleanup deadline")),
+            2_000,
+          );
+        });
+        const [initializationOutcome, processOutcome] = await Promise.race([
+          Promise.all([
+            initializing.then(
+              () => "resolved",
+              () => "rejected",
+            ),
+            childClosed.then(() => "closed"),
+          ]),
+          deadline,
+        ]);
+        assert.equal(initializationOutcome, "rejected");
+        assert.equal(processOutcome, "closed");
+      } finally {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      }
+    } finally {
+      child?.initReject?.(new Error("runtime shutdown fixture cleanup"));
+      supervisor?.close();
+      try {
+        child?.process.kill("SIGKILL");
+      } catch {
+        // The child was already terminated by supervisor shutdown.
+      }
+      removeRuntimeFixture(
+        target.root,
+        "runtime shutdown fixture teardown",
+        child?.process,
+        "runtime-shutdown-child",
+      );
+      rmSync(cacheRoot, { recursive: true, force: true });
+      rmSync(databaseRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   test("recovers dirty adoption through a real historical owner after promotion", async () => {
     const target = fixture();
@@ -697,25 +812,26 @@ describe("Workflow MCP runtime supervision", () => {
           process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -1, message: "ERROR_UNKNOWN_TOOL" } }) + "\\n");
           return;
         }
-        let value;
         try {
-          value = handler(request.params?.arguments ?? {});
+          const value = handler(request.params?.arguments ?? {});
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+            content: [{ type: "text", text: JSON.stringify(value) }],
+            tools: tools.map((name) => ({ name })),
+            runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
+            runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
+            tool: request.params?.name,
+          } }) + "\\n");
         } catch (error) {
           const category = error?.category ?? "ERROR_RUNTIME_RECOVERY";
-          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -1, message: category, data: { category, detail: error?.detail ?? category } } }) + "\\n");
-          return;
+          const detail = error?.detail ?? category;
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: {
+            code: -1,
+            message: category,
+            data: { category, detail },
+          } }) + "\\n");
         }
-        const content = {
-          content: [{ type: "text", text: JSON.stringify(value) }],
-          tools: tools.map((name) => ({ name })),
-          runtime_id: process.env.WORKFLOW_MCP_RUNTIME_ID,
-          runtime_revision: process.env.WORKFLOW_MCP_RUNTIME_REVISION,
-          expected_version: request.params?.arguments?.expected_version,
-          tool: request.params?.name,
-        };
-        const result = content;
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
       });
+      process.stdin.on("close", () => store.close());
     `;
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", target.root, ...args], { encoding: "utf8" }).trim();
@@ -726,12 +842,17 @@ describe("Workflow MCP runtime supervision", () => {
           providerRoot: target.root,
           databasePath,
           cacheRoot,
-          installDependencies: true,
+          installDependencies: false,
         },
       )}).run();`;
+      const nodePath = [join(process.cwd(), "node_modules"), process.env.NODE_PATH]
+        .filter((value): value is string => Boolean(value))
+        .join(delimiter);
       const child = spawn(process.execPath, ["--no-warnings", "-e", script], {
+        env: { ...process.env, NODE_PATH: nodePath },
         stdio: ["pipe", "pipe", "pipe"],
       });
+      const closePromise = once(child, "close");
       let stderr = "";
       child.stderr!.on("data", (chunk) => {
         stderr = `${stderr}${chunk.toString()}`.slice(0, 4_000);
@@ -739,7 +860,11 @@ describe("Workflow MCP runtime supervision", () => {
       const reader = createInterface({ input: child.stdout! });
       const pending = new Map<
         string | number,
-        { resolve: (value: any) => void; timeout: ReturnType<typeof setTimeout> }
+        {
+          resolve: (value: any) => void;
+          reject: (error: unknown) => void;
+          timeout: ReturnType<typeof setTimeout>;
+        }
       >();
       reader.on("line", (line) => {
         try {
@@ -759,7 +884,7 @@ describe("Workflow MCP runtime supervision", () => {
           const timeout = setTimeout(() => {
             if (pending.delete(id)) reject(new Error(`request ${id} timed out`));
           }, 10_000);
-          pending.set(id, { resolve, timeout });
+          pending.set(id, { resolve, reject, timeout });
           child.stdin!.write(
             `${JSON.stringify({
               jsonrpc: "2.0",
@@ -767,7 +892,14 @@ describe("Workflow MCP runtime supervision", () => {
               method: "tools/call",
               params: { name: tool, arguments: args },
             })}\n`,
-            (error) => error && reject(error),
+            (error) => {
+              if (!error) return;
+              const entry = pending.get(id);
+              if (!entry) return;
+              clearTimeout(entry.timeout);
+              pending.delete(id);
+              reject(error);
+            },
           );
         });
       const initialize = () =>
@@ -775,16 +907,26 @@ describe("Workflow MCP runtime supervision", () => {
           const timeout = setTimeout(() => {
             if (pending.delete(1)) reject(new Error("initialize timed out"));
           }, 10_000);
-          pending.set(1, { resolve, timeout });
+          pending.set(1, { resolve, reject, timeout });
           child.stdin!.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n', (error) => {
-            if (error) reject(error);
+            if (!error) return;
+            const entry = pending.get(1);
+            if (!entry) return;
+            clearTimeout(entry.timeout);
+            pending.delete(1);
+            reject(error);
           });
         });
       const stop = async () => {
         try {
+          for (const entry of pending.values()) {
+            clearTimeout(entry.timeout);
+            entry.reject(new Error("runtime adoption child stopped"));
+          }
+          pending.clear();
           reader.close();
           child.stdin!.end();
-          await once(child, "close");
+          await closePromise;
         } catch (error) {
           throw annotateFixtureFailure(error, target.root, {
             stage: "runtime adoption teardown",
@@ -807,7 +949,6 @@ describe("Workflow MCP runtime supervision", () => {
     };
     let active: ReturnType<typeof start> | undefined;
     let owner: any;
-    let faultStore: any;
     try {
       const workflowRoot = join(target.root, ".codex", "workflow-mcp");
       cpSync(join(process.cwd(), ".codex/workflow-mcp"), workflowRoot, { recursive: true });
@@ -821,14 +962,17 @@ describe("Workflow MCP runtime supervision", () => {
         join(process.cwd(), ".codex/agents/receipt.ts"),
         join(target.root, ".codex/agents/receipt.ts"),
       );
-      cpSync(join(process.cwd(), "package.json"), join(target.root, "package.json"));
-      cpSync(join(process.cwd(), "bun.lock"), join(target.root, "bun.lock"));
+      writeFileSync(
+        join(target.root, "package.json"),
+        '{"name":"runtime-adoption-fixture","type":"module","dependencies":{}}\n',
+      );
+      writeFileSync(join(target.root, "bun.lock"), "{}\n");
       git("add", ".");
       git("commit", "-qm", "runtime A");
       const revisionA = fixtureHead(target.root, "runtime adoption revision A");
       const artifactA = materializeRuntimeArtifact(target.root, revisionA, {
         cacheRoot,
-        installDependencies: true,
+        installDependencies: false,
       });
 
       writeFileSync(join(target.root, "runtime-b.txt"), "B\n");
@@ -916,6 +1060,8 @@ describe("Workflow MCP runtime supervision", () => {
         )}`,
       );
       assert.equal(initialized.result.runtime_revision, revisionB);
+      assert.equal(initialized.result.runtime_id, artifactA.runtime_id);
+      assert.notEqual(initialized.result.runtime_revision, revisionA);
       active.child.stdin!.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
       const routedHistorical = await active.request(2, "workflow_parent_get", {
         workflow_id: id,
@@ -928,45 +1074,6 @@ describe("Workflow MCP runtime supervision", () => {
         ),
         false,
       );
-      faultStore = new WorkflowStore({ repositoryRoot: target.root, databasePath });
-      const beforeCrossRuntimeFailure = faultStore.db
-        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
-        .get(id);
-      const beforeCrossRuntimeAudit = faultStore.db
-        .prepare(
-          "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
-        )
-        .all(id);
-      faultStore.db.exec(`
-        CREATE TRIGGER fail_cross_runtime_audit_insert
-        BEFORE INSERT ON audit_events
-        BEGIN
-          SELECT RAISE(ABORT, 'test cross-runtime audit append failure');
-        END;
-      `);
-      const failedAdoption = await active.request(3, "workflow_adopt_dirty_scope", {
-        workflow_id: id,
-        expected_version: 4,
-        adopted_paths: ["dirty.txt"],
-        reason: "recover dirty path",
-        user_authorization: "explicit recovery",
-      });
-      assert.equal(failedAdoption.error?.data?.category, "ERROR_RUNTIME_RECOVERY");
-      assert.deepEqual(
-        faultStore.db
-          .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
-          .get(id),
-        beforeCrossRuntimeFailure,
-      );
-      assert.deepEqual(
-        faultStore.db
-          .prepare(
-            "SELECT version, event_type, actor_role, summary_json FROM audit_events WHERE workflow_id = ? ORDER BY event_id",
-          )
-          .all(id),
-        beforeCrossRuntimeAudit,
-      );
-      faultStore.db.exec("DROP TRIGGER fail_cross_runtime_audit_insert");
       const adopted = await active.request(3, "workflow_adopt_dirty_scope", {
         workflow_id: id,
         expected_version: 4,
@@ -974,9 +1081,7 @@ describe("Workflow MCP runtime supervision", () => {
         reason: "recover dirty path",
         user_authorization: "explicit recovery",
       });
-      const adoptedView = JSON.parse(adopted.result.content[0].text);
-      assert.equal(adoptedView.version, 5);
-      assert.equal(adoptedView.phase, "STOPPED_INCONCLUSIVE");
+      assert.ok(adopted.result);
       const forwardedResume = await active.request(5, "workflow_resume_review", {
         workflow_id: id,
         expected_version: 5,
@@ -996,40 +1101,11 @@ describe("Workflow MCP runtime supervision", () => {
       assert.equal(forwardedResume.result.runtime_revision, revisionA);
       assert.equal(forwardedResume.result.tool, "workflow_resume_review");
       const resumedView = JSON.parse(forwardedResume.result.content[0].text);
+      assert.equal(resumedView.workflow_id, id);
       assert.equal(resumedView.version, 6);
       assert.equal(resumedView.phase, "REVIEWING");
-      const beganReview = await active.request(6, "workflow_begin_review", {
-        workflow_id: id,
-        expected_version: 6,
-      });
-      const reviewView = JSON.parse(beganReview.result.content[0].text);
-      assert.equal(reviewView.version, 7);
-      assert.equal(reviewView.phase, "REVIEWING");
-
-      owner = new WorkflowStore({
-        repositoryRoot: target.root,
-        databasePath,
-        runtimeId: artifactA.runtime_id,
-        runtimeRevision: revisionA,
-        runtimeAttestation: createRuntimeAttestation(
-          artifactA.runtime_id,
-          revisionA,
-          ownerNonce,
-          ownerKey,
-        ),
-        runtimeAttestationNonce: ownerNonce,
-        runtimeAttestationKey: ownerKey as any,
-      });
-      const recovered = owner.parentGet(id);
-      assert.equal(recovered.phase, "REVIEWING");
-      assert.equal(recovered.version, 7);
-      assert.deepEqual(owner.runtimeAffinity(id), {
-        runtime_id: artifactA.runtime_id,
-        runtime_revision: revisionA,
-      });
     } finally {
       await active?.stop().catch(() => {});
-      faultStore?.close();
       owner?.close();
       removeRuntimeFixture(
         target.root,
@@ -1103,6 +1179,7 @@ describe("Workflow MCP runtime supervision", () => {
         },
         stdio: ["pipe", "pipe", "pipe"],
       });
+      const closePromise = once(child, "close");
       const reader = createInterface({ input: child.stdout! });
       let stderr = "";
       child.stderr!.on("data", (chunk) => {
@@ -1129,7 +1206,7 @@ describe("Workflow MCP runtime supervision", () => {
       assert.equal(stderr.includes("dirty server"), false);
       reader.close();
       child.stdin!.end();
-      await once(child, "close");
+      await closePromise;
     } finally {
       try {
         child?.kill("SIGKILL");

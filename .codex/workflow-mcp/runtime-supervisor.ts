@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import {
   createDiagnosticRecorder,
   type DiagnosticRecorder,
@@ -34,6 +34,12 @@ export interface RuntimeSupervisorOptions extends RuntimeArtifactOptions {
 export interface ResolvedRuntime extends RuntimeArtifact {
   runtime_id: string;
   revision: string;
+}
+
+export interface LiveRuntimeCandidate {
+  artifact: ResolvedRuntime;
+  dead: boolean;
+  killed: boolean;
 }
 
 function runtimeFailure(
@@ -93,7 +99,43 @@ export function resolveOwningRuntime(
   }
 }
 
-interface JsonRpcMessage {
+/**
+ * Select an affined runtime without revalidating an already launched child.
+ *
+ * The live child is the trust unit for its lifecycle: it was materialized,
+ * validated, and attested before launch. A missing, dead, killed, or
+ * revision-mismatched child must go back through the owning resolver so the
+ * artifact is fully revalidated before any relaunch.
+ */
+export function selectAffinedRuntime(
+  affinity: RuntimeAffinity,
+  defaultRuntime: ResolvedRuntime,
+  lookupLiveChild: (runtimeId: string, runtimeRevision: string) => LiveRuntimeCandidate | undefined,
+  resolveOwner: (affinity: RuntimeAffinity) => ResolvedRuntime,
+): ResolvedRuntime {
+  if (affinity.runtime_id === null || affinity.runtime_revision === null) {
+    return resolveOwner(affinity);
+  }
+  if (
+    affinity.runtime_id === defaultRuntime.runtime_id &&
+    affinity.runtime_revision === defaultRuntime.revision
+  ) {
+    return defaultRuntime;
+  }
+  const candidate = lookupLiveChild(affinity.runtime_id, affinity.runtime_revision);
+  if (
+    candidate &&
+    !candidate.dead &&
+    !candidate.killed &&
+    candidate.artifact.runtime_id === affinity.runtime_id &&
+    candidate.artifact.revision === affinity.runtime_revision
+  ) {
+    return candidate.artifact;
+  }
+  return resolveOwner(affinity);
+}
+
+export interface JsonRpcMessage {
   id?: string | number | null;
   method?: string;
   params?: { name?: string; arguments?: Record<string, unknown> };
@@ -104,6 +146,21 @@ interface JsonRpcMessage {
 function isCommitReconciliation(message: JsonRpcMessage): boolean {
   return (
     message.method === "tools/call" && message.params?.name === "workflow_reconcile_commit_result"
+  );
+}
+
+export function requestsCurrentRuntime(
+  message: JsonRpcMessage,
+  isCrossRuntimeCommitReconciled: (workflowId: string) => boolean,
+): boolean {
+  if (isCommitReconciliation(message)) return true;
+  const workflowId = message.params?.arguments?.workflow_id;
+  return (
+    typeof workflowId === "string" &&
+    message.method === "tools/call" &&
+    (message.params?.name === "workflow_parent_get" ||
+      message.params?.name === "workflow_operator_decision_get") &&
+    isCrossRuntimeCommitReconciled(workflowId)
   );
 }
 
@@ -234,6 +291,7 @@ function unknownToolResponse(message: JsonRpcMessage): boolean {
 interface ChildRuntime {
   artifact: ResolvedRuntime;
   process: ChildProcess;
+  reader: Interface;
   initialized: boolean;
   initializing: Promise<void> | null;
   initId: RequestId;
@@ -324,7 +382,14 @@ export class RuntimeSupervisor {
 
   close(): void {
     for (const child of this.children.values()) {
+      this.cancelInitialization(
+        child,
+        this.childError(child, "runtime supervisor is shutting down"),
+      );
       child.dead = true;
+      child.pending.clear();
+      child.reader.close();
+      child.process.stdin?.destroy();
       child.process.kill();
     }
     this.children.clear();
@@ -349,21 +414,33 @@ export class RuntimeSupervisor {
     );
   }
 
+  private cancelInitialization(child: ChildRuntime, error: WorkflowError): void {
+    const rejectInitialization = child.initReject;
+    child.initializingResponseIds.clear();
+    child.initId = null;
+    child.initResolve = null;
+    child.initReject = null;
+    child.initializationRequestId = undefined;
+    child.initializing = null;
+    rejectInitialization?.(error);
+  }
+
   private failChild(child: ChildRuntime, detail: string): void {
     if (child.dead) return;
     child.dead = true;
     const key = runtimeKey(child.artifact);
     if (this.children.get(key) === child) this.children.delete(key);
+    child.reader.close();
+    child.process.stdin?.destroy();
+    try {
+      child.process.kill("SIGKILL");
+    } catch {
+      // The process may have exited between the lifecycle event and cleanup.
+    }
     const error = this.childError(child, detail);
     for (const pending of child.pending.values()) this.emitRequestError(pending.id, error);
     child.pending.clear();
-    const rejectInitialization = child.initReject;
-    child.initializingResponseIds.clear();
-    child.initializing = null;
-    child.initResolve = null;
-    child.initReject = null;
-    child.initializationRequestId = undefined;
-    rejectInitialization?.(error);
+    this.cancelInitialization(child, error);
   }
 
   private launch(artifact: ResolvedRuntime): ChildRuntime {
@@ -410,9 +487,11 @@ export class RuntimeSupervisor {
         error instanceof Error ? error.message : "runtime process could not be launched",
       );
     }
+    const lines = createInterface({ input: childOutput(child) });
     const runtime: ChildRuntime = {
       artifact,
       process: child,
+      reader: lines,
       initialized: false,
       initializing: null,
       initId: null,
@@ -424,7 +503,6 @@ export class RuntimeSupervisor {
       tools: null,
       dead: false,
     };
-    const lines = createInterface({ input: childOutput(child) });
     lines.on("line", (line) => {
       let message: JsonRpcMessage | null = null;
       try {
@@ -585,6 +663,12 @@ export class RuntimeSupervisor {
     });
     try {
       await child.initializing;
+    } catch (error) {
+      this.failChild(
+        child,
+        error instanceof Error ? error.message : "owning runtime initialization failed",
+      );
+      throw error;
     } finally {
       child.initializingResponseIds.clear();
       child.initId = null;
@@ -595,29 +679,39 @@ export class RuntimeSupervisor {
   }
 
   private affinityFor(message: JsonRpcMessage): { artifact: ResolvedRuntime; adopted: boolean } {
-    if (isCommitReconciliation(message)) return { artifact: this.defaultRuntime, adopted: false };
+    if (
+      requestsCurrentRuntime(message, (workflowId) =>
+        this.store.isCrossRuntimeCommitReconciled(workflowId),
+      )
+    )
+      return { artifact: this.defaultRuntime, adopted: false };
     const workflowId = message.params?.arguments?.workflow_id;
     if (typeof workflowId !== "string") return { artifact: this.defaultRuntime, adopted: false };
-    if (
-      message.method === "tools/call" &&
-      (message.params?.name === "workflow_parent_get" ||
-        message.params?.name === "workflow_operator_decision_get") &&
-      this.store.isCrossRuntimeCommitReconciled(workflowId)
-    ) {
-      return { artifact: this.defaultRuntime, adopted: false };
-    }
     let affinity = this.store.runtimeAffinity(workflowId);
     let adopted = false;
     if (affinity.runtime_id === null && affinity.runtime_revision === null) {
       affinity = this.store.adoptRuntime(workflowId);
       adopted = true;
     }
-    if (
-      affinity.runtime_id === this.defaultRuntime.runtime_id &&
-      affinity.runtime_revision === this.defaultRuntime.revision
-    )
-      return { artifact: this.defaultRuntime, adopted };
-    return { artifact: resolveOwningRuntime(this.providerRoot, affinity, this.options), adopted };
+    return {
+      artifact: selectAffinedRuntime(
+        affinity,
+        this.defaultRuntime,
+        (runtimeId, runtimeRevision) => {
+          const child = this.children.get(
+            runtimeKey({ runtime_id: runtimeId, revision: runtimeRevision }),
+          );
+          if (!child) return undefined;
+          return {
+            artifact: child.artifact,
+            dead: child.dead,
+            killed: child.process.killed,
+          };
+        },
+        (ownerAffinity) => resolveOwningRuntime(this.providerRoot, ownerAffinity, this.options),
+      ),
+      adopted,
+    };
   }
 
   private adoptedRequest(message: JsonRpcMessage, adopted: boolean): string {

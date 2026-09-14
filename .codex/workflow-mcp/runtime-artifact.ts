@@ -126,7 +126,7 @@ function committedFile(root: string, revision: string, path: string): CommittedF
   };
 }
 
-function localImportPaths(source: string): string[] {
+export function localImportPaths(source: string): string[] {
   const imports: string[] = [];
   const withoutComments = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/gu, "");
   const dynamicImports = /\bimport\s*\(\s*(?:"([^"]*)"|'([^']*)')\s*\)/gu;
@@ -150,7 +150,7 @@ function localImportPaths(source: string): string[] {
   return imports;
 }
 
-function localImportCandidates(path: string, specifier: string): string[] {
+export function localImportCandidates(path: string, specifier: string): string[] {
   const base = posix.normalize(posix.join(posix.dirname(path), specifier));
   if (base === ".." || base.startsWith("../") || base.startsWith("/")) {
     throw new Error(`trusted runtime local import escapes repository: ${path} -> ${specifier}`);
