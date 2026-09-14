@@ -6,8 +6,6 @@ import { WorkflowStore } from "../store.js";
 import { objectDigest } from "../validation.js";
 import { annotateFixtureFailure, captureHeadObservation, fixture } from "./test-fixtures.js";
 
-const ROLES = ["parent", "implementer", "reviewer", "committer"];
-
 function rangeFixture() {
   const { root, git } = fixture();
   mkdirSync(join(root, "dir"));
@@ -355,6 +353,18 @@ function optionalFinding(id: string) {
   };
 }
 
+function persistedState(store: any, workflowId: string): any {
+  const row = store.db
+    .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+    .get(workflowId);
+  assert.ok(row, "persisted workflow exists");
+  return JSON.parse(row.state_json);
+}
+
+function currentVersion(store: any, workflowId: string): number {
+  return persistedState(store, workflowId).version;
+}
+
 function doCreate(ctx: any, options: any = {}) {
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
 }
@@ -387,7 +397,7 @@ function doImplementation(ctx: any, _version: number, options: any = {}) {
   const workflow = ctx.created;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     status: options.status ?? "DONE",
     summary: options.summary ?? "implemented",
     agent_touched_paths: options.touched ?? [],
@@ -410,7 +420,7 @@ function doExpandScope(ctx: any, _version: number, addedPaths: string[]) {
   const workflow = ctx.created;
   ctx.store.expandScope({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     added_paths: addedPaths,
     reason: "authorize the remaining implementation scope",
     user_authorization: "explicitly authorized exact paths",
@@ -420,7 +430,7 @@ function doExpandScope(ctx: any, _version: number, addedPaths: string[]) {
 function doReview(ctx: any, _version: number, options: any = {}) {
   const workflow = ctx.created;
   const status = options.status ?? "APPROVED";
-  const expectedVersion = ctx.store.parentGet(workflow.workflow_id).version;
+  const expectedVersion = currentVersion(ctx.store, workflow.workflow_id);
   if (workflow.review_target?.review_mode !== "commit_range") {
     ctx.store.beginReview({
       workflow_id: workflow.workflow_id,
@@ -429,8 +439,7 @@ function doReview(ctx: any, _version: number, options: any = {}) {
   }
   const validationResults =
     options.validation_results ??
-    ctx.store
-      .reviewerGet(workflow.workflow_id)
+    persistedState(ctx.store, workflow.workflow_id)
       .validation_requirements.filter(({ kind }: any) => kind === "command")
       .map(({ validation_id }: any) => ({
         validation_id,
@@ -439,13 +448,13 @@ function doReview(ctx: any, _version: number, options: any = {}) {
       }));
   ctx.store.submitReview({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     review_status: status,
     blocking_findings: options.blocking ?? [],
     optional_findings: options.optional ?? [],
     prior_finding_classifications: options.prior ?? {},
     ...(validationResults.length > 0 ? { validation_results: validationResults } : {}),
-    ...(ctx.store.reviewerGet(workflow.workflow_id).repair_directive
+    ...(persistedState(ctx.store, workflow.workflow_id).repair_directive
       ? {
           repair_conformance: {
             status: "conforming",
@@ -463,7 +472,7 @@ function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
     throw new Error("expected an exact repair proposal");
   ctx.store.authorizeRepair({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     finding_ids: ids,
     repair_directive: {
       selected_finding_ids: decision.execution.primary.repair_binding.selected_finding_ids,
@@ -477,7 +486,7 @@ function doResumeImplementation(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.resumeImplementation({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     resume_context: "resumed",
   });
 }
@@ -486,7 +495,7 @@ function doResumeReview(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.resumeReview({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     resume_context: "resumed",
   });
 }
@@ -495,7 +504,7 @@ function doAcceptConcerns(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.acceptConcerns({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     user_authorization: "user accepted concerns",
   });
 }
@@ -504,7 +513,7 @@ function doAuthorizeCommit(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.authorizeCommit({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     user_authorization: "user authorized commit",
   });
 }
@@ -513,7 +522,7 @@ function doPrepareCommit(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.prepared = ctx.store.prepareCommit({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
   });
 }
 
@@ -521,7 +530,7 @@ function doSubmitCommitResult(ctx: any, _version: number, options: any) {
   const workflow = ctx.created;
   ctx.store.submitCommitResult({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     attempt_id: options.attemptId ?? ctx.prepared.commit_preparation.attempt_id,
     outcome: options.outcome,
     failure_summary: options.failure_summary ?? null,
@@ -532,7 +541,7 @@ function doRetryCommit(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.retryCommit({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     retry_context: "retrying",
   });
 }
@@ -541,7 +550,7 @@ function doFinalize(ctx: any, _version: number) {
   const workflow = ctx.created;
   ctx.store.finalizeRepairExhausted({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
   });
 }
 
@@ -549,7 +558,7 @@ function doLinkedFollowup(ctx: any, _version: number, findingIds: string[]) {
   const workflow = ctx.created;
   ctx.child = ctx.store.createLinkedFollowup({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     objective: "linked child",
     approved_plan: null,
     approved_paths: ["note.txt"],
@@ -593,7 +602,7 @@ function doLinkedFollowupFromPlan(ctx: any, findingIds: string[]) {
   const workflow = ctx.created;
   ctx.child = ctx.store.createLinkedFollowupFromPlan({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     plan_id: ctx.plan.plan_id,
     revision: ctx.plan.revision,
     finding_ids: findingIds,
@@ -605,7 +614,7 @@ function doChildImplementation(ctx: any, options: any = {}) {
   const workflow = ctx.child;
   ctx.store.submitImplementation({
     workflow_id: workflow.workflow_id,
-    expected_version: ctx.store.parentGet(workflow.workflow_id).version,
+    expected_version: currentVersion(ctx.store, workflow.workflow_id),
     status: "DONE",
     summary: "planned remediation implemented",
     agent_touched_paths: [],
@@ -629,11 +638,11 @@ function doChildReview(ctx: any, prior: any = {}) {
   const id = workflow.workflow_id;
   ctx.store.beginReview({
     workflow_id: id,
-    expected_version: ctx.store.parentGet(id).version,
+    expected_version: currentVersion(ctx.store, id),
   });
   ctx.store.submitReview({
     workflow_id: id,
-    expected_version: ctx.store.parentGet(id).version,
+    expected_version: currentVersion(ctx.store, id),
     review_status: "APPROVED",
     blocking_findings: [],
     optional_findings: [],
@@ -665,33 +674,23 @@ function assertSnapshot(store: any, ctx: any, snap: any, label: string) {
   assert.ok(entry, `${label}: workflow exists`);
   const workflow = entry;
   const id = workflow.workflow_id;
-  const expectedVersion = store.parentGet(id).version;
-  for (const role of ROLES) {
-    const view =
-      role === "parent"
-        ? store.parentGet(id)
-        : role === "implementer"
-          ? store.implementerGet(id)
-          : role === "reviewer"
-            ? store.reviewerGet(id)
-            : store.committerGet(id);
-    assert.equal(view.phase, snap.phase, `${label}: ${role} phase`);
-    assert.equal(view.version, expectedVersion, `${label}: ${role} version`);
-    assert.deepEqual(
-      view.permitted_next_actions,
-      snap.actions[role],
-      `${label}: ${role} permitted actions`,
-    );
-  }
   const row = store.db
     .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
     .get(id);
   assert.ok(row, `${label}: persisted row exists`);
   const parsed = JSON.parse(row.state_json);
-  assert.equal(row.version, expectedVersion, `${label}: persisted row version`);
-  assert.equal(parsed.version, expectedVersion, `${label}: persisted state version`);
+  assert.equal(row.version, parsed.version, `${label}: persisted state version matches row`);
   assert.equal(parsed.phase, snap.phase, `${label}: persisted state phase`);
   assert.equal(row.state_digest, objectDigest(parsed), `${label}: stored digest matches state`);
+}
+
+function assertAudit(store: any, ctx: any, snap: any, label: string) {
+  const entry = snap.wf === "child" ? ctx.child : ctx.created;
+  assert.ok(entry, `${label}: workflow exists`);
+  const workflow = entry;
+  const id = workflow.workflow_id;
+  const row = store.db.prepare("SELECT state_digest FROM workflows WHERE workflow_id = ?").get(id);
+  assert.ok(row, `${label}: persisted row exists`);
   const audit = store.audit(id);
   assert.deepEqual(
     audit.map((event: any) => event.event_type),
@@ -1316,17 +1315,24 @@ function scenario(name: string, steps: any[], options: any = {}) {
       ...base,
     };
     try {
-      for (const step of steps) {
+      const latestSnapshots = new Map<string, any>();
+      for (const [stepIndex, step] of steps.entries()) {
         step.run(ctx);
         for (const snap of step.snapshots) {
           assertSnapshot(store, ctx, snap, `${name}: ${step.name} (${snap.wf})`);
+          latestSnapshots.set(snap.wf, snap);
         }
-        store.close();
-        store = new WorkflowStore({ repositoryRoot: root, databasePath: dbPath });
-        ctx.store = store;
-        for (const snap of step.snapshots) {
-          assertSnapshot(store, ctx, snap, `${name}: ${step.name} (${snap.wf}) after reopen`);
+        if (step.restart === true || stepIndex === steps.length - 1) {
+          store.close();
+          store = new WorkflowStore({ repositoryRoot: root, databasePath: dbPath });
+          ctx.store = store;
+          for (const snap of step.snapshots) {
+            assertSnapshot(store, ctx, snap, `${name}: ${step.name} (${snap.wf}) after reopen`);
+          }
         }
+      }
+      for (const [workflow, snapshot] of latestSnapshots) {
+        assertAudit(store, ctx, snapshot, `${name}: final ${workflow} audit`);
       }
     } finally {
       ctx.store.close();
@@ -1339,11 +1345,13 @@ scenario("clean change lifecycle ends committed", [
   {
     name: "create change workflow",
     run: doCreate,
+    restart: true,
     snapshots: [snap("parent", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created)],
   },
   {
     name: "implement done",
     run: (ctx: any) => doImplementation(ctx, 0),
+    restart: true,
     snapshots: [snap("parent", "REVIEWING", 1, ACTIONS.reviewing, EVENTS.submitted)],
   },
   {
@@ -1373,6 +1381,7 @@ scenario("clean change lifecycle ends committed", [
   {
     name: "prepare commit",
     run: (ctx: any) => doPrepareCommit(ctx, 3),
+    restart: true,
     snapshots: [
       snap("parent", "COMMIT_PREPARED", 4, ACTIONS.commitPrepared, EVENTS.commitPrepared),
     ],
@@ -1655,6 +1664,7 @@ scenario("both implementation resumes restore their prior phase", [
     name: "needs context from implementing: stop",
     run: (ctx: any) =>
       doImplementation(ctx, 0, { status: "NEEDS_CONTEXT", summary: "need context" }),
+    restart: true,
     snapshots: [snap("parent", "STOPPED_NEEDS_CONTEXT", 1, ACTIONS.needsContext, EVENTS.stopped)],
   },
   {
@@ -1704,6 +1714,7 @@ scenario("both implementation resumes restore their prior phase", [
         summary: "blocked",
         resolution: { "F-1": "still_present" },
       }),
+    restart: true,
     snapshots: [
       snap(
         "parent",
@@ -2234,6 +2245,7 @@ scenario("linked follow-ups copy optional and blocking findings into fresh child
   {
     name: "optional from approved: link optional child",
     run: (ctx: any) => doLinkedFollowup(ctx, 2, ["F-OPT"]),
+    restart: true,
     snapshots: [
       snap("parent", "STOPPED_APPROVED", 3, ACTIONS.none, EVENTS.approvedLinked),
       snap("child", "IMPLEMENTING", 0, ACTIONS.implementing, EVENTS.created),
@@ -2592,6 +2604,26 @@ scenario(
           outcome: "not_committed",
           failure_summary: "pre-commit hook rejected",
         }),
+      restart: true,
+      snapshots: [
+        snap("parent", "STOPPED_NOT_COMMITTED", 5, ACTIONS.notCommitted, EVENTS.commitResult),
+      ],
+    },
+    {
+      name: "verify durable not-committed recovery",
+      run: (ctx: any) => {
+        const view = ctx.store.parentGet(ctx.created.workflow_id);
+        assert.deepEqual(view.permitted_next_actions, ["workflow_retry_commit"]);
+        assert.equal(
+          view.commit_preparation.attempt_id,
+          ctx.prepared.commit_preparation.attempt_id,
+        );
+        assert.deepEqual(view.commit_result, {
+          outcome: "not_committed",
+          commit_hash: null,
+          failure_summary: "pre-commit hook rejected",
+        });
+      },
       snapshots: [
         snap("parent", "STOPPED_NOT_COMMITTED", 5, ACTIONS.notCommitted, EVENTS.commitResult),
       ],

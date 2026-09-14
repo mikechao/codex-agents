@@ -127,6 +127,18 @@ path; `test:stress` runs both tiers with their respective caps. Focused Workflow
 commands retain parallelism `7` and `4` and exclude nested runtime files. Reviewer-level command
 concurrency remains supported without a global lock, retries, or deduplication coordinator.
 
+Test cost is an architectural constraint. Use the cheapest deterministic or component seam that
+proves the contract, and reserve real Git repositories and history, SQLite, filesystem
+copying/scanning, dependency installation, spawned processes/transports, and wall-clock behavior for
+tests whose contract genuinely crosses those boundaries. Do not accumulate unrelated contracts and
+repeated heavyweight setup in broad scenarios when focused tests can preserve the same coverage,
+and keep a small representative integration set for genuine boundary guarantees. Investigate any
+material increase in wall time, process count, or timing sensitivity of `test:core`, `test:runtime`,
+`test:workflow-mcp`, or `test` before completion rather than compensating primarily with timeout or
+parallelism changes. During iterative repair and review, prefer focused affected tests, then an
+affected owned tier only when it adds a useful signal, followed by one final `bun run validate`;
+do not stack overlapping comprehensive commands without a concrete diagnostic or policy reason.
+
 Subprocess execution keeps Node-compatible `node:child_process` (`execFileSync`/`spawnSync`)
 semantics: Bun's `spawnSync` does not throw on `maxBuffer` overflow (it SIGTERMs with no error),
 so the binary-blob protections and `ERROR_GIT`/`ERROR_RECEIPT_UNAVAILABLE` categorization rely on

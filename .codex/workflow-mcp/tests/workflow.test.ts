@@ -13,8 +13,10 @@ import {
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
+import { permittedNextActions } from "../transitions.js";
 import { objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
+import { deterministicReadiness } from "./workflow-state-fixtures.js";
 
 function input(git: (...args: string[]) => string, options: any = {}) {
   const paths = options.approved_paths ?? ["note.txt"];
@@ -51,7 +53,7 @@ function implementation(
 ) {
   return store.submitImplementation({
     workflow_id: workflow.workflow_id,
-    expected_version: version ?? store.parentGet(workflow.workflow_id).version,
+    expected_version: version ?? currentVersion(store, workflow.workflow_id),
     status,
     summary: "implementation evidence",
     agent_touched_paths: touched,
@@ -91,17 +93,18 @@ function review(
 ) {
   const id = workflow.workflow_id;
   if (workflow.review_target.review_mode === "working_tree") {
-    store.beginReview({ workflow_id: id, expected_version: store.parentGet(id).version });
+    store.beginReview({ workflow_id: id, expected_version: currentVersion(store, id) });
   }
+  const current = rawState(store, id);
   return store.submitReview({
     workflow_id: id,
-    expected_version: store.parentGet(id).version,
+    expected_version: current.version,
     review_status: status,
     blocking_findings: blocking,
     optional_findings: optional,
     prior_finding_classifications: prior,
     validation_results: reviewerValidationResults(workflow),
-    ...(store.reviewerGet(id).repair_directive
+    ...(current.repair_directive
       ? {
           repair_conformance: {
             status: "conforming",
@@ -161,6 +164,15 @@ function rawState(store: any, workflowId: string): any {
   return JSON.parse(row.state_json);
 }
 
+function currentVersion(store: any, workflowId: string): number {
+  return rawState(store, workflowId).version;
+}
+
+function deterministicParentActions(store: any, workflowId: string): string[] {
+  const state = rawState(store, workflowId);
+  return permittedNextActions(state, "parent", deterministicReadiness(state));
+}
+
 function authorized(
   store: any,
   root: string,
@@ -186,7 +198,7 @@ function authorized(
   review(store, created);
   store.authorizeCommit({
     workflow_id: id,
-    expected_version: store.parentGet(id).version,
+    expected_version: currentVersion(store, id),
     user_authorization: "authorized",
   });
   return { created, id };
@@ -396,6 +408,18 @@ test("worker mutations are capability-free and retain optimistic version checks"
       expected_version: store.parentGet(id).version,
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
+    assert.deepEqual(store.committerGet(id).permitted_next_actions, [
+      "workflow_submit_commit_result",
+    ]);
+    const preparedDecision = store.operatorDecisionGet(id);
+    assert.deepEqual(preparedDecision.primary, { kind: "no_user_action", route: "commit" });
+    assert.deepEqual(preparedDecision.execution.primary, {
+      mode: "dispatch",
+      route: "commit",
+      operation: "workflow_submit_commit_result",
+      workflow_id: id,
+      expected_version: prepared.version,
+    });
     git("commit", "-qm", "workflow test");
     const committed = store.submitCommitResult({
       workflow_id: id,
@@ -1824,7 +1848,7 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     ]);
     const failed = store.prepareCommit({
       workflow_id: first.id,
-      expected_version: store.parentGet(first.id).version,
+      expected_version: currentVersion(store, first.id),
     });
     assert.equal(failed.phase, "STOPPED_COMMIT_PREPARATION");
     assert.equal(failed.stop_context.category, "ERROR_STAGED_SCOPE");
@@ -1834,13 +1858,13 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     assert.equal(rawState(store, first.id).review_receipt !== null, true);
     assert.equal(failed.commit_preparation, null);
     assert.equal(failed.commit_result, null);
-    assert.deepEqual(store.parentGet(first.id).permitted_next_actions, [
+    assert.deepEqual(deterministicParentActions(store, first.id), [
       "workflow_retry_commit_preparation",
     ]);
     git("add", "note.txt");
     const retried = store.retryCommitPreparation({
       workflow_id: first.id,
-      expected_version: store.parentGet(first.id).version,
+      expected_version: currentVersion(store, first.id),
       retry_context: "stage the reviewed path",
     });
     assert.equal(retried.phase, "COMMIT_AUTHORIZED");
@@ -1853,7 +1877,7 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     assert.equal(rawState(store, first.id).review_receipt !== null, true);
     const prepared = store.prepareCommit({
       workflow_id: first.id,
-      expected_version: store.parentGet(first.id).version,
+      expected_version: currentVersion(store, first.id),
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
 
@@ -1861,7 +1885,7 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     writeFileSync(join(root, "note.txt"), "changed after approval\n");
     const stale = store.prepareCommit({
       workflow_id: second.id,
-      expected_version: store.parentGet(second.id).version,
+      expected_version: currentVersion(store, second.id),
     });
     assert.equal(stale.phase, "STOPPED_COMMIT_PREPARATION");
     assert.equal(stale.stop_context.category, "ERROR_STALE_RECEIPT");
@@ -1871,7 +1895,7 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     ]);
     const returned = store.returnCommitToReview({
       workflow_id: second.id,
-      expected_version: store.parentGet(second.id).version,
+      expected_version: currentVersion(store, second.id),
       review_context: "review changed worktree",
     });
     assert.equal(returned.phase, "REVIEWING");
@@ -1888,7 +1912,7 @@ test("commit preparation failures distinguish staged scope, stale review, and re
     assert.equal(
       store.authorizeCommit({
         workflow_id: second.id,
-        expected_version: store.parentGet(second.id).version,
+        expected_version: currentVersion(store, second.id),
         user_authorization: "fresh authorization",
       }).phase,
       "COMMIT_AUTHORIZED",
@@ -1935,7 +1959,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       const stagedBefore = git("diff", "--cached", "--name-status");
       const stopped = store.prepareCommit({
         workflow_id: id,
-        expected_version: store.parentGet(id).version,
+        expected_version: currentVersion(store, id),
       });
       assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION", candidate.name);
       assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE", candidate.name);
@@ -1945,7 +1969,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       assert.equal(git("rev-parse", "HEAD"), headBefore, candidate.name);
       assert.equal(git("status", "--porcelain"), statusBefore, candidate.name);
       assert.equal(git("diff", "--cached", "--name-status"), stagedBefore, candidate.name);
-      assert.deepEqual(store.parentGet(id).permitted_next_actions, [
+      assert.deepEqual(deterministicParentActions(store, id), [
         "workflow_retry_commit_preparation",
       ]);
       if (candidate.name === "empty") {
@@ -1955,12 +1979,12 @@ test("commit preparation store matrix preserves Git state and routes every failu
           repositoryRoot: root,
           databasePath: join(root, "matrix.sqlite"),
         });
-        assert.equal(store.parentGet(id).version, version);
+        assert.equal(currentVersion(store, id), version);
         assert.equal(store.audit(id).at(-1).event_type, "COMMIT_PREPARATION_FAILED");
       }
       const retried = store.retryCommitPreparation({
         workflow_id: id,
-        expected_version: store.parentGet(id).version,
+        expected_version: currentVersion(store, id),
         retry_context: `repair ${candidate.name}`,
       });
       assert.equal(retried.phase, "COMMIT_AUTHORIZED", candidate.name);
@@ -1998,13 +2022,13 @@ test("commit preparation store matrix preserves Git state and routes every failu
       const statusBefore = git("status", "--porcelain");
       const stopped = store.prepareCommit({
         workflow_id: workflow.id,
-        expected_version: store.parentGet(workflow.id).version,
+        expected_version: currentVersion(store, workflow.id),
       });
       assert.equal(stopped.stop_context.category, "ERROR_STAGED_CONTENT", candidate.name);
       assert.equal(stopped.stop_context.recovery, "retry", candidate.name);
       assert.equal(git("rev-parse", "HEAD"), headBefore, candidate.name);
       assert.equal(git("status", "--porcelain"), statusBefore, candidate.name);
-      assert.deepEqual(store.parentGet(workflow.id).permitted_next_actions, [
+      assert.deepEqual(deterministicParentActions(store, workflow.id), [
         "workflow_retry_commit_preparation",
       ]);
     } finally {
@@ -2033,16 +2057,16 @@ test("commit preparation store matrix preserves Git state and routes every failu
       candidate.mutate(root, git);
       const stopped = store.prepareCommit({
         workflow_id: workflow.id,
-        expected_version: store.parentGet(workflow.id).version,
+        expected_version: currentVersion(store, workflow.id),
       });
       assert.equal(stopped.stop_context.category, "ERROR_STALE_RECEIPT", candidate.name);
       assert.equal(stopped.stop_context.recovery, "review", candidate.name);
-      assert.deepEqual(store.parentGet(workflow.id).permitted_next_actions, [
+      assert.deepEqual(deterministicParentActions(store, workflow.id), [
         "workflow_return_commit_to_review",
       ]);
       const returned = store.returnCommitToReview({
         workflow_id: workflow.id,
-        expected_version: store.parentGet(workflow.id).version,
+        expected_version: currentVersion(store, workflow.id),
         review_context: `refresh ${candidate.name}`,
       });
       assert.equal(returned.phase, "REVIEWING", candidate.name);
@@ -2081,13 +2105,13 @@ test("commit preparation store matrix preserves Git state and routes every failu
     const rangeId = range.workflow_id;
     store.submitReview({
       workflow_id: rangeId,
-      expected_version: store.parentGet(rangeId).version,
+      expected_version: currentVersion(store, rangeId),
       review_status: "APPROVED",
       blocking_findings: [],
       optional_findings: [],
       prior_finding_classifications: {},
     });
-    const beforeVersion = store.parentGet(rangeId).version;
+    const beforeVersion = currentVersion(store, rangeId);
     const beforeAudit = store.audit(rangeId);
     assert.equal(
       category(() =>
@@ -2098,7 +2122,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       ),
       "ERROR_COMMIT_NOT_ALLOWED",
     );
-    assert.equal(store.parentGet(rangeId).version, beforeVersion);
+    assert.equal(currentVersion(store, rangeId), beforeVersion);
     assert.deepEqual(store.audit(rangeId), beforeAudit);
     store.close();
   } finally {
@@ -2114,7 +2138,7 @@ test("return-to-review legality preflights receipt reconstruction", () => {
     writeFileSync(join(root, "note.txt"), "changed after approval\n");
     const stopped = store.prepareCommit({
       workflow_id: workflow.id,
-      expected_version: store.parentGet(workflow.id).version,
+      expected_version: currentVersion(store, workflow.id),
     });
     assert.equal(stopped.phase, "STOPPED_COMMIT_PREPARATION");
     assert.equal(stopped.stop_context.recovery, "review");
@@ -2150,12 +2174,12 @@ test("commit result rejects malformed claims and records terminal verification m
     git("add", "note.txt");
     const prepared = store.prepareCommit({
       workflow_id: first.id,
-      expected_version: store.parentGet(first.id).version,
+      expected_version: currentVersion(store, first.id),
     });
     const submit = (overrides: any = {}) =>
       store.submitCommitResult({
         workflow_id: first.id,
-        expected_version: store.parentGet(first.id).version,
+        expected_version: currentVersion(store, first.id),
         attempt_id: prepared.commit_preparation.attempt_id,
         outcome: "committed",
         failure_summary: null,
@@ -2173,20 +2197,20 @@ test("commit result rejects malformed claims and records terminal verification m
       category(() => submit({ attempt_id: "0".repeat(36) })),
       "ERROR_COMMIT_MISMATCH",
     );
-    const before = store.parentGet(first.id).version;
-    assert.equal(store.parentGet(first.id).version, before);
+    const before = currentVersion(store, first.id);
+    assert.equal(currentVersion(store, first.id), before);
 
     git("commit", "-qm", "unexpected head");
     git("commit", "--allow-empty", "-qm", "unexpected second head");
     const mismatch = submit();
     assert.equal(mismatch.phase, "STOPPED_COMMIT_MISMATCH");
     assert.equal(mismatch.commit_result.mismatch_category, "PARENT_MISMATCH");
-    assert.deepEqual(store.parentGet(first.id).permitted_next_actions, []);
+    assert.deepEqual(mismatch.permitted_next_actions, []);
     assert.equal(
       category(() =>
         store.retryCommit({
           workflow_id: first.id,
-          expected_version: store.parentGet(first.id).version,
+          expected_version: currentVersion(store, first.id),
           retry_context: "cannot retry terminal mismatch",
         }),
       ),
@@ -2246,24 +2270,24 @@ test("commit verification distinguishes every prepared-result mismatch and prese
       git("add", "note.txt");
       const prepared = store.prepareCommit({
         workflow_id: authorizedWorkflow.id,
-        expected_version: store.parentGet(authorizedWorkflow.id).version,
+        expected_version: currentVersion(store, authorizedWorkflow.id),
       });
       candidate.mutate(root, git, store, authorizedWorkflow.id);
       const result = store.submitCommitResult({
         workflow_id: authorizedWorkflow.id,
-        expected_version: store.parentGet(authorizedWorkflow.id).version,
+        expected_version: currentVersion(store, authorizedWorkflow.id),
         attempt_id: prepared.commit_preparation.attempt_id,
         outcome: candidate.outcome,
         failure_summary: candidate.outcome === "committed" ? null : "external commit failed",
       });
       assert.equal(result.phase, "STOPPED_COMMIT_MISMATCH", candidate.name);
       assert.equal(result.commit_result.mismatch_category, candidate.expected, candidate.name);
-      assert.deepEqual(store.parentGet(authorizedWorkflow.id).permitted_next_actions, []);
+      assert.deepEqual(result.permitted_next_actions, []);
       assert.equal(
         category(() =>
           store.retryCommit({
             workflow_id: authorizedWorkflow.id,
-            expected_version: store.parentGet(authorizedWorkflow.id).version,
+            expected_version: currentVersion(store, authorizedWorkflow.id),
             retry_context: "terminal mismatch cannot retry",
           }),
         ),
@@ -2291,12 +2315,12 @@ test("post-commit hook-created extra commits are rejected as a parent mismatch",
     git("add", "note.txt");
     const prepared = store.prepareCommit({
       workflow_id: authorizedWorkflow.id,
-      expected_version: store.parentGet(authorizedWorkflow.id).version,
+      expected_version: currentVersion(store, authorizedWorkflow.id),
     });
     git("commit", "-qm", "primary commit");
     const result = store.submitCommitResult({
       workflow_id: authorizedWorkflow.id,
-      expected_version: store.parentGet(authorizedWorkflow.id).version,
+      expected_version: currentVersion(store, authorizedWorkflow.id),
       attempt_id: prepared.commit_preparation.attempt_id,
       outcome: "committed",
       failure_summary: null,
@@ -2329,14 +2353,14 @@ test("commit preparation binds exact modify, add, delete, and mode paths", () =>
     review(store, created);
     store.authorizeCommit({
       workflow_id: id,
-      expected_version: store.parentGet(id).version,
+      expected_version: currentVersion(store, id),
       user_authorization: "exact preparation",
     });
     for (const path of approvedPaths) git("add", path);
     const tree = git("write-tree");
     const prepared = store.prepareCommit({
       workflow_id: id,
-      expected_version: store.parentGet(id).version,
+      expected_version: currentVersion(store, id),
     });
     assert.equal(prepared.phase, "COMMIT_PREPARED");
     assert.deepEqual(prepared.commit_preparation.expected_paths, approvedPaths);

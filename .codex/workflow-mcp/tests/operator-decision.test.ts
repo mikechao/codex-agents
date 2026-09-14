@@ -21,6 +21,7 @@ import type { FindingId, WorkflowAction, WorkflowId, WorkflowState } from "../ty
 import { MAX_PATHS, objectDigest } from "../validation.js";
 import { WORKFLOW_ACTION_VALUES } from "../values.js";
 import { fixture } from "./test-fixtures.js";
+import { workflowState } from "./workflow-state-fixtures.js";
 
 function create(
   store: WorkflowStore,
@@ -2071,101 +2072,85 @@ test("operator projection rejects branch merges, divergent order, and extra unre
 });
 
 test("operator lineage references share the exact bounded relationship definition", () => {
-  const { root, git } = fixture();
-  const databasePath = join(root, "operator-lineage-bound.sqlite");
-  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
-  try {
-    const state = structuredClone(create(store, git)) as unknown as WorkflowState;
-    const ids = ["parent", "source", "successor", "root", "predecessor", "lineage"] as WorkflowId[];
-    state.parent_workflow_id = ids[0];
-    state.source_workflow_id = ids[1];
-    state.superseded_by_workflow_id = ids[2];
-    state.linked_continuation = {
-      root_workflow_id: ids[3],
-      predecessor_workflow_id: ids[4],
-      lineage_workflow_ids: [ids[5], ids[0], ids[5], ids[3]],
-      original_base_head: state.base_head,
-      combined_review_paths: state.approved_paths,
-      review_stage: "remediation",
-      remediation_review_receipt: null,
-    };
+  const state = workflowState();
+  const ids = ["parent", "source", "successor", "root", "predecessor", "lineage"] as WorkflowId[];
+  state.parent_workflow_id = ids[0];
+  state.source_workflow_id = ids[1];
+  state.superseded_by_workflow_id = ids[2];
+  state.linked_continuation = {
+    root_workflow_id: ids[3],
+    predecessor_workflow_id: ids[4],
+    lineage_workflow_ids: [ids[5], ids[0], ids[5], ids[3]],
+    original_base_head: state.base_head,
+    combined_review_paths: state.approved_paths,
+    review_stage: "remediation",
+    remediation_review_receipt: null,
+  };
 
-    assert.deepEqual(lineageReferences(state), ids);
-    const empty = structuredClone(state);
-    empty.parent_workflow_id = null;
-    empty.source_workflow_id = null;
-    empty.superseded_by_workflow_id = null;
-    empty.linked_continuation = null;
-    assert.deepEqual(lineageReferences(empty), []);
-    assert.equal(MAX_LINEAGE_RECORDS, 32);
-  } finally {
-    store.close();
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.deepEqual(lineageReferences(state), ids);
+  const empty = structuredClone(state);
+  empty.parent_workflow_id = null;
+  empty.source_workflow_id = null;
+  empty.superseded_by_workflow_id = null;
+  empty.linked_continuation = null;
+  assert.deepEqual(lineageReferences(empty), []);
+  assert.equal(MAX_LINEAGE_RECORDS, 32);
 });
 
 test("operator lineage validation accepts the bound and rejects records over it", () => {
-  const { root, git } = fixture();
-  const databasePath = join(root, "operator-lineage-limit.sqlite");
-  const store = new WorkflowStore({ repositoryRoot: root, databasePath });
-  try {
-    const base = structuredClone(create(store, git)) as unknown as WorkflowState;
-    const buildRecords = (count: number) => {
-      const states = Array.from({ length: count }, (_, index) => {
-        const state = structuredClone(base) as WorkflowState;
-        state.workflow_id = `lineage-${index}` as WorkflowId;
-        state.parent_workflow_id = null;
-        state.source_workflow_id = null;
-        state.superseded_by_workflow_id = null;
-        state.linked_continuation = null;
-        return state;
-      });
-      for (let index = 0; index < states.length - 1; index += 1) {
-        const current = states[index] as WorkflowState;
-        const successor = states[index + 1] as WorkflowState;
-        const lineage = states.slice(0, index + 1).map((state) => state.workflow_id as WorkflowId);
-        current.superseded_by_workflow_id = successor.workflow_id;
-        successor.parent_workflow_id = current.workflow_id;
-        successor.source_workflow_id = current.workflow_id;
-        successor.linked_continuation = {
-          root_workflow_id: states[0]?.workflow_id as WorkflowId,
-          predecessor_workflow_id: current.workflow_id as WorkflowId,
-          lineage_workflow_ids: lineage,
-          original_base_head: base.base_head,
-          combined_review_paths: base.approved_paths,
-          review_stage: "remediation",
-          remediation_review_receipt: null,
-        };
-      }
-      return states.map((state) => ({
-        state,
-        readiness: {
-          head: { status: "readable" as const, current_head: state.base_head },
-          implementation_submission: { status: "ready" as const },
-        },
-      }));
-    };
-
-    const withinRecords = buildRecords(MAX_LINEAGE_RECORDS);
-    const withinBound = deriveOperatorDecision(
-      withinRecords[0]?.state as WorkflowState,
-      withinRecords,
-    );
-    assert.deepEqual(withinBound.primary, {
-      kind: "operator_intervention",
-      reason: "the workflow has been superseded",
+  const base = workflowState();
+  const buildRecords = (count: number) => {
+    const states = Array.from({ length: count }, (_, index) => {
+      const state = structuredClone(base) as WorkflowState;
+      state.workflow_id = `lineage-${index}` as WorkflowId;
+      state.parent_workflow_id = null;
+      state.source_workflow_id = null;
+      state.superseded_by_workflow_id = null;
+      state.linked_continuation = null;
+      return state;
     });
+    for (let index = 0; index < states.length - 1; index += 1) {
+      const current = states[index] as WorkflowState;
+      const successor = states[index + 1] as WorkflowState;
+      const lineage = states.slice(0, index + 1).map((state) => state.workflow_id as WorkflowId);
+      current.superseded_by_workflow_id = successor.workflow_id;
+      successor.parent_workflow_id = current.workflow_id;
+      successor.source_workflow_id = current.workflow_id;
+      successor.linked_continuation = {
+        root_workflow_id: states[0]?.workflow_id as WorkflowId,
+        predecessor_workflow_id: current.workflow_id as WorkflowId,
+        lineage_workflow_ids: lineage,
+        original_base_head: base.base_head,
+        combined_review_paths: base.approved_paths,
+        review_stage: "remediation",
+        remediation_review_receipt: null,
+      };
+    }
+    return states.map((state) => ({
+      state,
+      readiness: {
+        head: { status: "readable" as const, current_head: state.base_head },
+        implementation_submission: { status: "ready" as const },
+      },
+    }));
+  };
 
-    const overRecords = buildRecords(MAX_LINEAGE_RECORDS + 1);
-    const overBound = deriveOperatorDecision(overRecords[0]?.state as WorkflowState, overRecords);
-    assert.deepEqual(overBound.primary, {
-      kind: "operator_intervention",
-      reason: "explicit lineage exceeds the bounded traversal limit",
-    });
-  } finally {
-    store.close();
-    rmSync(root, { recursive: true, force: true });
-  }
+  const withinRecords = buildRecords(MAX_LINEAGE_RECORDS);
+  const withinBound = deriveOperatorDecision(
+    withinRecords[0]?.state as WorkflowState,
+    withinRecords,
+  );
+  assert.deepEqual(withinBound.primary, {
+    kind: "operator_intervention",
+    reason: "the workflow has been superseded",
+  });
+
+  const overRecords = buildRecords(MAX_LINEAGE_RECORDS + 1);
+  const overBound = deriveOperatorDecision(overRecords[0]?.state as WorkflowState, overRecords);
+  assert.deepEqual(overBound.primary, {
+    kind: "operator_intervention",
+    reason: "explicit lineage exceeds the bounded traversal limit",
+  });
 });
 
 test("persisted operator lineage traversal accepts the bound and rejects records over it", () => {
