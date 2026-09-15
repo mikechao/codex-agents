@@ -21,7 +21,8 @@ exact current approved plan and executes it through `workflow_create_from_plan`.
 Plan schema v2 is a deliberate development clean break: retained pre-change artifacts are rejected
 with reset-required diagnostics and must be recreated, never migrated or retranscribed. The documented
 Native Plan -> Orchestrator reviewer-first `review_only` dogfood is a post-commit, fresh-host-reload
-manual activity; it is not an installed-target pre-commit gate.
+manual activity described in [the provider-only live dogfood guide](../.codex/agents/DOGFOOD.md); it is
+not an installed-target pre-commit gate.
 
 ## Authoritative-source transport investigation
 
@@ -74,12 +75,13 @@ upstream structured task field or deterministic pre-dispatch hook can reopen thi
 no plugin, task replacement, source artifact/reference, or Workflow MCP transport bookkeeping is added.
 
 This repository did not run a live provider-backed Plan-to-planner dogfood during this implementation
-pass; the manual validation matrix below remains required. The exact installed version and its
-version-corresponding source anchor are recorded so a fresh dogfood can be reproduced, but static
-configuration and source inspection must not be presented as end-to-end mechanical preservation.
+pass. The [provider-only live dogfood guide](../.codex/agents/DOGFOOD.md) describes how to reproduce
+that check. The exact installed version and its version-corresponding source anchor are recorded, but
+static configuration and source inspection must not be presented as end-to-end mechanical
+preservation.
 Upstream `dev` documentation/source may be useful for comparison, but it is supplemental and is not
-the basis of the #84 unavailability conclusion. Re-run the version check and matrix after an OpenCode
-upgrade or other host change.
+the basis of the #84 unavailability conclusion. Re-run the version check and provider-guide checks
+after an OpenCode upgrade or other host change.
 
 Ordinary conversational requests remain bounded and never copy arbitrary history. When complete source
 contents are explicitly supplied, the planner uses them directly without redundant source retrieval;
@@ -260,7 +262,8 @@ standalone executable at `.codex/runtime/workflow-mcp`, which Codex and OpenCode
 The installer does not copy the provider's Workflow MCP, bootstrap, supervisor, or runtime-artifact
 sources. Installed mode has no runtime-affinity lifecycle; its executable uses the target repository's
 Git and durable state and does not require Bun, target `node_modules`, or the provider checkout at
-runtime.
+runtime. A disposable installed target can still be used for provider live dogfood, but the
+provider-only `DOGFOOD.md` guide and historical results ledger are not part of installed output.
 
 Runtime authority is never guessed, regenerated, or replaced. Before dispatching
 the next role, Orchestrator refreshes the operator projection, checks its descriptor version, and

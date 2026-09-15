@@ -83,9 +83,9 @@ Read the relevant architecture documentation before changing an agent contract o
 MCP server. Before changing `.codex/workflow-mcp/`, read `.codex/workflow-mcp/ARCHITECTURE.md` first and
 preserve its ownership/dependency boundaries unless an architecture change is explicitly in scope. Keep the generated host definitions, explanatory workflow documentation, MCP tool schemas and
 transitions, and their tests consistent. When an agent contract changes, regenerate the host
-definitions (`bun run generate:agents`), keep the generator's per-host frontmatter accurate, and
-use `.codex/agents/EVALS.md` as the manual evaluation checklist; add to `EVAL_RESULTS.md` only
-for scenarios actually executed.
+definitions (`bun run generate:agents`) and keep the generator's per-host frontmatter accurate.
+`.codex/agents/DOGFOOD.md` is optional provider-side guidance for live model and host checks; it is
+not a downstream artifact or a replacement for executable assurance.
 
 The local STDIO server under `.codex/workflow-mcp/` is developer tooling. It must remain
 repository-local, emit no non-protocol output on stdout, preserve append-only workflow audit

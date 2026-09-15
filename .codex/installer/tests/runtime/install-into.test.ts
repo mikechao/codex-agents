@@ -268,6 +268,13 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     ]) {
       assert.ok(existsSync(join(root, ".codex/agents", file)), `missing .codex/agents/${file}`);
     }
+    for (const file of ["EVALS.md", "EVAL_RESULTS.md", "DOGFOOD.md"]) {
+      assert.equal(
+        existsSync(join(root, ".codex/agents", file)),
+        false,
+        `provider-only guide must not be installed: .codex/agents/${file}`,
+      );
+    }
     for (const file of ["runEvidence.ts", "inspectGitRange.ts"]) {
       const installed = join(root, ".opencode/tools", file);
       assert.ok(existsSync(installed), `missing .opencode/tools/${file}`);

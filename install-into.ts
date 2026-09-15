@@ -50,8 +50,6 @@ const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
   ".codex/agents/reviewer-validation.ts",
   ".codex/agents/WORKFLOW.md",
-  ".codex/agents/EVALS.md",
-  ".codex/agents/EVAL_RESULTS.md",
 ];
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
 const OPENCODE_CUSTOM_TOOL_FILES = ["runEvidence.ts", "inspectGitRange.ts"] as const;

@@ -181,7 +181,8 @@ bun run dogfood:target -- /absolute/path/to/dogfood-target
 ```
 
 The helper records the source provenance, baseline and installed checkpoints, and leaves the target
-available for inspection. It stops before any manual scenarios or host launch. Installation compiles
+available for inspection. It stops before optional provider-side live checks or host launch; see
+`.codex/agents/DOGFOOD.md` for those checks, which are not installed into the target. Installation compiles
 and verifies a standalone target-local Workflow MCP executable, so the installed target does not
 depend on the provider checkout or Bun at runtime. Git, SQLite state, and normal OS facilities remain
 intentional runtime dependencies.

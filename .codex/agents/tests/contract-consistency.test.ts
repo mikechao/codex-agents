@@ -1949,7 +1949,6 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     resolve(import.meta.dir, "../../workflow-mcp/README.md"),
     "utf8",
   ).replace(/\s+/gu, " ");
-  const evals = readFileSync(resolve(agentsDir, "EVALS.md"), "utf8").replace(/\s+/gu, " ");
 
   for (const contract of [orchestrator, guide]) {
     assert.match(contract, /unchanged (?:objective|approved intent)/iu);
@@ -2029,22 +2028,6 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     /Schema v10 is a clean break from schema v9 and earlier/u,
     "Workflow contract must document the schema v10 clean break",
   );
-  assert.match(
-    evals,
-    /before `workflow_create` or `workflow_create_from_plan`, Orchestrator reads the target `\.codex\/reviewer-validation\.json` policy and checks every proposed executable validation/u,
-    "manual evaluations must preflight both workflow creation routes",
-  );
-  assert.match(
-    evals,
-    /does not create either workflow route/u,
-    "manual evaluations must require a stop for either creation route",
-  );
-  assert.match(
-    evals,
-    /direct non-plan fallback still uses `workflow_create` with `approved_plan: null`/u,
-    "manual evaluations must preserve the direct fallback distinction",
-  );
-
   const terminalRefresh = orchestrator.indexOf("After every terminal subagent handoff");
   const conciseSummary = orchestrator.indexOf("before summarizing or routing", terminalRefresh);
   const route = orchestrator.indexOf("available authority boundary", conciseSummary);
