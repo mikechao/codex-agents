@@ -365,6 +365,19 @@ function currentVersion(store: any, workflowId: string): number {
   return persistedState(store, workflowId).version;
 }
 
+function valueAt(source: any, path: string[]): unknown {
+  return path.reduce((value, part) => value?.[part], source);
+}
+
+function setValueAt(target: Record<string, any>, path: string[], value: unknown): void {
+  let cursor = target;
+  for (const part of path.slice(0, -1)) {
+    if (cursor[part] === undefined) cursor[part] = {};
+    cursor = cursor[part];
+  }
+  cursor[path[path.length - 1]] = value;
+}
+
 function doCreate(ctx: any, options: any = {}) {
   ctx.created = ctx.store.create(createInput(ctx.root, ctx.git, options));
 }
@@ -481,6 +494,69 @@ function doAuthorizeRepair(ctx: any, _version: number, ids: string[]) {
     },
   });
 }
+
+test("descriptor-driven repair binding copies a bounded long proposal exactly once", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = store.create(createInput(root, git));
+    const id = created.workflow_id;
+    doImplementation({ root, git, store, created }, 0);
+    doReview({ root, git, store, created }, 1, {
+      status: "CHANGES_REQUESTED",
+      blocking: [
+        {
+          ...blocker("DESCRIPTOR-LIFECYCLE"),
+          remediation: `repair this bounded strategy ${"without changing approved intent. ".repeat(20)}`,
+        },
+      ],
+    });
+
+    const displayed = store.operatorDecisionGet(id, ["DESCRIPTOR-LIFECYCLE"]);
+    assert.equal(displayed.primary.kind, "approve_exact_repairs");
+    if (displayed.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected an exact repair proposal");
+
+    // The affirmative response is followed by the required fresh descriptor read.
+    const fresh = store.operatorDecisionGet(id, ["DESCRIPTOR-LIFECYCLE"]);
+    assert.equal(fresh.primary.kind, "approve_exact_repairs");
+    if (fresh.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected a fresh exact repair proposal");
+    const invocation = fresh.execution.primary.invocations[0];
+    assert.ok(invocation);
+    const payload: Record<string, any> = { ...invocation.fixed_arguments };
+    for (const requiredInput of invocation.required_inputs) {
+      assert.equal(requiredInput.source, "server_derived");
+      assert.ok(requiredInput.source_path);
+      const value = valueAt(invocation.repair_binding, requiredInput.source_path);
+      assert.notEqual(value, undefined);
+      setValueAt(payload, requiredInput.path, value);
+    }
+    const authorizationPath = invocation.authorization.representation.path;
+    setValueAt(payload, authorizationPath, "fresh affirmative repair authorization");
+
+    const before = currentVersion(store, id);
+    const repairing = store.authorizeRepair(payload);
+    const after = currentVersion(store, id);
+    assert.equal(after, before + 1);
+    assert.equal(repairing.phase, "REPAIRING");
+    assert.equal(repairing.committed_execution.primary.operation, "workflow_submit_implementation");
+    assert.deepEqual(repairing.committed_execution.primary, {
+      mode: "dispatch",
+      route: "implement",
+      operation: "workflow_submit_implementation",
+      workflow_id: id,
+      expected_version: after,
+    });
+    assert.equal(
+      repairing.repair_directive.strategy_constraints,
+      fresh.execution.primary.invocations[0].repair_binding.proposal.strategy_constraints,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function doResumeImplementation(ctx: any, _version: number) {
   const workflow = ctx.created;

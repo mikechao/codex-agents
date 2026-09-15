@@ -189,7 +189,11 @@ export type OperatorInputSource =
 export interface OperatorRequiredInput {
   path: string[];
   source: OperatorInputSource;
-  /** Exact source path in ParentView when source is parent_context. */
+  /**
+   * Exact source path in ParentView when source is parent_context. For a repair
+   * server_derived input, this is instead relative to the current mutation
+   * invocation's descriptor-owned repair binding.
+   */
   source_path?: string[];
   required: true;
 }

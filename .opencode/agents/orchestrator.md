@@ -152,6 +152,23 @@ shape, authorization placement, routing, or other protocol knowledge already dec
 descriptor. If a mutation would require an input that the descriptor does not declare, fail closed
 rather than inventing or discovering it.
 
+For the repair authorization invocation specifically, the fresh post-approval descriptor is an
+executable binding algorithm, not merely a proposal display. Select the exact advertised repair
+invocation, require every `server_derived` required input to expose its exact invocation-relative
+`source_path`, and resolve that path against the fresh invocation's `repair_binding`. Copy each
+resolved value verbatim to the input's declared destination path. Merge only the invocation's
+`fixed_arguments`, and place only the fresh affirmative user authorization at the declared
+`authorization.representation.path` (`repair_directive.user_authorization`). Do not normalize or
+recompute the proposal, regenerate or truncate any value, read `workflow_parent_get` for payload
+archaeology, try a mutation to discover the shape, or make a speculative second call. Missing,
+malformed, altered, stale, contradictory, or unresolvable bindings fail closed with no mutation or
+dispatch. On the successful normal path, invoke the advertised `workflow_authorize_repair`
+operation exactly once. After success, consume only its returned `committed_execution` descriptor
+(or a fresh descriptor when that response path is not advertised); dispatch the implementer only
+when that committed or fresh descriptor selects route `implement` and its advertised worker
+operation. Mutation success, `on_success.expected`, and retained narrative state never authorize
+dispatch.
+
 Validate every `parent_actions` entry before treating the descriptor as executable: an executable
 entry's action must match its single invocation operation, its inputs and bindings must be complete,
 and the operation must be allowed by this host. If any alternative is malformed or unavailable at

@@ -1121,7 +1121,9 @@ test("descriptor version 4 is the only executable descriptor", () => {
     inputSources.has(value.source) &&
     (value.source === "parent_context"
       ? isStringArray(value.source_path)
-      : value.source_path === undefined);
+      : value.source === "server_derived"
+        ? value.source_path === undefined || isStringArray(value.source_path)
+        : value.source_path === undefined);
   const isAlternative = (value: unknown): boolean =>
     isRecord(value) &&
     value.required === true &&
@@ -1162,6 +1164,14 @@ test("descriptor version 4 is the only executable descriptor", () => {
     Array.isArray(path) &&
     path.length === expected.length &&
     path.every((part: unknown, index: number) => part === expected[index]);
+  const valueAt = (source: unknown, path: string[]): unknown =>
+    path.reduce(
+      (value: unknown, part) =>
+        isRecord(value) || Array.isArray(value)
+          ? (value as Record<string, unknown>)[part]
+          : undefined,
+      source,
+    );
   const isInputResolvable = (invocation: Record<string, unknown>, input: unknown): boolean => {
     if (!isRecord(input) || !Array.isArray(input.path)) return false;
     if (input.source === "user_authored") return input.source_path === undefined;
@@ -1186,8 +1196,11 @@ test("descriptor version 4 is the only executable descriptor", () => {
     if (pathIs(input.path, ["finding_ids"])) {
       return (
         (isRecord(invocation.repair_binding) &&
-          isStringArray(invocation.repair_binding.selected_finding_ids)) ||
-        isLinkedFollowupBinding(invocation.linked_followup_binding)
+          invocation.operation === "workflow_authorize_repair" &&
+          isStringArray(invocation.repair_binding.selected_finding_ids) &&
+          pathIs(input.source_path, ["selected_finding_ids"])) ||
+        (isLinkedFollowupBinding(invocation.linked_followup_binding) &&
+          input.source_path === undefined)
       );
     }
     if (pathIs(input.path, ["findings", "*", "finding_id"])) {
@@ -1210,7 +1223,10 @@ test("descriptor version 4 is the only executable descriptor", () => {
         isStringArray(invocation.scope_reconciliation_binding.reviewed_paths)
       );
     }
-    if (isRecord(invocation.repair_binding)) {
+    if (
+      invocation.operation === "workflow_authorize_repair" &&
+      isRecord(invocation.repair_binding)
+    ) {
       const proposal = invocation.repair_binding.proposal;
       if (!isRecord(proposal)) return false;
       const repairPaths: Record<string, unknown> = {
@@ -1222,9 +1238,23 @@ test("descriptor version 4 is the only executable descriptor", () => {
         required_paths: proposal.required_paths,
         forbidden_paths: proposal.forbidden_paths,
       };
+      const repairSourcePaths: Record<string, string[]> = {
+        finding_ids: ["selected_finding_ids"],
+        selected_finding_ids: ["selected_finding_ids"],
+        required_outcome: ["proposal", "required_outcome"],
+        strategy_constraints: ["proposal", "strategy_constraints"],
+        fallbacks: ["proposal", "fallbacks"],
+        required_paths: ["proposal", "required_paths"],
+        forbidden_paths: ["proposal", "forbidden_paths"],
+      };
       if (input.path[0] === "repair_directive" && input.path.length === 2) {
         const key = input.path[1];
-        return typeof key === "string" && repairPaths[key] !== undefined;
+        return (
+          typeof key === "string" &&
+          repairPaths[key] !== undefined &&
+          pathIs(input.source_path, repairSourcePaths[key] ?? []) &&
+          valueAt(invocation.repair_binding, repairSourcePaths[key] ?? []) !== undefined
+        );
       }
     }
     return false;
@@ -1710,6 +1740,35 @@ test("orchestrator selects separately authorized parent actions from descriptors
     orchestrator,
     /never identify an alternative by interpreting operation\/tool names/u,
   );
+});
+
+test("repair authorization is an exact descriptor-driven single-call binding", () => {
+  const orchestrator = readFileSync(
+    resolve(import.meta.dir, "../../../.opencode/agents/orchestrator.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+  for (const phrase of [
+    "fresh post-approval descriptor",
+    "exact invocation-relative `source_path`",
+    "resolve that path against the fresh invocation's `repair_binding`",
+    "Copy each resolved value verbatim",
+    "Merge only the invocation's `fixed_arguments`",
+    "only the fresh affirmative user authorization",
+    "exactly once",
+    "no mutation or dispatch",
+    "`workflow_parent_get` for payload archaeology",
+    "regenerate or truncate any value",
+    "speculative second call",
+    "returned `committed_execution` descriptor",
+    "advertised worker operation",
+  ]) {
+    assert.ok(orchestrator.includes(phrase), `repair contract must include: ${phrase}`);
+  }
+  assert.match(
+    orchestrator,
+    /missing, malformed, altered, stale, contradictory, or unresolvable bindings fail closed/iu,
+  );
+  assert.match(orchestrator, /Mutation success.*`on_success\.expected`.*never authorize/u);
 });
 
 test("orchestrator and flow guide do not duplicate descriptor protocol maps", () => {

@@ -81,9 +81,14 @@ const metadataAuthorization = (
       : exclusiveBinding(boundSemanticInputPaths, alternatives),
 });
 
-const input = (path: string[], source: OperatorInputSource): OperatorRequiredInput => ({
+const input = (
+  path: string[],
+  source: OperatorInputSource,
+  sourcePath?: string[],
+): OperatorRequiredInput => ({
   path,
   source,
+  ...(sourcePath ? { source_path: sourcePath } : {}),
   required: true,
 });
 
@@ -228,13 +233,27 @@ export const ACTION_DESCRIPTOR_METADATA = {
       ],
     ),
     inputs: [
-      input(["finding_ids"], "server_derived"),
-      input(["repair_directive", "selected_finding_ids"], "server_derived"),
-      input(["repair_directive", "required_outcome"], "server_derived"),
-      input(["repair_directive", "strategy_constraints"], "server_derived"),
-      input(["repair_directive", "fallbacks"], "server_derived"),
-      input(["repair_directive", "required_paths"], "server_derived"),
-      input(["repair_directive", "forbidden_paths"], "server_derived"),
+      input(["finding_ids"], "server_derived", ["selected_finding_ids"]),
+      input(["repair_directive", "selected_finding_ids"], "server_derived", [
+        "selected_finding_ids",
+      ]),
+      input(["repair_directive", "required_outcome"], "server_derived", [
+        "proposal",
+        "required_outcome",
+      ]),
+      input(["repair_directive", "strategy_constraints"], "server_derived", [
+        "proposal",
+        "strategy_constraints",
+      ]),
+      input(["repair_directive", "fallbacks"], "server_derived", ["proposal", "fallbacks"]),
+      input(["repair_directive", "required_paths"], "server_derived", [
+        "proposal",
+        "required_paths",
+      ]),
+      input(["repair_directive", "forbidden_paths"], "server_derived", [
+        "proposal",
+        "forbidden_paths",
+      ]),
     ],
   },
   workflow_adjudicate_findings: {

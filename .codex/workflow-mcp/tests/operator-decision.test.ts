@@ -612,34 +612,76 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
     });
     const invocation = (subset.primary as any).invocations[0];
     assert.deepEqual(invocation.required_inputs, [
-      { path: ["finding_ids"], source: "server_derived", required: true },
+      {
+        path: ["finding_ids"],
+        source: "server_derived",
+        source_path: ["selected_finding_ids"],
+        required: true,
+      },
       {
         path: ["repair_directive", "selected_finding_ids"],
         source: "server_derived",
+        source_path: ["selected_finding_ids"],
         required: true,
       },
       {
         path: ["repair_directive", "required_outcome"],
         source: "server_derived",
+        source_path: ["proposal", "required_outcome"],
         required: true,
       },
       {
         path: ["repair_directive", "strategy_constraints"],
         source: "server_derived",
+        source_path: ["proposal", "strategy_constraints"],
         required: true,
       },
-      { path: ["repair_directive", "fallbacks"], source: "server_derived", required: true },
+      {
+        path: ["repair_directive", "fallbacks"],
+        source: "server_derived",
+        source_path: ["proposal", "fallbacks"],
+        required: true,
+      },
       {
         path: ["repair_directive", "required_paths"],
         source: "server_derived",
+        source_path: ["proposal", "required_paths"],
         required: true,
       },
       {
         path: ["repair_directive", "forbidden_paths"],
         source: "server_derived",
+        source_path: ["proposal", "forbidden_paths"],
         required: true,
       },
     ]);
+    assert.deepEqual(
+      invocation.required_inputs.map((input: any) => [input.path, input.source_path]),
+      [
+        [["finding_ids"], ["selected_finding_ids"]],
+        [["repair_directive", "selected_finding_ids"], ["selected_finding_ids"]],
+        [
+          ["repair_directive", "required_outcome"],
+          ["proposal", "required_outcome"],
+        ],
+        [
+          ["repair_directive", "strategy_constraints"],
+          ["proposal", "strategy_constraints"],
+        ],
+        [
+          ["repair_directive", "fallbacks"],
+          ["proposal", "fallbacks"],
+        ],
+        [
+          ["repair_directive", "required_paths"],
+          ["proposal", "required_paths"],
+        ],
+        [
+          ["repair_directive", "forbidden_paths"],
+          ["proposal", "forbidden_paths"],
+        ],
+      ],
+    );
     assert.deepEqual(invocation.repair_binding.selected_finding_ids, ["REPAIR-B"]);
     assert.deepEqual(
       invocation.stale_binding.references.find(

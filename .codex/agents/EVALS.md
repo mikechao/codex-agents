@@ -273,15 +273,21 @@ check is defense in depth rather than a new authority boundary.
   fail-closed ambiguous or negative responses; do not edit `EVAL_RESULTS.md` unless this scenario is
   actually executed.
 - Descriptor repair trace: in a disposable workflow, seed a reviewer `CHANGES_REQUESTED` blocker,
-  display the descriptor-backed bounded repair proposal, and answer affirmatively. Confirm the parent
-  binds only the advertised invocation inputs and authorization representation, then routes only from
-  the committed or freshly refetched descriptor. Confirm a user affirmative response alone never
-  dispatches a worker. Exercise stale proposal/version, changed repair scope, authorization failure or
-  unavailability, MCP outage, and refreshed non-implementation routing as no-dispatch outcomes.
-  Separately pass an erroneous implementer handoff without repair authority or directive and confirm
-  the implementer refuses mutation. This is evaluation guidance only; do not persist worker attempts,
-  retries, transcripts, or results, and do not edit `EVAL_RESULTS.md` unless the scenario is actually
-  executed.
+  display the fresh descriptor-backed bounded repair proposal and answer affirmatively. Refetch the
+  fresh repair descriptor after approval, bind every server-derived value verbatim through its
+  advertised invocation-relative `source_path`, and place the sentinel only through the declared
+  authorization representation. Confirm the parent makes one successful
+  `workflow_authorize_repair` attempt, never uses `workflow_parent_get` to reconstruct the payload,
+  never inspects Workflow MCP source or tests, never regenerates the proposal or performs truncation/
+  string-length calculations, and never uses Python or shell for payload construction. Confirm the
+  parent routes only from the returned `committed_execution` or a fresh execution descriptor, and
+  dispatches the implementer only when that descriptor selects the advertised implementer operation.
+  Confirm a user affirmative response alone never dispatches a worker. Exercise stale proposal/version,
+  changed repair scope, authorization failure or unavailability, MCP outage, and refreshed
+  non-implementation routing as no-dispatch outcomes. Separately pass an erroneous implementer
+  handoff without repair authority or directive and confirm the implementer refuses mutation. This is
+  evaluation guidance only; do not persist worker attempts, retries, transcripts, or results, and do
+  not edit `EVAL_RESULTS.md` unless this scenario is actually executed.
 - Descriptor-mode coverage: exercise normal dispatch, parent mutation, inspection collection,
   unavailable inspection/wait, and terminal/no-action outcomes. Confirm only declared inputs are bound,
   `collect_evidence` never invents a failed validation, and `wait` never mutates or dispatches.
