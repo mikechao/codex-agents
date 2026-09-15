@@ -16,6 +16,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { verifyRevision } from "./git.js";
+import type { ContentDigest, GitCommitSha, RuntimeId } from "./types.js";
+import { contentDigest, revision, runtimeId as validateRuntimeId } from "./validation.js";
 
 const ENTRYPOINT = ".codex/workflow-mcp/server.ts";
 const RECEIPT_MODULES = [".codex/agents/change-receipt.ts", ".codex/agents/receipt.ts"];
@@ -27,25 +29,25 @@ const RUNTIME_ATTESTATION_KEY_BYTES = 32;
 export interface RuntimeManifestEntry {
   path: string;
   mode: "100644" | "100755" | "120000";
-  digest: string;
+  digest: ContentDigest;
   size: number;
 }
 
 export interface RuntimeManifest {
   schema_version: 1;
-  revision: string;
+  revision: GitCommitSha;
   entrypoint: string;
   files: RuntimeManifestEntry[];
   package_metadata: string[];
 }
 
 export interface RuntimeArtifact {
-  runtime_id: string;
+  runtime_id: RuntimeId;
   runtimePath: string;
   runtime_path: string;
   cachePath: string;
   attestationKeyPath: string;
-  revision: string;
+  revision: GitCommitSha;
   manifest: RuntimeManifest;
   reused: boolean;
 }
@@ -69,8 +71,8 @@ interface RuntimeDependencyManifest {
   files: RuntimeManifestEntry[];
 }
 
-function digest(value: Buffer | string): string {
-  return createHash("sha256").update(value).digest("hex");
+function digest(value: Buffer | string): ContentDigest {
+  return contentDigest(createHash("sha256").update(value).digest("hex"));
 }
 
 function canonical(value: unknown): string {
@@ -100,7 +102,7 @@ function gitText(root: string, args: readonly string[]): string {
   return git(root, args).toString("utf8");
 }
 
-function committedFile(root: string, revision: string, path: string): CommittedFile {
+function committedFile(root: string, revision: GitCommitSha, path: string): CommittedFile {
   const record = gitText(root, ["ls-tree", "-z", revision, "--", path]).split("\0")[0] ?? "";
   const separator = record.indexOf("\t");
   if (separator < 0) throw new Error(`trusted runtime file is missing: ${path}`);
@@ -163,7 +165,7 @@ export function localImportCandidates(path: string, specifier: string): string[]
 
 function resolveLocalImport(
   root: string,
-  revision: string,
+  revision: GitCommitSha,
   path: string,
   specifier: string,
 ): string {
@@ -179,7 +181,7 @@ function resolveLocalImport(
   throw new Error(`trusted runtime local import has no committed target: ${path} -> ${specifier}`);
 }
 
-function runtimeClosure(root: string, revision: string): Map<string, CommittedFile> {
+function runtimeClosure(root: string, revision: GitCommitSha): Map<string, CommittedFile> {
   const paths = [...RECEIPT_MODULES, ...PACKAGE_METADATA, ENTRYPOINT];
   const files = new Map<string, CommittedFile>();
   const pending = [...paths];
@@ -205,7 +207,7 @@ function runtimeClosure(root: string, revision: string): Map<string, CommittedFi
   return files;
 }
 
-function manifestFor(root: string, revision: string): RuntimeManifest {
+function manifestFor(root: string, revision: GitCommitSha): RuntimeManifest {
   const files = runtimeClosure(root, revision);
   const entries = [...files.entries()]
     .map(([path, file]) => ({
@@ -224,9 +226,73 @@ function manifestFor(root: string, revision: string): RuntimeManifest {
   };
 }
 
-function runtimeId(manifest: RuntimeManifest): string {
+function runtimeId(manifest: RuntimeManifest): RuntimeId {
   const { revision: _revision, ...trustedInputs } = manifest;
-  return digest(Buffer.from(canonical(trustedInputs), "utf8"));
+  return validateRuntimeId(digest(Buffer.from(canonical(trustedInputs), "utf8")));
+}
+
+export function parseRuntimeManifest(value: unknown): RuntimeManifest | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (
+    canonical(keys) !==
+    canonical(["entrypoint", "files", "package_metadata", "revision", "schema_version"].sort())
+  )
+    return null;
+  if (
+    record.schema_version !== SCHEMA_VERSION ||
+    record.entrypoint !== ENTRYPOINT ||
+    !Array.isArray(record.files) ||
+    !Array.isArray(record.package_metadata)
+  )
+    return null;
+  let trustedRevision: GitCommitSha;
+  try {
+    trustedRevision = revision(record.revision);
+  } catch {
+    return null;
+  }
+  const packageMetadata = record.package_metadata;
+  if (
+    packageMetadata.length !== PACKAGE_METADATA.length ||
+    packageMetadata.some((entry) => typeof entry !== "string") ||
+    canonical(packageMetadata) !== canonical([...PACKAGE_METADATA].sort())
+  )
+    return null;
+  const files: RuntimeManifestEntry[] = [];
+  for (const item of record.files) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const entry = item as Record<string, unknown>;
+    if (canonical(Object.keys(entry).sort()) !== canonical(["digest", "mode", "path", "size"]))
+      return null;
+    if (
+      typeof entry.path !== "string" ||
+      (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") ||
+      !Number.isSafeInteger(entry.size) ||
+      (entry.size as number) < 0
+    )
+      return null;
+    let trustedDigest: ContentDigest;
+    try {
+      trustedDigest = contentDigest(entry.digest);
+    } catch {
+      return null;
+    }
+    files.push({
+      path: entry.path,
+      mode: entry.mode,
+      digest: trustedDigest,
+      size: entry.size as number,
+    });
+  }
+  return {
+    schema_version: SCHEMA_VERSION,
+    revision: trustedRevision,
+    entrypoint: ENTRYPOINT,
+    files,
+    package_metadata: [...PACKAGE_METADATA].sort(),
+  };
 }
 
 function externalCacheRoot(root: string, requested: string | undefined): string {
@@ -362,7 +428,7 @@ function validateDependencies(artifactRoot: string, packageContent: Buffer): boo
 
 function validArtifact(
   artifactRoot: string,
-  expectedId: string,
+  expectedId: RuntimeId,
   manifest: RuntimeManifest,
   packageContent: Buffer,
   externalRoot: string,
@@ -383,18 +449,21 @@ function validArtifact(
       artifactPath(artifactRoot, artifactReal, externalReal, repositoryReal, ".runtime-complete"),
       "utf8",
     ).trim();
-    const stored = JSON.parse(
-      readFileSync(
-        artifactPath(
-          artifactRoot,
-          artifactReal,
-          externalReal,
-          repositoryReal,
-          ".runtime-manifest.json",
+    const stored = parseRuntimeManifest(
+      JSON.parse(
+        readFileSync(
+          artifactPath(
+            artifactRoot,
+            artifactReal,
+            externalReal,
+            repositoryReal,
+            ".runtime-manifest.json",
+          ),
+          "utf8",
         ),
-        "utf8",
       ),
-    ) as RuntimeManifest;
+    );
+    if (!stored) return false;
     const { revision: _storedRevision, ...storedInputs } = stored;
     const { revision: _revision, ...trustedInputs } = manifest;
     if (marker !== expectedId || canonical(storedInputs) !== canonical(trustedInputs)) return false;
@@ -431,7 +500,7 @@ function validArtifact(
         ),
         "utf8",
       ),
-    ) as RuntimeDependencyManifest;
+    );
     if (canonical(storedDependencies) !== canonical(dependencyManifest(artifactRoot))) return false;
     return validateDependencies(artifactRoot, packageContent);
   } catch {

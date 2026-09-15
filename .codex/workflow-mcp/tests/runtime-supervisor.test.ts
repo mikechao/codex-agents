@@ -14,7 +14,8 @@ import {
   selectAffinedRuntime,
 } from "../runtime-supervisor.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
-import { objectDigest } from "../validation.js";
+import type { GitCommitSha, RuntimeId } from "../types.js";
+import { objectDigest, runtimeId as validateRuntimeId } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
 
 function attestation(runtimeId: string, revision: string) {
@@ -53,6 +54,26 @@ function create(store: any, revision: string, objective: string) {
   });
 }
 
+function dirtyAdoptionAudit(revision: string) {
+  const runtimeId = "a".repeat(64);
+  return {
+    scope_expansion_id: "expansion",
+    scope_expansion_version: 1,
+    adopted_paths: ["note.txt"],
+    base_head: revision,
+    current_states: [{ path: "note.txt", state: "unchanged", kind: "file" }],
+    index_states: [{ path: "note.txt", state: "unchanged", kind: "file" }],
+    current_state_commitment: "b".repeat(64),
+    runtime_id: runtimeId,
+    runtime_revision: revision,
+    executing_runtime_id: runtimeId,
+    executing_runtime_revision: revision,
+    cross_runtime: false,
+    reason: "test",
+    user_authorization: "authorized",
+  };
+}
+
 function operatorProjectionResponse(primary: Record<string, unknown>) {
   return {
     jsonrpc: "2.0",
@@ -64,7 +85,20 @@ function operatorProjectionResponse(primary: Record<string, unknown>) {
 }
 
 function resolvedRuntime(runtimeId: string, revision: string): ResolvedRuntime {
-  return { runtime_id: runtimeId, revision } as ResolvedRuntime;
+  return {
+    runtime_id: validateRuntimeId(runtimeId),
+    revision: revision as GitCommitSha,
+  } as ResolvedRuntime;
+}
+
+function affinity(
+  runtimeId: string,
+  revision: string,
+): {
+  runtime_id: RuntimeId;
+  runtime_revision: GitCommitSha;
+} {
+  return { runtime_id: validateRuntimeId(runtimeId), runtime_revision: revision as GitCommitSha };
 }
 
 const operatorProjectionRequest = {
@@ -201,12 +235,7 @@ describe("Workflow MCP runtime supervision", () => {
 
     for (const revision of ["missing", "dead", "killed", revisionB]) {
       assert.equal(
-        selectAffinedRuntime(
-          { runtime_id: runtimeId, runtime_revision: revision },
-          defaultRuntime,
-          lookup,
-          resolveOwner,
-        ),
+        selectAffinedRuntime(affinity(runtimeId, revision), defaultRuntime, lookup, resolveOwner),
         fallbackRuntime,
       );
     }
@@ -424,6 +453,45 @@ describe("Workflow MCP runtime supervision", () => {
     } finally {
       owner?.close();
       supervisor?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validates dirty-adoption runtime evidence when reading audit events", () => {
+    const { root } = fixture();
+    const revision = fixtureHead(root, "audit runtime evidence setup");
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    try {
+      const created = create(store, revision, "audit runtime evidence");
+      const row = store.db
+        .prepare("SELECT summary_json FROM audit_events WHERE workflow_id = ?")
+        .get(created.workflow_id) as { summary_json: string };
+      const summary = JSON.parse(row.summary_json);
+      const validDetail = dirtyAdoptionAudit(revision);
+      const writeDetail = (detail: unknown) =>
+        store.db
+          .prepare("UPDATE audit_events SET summary_json = ? WHERE workflow_id = ?")
+          .run(JSON.stringify({ ...summary, dirty_scope_adoption: detail }), created.workflow_id);
+
+      for (const detail of [
+        { ...validDetail, runtime_id: "invalid" },
+        { ...validDetail, runtime_revision: "invalid" },
+        { ...validDetail, runtime_id: null },
+      ]) {
+        writeDetail(detail);
+        assert.throws(
+          () => store.audit(created.workflow_id),
+          (error: unknown) =>
+            error instanceof WorkflowError && error.category === "ERROR_STALE_ADOPTION",
+        );
+      }
+
+      writeDetail(validDetail);
+      const audit = store.audit(created.workflow_id);
+      assert.deepEqual(audit[0].dirty_scope_adoption, validDetail);
+      assert.deepEqual((audit[0].summary as any).dirty_scope_adoption, validDetail);
+    } finally {
+      store.close();
       rmSync(root, { recursive: true, force: true });
     }
   });

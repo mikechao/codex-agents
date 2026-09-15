@@ -22,14 +22,17 @@ import {
   localImportCandidates,
   localImportPaths,
   materializeRuntimeArtifact,
+  parseRuntimeManifest,
   trustedRuntimeManifest,
 } from "../../runtime-artifact.js";
 import { resolveOwningRuntime } from "../../runtime-supervisor.js";
+import type { GitCommitSha } from "../../types.js";
+import { revision as validateRevision } from "../../validation.js";
 
 function gitFixture(
   files: Record<string, string>,
   symlinks: Record<string, string> = {},
-): { root: string; revision: string } {
+): { root: string; revision: GitCommitSha } {
   const root = mkdtempSync(join(tmpdir(), "workflow-runtime-fixture-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
@@ -48,7 +51,9 @@ function gitFixture(
   execFileSync("git", ["commit", "-q", "-m", "fixture"], { cwd: root });
   return {
     root,
-    revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+    revision: validateRevision(
+      execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+    ),
   };
 }
 
@@ -283,13 +288,25 @@ writeFileSync(
         installDependencies: false,
       });
       const storedManifest = readFileSync(join(first.cachePath, ".runtime-manifest.json"), "utf8");
+      const storedManifestValue = JSON.parse(storedManifest) as Record<string, any>;
+      expect(parseRuntimeManifest(storedManifestValue)?.revision).toBe(fixture.revision);
+      expect(
+        parseRuntimeManifest({
+          ...storedManifestValue,
+          files: storedManifestValue.files.map((entry: Record<string, unknown>, index: number) =>
+            index === 0 ? { ...entry, digest: "invalid" } : entry,
+          ),
+        }),
+      ).toBeNull();
       writeFileSync(join(fixture.root, "unrelated.txt"), "unrelated\n");
       execFileSync("git", ["add", "unrelated.txt"], { cwd: fixture.root });
       execFileSync("git", ["commit", "-q", "-m", "unrelated"], { cwd: fixture.root });
-      const secondRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: fixture.root,
-        encoding: "utf8",
-      }).trim();
+      const secondRevision = validateRevision(
+        execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: fixture.root,
+          encoding: "utf8",
+        }).trim(),
+      );
       const second = materializeRuntimeArtifact(fixture.root, secondRevision, {
         cacheRoot,
         installDependencies: false,
@@ -330,10 +347,12 @@ writeFileSync(
       );
       execFileSync("git", ["add", ".codex/workflow-mcp/server.ts"], { cwd: fixture.root });
       execFileSync("git", ["commit", "-q", "-m", "trusted runtime change"], { cwd: fixture.root });
-      const secondRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: fixture.root,
-        encoding: "utf8",
-      }).trim();
+      const secondRevision = validateRevision(
+        execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: fixture.root,
+          encoding: "utf8",
+        }).trim(),
+      );
       const second = materializeRuntimeArtifact(fixture.root, secondRevision, {
         cacheRoot,
         installDependencies: false,

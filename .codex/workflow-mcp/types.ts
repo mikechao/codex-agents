@@ -36,6 +36,7 @@ export type Brand<T, B extends string> = T & { readonly [__brand]: B };
 
 export type WorkflowId = Brand<string, "WorkflowId">;
 export type WorkflowVersion = Brand<number, "WorkflowVersion">;
+export type RuntimeId = Brand<string, "RuntimeId">;
 export type GitCommitSha = Brand<string, "GitCommitSha">;
 export type GitTreeSha = Brand<string, "GitTreeSha">;
 export type GitBlobSha = Brand<string, "GitBlobSha">;
@@ -881,7 +882,7 @@ export interface WorkflowState {
   workflow_id: WorkflowId | null; // null only during construction; always set when persisted
   workflow_type: WorkflowType;
   /** Immutable runtime that owns this workflow. */
-  runtime_id: string | null;
+  runtime_id: RuntimeId | null;
   runtime_revision: GitCommitSha | null;
   phase: WorkflowPhase;
   objective: string;
@@ -1208,9 +1209,9 @@ export interface DirtyScopeAdoptionAudit {
   current_states: DirtyScopeAdoptionState[];
   index_states: DirtyScopeAdoptionIndexState[];
   current_state_commitment: StateDigest;
-  runtime_id: string | null;
+  runtime_id: RuntimeId | null;
   runtime_revision: GitCommitSha | null;
-  executing_runtime_id: string | null;
+  executing_runtime_id: RuntimeId | null;
   executing_runtime_revision: GitCommitSha | null;
   cross_runtime: boolean;
   reason: string;

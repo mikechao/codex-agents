@@ -24,7 +24,9 @@ import type {
   CommitAttemptId,
   CommitSubmissionOutcome,
   CommitterView,
+  ContentDigest,
   ExactRepoPath,
+  GitCommitSha,
   ImplementationStatus,
   ImplementerHandoffView,
   ImplementerView,
@@ -41,6 +43,7 @@ import type {
   ReviewStatus,
   Role,
   RoleViewCommon,
+  RuntimeId,
   ValidationRequirement,
   ValidationRequirementId,
   ValidationResult,
@@ -206,6 +209,35 @@ function _compileBrandedCorrelation(): void {
   void manualId;
   void repairDirective;
   void repairConformance;
+}
+
+function _compileRuntimeBrandSeparation(): void {
+  const rawRuntimeId = "a".repeat(64) as string;
+  const rawRevision = "b".repeat(40) as string;
+  const rawDigest = "c".repeat(64) as string;
+  const runtimeId = undefined as unknown as RuntimeId;
+  const revision = undefined as unknown as GitCommitSha;
+  const digest = undefined as unknown as ContentDigest;
+
+  // @ts-expect-error raw runtime identities require authoritative validation
+  const invalidRuntimeId: RuntimeId = rawRuntimeId;
+  // @ts-expect-error raw revisions require authoritative validation
+  const invalidRevision: GitCommitSha = rawRevision;
+  // @ts-expect-error raw content digests require authoritative validation
+  const invalidDigest: ContentDigest = rawDigest;
+  // @ts-expect-error runtime identities and revisions are distinct domains
+  const runtimeAsRevision: GitCommitSha = runtimeId;
+  // @ts-expect-error runtime identities and content digests are distinct domains
+  const runtimeAsDigest: ContentDigest = runtimeId;
+  // @ts-expect-error revisions and content digests are distinct domains
+  const revisionAsDigest: ContentDigest = revision;
+  void invalidRuntimeId;
+  void invalidRevision;
+  void invalidDigest;
+  void runtimeAsRevision;
+  void runtimeAsDigest;
+  void revisionAsDigest;
+  void digest;
 }
 
 function _compileDirectParentView(): void {

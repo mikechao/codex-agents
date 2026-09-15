@@ -3,6 +3,8 @@ import { CURRENT_STATE_SCHEMA_VERSION } from "./migration.js";
 import type {
   CommitMismatchCategory,
   FindingResolution,
+  GitCommitSha,
+  RuntimeId,
   WorkflowPhase,
   WorkflowState,
 } from "./types.js";
@@ -15,6 +17,8 @@ import {
   MAX_PATHS,
   MAX_REPO_PATH_LENGTH,
   MAX_TEXT,
+  revision,
+  runtimeId,
   workItems,
 } from "./validation.js";
 import {
@@ -150,6 +154,22 @@ function sha40(value: unknown): void {
 
 function sha64(value: unknown): void {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) corrupt();
+}
+
+function validatedRuntimeId(value: unknown): RuntimeId {
+  try {
+    return runtimeId(value);
+  } catch {
+    corrupt();
+  }
+}
+
+function validatedRevision(value: unknown): GitCommitSha {
+  try {
+    return revision(value);
+  } catch {
+    corrupt();
+  }
 }
 
 function nullableString(value: unknown, max: number): void {
@@ -697,7 +717,9 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
   if (typeof value.workflow_id !== "string" || !/^[0-9a-f-]{36}$/u.test(value.workflow_id))
     corrupt();
   if (!isValue(WORKFLOW_TYPE_VALUES, value.workflow_type)) corrupt();
-  if (value.runtime_id !== null && !/^[0-9a-f]{64}$/u.test(String(value.runtime_id))) corrupt();
+  const validatedRuntime = value.runtime_id === null ? null : validatedRuntimeId(value.runtime_id);
+  const validatedRuntimeRevision =
+    value.runtime_revision === null ? null : validatedRevision(value.runtime_revision);
   if (value.runtime_revision !== null) sha40(value.runtime_revision);
   if ((value.runtime_id === null) !== (value.runtime_revision === null)) corrupt();
   if (
@@ -963,5 +985,9 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
   commitAuthorizationShape(value.commit_authorization);
   commitPreparationShape(value.commit_preparation);
   commitResultShape(value.commit_result);
-  return value as unknown as WorkflowState; // validated producer cast at the persistence boundary
+  return {
+    ...(value as unknown as WorkflowState),
+    runtime_id: validatedRuntime,
+    runtime_revision: validatedRuntimeRevision,
+  };
 }

@@ -20,6 +20,7 @@ import {
   type RuntimeAffinity,
   resolveStatePath,
 } from "./store.js";
+import type { GitCommitSha, RuntimeId } from "./types.js";
 
 export interface RuntimeSupervisorOptions extends RuntimeArtifactOptions {
   repositoryRoot?: string;
@@ -32,8 +33,8 @@ export interface RuntimeSupervisorOptions extends RuntimeArtifactOptions {
 }
 
 export interface ResolvedRuntime extends RuntimeArtifact {
-  runtime_id: string;
-  revision: string;
+  runtime_id: RuntimeId;
+  revision: GitCommitSha;
 }
 
 export interface LiveRuntimeCandidate {
@@ -110,7 +111,10 @@ export function resolveOwningRuntime(
 export function selectAffinedRuntime(
   affinity: RuntimeAffinity,
   defaultRuntime: ResolvedRuntime,
-  lookupLiveChild: (runtimeId: string, runtimeRevision: string) => LiveRuntimeCandidate | undefined,
+  lookupLiveChild: (
+    runtimeId: RuntimeId,
+    runtimeRevision: GitCommitSha,
+  ) => LiveRuntimeCandidate | undefined,
   resolveOwner: (affinity: RuntimeAffinity) => ResolvedRuntime,
 ): ResolvedRuntime {
   if (affinity.runtime_id === null || affinity.runtime_revision === null) {

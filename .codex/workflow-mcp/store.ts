@@ -34,8 +34,8 @@ import {
 } from "./reviewer-validation-policy.js";
 import {
   isValidRuntimeArtifact,
+  parseRuntimeManifest,
   type RuntimeArtifact,
-  type RuntimeManifest,
 } from "./runtime-artifact.js";
 import type {
   LinkedFollowupPlan,
@@ -116,6 +116,7 @@ import type {
   PlanRevisionArtifact,
   Role,
   RoleView,
+  RuntimeId,
   ScopeExpansionAudit,
   StateDigest,
   WorkflowAction,
@@ -135,6 +136,8 @@ import {
   planId,
   planRevision,
   repairCycle,
+  revision,
+  runtimeId as validateRuntimeId,
   workItems,
 } from "./validation.js";
 
@@ -161,13 +164,13 @@ export interface WorkflowStoreOptions {
 }
 
 export interface RuntimeAffinity {
-  runtime_id: string | null;
-  runtime_revision: string | null;
+  runtime_id: RuntimeId | null;
+  runtime_revision: GitCommitSha | null;
 }
 
 function runtimeAffinityPair(
-  runtimeId: string | null,
-  runtimeRevision: string | null,
+  runtimeId: RuntimeId | null,
+  runtimeRevision: GitCommitSha | null,
 ): RuntimeAffinity {
   if ((runtimeId === null) !== (runtimeRevision === null)) {
     fail("ERROR_RUNTIME_RECOVERY", "workflow runtime affinity is incomplete");
@@ -175,21 +178,41 @@ function runtimeAffinityPair(
   return { runtime_id: runtimeId, runtime_revision: runtimeRevision };
 }
 
+function assertRawRuntimeAffinityPair(runtimeId: unknown, runtimeRevision: unknown): void {
+  if ((runtimeId === null) !== (runtimeRevision === null)) {
+    fail("ERROR_RUNTIME_RECOVERY", "workflow runtime affinity is incomplete");
+  }
+}
+
+export function createRuntimeAttestation(
+  runtimeId: RuntimeId,
+  runtimeRevision: GitCommitSha,
+  nonce: string,
+  key: string | Buffer,
+): string;
+export function createRuntimeAttestation(
+  runtimeId: string,
+  runtimeRevision: string,
+  nonce: string,
+  key: string | Buffer,
+): string;
 export function createRuntimeAttestation(
   runtimeId: string,
   runtimeRevision: string,
   nonce: string,
   key: string | Buffer,
 ): string {
+  const validatedRuntimeId = validateRuntimeId(runtimeId);
+  const validatedRuntimeRevision = revision(runtimeRevision);
   return createHmac("sha256", key)
-    .update(`${runtimeId}\u0000${runtimeRevision}\u0000${nonce}`, "utf8")
+    .update(`${validatedRuntimeId}\u0000${validatedRuntimeRevision}\u0000${nonce}`, "utf8")
     .digest("hex");
 }
 
 function immutableRuntimeKey(
   repositoryRoot: string,
-  runtimeId: string,
-  runtimeRevision: string,
+  runtimeId: RuntimeId,
+  runtimeRevision: GitCommitSha,
 ): Buffer | null {
   const repository = realpathSync(repositoryRoot);
   try {
@@ -212,7 +235,8 @@ function immutableRuntimeKey(
     )
       return null;
     if (readFileSync(markerPath, "utf8").trim() !== runtimeId) return null;
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as RuntimeManifest;
+    const manifest = parseRuntimeManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
+    if (!manifest) return null;
     // The manifest revision records the artifact's historical materialization. Content-addressed
     // reuse intentionally ignores it; the requested launch revision is authenticated below by
     // HMAC(runtime_id, runtime_revision, nonce).
@@ -594,12 +618,11 @@ function parseState(row: WorkflowRow): WorkflowState {
     parsed !== null &&
     "runtime_id" in parsed &&
     "runtime_revision" in parsed
-  ) {
-    runtimeAffinityPair(
-      (parsed as { runtime_id: string | null }).runtime_id,
-      (parsed as { runtime_revision: GitCommitSha | null }).runtime_revision,
+  )
+    assertRawRuntimeAffinityPair(
+      (parsed as { runtime_id: unknown }).runtime_id,
+      (parsed as { runtime_revision: unknown }).runtime_revision,
     );
-  }
   return validateWorkflowStateV10(parsed);
 }
 
@@ -642,6 +665,73 @@ type MutationAuditDetails = {
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   finding_adjudications?: FindingAdjudication[];
 };
+
+type RawDirtyScopeAdoptionAudit = Omit<
+  DirtyScopeAdoptionAudit,
+  "runtime_id" | "runtime_revision" | "executing_runtime_id" | "executing_runtime_revision"
+> & {
+  runtime_id: unknown;
+  runtime_revision: unknown;
+  executing_runtime_id: unknown;
+  executing_runtime_revision: unknown;
+};
+
+function parseDirtyScopeAdoptionAudit(value: unknown): DirtyScopeAdoptionAudit {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is missing");
+  }
+  const detail = value as RawDirtyScopeAdoptionAudit;
+  if (
+    !Array.isArray(detail.adopted_paths) ||
+    detail.adopted_paths.length === 0 ||
+    detail.adopted_paths.some((path) => typeof path !== "string") ||
+    new Set(detail.adopted_paths).size !== detail.adopted_paths.length ||
+    typeof detail.scope_expansion_id !== "string" ||
+    !Number.isSafeInteger(detail.scope_expansion_version) ||
+    typeof detail.base_head !== "string" ||
+    !Array.isArray(detail.current_states) ||
+    !Array.isArray(detail.index_states) ||
+    typeof detail.current_state_commitment !== "string" ||
+    typeof detail.cross_runtime !== "boolean" ||
+    typeof detail.reason !== "string" ||
+    typeof detail.user_authorization !== "string"
+  ) {
+    fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is invalid");
+  }
+
+  let baseHead: GitCommitSha;
+  let runtimeIdentity: RuntimeId | null;
+  let runtimeRevision: GitCommitSha | null;
+  let executingRuntimeIdentity: RuntimeId | null;
+  let executingRuntimeRevision: GitCommitSha | null;
+  try {
+    baseHead = revision(detail.base_head, "dirty scope adoption base head");
+    runtimeIdentity = detail.runtime_id === null ? null : validateRuntimeId(detail.runtime_id);
+    runtimeRevision = detail.runtime_revision === null ? null : revision(detail.runtime_revision);
+    executingRuntimeIdentity =
+      detail.executing_runtime_id === null ? null : validateRuntimeId(detail.executing_runtime_id);
+    executingRuntimeRevision =
+      detail.executing_runtime_revision === null
+        ? null
+        : revision(detail.executing_runtime_revision);
+  } catch {
+    fail("ERROR_STALE_ADOPTION", "dirty scope adoption runtime evidence is invalid");
+  }
+  if (
+    (runtimeIdentity === null) !== (runtimeRevision === null) ||
+    (executingRuntimeIdentity === null) !== (executingRuntimeRevision === null)
+  ) {
+    fail("ERROR_STALE_ADOPTION", "dirty scope adoption runtime evidence is incomplete");
+  }
+  return {
+    ...detail,
+    base_head: baseHead,
+    runtime_id: runtimeIdentity,
+    runtime_revision: runtimeRevision,
+    executing_runtime_id: executingRuntimeIdentity,
+    executing_runtime_revision: executingRuntimeRevision,
+  };
+}
 
 type ExistingWorkflowTransition = {
   row: WorkflowRow;
@@ -741,7 +831,7 @@ export class WorkflowStore {
   readonly root: string;
   readonly path: string;
   readonly faultAfterLinkedChildInsert: boolean;
-  readonly runtimeId: string | null;
+  readonly runtimeId: RuntimeId | null;
   readonly runtimeRevision: GitCommitSha | null;
   readonly runtimeAttestation: string | null;
   readonly runtimeAttestationNonce: string | null;
@@ -763,25 +853,37 @@ export class WorkflowStore {
       options.runtimeAttestation ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION ?? null;
     const runtimeAttestationNonce =
       options.runtimeAttestationNonce ?? process.env.WORKFLOW_MCP_RUNTIME_ATTESTATION_NONCE ?? null;
-    if (runtimeId !== null && !/^[0-9a-f]{64}$/u.test(runtimeId))
-      fail("ERROR_RUNTIME_ISOLATION", "runtime identity is invalid");
-    if (runtimeRevision !== null && !/^[0-9a-f]{40}$/u.test(runtimeRevision))
-      fail("ERROR_RUNTIME_ISOLATION", "runtime revision is invalid");
+    let validatedRuntimeId: RuntimeId | null = null;
+    let validatedRuntimeRevision: GitCommitSha | null = null;
+    if (runtimeId !== null) {
+      try {
+        validatedRuntimeId = validateRuntimeId(runtimeId);
+      } catch {
+        fail("ERROR_RUNTIME_ISOLATION", "runtime identity is invalid");
+      }
+    }
+    if (runtimeRevision !== null) {
+      try {
+        validatedRuntimeRevision = revision(runtimeRevision);
+      } catch {
+        fail("ERROR_RUNTIME_ISOLATION", "runtime revision is invalid");
+      }
+    }
     if (runtimeAttestation !== null && !/^[0-9a-f]{64}$/u.test(runtimeAttestation))
       fail("ERROR_RUNTIME_ISOLATION", "runtime launch attestation is invalid");
     if (runtimeAttestationNonce !== null && !/^[0-9a-f]{64}$/u.test(runtimeAttestationNonce))
       fail("ERROR_RUNTIME_ISOLATION", "runtime launch attestation nonce is invalid");
-    if ((runtimeId === null) !== (runtimeRevision === null))
+    if ((validatedRuntimeId === null) !== (validatedRuntimeRevision === null))
       fail("ERROR_RUNTIME_ISOLATION", "runtime identity is incomplete");
-    this.runtimeId = runtimeId;
-    this.runtimeRevision = runtimeRevision as GitCommitSha | null;
+    this.runtimeId = validatedRuntimeId;
+    this.runtimeRevision = validatedRuntimeRevision;
     this.runtimeAttestation = runtimeAttestation;
     this.runtimeAttestationNonce = runtimeAttestationNonce;
     this.runtimeAttestationKey =
       options.runtimeAttestationKey !== undefined
         ? Buffer.from(options.runtimeAttestationKey, "utf8")
-        : runtimeId !== null && runtimeRevision !== null
-          ? immutableRuntimeKey(this.root, runtimeId, runtimeRevision)
+        : validatedRuntimeId !== null && validatedRuntimeRevision !== null
+          ? immutableRuntimeKey(this.root, validatedRuntimeId, validatedRuntimeRevision)
           : null;
     this.diagnostics =
       options.diagnostics ??
@@ -1737,19 +1839,24 @@ export class WorkflowStore {
         created_at: string;
       }>
     ).map((event) => {
+      const rawSummary = JSON.parse(event.summary_json) as AuditEnvelope & {
+        dirty_scope_adoption?: unknown;
+        finding_adjudications?: FindingAdjudication[];
+      };
       const result: AuditEvent = {
         version: event.version,
         event_type: event.event_type as AuditEventType,
         actor_role: event.actor_role as ActorRole,
-        summary: JSON.parse(event.summary_json) as AuditEnvelope,
+        summary: rawSummary,
         created_at: event.created_at as IsoTimestamp,
       };
-      const rawSummary = JSON.parse(event.summary_json) as AuditEnvelope & {
-        dirty_scope_adoption?: DirtyScopeAdoptionAudit;
-        finding_adjudications?: FindingAdjudication[];
-      };
-      if (rawSummary.dirty_scope_adoption)
-        result.dirty_scope_adoption = rawSummary.dirty_scope_adoption;
+      if (
+        rawSummary &&
+        typeof rawSummary === "object" &&
+        !Array.isArray(rawSummary) &&
+        "dirty_scope_adoption" in rawSummary
+      )
+        result.dirty_scope_adoption = parseDirtyScopeAdoptionAudit(rawSummary.dirty_scope_adoption);
       if (
         result.event_type === "SCOPE_EXPANDED" ||
         result.event_type === "STAGED_SCOPE_RECONCILED"
@@ -1802,30 +1909,14 @@ export class WorkflowStore {
       } catch {
         fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is malformed");
       }
-      const detail =
+      const detailValue =
         summary && typeof summary === "object" && !Array.isArray(summary)
-          ? (summary as { dirty_scope_adoption?: DirtyScopeAdoptionAudit }).dirty_scope_adoption
+          ? (summary as { dirty_scope_adoption?: unknown }).dirty_scope_adoption
           : undefined;
-      if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+      if (!detailValue || typeof detailValue !== "object" || Array.isArray(detailValue)) {
         fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is missing");
       }
-      if (
-        !Array.isArray(detail.adopted_paths) ||
-        detail.adopted_paths.length === 0 ||
-        detail.adopted_paths.some((path) => typeof path !== "string") ||
-        new Set(detail.adopted_paths).size !== detail.adopted_paths.length ||
-        typeof detail.scope_expansion_id !== "string" ||
-        !Number.isSafeInteger(detail.scope_expansion_version) ||
-        typeof detail.base_head !== "string" ||
-        !Array.isArray(detail.current_states) ||
-        !Array.isArray(detail.index_states) ||
-        typeof detail.current_state_commitment !== "string" ||
-        typeof detail.cross_runtime !== "boolean" ||
-        typeof detail.reason !== "string" ||
-        typeof detail.user_authorization !== "string"
-      ) {
-        fail("ERROR_STALE_ADOPTION", "dirty scope adoption audit evidence is invalid");
-      }
+      const detail = parseDirtyScopeAdoptionAudit(detailValue);
       const expansion = state.scope_expansions.find(
         (candidate) =>
           candidate.expansion_id === detail.scope_expansion_id &&
@@ -2063,7 +2154,7 @@ export class WorkflowStore {
             adoptedIndexStates,
           ),
           runtime_id: owner.runtime_id,
-          runtime_revision: owner.runtime_revision as GitCommitSha,
+          runtime_revision: owner.runtime_revision,
           executing_runtime_id: this.runtimeId,
           executing_runtime_revision: this.runtimeRevision,
           cross_runtime: true,
@@ -2635,7 +2726,7 @@ export class WorkflowStore {
     const childState = linkedFollowupChildState(followup);
     const parentAffinity = runtimeAffinityPair(state.runtime_id, state.runtime_revision);
     childState.runtime_id = parentAffinity.runtime_id;
-    childState.runtime_revision = parentAffinity.runtime_revision as GitCommitSha | null;
+    childState.runtime_revision = parentAffinity.runtime_revision;
     childState.workflow_id = childId;
     const childReceipt = createReceipt(this.root, childState.approved_paths, true);
     if (childReceipt.base_head !== followup.base_head)

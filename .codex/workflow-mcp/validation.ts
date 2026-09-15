@@ -7,6 +7,7 @@ import type {
   AcceptanceResult,
   AcceptanceStatus,
   BlockingFinding,
+  ContentDigest,
   ErrorCategory,
   ExactRepoPath,
   Finding,
@@ -28,6 +29,7 @@ import type {
   RepairFallback,
   ReviewFinding,
   Role,
+  RuntimeId,
   StateDigest,
   ValidationRequirement,
   ValidationRequirementId,
@@ -570,6 +572,20 @@ export function revision(value: unknown, name = "revision"): GitCommitSha {
     fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
   }
   return value as GitCommitSha;
+}
+
+export function runtimeId(value: unknown, name = "runtime identity"): RuntimeId {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
+  }
+  return value as RuntimeId;
+}
+
+export function contentDigest(value: unknown, name = "content digest"): ContentDigest {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    fail("ERROR_INVALID_SHAPE", `${name} is invalid`);
+  }
+  return value as ContentDigest;
 }
 
 export function role(value: unknown): Role {
