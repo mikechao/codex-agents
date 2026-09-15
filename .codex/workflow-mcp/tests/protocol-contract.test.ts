@@ -274,6 +274,8 @@ test("closed protocol registry and schema contract exposes workflow actions with
     description:
       "Direct linked follow-ups are null-plan; use the plan-native route for PlanArtifact authority.",
   });
+  assert.equal(linkedDirectSchema.properties.validation_requirements.minItems, 0);
+  assert.match(create.description ?? "", /direct workflows require explicit null-plan authority/iu);
 });
 
 test("closed protocol source contract retains only the live protocol instructions", () => {

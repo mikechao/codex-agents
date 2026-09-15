@@ -25,7 +25,6 @@ export {
   IMPLEMENTATION_STOP_PHASES,
   reconcileStagedScope,
   resumeImplementation,
-  stagedScopeReconciliationFeasible,
   submitImplementation,
 } from "./transitions/implementation.js";
 export type {
@@ -36,6 +35,7 @@ export type {
   WorkflowNextStep,
   WorkflowReviewReadiness,
   WorkflowReviewRecoveryReadiness,
+  WorkflowStagedScopeRecoveryReadiness,
 } from "./transitions/queries.js";
 export {
   adjudicateFindings,
@@ -71,6 +71,8 @@ export {
   reviewTargetStateReady,
   roleView,
   scopeMutationReadiness,
+  stagedScopeReconciliationFeasible,
+  stagedScopeRecoveryReadiness,
   workflowLegality,
 } from "./transitions/queries.js";
 export { changedReceiptPaths, dirtyBaselinePaths, rangeDirtyBaselinePaths, scopeChangedPaths };

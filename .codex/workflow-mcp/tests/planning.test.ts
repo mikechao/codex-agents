@@ -576,6 +576,7 @@ test("bounded revisions replace arrays wholesale and reject invalid envelopes at
       [{ full_plan: null }, "ERROR_INVALID_SHAPE"],
       [{ objective: undefined }, "ERROR_INVALID_SHAPE"],
       [{ approved_paths: [] }, "ERROR_INVALID_PATHS"],
+      [{ validation_requirements: [] }, "ERROR_INVALID_SHAPE"],
       [{ validation_requirements: ["legacy string requirement"] }, "ERROR_INVALID_SHAPE"],
       [
         { validation_requirements: [{ description: "legacy null requirement", argv: null }] },

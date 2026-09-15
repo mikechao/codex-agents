@@ -363,9 +363,12 @@ source, exact current finding IDs, narrow remediation context and scope, and a f
 When the preparation-failure descriptor advertises staged-scope reconciliation, its exact bound paths
 are the only paths that may be added to the current workflow scope. The authorized mutation clears
 existing review and commit authority and requires fresh review followed by fresh commit authorization.
-When outside-scope staged paths are present, the descriptor also offers retry without scope expansion;
-that retry is accepted only after those paths are removed. The parent does not infer a move from
-summary prose or substitute another workflow.
+For a supported `change` working-tree workflow, reconciliation is advertised only while the live
+out-of-scope staged paths exactly match the persisted reconciliation paths. If the live set is empty,
+the descriptor advertises retry only; if it changes to another non-empty set, it advertises no parent
+mutation and remains fail-closed. `review_only` never advertises staged-scope reconciliation. The
+parent does not infer a move from summary prose, reuse historical staged paths after a fresh read, or
+substitute another workflow.
 They cannot serve as changed intent or reconciliation shortcuts. After every terminal worker handoff and parent mutation, refresh the
 read-only `workflow_operator_decision_get` projection, summarize only its bounded semantic result,
 and route from its fresh descriptor; stale prose and dirty-path inference grant no authority. Use

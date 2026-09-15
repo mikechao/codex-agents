@@ -247,8 +247,10 @@ const ACTION_PRECONDITION_AUDIT = {
   },
   workflow_reconcile_staged_scope: {
     surface: "projected_transition",
-    durable_state: ["staged-scope recovery choice"],
-    projection_readiness: ["exact captured staged paths outside review authority"],
+    durable_state: ["staged-scope recovery choice and persisted reconciliation receipt"],
+    projection_readiness: [
+      "supported change working-tree workflow, exact persisted/live staged paths, and current scope capacity",
+    ],
     payload_or_mutation_time: ["review context", "user authorization"],
   },
   workflow_return_commit_to_review: {
@@ -1655,6 +1657,56 @@ test("runtime Git facts suppress deterministically rejected actions", () => {
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("staged recovery legality follows exact live scope and workflow type", () => {
+  const base = workflowState({ phase: "COMMIT_AUTHORIZED" }) as any;
+  base.phase = "STOPPED_COMMIT_PREPARATION";
+  base.stop_context = {
+    status: "COMMIT_PREPARATION_FAILED",
+    category: "ERROR_STAGED_SCOPE",
+    summary: "staged scope is outside the reviewed authority",
+    recovery: "choose",
+    reconciliation_paths: ["b.txt"],
+    failed_at: "2026-09-14T00:00:00.000Z",
+    failed_version: 1,
+    stopped_from: "COMMIT_AUTHORIZED",
+  };
+  const common = {
+    head: { status: "readable" as const, current_head: base.base_head },
+  };
+
+  assert.deepEqual(
+    workflowLegality(base, {
+      ...common,
+      staged_scope_recovery: { status: "reconcile" },
+    }).actions.parent,
+    ["workflow_reconcile_staged_scope"],
+  );
+  assert.deepEqual(
+    workflowLegality(base, {
+      ...common,
+      staged_scope_recovery: { status: "retry" },
+    }).actions.parent,
+    ["workflow_retry_commit_preparation"],
+  );
+  assert.deepEqual(
+    workflowLegality(base, {
+      ...common,
+      staged_scope_recovery: { status: "unavailable" },
+    }).actions.parent,
+    [],
+  );
+
+  const reviewOnly = structuredClone(base);
+  reviewOnly.workflow_type = "review_only";
+  assert.deepEqual(
+    workflowLegality(reviewOnly, {
+      ...common,
+      staged_scope_recovery: { status: "reconcile" },
+    }).actions.parent,
+    [],
+  );
 });
 
 test("legality fails closed for omitted dynamic authority and full scope", () => {

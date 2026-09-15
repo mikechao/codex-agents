@@ -761,6 +761,16 @@ test("orchestrator presents semantic proposals and consumes descriptor inputs", 
   assert.match(orchestrator, /workflow_create_from_plan` by identity and supported options only/u);
 });
 
+test("direct orchestration preserves explicit null-plan and empty-validation authority", () => {
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  assert.match(
+    orchestrator,
+    /For a direct request use `workflow_create` with `approved_plan: null` and `validation_requirements: \[\]` when the user supplied no additional validation requirements/u,
+  );
+  assert.match(orchestrator, /Omission or invented inspection requirements are invalid/u);
+  assert.match(orchestrator, /do not probe alternate payload shapes after rejection/u);
+});
+
 test("descriptor version 4 is the only executable descriptor", () => {
   const orchestratorSource = opencode("orchestrator.md");
   const orchestrator = orchestratorSource.replace(/\s+/gu, " ");
@@ -2189,6 +2199,9 @@ test("reviewer contract distinguishes absent, required, and unknown path states"
     "git grep",
     "Git grep exit code `1` means no matches",
     "contextual searches do not expand workflow scope",
+    "Tracked paths outside `approved_paths` remain context-only even when their working-tree or index contents are dirty or staged",
+    "do not report them as semantic findings merely because they differ",
+    "demonstrably affects the approved review target/contract or causes an authorized validation to fail",
     "tracked content at `head_revision` only",
     "do not mask an observable validation failure",
   ]) {

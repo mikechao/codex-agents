@@ -284,21 +284,13 @@ export function createState(
     "AC",
     "criterion_id",
   );
-  state.validation_requirements =
-    args.workflow_type === "review_only"
-      ? contractList(
-          args.validation_requirements,
-          "validation_requirements",
-          "VAL",
-          "validation_id",
-          true,
-        )
-      : contractList(
-          args.validation_requirements,
-          "validation_requirements",
-          "VAL",
-          "validation_id",
-        );
+  state.validation_requirements = contractList(
+    args.validation_requirements,
+    "validation_requirements",
+    "VAL",
+    "validation_id",
+    true,
+  );
   state.review_target = target;
   return state;
 }

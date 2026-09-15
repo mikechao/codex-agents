@@ -13,10 +13,10 @@ import {
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { createRuntimeAttestation, WorkflowStore } from "../store.js";
-import { permittedNextActions, stagedScopeReconciliationFeasible } from "../transitions.js";
+import { stagedScopeReconciliationFeasible } from "../transitions.js";
 import { MAX_PATHS, MAX_REPO_PATH_LENGTH, objectDigest } from "../validation.js";
 import { fixture } from "./test-fixtures.js";
-import { deterministicReadiness, workflowState } from "./workflow-state-fixtures.js";
+import { workflowState } from "./workflow-state-fixtures.js";
 
 function input(git: (...args: string[]) => string, options: any = {}) {
   const paths = options.approved_paths ?? ["note.txt"];
@@ -169,8 +169,7 @@ function currentVersion(store: any, workflowId: string): number {
 }
 
 function deterministicParentActions(store: any, workflowId: string): string[] {
-  const state = rawState(store, workflowId);
-  return permittedNextActions(state, "parent", deterministicReadiness(state));
+  return store.parentGet(workflowId).permitted_next_actions;
 }
 
 function authorized(
@@ -1971,16 +1970,11 @@ test("incomplete reviewed rename authority reconciles exact staged paths before 
     assert.deepEqual(stopped.stop_context.reconciliation_paths, ["note.txt"]);
     assert.deepEqual(deterministicParentActions(store, created.workflow_id), [
       "workflow_reconcile_staged_scope",
-      "workflow_retry_commit_preparation",
     ]);
     const execution = store.operatorDecisionGet(created.workflow_id).execution;
     assert.equal(execution.primary.mode, "parent_mutation");
     if (execution.primary.mode !== "parent_mutation") throw new Error("expected recovery mutation");
-    assert.equal(execution.primary.selection, "choose_one");
-    const retry = execution.primary.invocations.find(
-      (invocation: any) => invocation.operation === "workflow_retry_commit_preparation",
-    );
-    assert.ok(retry);
+    assert.equal(execution.primary.selection, "single");
     const reconciliation = execution.primary.invocations.find(
       (invocation: any) => invocation.operation === "workflow_reconcile_staged_scope",
     );
@@ -1993,21 +1987,6 @@ test("incomplete reviewed rename authority reconciles exact staged paths before 
       { path: ["added_paths"], source: "server_derived", required: true },
       { path: ["review_context"], source: "user_authored", required: true },
     ]);
-    const versionBeforeBlockedRetry = currentVersion(store, created.workflow_id);
-    assert.equal(
-      category(() =>
-        store.retryCommitPreparation({
-          ...retry?.fixed_arguments,
-          retry_context: "repeat the incomplete reviewed scope",
-        }),
-      ),
-      "ERROR_INVALID_TRANSITION",
-    );
-    assert.equal(currentVersion(store, created.workflow_id), versionBeforeBlockedRetry);
-    const retryAction = store
-      .operatorDecisionGet(created.workflow_id)
-      .execution.parent_actions.find((action: any) => action.action === retry?.operation);
-    assert.equal(retryAction?.status, "executable");
     const reconciliationMutation = {
       ...reconciliation?.fixed_arguments,
       added_paths: reconciliation?.scope_reconciliation_binding.added_paths,
@@ -2045,6 +2024,104 @@ test("incomplete reviewed rename authority reconciles exact staged paths before 
     );
     store.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fresh staged recovery fails closed when live scope changes after a descriptor", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const workflow = authorized(store, root, git, {
+      approved_paths: ["note.txt"],
+      objective: "staged recovery freshness",
+    });
+    writeFileSync(join(root, "b.txt"), "staged outside scope\n");
+    git("add", "note.txt", "b.txt");
+    const stopped = store.prepareCommit({
+      workflow_id: workflow.id,
+      expected_version: currentVersion(store, workflow.id),
+    });
+    assert.deepEqual(stopped.stop_context.reconciliation_paths, ["b.txt"]);
+    const beforeVersion = currentVersion(store, workflow.id);
+    const descriptor = store.operatorDecisionGet(workflow.id).execution.primary;
+    assert.equal(descriptor.mode, "parent_mutation");
+    if (descriptor.mode !== "parent_mutation")
+      throw new Error("expected reconciliation descriptor");
+    assert.equal(descriptor.selection, "single");
+    assert.equal(descriptor.invocations[0].operation, "workflow_reconcile_staged_scope");
+
+    git("reset", "-q", "--", "b.txt");
+    writeFileSync(join(root, "c.txt"), "changed outside scope\n");
+    git("add", "c.txt");
+    const afterExternalChange = {
+      status: git("status", "--porcelain"),
+      staged: git("diff", "--cached", "--name-status"),
+    };
+    assert.equal(
+      category(() =>
+        store.reconcileStagedScope({
+          ...descriptor.invocations[0].fixed_arguments,
+          added_paths: ["b.txt"],
+          review_context: "reconcile the originally observed scope",
+          user_authorization: "authorize the exact originally observed scope",
+        }),
+      ),
+      "ERROR_STALE_RECEIPT",
+    );
+    assert.equal(currentVersion(store, workflow.id), beforeVersion);
+    assert.equal(git("status", "--porcelain"), afterExternalChange.status);
+    assert.equal(git("diff", "--cached", "--name-status"), afterExternalChange.staged);
+
+    const fresh = store.operatorDecisionGet(workflow.id);
+    assert.deepEqual(fresh.execution.parent_actions, []);
+    assert.equal(fresh.execution.primary.mode, "wait");
+    assert.doesNotMatch(JSON.stringify(fresh), /b\.txt/iu);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fresh staged recovery fails closed when HEAD advances after preparation", () => {
+  const { root, git } = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const workflow = authorized(store, root, git, {
+      approved_paths: ["note.txt"],
+      objective: "staged recovery head freshness",
+    });
+    writeFileSync(join(root, "b.txt"), "staged outside scope\n");
+    git("add", "note.txt", "b.txt");
+    const stopped = store.prepareCommit({
+      workflow_id: workflow.id,
+      expected_version: currentVersion(store, workflow.id),
+    });
+    assert.equal(stopped.stop_context.category, "ERROR_STAGED_SCOPE");
+    assert.deepEqual(stopped.stop_context.reconciliation_paths, ["b.txt"]);
+    assert.deepEqual(deterministicParentActions(store, workflow.id), [
+      "workflow_reconcile_staged_scope",
+    ]);
+
+    const state = rawState(store, workflow.id);
+    const headRef = git("symbolic-ref", "--quiet", "HEAD");
+    const advancedHead = git(
+      "commit-tree",
+      git("rev-parse", "HEAD^{tree}"),
+      "-p",
+      state.base_head,
+      "-m",
+      "advance HEAD without changing the index",
+    );
+    git("update-ref", headRef, advancedHead);
+    assert.deepEqual(git("diff", "--cached", "--name-only").split("\n"), ["b.txt", "note.txt"]);
+
+    const fresh = store.operatorDecisionGet(workflow.id);
+    assert.deepEqual(fresh.execution.parent_actions, []);
+    assert.equal(fresh.execution.primary.mode, "wait");
+    assert.doesNotMatch(JSON.stringify(fresh), /workflow_reconcile_staged_scope/iu);
+  } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -2341,7 +2418,7 @@ test("commit preparation store matrix preserves Git state and routes every failu
       assert.deepEqual(
         deterministicParentActions(store, id),
         candidate.name === "extra and untracked"
-          ? ["workflow_reconcile_staged_scope", "workflow_retry_commit_preparation"]
+          ? ["workflow_reconcile_staged_scope"]
           : ["workflow_retry_commit_preparation"],
       );
       if (candidate.name === "empty") {

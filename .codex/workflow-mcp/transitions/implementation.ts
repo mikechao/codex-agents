@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { fail } from "../errors.js";
 import type {
   ChangeReceipt,
-  ExactRepoPath,
   StoppingImplementationStatus,
   WorkflowPhase,
   WorkflowState,
@@ -28,6 +27,7 @@ import {
   hasFailedRequiredValidation,
   implementationRecoveryStateReady,
   scopeMutationReadiness,
+  stagedScopeReconciliationFeasible,
 } from "./queries.js";
 import { scopeChangedPaths } from "./receipts.js";
 import {
@@ -400,35 +400,6 @@ export function reconcileStagedScope(
   clearFullCommitEvidence(next);
   applyRecovery(next, "REVIEWING", "review", args.review_context, "review_context");
   return next;
-}
-
-/** Whether an exact staged-scope expansion can be persisted without exceeding state caps. */
-export function stagedScopeReconciliationFeasible(
-  state: WorkflowState,
-  addedPaths: ReadonlyArray<string>,
-  repositoryRoot: string,
-): boolean {
-  let validatedPaths: ExactRepoPath[];
-  try {
-    validatedPaths = exactPaths(addedPaths, repositoryRoot);
-  } catch {
-    return false;
-  }
-  const approvedPaths = new Set<string>(state.approved_paths);
-  if (
-    validatedPaths.some((path) => approvedPaths.has(path)) ||
-    state.scope_expansions.length >= MAX_PATHS ||
-    state.approved_path_baselines.length + validatedPaths.length > MAX_PATHS
-  ) {
-    return false;
-  }
-  const resultingPaths = new Set([...state.approved_paths, ...validatedPaths]);
-  if (resultingPaths.size > MAX_PATHS) return false;
-  const combinedPaths = new Set([
-    ...(state.linked_continuation?.combined_review_paths ?? state.approved_paths),
-    ...validatedPaths,
-  ]);
-  return combinedPaths.size <= MAX_PATHS;
 }
 
 export function adoptDirtyScope(

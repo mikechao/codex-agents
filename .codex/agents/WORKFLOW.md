@@ -439,11 +439,14 @@ an unchanged-HEAD failure enters the retryable `STOPPED_NOT_COMMITTED`
 stop (cleared by `workflow_retry_commit`); any verification mismatch enters the terminal
 `STOPPED_COMMIT_MISMATCH`. A supported preparation failure before a commit exists is persisted as
 `STOPPED_COMMIT_PREPARATION` with its category, bounded diagnostic, failure version/timestamp, and
-recovery class. Scope/content failures with staged paths outside reviewed authority expose a bounded
-choice between `workflow_retry_commit_preparation` and
-`workflow_reconcile_staged_scope`: retry preserves scope and is accepted only after the extra staged
-paths are removed; reconciliation adds only the exact observed paths and requires fresh review and
-fresh commit authorization. Other retryable scope/content failures expose only
+recovery class. Scope/content failures with staged paths outside reviewed authority expose live, exact
+recovery authority. For a supported `change` working-tree workflow, a persisted reconciliation set is
+reconcilable only while the live out-of-scope staged set is exactly the persisted set; the descriptor
+then exposes reconciliation only. When the live set is empty, it exposes retry only. A different
+non-empty live set exposes no parent mutation and remains fail-closed. `review_only` never exposes
+staged-scope reconciliation. Retry preserves scope and reconciliation adds only the exact observed
+paths, in both cases requiring the existing fresh review/authorization gates. Other retryable
+scope/content failures expose only
 `workflow_retry_commit_preparation`; stale receipt failures expose only
 `workflow_return_commit_to_review`, which clears authorization and requires a fresh review and
 fresh authorization. The committer has no permitted action while stopped. The server never changes

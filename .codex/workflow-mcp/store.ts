@@ -81,6 +81,7 @@ import {
   roleView,
   scopeMutationReadiness,
   stagedScopeReconciliationFeasible,
+  stagedScopeRecoveryReadiness,
   submitCommitResult,
   submitImplementation,
   submitReview,
@@ -1258,6 +1259,7 @@ export class WorkflowStore {
       approved_review: { status: "unavailable" },
       commit_preparation: { status: "unavailable" },
       commit_review_return: { status: "unavailable" },
+      staged_scope_recovery: { status: "unavailable" },
       commit_result:
         state.phase === "COMMIT_PREPARED"
           ? this.#commitSubmissionReadiness(head)
@@ -1280,6 +1282,20 @@ export class WorkflowStore {
       readiness.approved_review = this.#approvedReviewReadiness(state);
     if (state.phase === "COMMIT_AUTHORIZED")
       readiness.commit_preparation = this.#commitPreparationPreflight(state).readiness;
+    if (state.phase === "STOPPED_COMMIT_PREPARATION")
+      try {
+        readiness.staged_scope_recovery = stagedScopeRecoveryReadiness(
+          state,
+          stagedPathsOutsideScope(
+            this.root,
+            state.review_target.approved_paths ?? state.approved_paths,
+          ),
+          this.root,
+          head.status === "readable" ? head.current_head : null,
+        );
+      } catch {
+        readiness.staged_scope_recovery = { status: "unavailable" };
+      }
     if (state.phase === "STOPPED_COMMIT_PREPARATION")
       readiness.commit_review_return = this.#commitReviewReturnPreflight(state).readiness;
     return readiness;
@@ -2451,10 +2467,14 @@ export class WorkflowStore {
       "COMMIT_PREPARATION_RETRY_AUTHORIZED",
       (state) => {
         const reviewedPaths = state.review_target.approved_paths ?? state.approved_paths;
+        const head = this.#headReadiness();
         const stagedScopeWithinReviewedPaths =
-          state.stop_context?.status === "COMMIT_PREPARATION_FAILED" &&
-          state.stop_context.recovery === "choose" &&
-          stagedPathsOutsideScope(this.root, reviewedPaths).length === 0;
+          stagedScopeRecoveryReadiness(
+            state,
+            stagedPathsOutsideScope(this.root, reviewedPaths),
+            this.root,
+            head.status === "readable" ? head.current_head : null,
+          ).status === "retry";
         return retryCommitPreparation(state, args, stagedScopeWithinReviewedPaths);
       },
       "retry",

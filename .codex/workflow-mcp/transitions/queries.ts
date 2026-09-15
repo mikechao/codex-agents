@@ -3,6 +3,7 @@ import type {
   ApprovedPathBaselineView,
   BlockingFinding,
   CommitterView,
+  ExactRepoPath,
   GitCommitSha,
   ImplementerHandoffView,
   ImplementerView,
@@ -19,7 +20,7 @@ import type {
   WorkflowPhase,
   WorkflowState,
 } from "../types.js";
-import { canonicalJson, MAX_DETAIL, MAX_PATHS, MAX_TEXT, role } from "../validation.js";
+import { canonicalJson, exactPaths, MAX_DETAIL, MAX_PATHS, MAX_TEXT, role } from "../validation.js";
 import { VALIDATION_STATUS_SET } from "../values.js";
 import { dirtyBaselinePaths } from "./receipts.js";
 import { clone } from "./shared.js";
@@ -297,6 +298,9 @@ export type WorkflowReviewRecoveryReadiness =
 export type WorkflowCommitResultReadiness =
   | { status: "ready"; authority: "committer" | "reconciliation" }
   | { status: "unavailable" };
+export type WorkflowStagedScopeRecoveryReadiness =
+  | { status: "reconcile" | "retry" }
+  | { status: "unavailable" };
 
 export interface WorkflowLegalityReadiness {
   head?: WorkflowHeadReadiness;
@@ -307,6 +311,7 @@ export interface WorkflowLegalityReadiness {
   commit_preparation?: { status: "ready" | "unavailable" };
   commit_review_return?: { status: "ready" | "unavailable" };
   commit_result?: WorkflowCommitResultReadiness;
+  staged_scope_recovery?: WorkflowStagedScopeRecoveryReadiness;
 }
 
 export type WorkflowNextStep =
@@ -362,6 +367,69 @@ export function scopeMutationReadiness(state: WorkflowState): ScopeMutationReadi
   if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree")
     return "wrong_workflow";
   return state.approved_paths.length < MAX_PATHS ? "ready" : "path_limit_reached";
+}
+
+function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
+}
+
+/** Whether an exact staged-scope expansion can be persisted without exceeding state caps. */
+export function stagedScopeReconciliationFeasible(
+  state: WorkflowState,
+  addedPaths: ReadonlyArray<string>,
+  repositoryRoot: string,
+): boolean {
+  if (state.workflow_type !== "change" || state.review_target.review_mode !== "working_tree") {
+    return false;
+  }
+  let validatedPaths: ExactRepoPath[];
+  try {
+    validatedPaths = exactPaths(addedPaths, repositoryRoot);
+  } catch {
+    return false;
+  }
+  const approvedPaths = new Set<string>(state.approved_paths);
+  if (
+    validatedPaths.some((path) => approvedPaths.has(path)) ||
+    state.scope_expansions.length >= MAX_PATHS ||
+    state.approved_path_baselines.length + validatedPaths.length > MAX_PATHS
+  ) {
+    return false;
+  }
+  const resultingPaths = new Set([...state.approved_paths, ...validatedPaths]);
+  if (resultingPaths.size > MAX_PATHS) {
+    return false;
+  }
+  const combinedPaths = new Set([
+    ...(state.linked_continuation?.combined_review_paths ?? state.approved_paths),
+    ...validatedPaths,
+  ]);
+  return combinedPaths.size <= MAX_PATHS;
+}
+
+/** Derive staged recovery from the current live index and persisted receipt evidence. */
+export function stagedScopeRecoveryReadiness(
+  state: WorkflowState,
+  observedStagedPaths: ReadonlyArray<string>,
+  repositoryRoot: string,
+  currentHead: GitCommitSha | null,
+): WorkflowStagedScopeRecoveryReadiness {
+  if (
+    state.phase !== "STOPPED_COMMIT_PREPARATION" ||
+    state.stop_context?.status !== "COMMIT_PREPARATION_FAILED" ||
+    state.stop_context.category !== "ERROR_STAGED_SCOPE" ||
+    state.stop_context.recovery !== "choose"
+  ) {
+    return { status: "unavailable" };
+  }
+  if (observedStagedPaths.length === 0) return { status: "retry" };
+  const persistedPaths = state.stop_context.reconciliation_paths ?? [];
+  return persistedPaths.length > 0 &&
+    samePathList(persistedPaths, observedStagedPaths) &&
+    currentHead === state.base_head &&
+    stagedScopeReconciliationFeasible(state, persistedPaths, repositoryRoot)
+    ? { status: "reconcile" }
+    : { status: "unavailable" };
 }
 
 export type RepairCycleReadiness = "authorize" | "finalize" | "unavailable";
@@ -552,19 +620,19 @@ function actionsForRole(
       state.stop_context?.status === "COMMIT_PREPARATION_FAILED"
         ? state.stop_context.recovery
         : null;
-    actions = actions.filter((action) =>
-      recovery === "retry"
-        ? action === "workflow_retry_commit_preparation"
-        : recovery === "choose"
-          ? (action === "workflow_reconcile_staged_scope" ||
-              action === "workflow_retry_commit_preparation") &&
-            (state.stop_context?.status === "COMMIT_PREPARATION_FAILED"
-              ? (state.stop_context.reconciliation_paths?.length ?? 0)
-              : 0) > 0
-          : recovery === "review"
-            ? action === "workflow_return_commit_to_review"
-            : false,
-    );
+    actions = actions.filter((action) => {
+      if (recovery === "retry") return action === "workflow_retry_commit_preparation";
+      if (recovery === "review") return action === "workflow_return_commit_to_review";
+      if (recovery !== "choose") return false;
+      const stagedRecovery = readiness.staged_scope_recovery?.status;
+      return stagedRecovery === "reconcile" &&
+        state.workflow_type === "change" &&
+        state.review_target.review_mode === "working_tree"
+        ? action === "workflow_reconcile_staged_scope"
+        : stagedRecovery === "retry"
+          ? action === "workflow_retry_commit_preparation"
+          : false;
+    });
     if (recovery === "review" && readiness.commit_review_return?.status !== "ready") actions = [];
   }
   if (actorRole === "parent" && linkedFollowupStateReadiness(state) === "superseded") {

@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { JsonSchemaType } from "@modelcontextprotocol/server";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import {
   connectProtocol,
   disposeProtocolFixture,
@@ -95,45 +97,137 @@ test("SDK dispatch exposes exact role tools and serializes a representative life
       workflow_id: created.workflow_id,
     });
     assert.equal(decision.execution.primary.mode, "parent_mutation");
-    assert.equal(decision.execution.primary.selection, "choose_one");
-    const retry = decision.execution.primary.invocations.find(
-      (invocation: any) => invocation.operation === "workflow_retry_commit_preparation",
-    );
+    assert.equal(decision.execution.primary.selection, "single");
     const reconcile = decision.execution.parent_actions.find(
       (action: any) => action.action === "workflow_reconcile_staged_scope",
     );
-    assert.ok(retry);
     assert.equal(reconcile?.status, "executable");
     assert.deepEqual(reconcile?.descriptor.invocations[0].scope_reconciliation_binding, {
       reviewed_paths: ["note.txt"],
       added_paths: ["unrelated.txt"],
     });
 
-    const failedRetry = await session.callRaw("workflow_retry_commit_preparation", {
-      ...retry?.fixed_arguments,
-      retry_context: "keep the reviewed scope after correcting accidental staging",
-    });
-    assert.equal(failedRetry.result.isError, true);
-    assert.equal(failedRetry.body.category, "ERROR_INVALID_TRANSITION");
-    assert.equal(await session.version(created.workflow_id), stopped.version);
-
-    git("reset", "-q", "--", "unrelated.txt");
-    const retried = await session.call("workflow_retry_commit_preparation", {
-      ...retry?.fixed_arguments,
-      retry_context: "keep the reviewed scope after correcting accidental staging",
-    });
-    assert.equal(retried.phase, "COMMIT_AUTHORIZED");
+    const reconciliationInvocation = reconcile?.descriptor.invocations[0];
+    assert.ok(reconciliationInvocation);
+    assert.deepEqual(reconciliationInvocation?.required_inputs, [
+      { path: ["added_paths"], source: "server_derived", required: true },
+      { path: ["review_context"], source: "user_authored", required: true },
+    ]);
+    assert.equal(reconciliationInvocation?.operation, "workflow_reconcile_staged_scope");
+    const reconciliationPayload = {
+      ...reconciliationInvocation?.fixed_arguments,
+      added_paths: reconciliationInvocation?.scope_reconciliation_binding.added_paths,
+      review_context: "reconcile the complete staged scope",
+      user_authorization: "authorize the exact staged scope",
+    };
+    const reconciliationTool = listed.tools.find(
+      (tool) => tool.name === reconciliationInvocation?.operation,
+    );
+    assert.ok(reconciliationTool);
+    // The wire-level Tool type permits arbitrary JSON values in schema keywords, while
+    // the SDK validator requires its stricter JSON Schema representation. This preserves
+    // the exact advertised schema object at the test boundary without reconstructing it.
+    const advertisedSchema = reconciliationTool.inputSchema as JsonSchemaType;
+    const validation = new AjvJsonSchemaValidator().getValidator(advertisedSchema)(
+      reconciliationPayload,
+    );
+    assert.equal(validation.valid, true, validation.valid ? undefined : validation.errorMessage);
+    const reconciled = await session.call(
+      reconciliationInvocation?.operation,
+      reconciliationPayload,
+    );
+    assert.equal(reconciled.phase, "REVIEWING");
+    assert.deepEqual(reconciled.approved_paths, ["note.txt", "unrelated.txt"]);
     const refreshed = await session.call("workflow_operator_decision_get", {
       workflow_id: created.workflow_id,
     });
     assert.equal(refreshed.execution.primary.mode, "dispatch");
-    assert.equal(refreshed.execution.primary.route, "commit");
-    assert.equal(refreshed.execution.primary.operation, "workflow_prepare_commit");
-    const prepared = await session.call(refreshed.execution.primary.operation, {
+    assert.equal(refreshed.execution.primary.route, "re_review");
+    assert.equal(refreshed.execution.primary.operation, "workflow_begin_review");
+    const began = await session.call(refreshed.execution.primary.operation, {
       workflow_id: refreshed.execution.primary.workflow_id,
       expected_version: refreshed.execution.primary.expected_version,
     });
-    assert.equal(prepared.phase, "COMMIT_PREPARED");
+    assert.equal(began.phase, "REVIEWING");
+  } finally {
+    await disposeProtocolFixture(root, session);
+  }
+});
+
+test("SDK direct creation accepts explicit null-plan and empty validation contracts", async () => {
+  const { root, git } = fixture();
+  const session = await connectProtocol(root);
+  try {
+    for (const workflow_type of ["change", "review_only"] as const) {
+      const created = await session.call(
+        "workflow_create",
+        workflowCreateInput(git, { workflow_type, validation_requirements: [] }),
+      );
+      assert.equal(created.approved_plan, null);
+      assert.deepEqual(created.validation_requirements, []);
+    }
+  } finally {
+    await disposeProtocolFixture(root, session);
+  }
+});
+
+test("descriptor-bound direct linked follow-up is schema and transition executable with no validation", async () => {
+  const { root, git } = fixture();
+  const session = await connectProtocol(root);
+  const optional = {
+    finding_id: "OPTIONAL-PROTOCOL-1",
+    severity: "P3",
+    blocking: false,
+    file_and_line: "note.txt:1",
+    failure_scenario: "the documentation misleads maintainers",
+    impact: "the comment is stale",
+    violated_requirement: "documentation reflects behavior",
+    remediation: "update the comment",
+    missing_or_inadequate_test: "add documentation coverage",
+  };
+  try {
+    const source = await session.call("workflow_create", workflowCreateInput(git));
+    await session.call(
+      "workflow_submit_implementation",
+      implementationInput(source.workflow_id, await session.version(source.workflow_id)),
+    );
+    writeFileSync(join(root, "note.txt"), "linked source change\n");
+    await session.call("workflow_begin_review", {
+      workflow_id: source.workflow_id,
+      expected_version: await session.version(source.workflow_id),
+    });
+    await session.call("workflow_submit_review", {
+      workflow_id: source.workflow_id,
+      expected_version: await session.version(source.workflow_id),
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [optional],
+      prior_finding_classifications: {},
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "fresh reviewer pass" },
+      ],
+    });
+
+    const decision = await session.call("workflow_operator_decision_get", {
+      workflow_id: source.workflow_id,
+    });
+    const action = decision.execution.parent_actions.find(
+      (candidate: any) => candidate.action === "workflow_create_linked_followup",
+    );
+    assert.equal(action?.status, "executable");
+    const invocation = action.descriptor.invocations[0];
+    const child = await session.call("workflow_create_linked_followup", {
+      ...invocation.fixed_arguments,
+      objective: "update the stale documentation",
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["the comment matches behavior"],
+      validation_requirements: [],
+      finding_ids: [optional.finding_id],
+      user_authorization: "authorize the narrow documentation follow-up",
+    });
+    assert.equal(child.approved_plan, null);
+    assert.deepEqual(child.validation_requirements, []);
+    assert.equal(child.phase, "IMPLEMENTING");
   } finally {
     await disposeProtocolFixture(root, session);
   }

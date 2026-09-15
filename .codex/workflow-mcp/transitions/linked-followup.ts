@@ -252,6 +252,7 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
       "validation_requirements",
       "VAL",
       "validation_id",
+      true,
     );
   }
   return state;

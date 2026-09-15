@@ -230,6 +230,15 @@ check is defense in depth rather than a new authority boundary.
   creation with current-HEAD/null-head and all three inclusion flags, an exact complete dirty scope
   excluding unrelated/ignored state, descriptor-owned dispatch, separate approval and commit
   authorization, and one coherent exact-scope commit.
+- Descriptor recovery and direct payload dogfood (#152 Runs 3–5): from fresh disposable targets,
+  confirm direct `change` and `review_only` creation sends `approved_plan: null` and
+  `validation_requirements: []` on the first call when no extra validation was requested; confirm
+  ambient tracked dirty/staged paths outside `approved_paths` remain context-only; confirm staged
+  recovery exposes reconciliation only for an exact live match, retry only for an empty live set, and
+  no parent mutation for a changed non-empty set; and confirm an explicitly authorized optional
+  linked follow-up succeeds with its descriptor-bound empty validation list. Preserve the observed
+  #140 Runs 1–2 evidence and rerun only Runs 3–5 after a fresh host reload. Do not record results
+  unless each run is actually executed.
 - Reconciliation blocking repair: after a fresh reconciliation review reports blocking findings,
   confirm the descriptor exposes the bounded repair proposal and any worker dispatch is conditional
   on its declared authorization; optional findings never trigger remediation.

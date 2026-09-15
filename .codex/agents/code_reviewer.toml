@@ -77,8 +77,12 @@ Rules:
   contract behavior rather than an OpenCode permission assumption.
 - Contextual searches may use tracked content outside `approved_paths` to understand the approved
   implementation, but contextual searches do not expand workflow scope or authorize findings
-  unrelated to the approved implementation. For a commit-range review, search tracked content at
-  `head_revision` only; do not use the current working-tree corpus or untracked files.
+  unrelated to the approved implementation. Tracked paths outside `approved_paths` remain context-only
+  even when their working-tree or index contents are dirty or staged; do not report them as semantic
+  findings merely because they differ. Such context may support a finding only when it demonstrably
+  affects the approved review target/contract or causes an authorized validation to fail. For a
+  commit-range review, search tracked content at `head_revision` only; do not use the current
+  working-tree corpus or untracked files.
 - For a working-tree review, if an authoritative objective, acceptance criterion, validation
   requirement, or other contract requires an approved file or artifact to exist, a provably absent
   path is an actionable blocking finding describing the required artifact and its absence. Do not

@@ -480,7 +480,8 @@ export const toolDefinitions = [
   },
   {
     name: "workflow_create",
-    description: "Create a change or review-only workflow and return the parent view.",
+    description:
+      "Create a change or review-only workflow and return the parent view. Direct workflows require explicit null-plan authority and may use an empty validation requirement list.",
     inputSchema: schema(
       {
         workflow_type: { type: "string", enum: [...WORKFLOW_TYPE_VALUES] },
@@ -488,7 +489,7 @@ export const toolDefinitions = [
         approved_plan: {
           type: "null",
           description:
-            "Direct linked follow-ups are null-plan; use the plan-native route for PlanArtifact authority.",
+            "Direct workflows require explicit null-plan authority; use the plan-native route for PlanArtifact authority.",
         },
         approved_paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
         acceptance_criteria: {
@@ -889,7 +890,7 @@ export const toolDefinitions = [
   {
     name: "workflow_create_linked_followup",
     description:
-      "Create a fresh linked cycle-0 remediation workflow with a narrow authorized mutation scope; after remediation approval it requires a fresh combined review of the inherited logical-change scope before commit eligibility.",
+      "Create a fresh linked cycle-0 remediation workflow with a narrow authorized mutation scope; direct follow-ups require explicit null-plan authority and may use an empty validation requirement list; after remediation approval it requires a fresh combined review of the inherited logical-change scope before commit eligibility.",
     inputSchema: schema(
       {
         ...common.properties,
@@ -909,7 +910,7 @@ export const toolDefinitions = [
         validation_requirements: {
           type: "array",
           items: validationRequirementSchema,
-          minItems: 1,
+          minItems: 0,
           maxItems: 999,
         },
         finding_ids: { type: "array", items: { type: "string" }, minItems: 1 },
