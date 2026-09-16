@@ -1,5 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { authoritativeImplementationContract } from "../implementation-contract.js";
+import { replaceAuthoritativeImplementationContract } from "../transitions/state.js";
 import {
   rebindImplementationPlan,
   roleView,
@@ -10,10 +12,12 @@ import {
 import type {
   AcceptanceCriterionId,
   ContentDigest,
+  ExactRepoPath,
   GitCommitSha,
   IsoTimestamp,
   PlanId,
   PlanRevision,
+  PlanRevisionArtifact,
   ValidationRequirementId,
   WorkflowState,
   WorkflowVersion,
@@ -324,6 +328,70 @@ test("deterministic readiness fails closed without invoking repository integrati
   assert.deepEqual(workflowLegality(prepared).actions.committer, []);
 });
 
+test("authoritative contract replacement reports scope reconciliation without clearing overlays", () => {
+  const state = workflowState({ workflow_type: "review_only", phase: "REVIEWING" });
+  const planId = "00000000-0000-4000-8000-000000000158" as PlanId;
+  const artifact: PlanRevisionArtifact = {
+    plan_schema_version: 3,
+    plan_id: planId,
+    revision: 2 as PlanRevision,
+    workflow_type: "change",
+    full_plan: "replacement plan",
+    execution_brief: "replacement brief",
+    objective: "replacement objective",
+    approved_paths: [...state.approved_paths, "new.txt" as ExactRepoPath].sort(),
+    acceptance_criteria: [
+      {
+        criterion_id: "AC-001" as AcceptanceCriterionId,
+        description: "replacement acceptance",
+      },
+    ],
+    validation_requirements: [
+      {
+        validation_id: "VAL-001" as ValidationRequirementId,
+        description: "replacement validation",
+        kind: "command",
+        argv: ["true"],
+      },
+    ],
+    created_at: "2026-01-02T00:00:00.000Z" as IsoTimestamp,
+  };
+  const provenance = {
+    plan_id: planId,
+    revision: artifact.revision,
+    artifact_digest:
+      "2222222222222222222222222222222222222222222222222222222222222222" as ContentDigest,
+    approved_at: "2026-01-02T00:01:00.000Z" as IsoTimestamp,
+  };
+  const before = structuredClone(state);
+  const replacement = replaceAuthoritativeImplementationContract(
+    state,
+    authoritativeImplementationContract(artifact, provenance),
+  );
+
+  assert.deepEqual(replacement.prior_effective_paths, before.approved_paths);
+  assert.deepEqual(replacement.artifact_declared_paths, artifact.approved_paths);
+  assert.deepEqual(replacement.added_paths, ["new.txt"]);
+  assert.deepEqual(state, before);
+  const changedFields = Object.keys(replacement.state)
+    .filter(
+      (key) =>
+        JSON.stringify(replacement.state[key as keyof WorkflowState]) !==
+        JSON.stringify(before[key as keyof WorkflowState]),
+    )
+    .sort();
+  assert.deepEqual(changedFields, [
+    "acceptance_criteria",
+    "approved_paths",
+    "approved_plan",
+    "execution_brief",
+    "objective",
+    "plan_provenance",
+    "validation_requirements",
+    "workflow_type",
+  ]);
+});
+
 test("plan rebind after a repair block clears active lifecycle authority and resumes fresh implementation", () => {
   const repairing = workflowState({ phase: "REPAIRING" });
   const planId = "00000000-0000-4000-8000-000000000155" as PlanId;
@@ -365,40 +433,41 @@ test("plan rebind after a repair block clears active lifecycle authority and res
   blocked.version = (repairing.version + 1) as WorkflowVersion;
   const adjudications = blocked.finding_adjudications;
   const remediation = blocked.remediation_context;
+  const replacementArtifact: PlanRevisionArtifact = {
+    plan_schema_version: 3,
+    plan_id: planId,
+    revision: 2 as PlanRevision,
+    workflow_type: "change",
+    full_plan: "revision two plan",
+    execution_brief: "revision two brief",
+    objective: "revision two objective",
+    approved_paths: blocked.approved_paths,
+    acceptance_criteria: [
+      {
+        criterion_id: "AC-001" as AcceptanceCriterionId,
+        description: "revision two acceptance",
+      },
+    ],
+    validation_requirements: [
+      {
+        validation_id: "VAL-001" as ValidationRequirementId,
+        description: "revision two validation",
+        kind: "command",
+        argv: ["true"],
+      },
+    ],
+    created_at: "2026-01-02T00:00:00.000Z" as IsoTimestamp,
+  };
+  const replacementProvenance = {
+    plan_id: planId,
+    revision: 2 as PlanRevision,
+    artifact_digest:
+      "2222222222222222222222222222222222222222222222222222222222222222" as ContentDigest,
+    approved_at: "2026-01-02T00:01:00.000Z" as IsoTimestamp,
+  };
   const rebound = rebindImplementationPlan(
     blocked,
-    {
-      plan_schema_version: 3,
-      plan_id: planId,
-      revision: 2 as PlanRevision,
-      workflow_type: "change",
-      full_plan: "revision two plan",
-      execution_brief: "revision two brief",
-      objective: "revision two objective",
-      approved_paths: blocked.approved_paths,
-      acceptance_criteria: [
-        {
-          criterion_id: "AC-001" as AcceptanceCriterionId,
-          description: "revision two acceptance",
-        },
-      ],
-      validation_requirements: [
-        {
-          validation_id: "VAL-001" as ValidationRequirementId,
-          description: "revision two validation",
-          kind: "command",
-          argv: ["true"],
-        },
-      ],
-      created_at: "2026-01-02T00:00:00.000Z" as IsoTimestamp,
-    },
-    {
-      plan_id: planId,
-      revision: 2 as PlanRevision,
-      artifact_digest:
-        "2222222222222222222222222222222222222222222222222222222222222222" as ContentDigest,
-      approved_at: "2026-01-02T00:01:00.000Z" as IsoTimestamp,
-    },
+    authoritativeImplementationContract(replacementArtifact, replacementProvenance),
     syntheticReceipt(),
     "authorization must not enter semantic state",
   );

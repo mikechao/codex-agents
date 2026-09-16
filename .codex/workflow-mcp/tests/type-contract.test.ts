@@ -21,6 +21,8 @@ import type {
   AcceptanceCriterion,
   AcceptanceCriterionId,
   AcceptanceResult,
+  AuthoritativeImplementationAuthority,
+  AuthoritativeImplementationContract,
   CommitAttemptId,
   CommitSubmissionOutcome,
   CommitterView,
@@ -31,10 +33,12 @@ import type {
   ImplementerHandoffView,
   ImplementerView,
   ParentView,
+  PersistedImplementationAuthority,
   PlanAuthoringContent,
   PlannerPlanRead,
   PlanRead,
   PlanRevisionArtifact,
+  PlanRevisionContent,
   PlanRevisionReplacements,
   RepairConformance,
   RepairDirective,
@@ -94,6 +98,16 @@ type PlannerContentKeys =
   | "approved_paths"
   | "acceptance_criteria"
   | "validation_requirements";
+
+type AuthoritativeImplementationContractKeys =
+  | "workflow_type"
+  | "approved_plan"
+  | "execution_brief"
+  | "objective"
+  | "artifact_approved_paths"
+  | "acceptance_criteria"
+  | "validation_requirements"
+  | "plan_provenance";
 
 const _canonicalValues = [
   ROLE_VALUES,
@@ -310,6 +324,15 @@ type _PlannerContentIsCanonicalWriteShape = Expect<
   Equal<PlanAuthoringContent, Required<PlanRevisionReplacements>>
 >;
 type _PlannerContentKeysAreComplete = Expect<Equal<keyof PlanAuthoringContent, PlannerContentKeys>>;
+type _PlanRevisionContentKeysAreComplete = Expect<
+  Equal<keyof PlanRevisionContent, PlannerContentKeys>
+>;
+type _AuthoritativeImplementationContractKeysAreComplete = Expect<
+  Equal<keyof AuthoritativeImplementationContract, AuthoritativeImplementationContractKeys>
+>;
+type _PersistedAuthorityUsesTheSameNonScopeFields = Expect<
+  Equal<keyof PersistedImplementationAuthority, keyof AuthoritativeImplementationAuthority>
+>;
 type _PlannerEnvelopeKeysAreBounded = Expect<
   Equal<
     keyof PlannerPlanRead,

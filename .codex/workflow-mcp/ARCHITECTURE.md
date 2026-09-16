@@ -17,6 +17,8 @@ The low-level/common layer provides reusable domain primitives:
   validation helpers.
 - `migration.ts` defines the supported persisted schema-version boundary and its fail-closed
   check.
+- `implementation-contract.ts` owns the typed projection from exact approved PlanArtifact
+  authority to the workflow implementation contract and its non-scope state projection.
 
 The shared/support layer contains helpers used by multiple transition domains:
 

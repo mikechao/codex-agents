@@ -1,11 +1,11 @@
 import { fail } from "../errors.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "../migration.js";
 import type {
+  AuthoritativeImplementationContract,
   ExactRepoPath,
   GitCommitSha,
   LinkedContinuation,
   PlanProvenance,
-  PlanRevisionArtifact,
   RemediationContext,
   ReviewFinding,
   ReviewTarget,
@@ -45,6 +45,48 @@ interface BaseStateOptions {
   workItems?: WorkItemReference[];
   executionBrief?: string | null;
   planProvenance?: PlanProvenance | null;
+}
+
+export interface ImplementationContractReplacement {
+  state: WorkflowState;
+  prior_effective_paths: ExactRepoPath[];
+  artifact_declared_paths: ExactRepoPath[];
+  added_paths: ExactRepoPath[];
+}
+
+function writeAuthoritativeImplementationContract(
+  state: WorkflowState,
+  contract: AuthoritativeImplementationContract,
+): void {
+  state.workflow_type = contract.workflow_type;
+  state.objective = contract.objective;
+  state.approved_plan = contract.approved_plan;
+  state.execution_brief = contract.execution_brief;
+  state.plan_provenance = clone(contract.plan_provenance);
+  state.approved_paths = clone(contract.artifact_approved_paths);
+  state.acceptance_criteria = clone(contract.acceptance_criteria);
+  state.validation_requirements = clone(contract.validation_requirements);
+}
+
+/** Replace only exact PlanArtifact authority and report workflow-local scope reconciliation. */
+export function replaceAuthoritativeImplementationContract(
+  state: WorkflowState,
+  contract: AuthoritativeImplementationContract,
+): ImplementationContractReplacement {
+  const priorEffectivePaths = clone(state.approved_paths);
+  const artifactDeclaredPaths = clone(contract.artifact_approved_paths);
+  if (priorEffectivePaths.some((path) => !artifactDeclaredPaths.includes(path))) {
+    fail("ERROR_PLAN_INVALID", "replacement plan cannot contract effective workflow scope");
+  }
+  const addedPaths = artifactDeclaredPaths.filter((path) => !priorEffectivePaths.includes(path));
+  const next = clone<WorkflowState>(state);
+  writeAuthoritativeImplementationContract(next, contract);
+  return {
+    state: next,
+    prior_effective_paths: priorEffectivePaths,
+    artifact_declared_paths: artifactDeclaredPaths,
+    added_paths: addedPaths,
+  };
 }
 
 export function baseState({
@@ -297,30 +339,28 @@ export function createState(
 
 /** Construct a workflow from an already-normalized, server-verified plan revision. */
 export function createStateFromPlan(
-  artifact: PlanRevisionArtifact,
-  provenance: PlanProvenance,
+  contract: AuthoritativeImplementationContract,
   baseHead: GitCommitSha,
   maxRepairCycles: number,
   inheritedWorkItems: WorkItemReference[] = [],
 ): WorkflowState {
   const state = baseState({
-    objective: artifact.objective,
-    workflowType: artifact.workflow_type,
-    approvedPlan: artifact.full_plan,
-    executionBrief: artifact.execution_brief,
-    planProvenance: provenance,
-    approvedPaths: artifact.approved_paths,
+    objective: contract.objective,
+    workflowType: contract.workflow_type,
+    approvedPlan: contract.approved_plan,
+    executionBrief: contract.execution_brief,
+    planProvenance: contract.plan_provenance,
+    approvedPaths: contract.artifact_approved_paths,
     baseHead,
     maxRepairCycles,
     workItems: inheritedWorkItems,
   });
-  state.acceptance_criteria = clone(artifact.acceptance_criteria);
-  state.validation_requirements = clone(artifact.validation_requirements);
+  writeAuthoritativeImplementationContract(state, contract);
   state.review_target = {
     review_mode: "working_tree",
     base_revision: baseHead,
     head_revision: null,
-    approved_paths: clone(artifact.approved_paths),
+    approved_paths: clone(contract.artifact_approved_paths),
     include_staged: true,
     include_unstaged: true,
     include_untracked: true,

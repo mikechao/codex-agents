@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { fail } from "../errors.js";
 import type {
+  AuthoritativeImplementationContract,
   ChangeReceipt,
-  PlanProvenance,
-  PlanRevisionArtifact,
   StoppingImplementationStatus,
   WorkflowPhase,
   WorkflowState,
@@ -40,6 +39,7 @@ import {
   clone,
   ensurePhase,
 } from "./shared.js";
+import { replaceAuthoritativeImplementationContract } from "./state.js";
 
 export const IMPLEMENTATION_STOP_PHASES: Record<StoppingImplementationStatus, WorkflowPhase> = {
   DONE_WITH_CONCERNS: "STOPPED_CONCERNS",
@@ -482,8 +482,7 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
 
 export function rebindImplementationPlan(
   state: WorkflowState,
-  artifact: PlanRevisionArtifact,
-  provenance: PlanProvenance,
+  contract: AuthoritativeImplementationContract,
   addedReceipt: ChangeReceipt,
   userAuthorizationValue: string,
 ): WorkflowState {
@@ -491,18 +490,15 @@ export function rebindImplementationPlan(
   if (!implementationRecoveryStateReady(state)) {
     fail("ERROR_STATE_CORRUPT", "blocked implementation stop context is invalid");
   }
-  if (implementationPlanRebindStateReadiness(state, artifact) !== "ready") {
+  if (implementationPlanRebindStateReadiness(state, contract) !== "ready") {
     fail("ERROR_PLAN_INVALID", "approved replacement plan is incompatible with this workflow");
   }
-  if (
-    provenance.plan_id !== artifact.plan_id ||
-    provenance.revision !== artifact.revision ||
-    state.plan_provenance === null
-  ) {
+  if (state.plan_provenance === null) {
     fail("ERROR_PLAN_INVALID", "replacement plan provenance is invalid");
   }
 
-  const addedPaths = artifact.approved_paths.filter((path) => !state.approved_paths.includes(path));
+  const replacement = replaceAuthoritativeImplementationContract(state, contract);
+  const addedPaths = replacement.added_paths;
   if (
     addedPaths.length > 0 &&
     (addedReceipt.base_head !== state.base_head ||
@@ -522,13 +518,7 @@ export function rebindImplementationPlan(
 
   const now = isoNow();
   const resultingVersion = (state.version + 1) as WorkflowVersion;
-  const next = clone<WorkflowState>(state);
-  next.objective = artifact.objective;
-  next.approved_plan = artifact.full_plan;
-  next.execution_brief = artifact.execution_brief;
-  next.plan_provenance = clone(provenance);
-  next.acceptance_criteria = clone(artifact.acceptance_criteria);
-  next.validation_requirements = clone(artifact.validation_requirements);
+  const next = replacement.state;
 
   if (addedPaths.length > 0) {
     next.scope_expansions.push({
@@ -548,12 +538,11 @@ export function rebindImplementationPlan(
       })),
     );
   }
-  next.approved_paths = clone(artifact.approved_paths);
   next.review_target = {
     review_mode: "working_tree",
     base_revision: state.base_head,
     head_revision: null,
-    approved_paths: clone(artifact.approved_paths),
+    approved_paths: clone(replacement.artifact_declared_paths),
     include_staged: true,
     include_unstaged: true,
     include_untracked: true,
@@ -581,7 +570,7 @@ export function rebindImplementationPlan(
   next.stop_context = null;
   next.recovery_context = {
     kind: "implementation",
-    context: `Implementation resumed after rebinding to approved PlanArtifact revision ${artifact.revision}.`,
+    context: `Implementation resumed after rebinding to approved PlanArtifact revision ${contract.plan_provenance.revision}.`,
     recovered_at: now,
   };
   return next;

@@ -564,6 +564,43 @@ export interface PlanRevisionArtifact {
   created_at: IsoTimestamp;
 }
 
+/** Plan-authored implementation content, excluding immutable revision envelope metadata. */
+export type PlanRevisionContent = Omit<
+  PlanRevisionArtifact,
+  "plan_schema_version" | "plan_id" | "revision" | "created_at"
+>;
+
+/**
+ * Exact approved PlanArtifact authority before workflow-local scope and lifecycle overlays.
+ * `artifact_approved_paths` is deliberately distinct from a workflow's effective approved scope.
+ */
+export type AuthoritativeImplementationContract = Omit<
+  PlanRevisionContent,
+  "full_plan" | "approved_paths"
+> & {
+  approved_plan: PlanRevisionContent["full_plan"];
+  artifact_approved_paths: PlanRevisionContent["approved_paths"];
+  plan_provenance: PlanProvenance;
+};
+
+/** Contract fields that remain directly recoverable after effective workflow scope expands. */
+export type AuthoritativeImplementationAuthority = Omit<
+  AuthoritativeImplementationContract,
+  "artifact_approved_paths"
+>;
+
+/** Persisted non-scope authority projection, including the separate nullable direct-workflow path. */
+export type PersistedImplementationAuthority = Pick<
+  WorkflowState,
+  | "workflow_type"
+  | "objective"
+  | "approved_plan"
+  | "execution_brief"
+  | "plan_provenance"
+  | "acceptance_criteria"
+  | "validation_requirements"
+>;
+
 /** Caller-selected fields for a bounded copy-forward plan revision. */
 export interface PlanRevisionReplacements {
   workflow_type?: WorkflowType;

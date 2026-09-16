@@ -24,6 +24,7 @@ import {
   verifyPreparedCommit,
   verifyReviewReceipt,
 } from "./git.js";
+import { authoritativeImplementationAuthorityFromState } from "./implementation-contract.js";
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { assertSupportedStateSchema } from "./migration.js";
 import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
@@ -414,13 +415,8 @@ function changedFields(before: WorkflowState | null, after: WorkflowState): stri
 
 function assertApprovedPlanUnchanged(before: WorkflowState, after: WorkflowState): void {
   if (
-    before.workflow_type !== after.workflow_type ||
-    before.objective !== after.objective ||
-    before.approved_plan !== after.approved_plan ||
-    before.execution_brief !== after.execution_brief ||
-    canonicalJson(before.plan_provenance) !== canonicalJson(after.plan_provenance) ||
-    canonicalJson(before.acceptance_criteria) !== canonicalJson(after.acceptance_criteria) ||
-    canonicalJson(before.validation_requirements) !== canonicalJson(after.validation_requirements)
+    canonicalJson(authoritativeImplementationAuthorityFromState(before)) !==
+    canonicalJson(authoritativeImplementationAuthorityFromState(after))
   ) {
     fail("ERROR_INVALID_TRANSITION", "approved plan and execution contract are immutable");
   }
@@ -1399,11 +1395,11 @@ export class WorkflowStore {
     if (plan === null || plan.artifact.revision <= state.plan_provenance.revision) {
       return { status: "no_replacement", plan: null };
     }
-    if (implementationPlanRebindStateReadiness(state, plan.artifact) !== "ready") {
+    if (implementationPlanRebindStateReadiness(state, plan.implementation_contract) !== "ready") {
       return { status: "incompatible", plan: null };
     }
     try {
-      assertPlanValidationPolicy(this.root, plan.artifact.validation_requirements);
+      assertPlanValidationPolicy(this.root, plan.implementation_contract.validation_requirements);
     } catch (error) {
       if (error instanceof WorkflowError && error.category === "ERROR_PLAN_INVALID") {
         return { status: "incompatible", plan: null };
@@ -1556,11 +1552,13 @@ export class WorkflowStore {
     return this.db
       .transaction(() => {
         const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
-        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
+        assertPlanValidationPolicy(
+          this.root,
+          resolved.implementation_contract.validation_requirements,
+        );
         const head = currentHead(this.root);
         const state = createStateFromPlan(
-          resolved.artifact,
-          resolved.provenance,
+          resolved.implementation_contract,
           head,
           maxRepairCycles,
           inheritedItems,
@@ -2515,14 +2513,18 @@ export class WorkflowStore {
         if (
           resolved.provenance.plan_id !== state.plan_provenance.plan_id ||
           resolved.provenance.revision <= state.plan_provenance.revision ||
-          implementationPlanRebindStateReadiness(state, resolved.artifact) !== "ready"
+          implementationPlanRebindStateReadiness(state, resolved.implementation_contract) !==
+            "ready"
         ) {
           fail(
             "ERROR_PLAN_INVALID",
             "approved replacement plan is incompatible with this workflow",
           );
         }
-        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
+        assertPlanValidationPolicy(
+          this.root,
+          resolved.implementation_contract.validation_requirements,
+        );
 
         const head = currentHead(this.root);
         if (head !== state.base_head) {
@@ -2539,7 +2541,7 @@ export class WorkflowStore {
           fail("ERROR_STALE_RECEIPT", "blocked implementation changed after its receipt");
         }
 
-        const addedPaths = resolved.artifact.approved_paths.filter(
+        const addedPaths = resolved.implementation_contract.artifact_approved_paths.filter(
           (path) => !state.approved_paths.includes(path),
         );
         const addedReceipt =
@@ -2564,8 +2566,7 @@ export class WorkflowStore {
         const priorProvenance = state.plan_provenance;
         const next = rebindImplementationPlan(
           state,
-          resolved.artifact,
-          resolved.provenance,
+          resolved.implementation_contract,
           addedReceipt,
           normalizedAuthorization,
         );
@@ -3042,13 +3043,15 @@ export class WorkflowStore {
         // Resolve and approve the child plan inside the same immediate transaction as the
         // source supersession and child insertion. The caller supplies identity only.
         const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
-        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
+        assertPlanValidationPolicy(
+          this.root,
+          resolved.implementation_contract.validation_requirements,
+        );
         if (linkedFollowupStateReadiness(state) !== "ready") {
           linkedFollowupInputFromPlan(
             state,
             args,
-            resolved.artifact,
-            resolved.provenance,
+            resolved.implementation_contract,
             state.base_head,
           );
         }
@@ -3057,8 +3060,7 @@ export class WorkflowStore {
         const followup = linkedFollowupInputFromPlan(
           state,
           args,
-          resolved.artifact,
-          resolved.provenance,
+          resolved.implementation_contract,
           head.current_head,
         );
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);

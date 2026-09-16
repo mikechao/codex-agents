@@ -1,6 +1,7 @@
 import type {
   ApprovedPathBaseline,
   ApprovedPathBaselineView,
+  AuthoritativeImplementationContract,
   BlockingFinding,
   CommitterView,
   ExactRepoPath,
@@ -9,7 +10,6 @@ import type {
   ImplementerView,
   LinkedContinuation,
   ParentView,
-  PlanRevisionArtifact,
   ReviewerView,
   ReviewerViewBase,
   Role,
@@ -473,7 +473,7 @@ export function implementationRecoveryStateReady(state: WorkflowState): boolean 
 
 export function implementationPlanRebindStateReadiness(
   state: WorkflowState,
-  artifact: PlanRevisionArtifact,
+  contract: AuthoritativeImplementationContract,
 ): "ready" | "incompatible" | "unavailable" {
   if (
     state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" ||
@@ -486,16 +486,18 @@ export function implementationPlanRebindStateReadiness(
     return "unavailable";
   }
   if (
-    artifact.plan_id !== state.plan_provenance.plan_id ||
-    artifact.revision <= state.plan_provenance.revision ||
-    artifact.workflow_type !== "change" ||
-    state.approved_paths.some((path) => !artifact.approved_paths.includes(path))
+    contract.plan_provenance.plan_id !== state.plan_provenance.plan_id ||
+    contract.plan_provenance.revision <= state.plan_provenance.revision ||
+    contract.workflow_type !== "change" ||
+    state.approved_paths.some((path) => !contract.artifact_approved_paths.includes(path))
   ) {
     return "incompatible";
   }
-  const addedPaths = artifact.approved_paths.filter((path) => !state.approved_paths.includes(path));
+  const addedPaths = contract.artifact_approved_paths.filter(
+    (path) => !state.approved_paths.includes(path),
+  );
   if (
-    artifact.approved_paths.length > MAX_PATHS ||
+    contract.artifact_approved_paths.length > MAX_PATHS ||
     state.approved_path_baselines.length + addedPaths.length > MAX_PATHS ||
     (addedPaths.length > 0 && state.scope_expansions.length >= MAX_PATHS) ||
     new Set([

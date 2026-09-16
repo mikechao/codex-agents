@@ -803,6 +803,126 @@ test("blocked implementation rebinds atomically to the exact current approved pl
   }
 });
 
+test("plan rebind preserves prior scope history and appends baselines only for new paths", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve initial scope-history plan",
+    });
+    const created = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const id = created.workflow_id;
+    const expanded = store.expandScope({
+      workflow_id: id,
+      expected_version: 0,
+      added_paths: ["expanded.txt"],
+      reason: "authorize pre-rebind expansion",
+      user_authorization: "authorize expanded path",
+    });
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: expanded.version,
+      status: "BLOCKED",
+      summary: "blocked after scope expansion",
+      agent_touched_paths: [],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "blocked" },
+      ],
+      validation_results: [{ validation_id: "VAL-001", status: "not_run", evidence: "blocked" }],
+      known_failures: ["blocked"],
+      finding_resolution_map: {},
+    });
+
+    const absorbedDraft = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: {
+        full_plan: "revision two absorbs existing expansion",
+        approved_paths: ["note.txt", "expanded.txt"],
+      },
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: absorbedDraft.revision,
+      user_authorization: "approve absorbed expansion",
+    });
+    const beforeAbsorbedRebind = store.parentGet(id);
+    const priorExpansions = structuredClone(beforeAbsorbedRebind.scope_expansions);
+    const priorBaselines = structuredClone(beforeAbsorbedRebind.approved_path_baselines);
+    const absorbed = store.rebindImplementationPlan({
+      workflow_id: id,
+      expected_version: beforeAbsorbedRebind.version,
+      plan_id: draft.plan_id,
+      revision: absorbedDraft.revision,
+      user_authorization: "authorize absorbed-scope rebind",
+    });
+    assert.deepEqual(absorbed.scope_expansions, priorExpansions);
+    assert.deepEqual(absorbed.approved_path_baselines, priorBaselines);
+    assert.deepEqual(absorbed.approved_paths, ["expanded.txt", "note.txt"]);
+    assert.equal(store.parentGet(id).plan_provenance?.revision, absorbedDraft.revision);
+
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: absorbed.version,
+      status: "BLOCKED",
+      summary: "blocked before adding one more authorized path",
+      agent_touched_paths: [],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "blocked again" },
+      ],
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "blocked again" },
+      ],
+      known_failures: ["blocked again"],
+      finding_resolution_map: {},
+    });
+    const addedDraft = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: absorbedDraft.revision,
+      replacements: {
+        full_plan: "revision three adds one path",
+        approved_paths: ["note.txt", "expanded.txt", "newly-authorized.txt"],
+      },
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: addedDraft.revision,
+      user_authorization: "approve one new path",
+    });
+    const beforeAddedRebind = store.parentGet(id);
+    const rebound = store.rebindImplementationPlan({
+      workflow_id: id,
+      expected_version: beforeAddedRebind.version,
+      plan_id: draft.plan_id,
+      revision: addedDraft.revision,
+      user_authorization: "authorize one-path rebind",
+    });
+
+    assert.deepEqual(rebound.scope_expansions.slice(0, priorExpansions.length), priorExpansions);
+    assert.deepEqual(
+      rebound.approved_path_baselines.slice(0, priorBaselines.length),
+      priorBaselines,
+    );
+    assert.equal(rebound.scope_expansions.length, priorExpansions.length + 1);
+    assert.deepEqual(rebound.scope_expansions.at(-1)?.added_paths, ["newly-authorized.txt"]);
+    assert.equal(rebound.approved_path_baselines.length, priorBaselines.length + 1);
+    assert.equal(rebound.approved_path_baselines.at(-1)?.path, "newly-authorized.txt");
+    assert.equal(
+      rebound.approved_path_baselines.filter((baseline: any) => baseline.path === "expanded.txt")
+        .length,
+      1,
+    );
+    assert.deepEqual(rebound.approved_paths, ["expanded.txt", "newly-authorized.txt", "note.txt"]);
+    assert.equal(store.parentGet(id).plan_provenance?.revision, addedDraft.revision);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
 test("an incompatible newer approved plan revision fails blocked recovery closed", () => {
   const target = fixture();
   const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });

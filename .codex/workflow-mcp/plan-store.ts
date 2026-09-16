@@ -1,8 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { fail, isWorkflowError } from "./errors.js";
+import { authoritativeImplementationContract } from "./implementation-contract.js";
 import { planReference } from "./plan-reference.js";
 import type {
+  AuthoritativeImplementationContract,
   ContentDigest,
   PlanApproval,
   PlanId,
@@ -11,6 +13,7 @@ import type {
   PlanRead,
   PlanRevision,
   PlanRevisionArtifact,
+  PlanRevisionContent,
 } from "./types.js";
 import {
   canonicalJson,
@@ -49,17 +52,6 @@ interface PlanApprovalRow {
   approved_at: string;
 }
 
-type PlanRevisionContent = Pick<
-  PlanRevisionArtifact,
-  | "workflow_type"
-  | "full_plan"
-  | "execution_brief"
-  | "objective"
-  | "approved_paths"
-  | "acceptance_criteria"
-  | "validation_requirements"
->;
-
 interface ResolvedPlan {
   plan: PlanRow;
   revision: PlanRevisionRow;
@@ -72,6 +64,7 @@ export interface ApprovedPlan {
   artifact_digest: ContentDigest;
   approval: PlanApproval;
   provenance: PlanProvenance;
+  implementation_contract: AuthoritativeImplementationContract;
 }
 
 function planRevisionContent(value: PlanRevisionContent): PlanRevisionContent {
@@ -231,16 +224,21 @@ export class PlanStore {
     )
       fail("ERROR_PLAN_UNAPPROVED", "plan revision is not approved");
     const artifactDigest = resolved.revision.artifact_digest as ContentDigest;
+    const resolvedProvenance: PlanProvenance = {
+      plan_id: resolved.artifact.plan_id,
+      revision: resolved.artifact.revision,
+      artifact_digest: artifactDigest,
+      approved_at: resolved.approval.approved_at,
+    };
     return {
       artifact: resolved.artifact,
       artifact_digest: artifactDigest,
       approval: resolved.approval,
-      provenance: {
-        plan_id: resolved.artifact.plan_id,
-        revision: resolved.artifact.revision,
-        artifact_digest: artifactDigest,
-        approved_at: resolved.approval.approved_at,
-      },
+      provenance: resolvedProvenance,
+      implementation_contract: authoritativeImplementationContract(
+        resolved.artifact,
+        resolvedProvenance,
+      ),
     };
   }
 
@@ -405,16 +403,21 @@ export class PlanStore {
       fail("ERROR_STATE_CORRUPT", "workflow plan revision is not approved");
     }
     const artifactDigest = resolved.revision.artifact_digest as ContentDigest;
+    const resolvedProvenance: PlanProvenance = {
+      plan_id: resolved.artifact.plan_id,
+      revision: resolved.artifact.revision,
+      artifact_digest: artifactDigest,
+      approved_at: resolved.approval.approved_at,
+    };
     const approved: ApprovedPlan = {
       artifact: resolved.artifact,
       artifact_digest: artifactDigest,
       approval: resolved.approval,
-      provenance: {
-        plan_id: resolved.artifact.plan_id,
-        revision: resolved.artifact.revision,
-        artifact_digest: artifactDigest,
-        approved_at: resolved.approval.approved_at,
-      },
+      provenance: resolvedProvenance,
+      implementation_contract: authoritativeImplementationContract(
+        resolved.artifact,
+        resolvedProvenance,
+      ),
     };
     if (canonicalJson(approved.provenance) !== canonicalJson(provenance)) {
       fail("ERROR_STATE_CORRUPT", "workflow plan provenance is inconsistent");
@@ -436,16 +439,18 @@ export class PlanStore {
       fail("ERROR_STATE_CORRUPT", "plan approval digest is corrupted");
     }
     const artifactDigest = resolved.revision.artifact_digest as ContentDigest;
+    const provenance: PlanProvenance = {
+      plan_id: resolved.artifact.plan_id,
+      revision: resolved.artifact.revision,
+      artifact_digest: artifactDigest,
+      approved_at: resolved.approval.approved_at,
+    };
     return {
       artifact: resolved.artifact,
       artifact_digest: artifactDigest,
       approval: resolved.approval,
-      provenance: {
-        plan_id: resolved.artifact.plan_id,
-        revision: resolved.artifact.revision,
-        artifact_digest: artifactDigest,
-        approved_at: resolved.approval.approved_at,
-      },
+      provenance,
+      implementation_contract: authoritativeImplementationContract(resolved.artifact, provenance),
     };
   }
 }
