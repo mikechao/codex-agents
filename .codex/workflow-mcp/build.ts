@@ -37,7 +37,12 @@ function regularExecutable(path: string): void {
   }
 }
 
-function verifyProtocol(path: string, databasePath: string, cwd: string): void {
+function verifyProtocol(
+  path: string,
+  databasePath: string,
+  sourceRoot: string,
+  smokeRoot: string,
+): void {
   const smokeScript = `
     const { spawn } = require("node:child_process");
     const child = spawn(process.env.WORKFLOW_MCP_SMOKE_TARGET, [], {
@@ -94,11 +99,11 @@ function verifyProtocol(path: string, databasePath: string, cwd: string): void {
     });
   `;
   const result = spawnSync(process.execPath, ["-e", smokeScript], {
-    cwd,
+    cwd: smokeRoot,
     env: {
       ...process.env,
       WORKFLOW_MCP_SMOKE_TARGET: path,
-      WORKFLOW_MCP_SMOKE_CWD: cwd,
+      WORKFLOW_MCP_SMOKE_CWD: sourceRoot,
       WORKFLOW_MCP_SMOKE_DB: databasePath,
     },
     encoding: "utf8",
@@ -168,30 +173,35 @@ export function buildStandaloneWorkflowMcp(options: BuildStandaloneWorkflowMcpOp
   const outputPath = resolve(options.outputPath);
   const entrypoint = resolve(sourceRoot, ENTRYPOINT);
   const bunExecutable = options.bunExecutable ?? process.execPath;
-  const result = spawnSync(
-    bunExecutable,
-    ["build", "--compile", entrypoint, "--outfile", outputPath],
-    {
-      cwd: sourceRoot,
-      encoding: "utf8",
-      maxBuffer: MAX_OUTPUT_BYTES,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  const details = outputText(result.stderr) || outputText(result.stdout);
-  if (result.error !== undefined || result.status !== 0) {
-    throw new Error(
-      `Unable to compile standalone Workflow MCP${details.length === 0 ? "" : `: ${details}`}`,
-      { cause: result.error },
-    );
-  }
-  regularExecutable(outputPath);
-  const smokeRoot = mkdtempSync(join(tmpdir(), "workflow-mcp-build-smoke-"));
+  const compilerRoot = mkdtempSync(join(tmpdir(), "workflow-mcp-build-compiler-"));
   try {
-    verifyProtocol(outputPath, join(smokeRoot, "state.sqlite"), sourceRoot);
+    const result = spawnSync(
+      bunExecutable,
+      ["build", "--compile", entrypoint, "--outfile", outputPath],
+      {
+        cwd: compilerRoot,
+        encoding: "utf8",
+        maxBuffer: MAX_OUTPUT_BYTES,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const details = outputText(result.stderr) || outputText(result.stdout);
+    if (result.error !== undefined || result.status !== 0) {
+      throw new Error(
+        `Unable to compile standalone Workflow MCP${details.length === 0 ? "" : `: ${details}`}`,
+        { cause: result.error },
+      );
+    }
+    regularExecutable(outputPath);
+    const smokeRoot = mkdtempSync(join(tmpdir(), "workflow-mcp-build-smoke-"));
+    try {
+      verifyProtocol(outputPath, join(smokeRoot, "state.sqlite"), sourceRoot, smokeRoot);
+    } finally {
+      rmSync(smokeRoot, { recursive: true, force: true });
+    }
   } finally {
-    rmSync(smokeRoot, { recursive: true, force: true });
+    rmSync(compilerRoot, { recursive: true, force: true });
   }
   return outputPath;
 }
