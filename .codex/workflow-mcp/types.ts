@@ -147,6 +147,7 @@ export type OperatorRoute = "implement" | "review" | "re_review" | "commit";
 export type OperatorRecovery =
   | "accept_concerns"
   | "adopt_dirty_scope"
+  | "rebind_implementation_plan"
   | "resume_implementation"
   | "resume_review"
   | "retry_commit"
@@ -157,6 +158,7 @@ export type OperatorRecovery =
 export type OperatorParentMutationOperation =
   | "workflow_adopt_dirty_scope"
   | "workflow_expand_scope"
+  | "workflow_rebind_implementation_plan"
   | "workflow_record_manual_validation"
   | "workflow_resume_implementation"
   | "workflow_accept_concerns"
@@ -232,6 +234,7 @@ export type OperatorDescriptorClassification =
   | "descriptorized_in_142"
   | "descriptorized_in_143"
   | "descriptorized_in_144"
+  | "descriptorized_in_155"
   | "protocol_or_query_only";
 
 export type OperatorActionDescriptorMetadata =
@@ -251,7 +254,11 @@ export type OperatorActionDescriptorMetadata =
       input_alternatives?: OperatorInputAlternative[];
     }
   | {
-      classification: "descriptorized_in_142" | "descriptorized_in_143" | "descriptorized_in_144";
+      classification:
+        | "descriptorized_in_142"
+        | "descriptorized_in_143"
+        | "descriptorized_in_144"
+        | "descriptorized_in_155";
       mode: "parent_mutation";
       operation: OperatorParentMutationOperation;
       authorization: OperatorAuthorizationMetadata;
@@ -367,7 +374,7 @@ export interface OperatorLinkedFollowupBinding {
 export interface OperatorPlanBinding {
   plan_id: PlanId;
   revision: PlanRevision;
-  source: "approved_child_plan_context";
+  source: "approved_child_plan_context" | "approved_recovery_plan_context";
 }
 
 export interface OperatorRepairAuthorizationDescriptor extends OperatorParentMutationDescriptor {
@@ -428,7 +435,7 @@ export type OperatorParentActionDescriptor =
     };
 
 export interface OperatorExecutionDescriptor {
-  descriptor_version: 4;
+  descriptor_version: 5;
   primary: OperatorNextActionDescriptor;
   parent_actions: OperatorParentActionDescriptor[];
 }
@@ -688,6 +695,7 @@ export type AuditEventType =
   | "IMPLEMENTATION_INCOMPLETE"
   | "IMPLEMENTATION_STOPPED"
   | "IMPLEMENTATION_RESUMED"
+  | "IMPLEMENTATION_PLAN_REBOUND"
   | "CONCERNS_ACCEPTED"
   | "DIRTY_SCOPE_ADOPTED"
   | "REVIEW_STARTED"
@@ -1174,6 +1182,7 @@ export interface AuditEnvelope {
   linked_workflow_id: WorkflowId | null;
   outcome: AuditOutcome;
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+  plan_rebind?: PlanRebindAudit;
 }
 
 export interface AuditEvent {
@@ -1183,8 +1192,17 @@ export interface AuditEvent {
   summary: AuditEnvelope;
   scope_expansion?: ScopeExpansionAudit;
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
+  plan_rebind?: PlanRebindAudit;
   finding_adjudications?: FindingAdjudication[];
   created_at: IsoTimestamp;
+}
+
+export interface PlanRebindAudit {
+  prior_plan_provenance: PlanProvenance;
+  replacement_plan_provenance: PlanProvenance;
+  added_paths: ExactRepoPath[];
+  user_authorization: string;
+  rebound_at: IsoTimestamp;
 }
 
 export interface DirtyScopeAdoptionState {

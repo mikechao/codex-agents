@@ -389,4 +389,31 @@ export class PlanStore {
   resolveApprovedPlan(planValue: unknown, revisionValue: unknown): ApprovedPlan {
     return this.#approvedPlan(planValue, revisionValue);
   }
+
+  /** Resolve only the aggregate's exact current revision when that revision is approved. */
+  resolveCurrentApprovedPlan(planValue: unknown): ApprovedPlan | null {
+    const id = planId(planValue);
+    const planRow = this.#db.prepare("SELECT * FROM plans WHERE plan_id = ?").get(id) as
+      | PlanRow
+      | undefined;
+    if (!planRow) fail("ERROR_PLAN_NOT_FOUND", "plan is not found");
+    const plan = parsePlanRow(planRow);
+    const resolved = this.#planRevision(id, plan.current_revision);
+    if (!resolved.approval) return null;
+    if (resolved.approval.artifact_digest !== resolved.revision.artifact_digest) {
+      fail("ERROR_STATE_CORRUPT", "plan approval digest is corrupted");
+    }
+    const artifactDigest = resolved.revision.artifact_digest as ContentDigest;
+    return {
+      artifact: resolved.artifact,
+      artifact_digest: artifactDigest,
+      approval: resolved.approval,
+      provenance: {
+        plan_id: resolved.artifact.plan_id,
+        revision: resolved.artifact.revision,
+        artifact_digest: artifactDigest,
+        approved_at: resolved.approval.approved_at,
+      },
+    };
+  }
 }

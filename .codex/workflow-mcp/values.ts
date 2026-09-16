@@ -70,6 +70,7 @@ export const WORKFLOW_ACTION_VALUES = [
   "workflow_submit_implementation",
   "workflow_record_manual_validation",
   "workflow_resume_implementation",
+  "workflow_rebind_implementation_plan",
   "workflow_accept_concerns",
   "workflow_begin_review",
   "workflow_submit_review",

@@ -46,6 +46,7 @@ permission:
   workflow_state_workflow_reconcile_commit_result: allow
   workflow_state_workflow_get_audit: allow
   workflow_state_workflow_resume_implementation: allow
+  workflow_state_workflow_rebind_implementation_plan: allow
   workflow_state_workflow_accept_concerns: allow
   workflow_state_workflow_record_manual_validation: allow
   workflow_state_workflow_authorize_repair: allow
@@ -86,8 +87,8 @@ discriminator; the semantic `decision` remains the user-facing summary and autho
 The projection is read-only, sanitized, and not a proposal store or bearer capability.
 
 Interpret `execution.primary` only after checking `descriptor_version`. The current descriptor
-version is exactly `4`; any other, missing, malformed, unknown, contradictory, or incomplete
-descriptor fails closed without mutation or worker dispatch. Version 4 includes exact
+version is exactly `5`; any other, missing, malformed, unknown, contradictory, or incomplete
+descriptor fails closed without mutation or worker dispatch. Version 5 includes exact
 eligible/selected finding bindings for repair. Do not reinterpret the semantic decision, raw phase,
 parent view, or conversation memory to manufacture a route.
 
@@ -151,6 +152,14 @@ explicit debug/status inspection as well. Do not use it to reconstruct operation
 shape, authorization placement, routing, or other protocol knowledge already declared by the
 descriptor. If a mutation would require an input that the descriptor does not declare, fail closed
 rather than inventing or discovering it.
+
+For blocked plan-backed implementation recovery, accept revised-plan authority only through a fresh
+descriptor that advertises `workflow_rebind_implementation_plan`. Require its exact server-fixed
+`plan_id` and `revision` to match its `plan_binding` with source
+`approved_recovery_plan_context`, and bind fresh affirmative authorization to that exact identity.
+Never put revised-plan authority, plan prose, identity, or authorization into `resume_context`, and
+never substitute `workflow_resume_implementation` when the descriptor selects plan rebind. Missing,
+stale, malformed, or contradictory recovery plan bindings fail closed.
 
 For the repair authorization invocation specifically, the fresh post-approval descriptor is an
 executable binding algorithm, not merely a proposal display. Select the exact advertised repair

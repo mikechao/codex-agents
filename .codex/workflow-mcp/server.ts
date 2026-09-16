@@ -314,6 +314,7 @@ export const SERVER_TOOL_NAMES = [
   "workflow_submit_implementation",
   "workflow_record_manual_validation",
   "workflow_resume_implementation",
+  "workflow_rebind_implementation_plan",
   "workflow_accept_concerns",
   "workflow_begin_review",
   "workflow_submit_review",
@@ -721,6 +722,27 @@ export const toolDefinitions = [
     ),
     annotations: {
       title: "Resume implementation",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "workflow_rebind_implementation_plan",
+    description:
+      "Rebind a blocked plan-backed implementation to the exact current approved revision of the same plan.",
+    inputSchema: schema(
+      {
+        ...common.properties,
+        plan_id: planIdentityProperties.plan_id,
+        revision: planIdentityProperties.revision,
+        user_authorization: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+      [...common.required, "plan_id", "revision", "user_authorization"],
+    ),
+    annotations: {
+      title: "Rebind implementation plan",
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: false,
@@ -1164,6 +1186,7 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     workflow_submit_implementation: (args) => store.submitImplementation(args),
     workflow_record_manual_validation: (args) => store.recordManualValidation(args),
     workflow_resume_implementation: (args) => store.resumeImplementation(args),
+    workflow_rebind_implementation_plan: (args) => store.rebindImplementationPlan(args),
     workflow_accept_concerns: (args) => store.acceptConcerns(args),
     workflow_begin_review: (args) => store.beginReview(args),
     workflow_submit_review: (args) => store.submitReview(args),

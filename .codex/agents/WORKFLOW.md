@@ -199,7 +199,7 @@ grant authority. This routing distinction adds no Workflow MCP phase, schema, pe
 authority change.
 
 The descriptor is guidance, not authorization or a bearer capability. Its `descriptor_version` must
-be exactly `4` before interpretation. Any other, missing, malformed, contradictory, or incomplete
+be exactly `5` before interpretation. Any other, missing, malformed, contradictory, or incomplete
 descriptor is a fail-closed stop without fallback mutation or dispatch; the parent must not
 reconstruct a route from semantic decisions, raw phases, parent state, or conversation memory.
 
@@ -219,7 +219,7 @@ binding; and `observed_evidence` comes only from performing the declared inspect
 unresolvable source fails closed. Separately advertised alternatives are presented and selected using
 each invocation's semantic choice label and summary, not its operation/tool name.
 
-Every v4 `parent_actions` entry is itself complete executable guidance: its status and action must
+Every v5 `parent_actions` entry is itself complete executable guidance: its status and action must
 match the descriptor mode and advertised operation, and the operation must be available at the host
 permission boundary. Linked-follow-up `finding_ids` come from `linked_followup_binding`, which exposes
 current semantic finding summaries and exact IDs in separate blocking/optional buckets; select a
@@ -529,8 +529,19 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
   explicitly with `workflow_resume_review`; otherwise resume directly once the context is available.
   A complete change result set with a genuine failed required validation keeps the existing
   exemption during normal `REVIEWING`, but does not bypass stopped-state evidence recovery.
-- `STOPPED_NEEDS_CONTEXT` / `STOPPED_IMPLEMENTATION_BLOCKED`: resume implementation with
-  `workflow_resume_implementation` once the missing context or blocker is resolved.
+- `STOPPED_NEEDS_CONTEXT`: resume implementation with `workflow_resume_implementation` once the
+  missing context is resolved. `STOPPED_IMPLEMENTATION_BLOCKED` ordinarily resumes the same way
+  when no newer approved revision exists. A newer current approved revision of the same
+  PlanArtifact is a narrow exception: the server advertises only
+  `workflow_rebind_implementation_plan` when the revision is forward, remains a `change`, retains
+  every effective approved path, fits scope limits, and has authorized validation commands. The
+  transition preserves the workflow, original Git baselines, and partial tree, invalidates stale
+  implementation/review/repair/commit evidence, and resumes fresh `IMPLEMENTING`; newly added paths
+  must be clean or absent and receive append-only baselines. An incompatible newer approved
+  revision fails closed to operator intervention. The exact recovery authorization is audit-only,
+  except for the existing append-only scope-expansion authorization when paths are added; semantic
+  recovery state contains only deterministic server text. Ordinary resume behavior is otherwise
+  unchanged.
 - `STOPPED_CONCERNS`: accept with `workflow_accept_concerns` under explicit user authorization; this
   enters review without rewriting the failed evidence and never implies commit authorization. If
   pending inspection evidence remains, the parent may record it directly; a valid required failure moves
@@ -563,7 +574,7 @@ Report only its semantic decision, outcome, blocker summaries, recovery choice, 
 boundaries, and material linked-workflow summary. Do not dump raw workflow or plan identity,
 phase/action names, receipts, audit events, capabilities, validation logs, or a complete worker report.
 
-The descriptor mode is the first routing discriminator after this refresh. Only descriptor version 4
+The descriptor mode is the first routing discriminator after this refresh. Only descriptor version 5
 is executable and it supports the current five modes and committed-state result. Any other, missing,
 unknown, malformed, contradictory, or incomplete descriptor fails closed without fallback mutation
 or dispatch.

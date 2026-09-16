@@ -9,6 +9,7 @@ import type {
   ImplementerView,
   LinkedContinuation,
   ParentView,
+  PlanRevisionArtifact,
   ReviewerView,
   ReviewerViewBase,
   Role,
@@ -267,7 +268,11 @@ const ACTION_MATRIX: Partial<
     ],
     STOPPED_CONCERNS: ["workflow_accept_concerns"],
     STOPPED_NEEDS_CONTEXT: ["workflow_expand_scope", "workflow_resume_implementation"],
-    STOPPED_IMPLEMENTATION_BLOCKED: ["workflow_expand_scope", "workflow_resume_implementation"],
+    STOPPED_IMPLEMENTATION_BLOCKED: [
+      "workflow_expand_scope",
+      "workflow_rebind_implementation_plan",
+      "workflow_resume_implementation",
+    ],
     STOPPED_INCONCLUSIVE: [
       "workflow_adopt_dirty_scope",
       "workflow_record_manual_validation",
@@ -312,6 +317,9 @@ export interface WorkflowLegalityReadiness {
   commit_review_return?: { status: "ready" | "unavailable" };
   commit_result?: WorkflowCommitResultReadiness;
   staged_scope_recovery?: WorkflowStagedScopeRecoveryReadiness;
+  implementation_plan_recovery?: {
+    status: "rebind" | "no_replacement" | "incompatible" | "unavailable";
+  };
 }
 
 export type WorkflowNextStep =
@@ -463,6 +471,43 @@ export function implementationRecoveryStateReady(state: WorkflowState): boolean 
   );
 }
 
+export function implementationPlanRebindStateReadiness(
+  state: WorkflowState,
+  artifact: PlanRevisionArtifact,
+): "ready" | "incompatible" | "unavailable" {
+  if (
+    state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" ||
+    !implementationRecoveryStateReady(state) ||
+    state.workflow_type !== "change" ||
+    state.review_target.review_mode !== "working_tree" ||
+    state.superseded_by_workflow_id !== null ||
+    state.plan_provenance === null
+  ) {
+    return "unavailable";
+  }
+  if (
+    artifact.plan_id !== state.plan_provenance.plan_id ||
+    artifact.revision <= state.plan_provenance.revision ||
+    artifact.workflow_type !== "change" ||
+    state.approved_paths.some((path) => !artifact.approved_paths.includes(path))
+  ) {
+    return "incompatible";
+  }
+  const addedPaths = artifact.approved_paths.filter((path) => !state.approved_paths.includes(path));
+  if (
+    artifact.approved_paths.length > MAX_PATHS ||
+    state.approved_path_baselines.length + addedPaths.length > MAX_PATHS ||
+    (addedPaths.length > 0 && state.scope_expansions.length >= MAX_PATHS) ||
+    new Set([
+      ...(state.linked_continuation?.combined_review_paths ?? state.approved_paths),
+      ...addedPaths,
+    ]).size > MAX_PATHS
+  ) {
+    return "incompatible";
+  }
+  return "ready";
+}
+
 export function reviewTargetStateReady(state: WorkflowState): boolean {
   const expectedPaths =
     state.linked_continuation?.review_stage === "combined"
@@ -531,6 +576,24 @@ function actionsForRole(
     !implementationRecoveryStateReady(state)
   ) {
     actions = actions.filter((action) => action !== "workflow_resume_implementation");
+  }
+  if (actorRole === "parent" && state.phase === "STOPPED_IMPLEMENTATION_BLOCKED") {
+    const recovery = readiness.implementation_plan_recovery?.status ?? "no_replacement";
+    if (recovery === "rebind") {
+      actions = actions.filter(
+        (action) =>
+          action !== "workflow_resume_implementation" && action !== "workflow_expand_scope",
+      );
+    } else if (recovery === "incompatible") {
+      actions = actions.filter(
+        (action) =>
+          action !== "workflow_rebind_implementation_plan" &&
+          action !== "workflow_resume_implementation" &&
+          action !== "workflow_expand_scope",
+      );
+    } else {
+      actions = actions.filter((action) => action !== "workflow_rebind_implementation_plan");
+    }
   }
   if (
     actorRole === "parent" &&
@@ -727,6 +790,7 @@ function nextStep(
   }
   const recoveries: WorkflowAction[] = [
     "workflow_accept_concerns",
+    "workflow_rebind_implementation_plan",
     "workflow_resume_implementation",
     "workflow_resume_review",
     "workflow_retry_commit",

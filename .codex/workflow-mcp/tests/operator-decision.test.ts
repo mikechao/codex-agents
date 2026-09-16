@@ -161,6 +161,12 @@ const ACTION_PRECONDITION_AUDIT = {
     projection_readiness: [],
     payload_or_mutation_time: ["resume context"],
   },
+  workflow_rebind_implementation_plan: {
+    surface: "projected_transition",
+    durable_state: ["implementationPlanRebindStateReadiness"],
+    projection_readiness: ["implementation_plan_recovery: rebind"],
+    payload_or_mutation_time: ["current approved plan, clean added paths, and authorization"],
+  },
   workflow_accept_concerns: {
     surface: "projected_transition",
     durable_state: ["concern stop phase and context"],
@@ -287,6 +293,7 @@ test("every workflow action has explicit descriptor treatment and authorization 
       metadata.classification === "descriptorized_in_142" ||
         metadata.classification === "descriptorized_in_143" ||
         metadata.classification === "descriptorized_in_144" ||
+        metadata.classification === "descriptorized_in_155" ||
         metadata.classification === "protocol_or_query_only",
       action,
     );
@@ -310,7 +317,10 @@ test("every workflow action has explicit descriptor treatment and authorization 
       binding === null ? [] : binding.kind === "all" ? binding.paths : binding.common_paths;
     const boundAlternatives = binding?.kind === "exclusive_one_of" ? binding.alternatives : [];
     const fixedArgumentPaths =
-      action === "workflow_create_linked_followup_from_plan" ? [["plan_id"], ["revision"]] : [];
+      action === "workflow_create_linked_followup_from_plan" ||
+      action === "workflow_rebind_implementation_plan"
+        ? [["plan_id"], ["revision"]]
+        : [];
     for (const path of [...boundPaths, ...boundAlternatives]) {
       assert.ok(
         metadata.inputs.some(
@@ -567,7 +577,7 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       next: { kind: "repair_required" },
     };
     const all = descriptorForLegality(state, legality);
-    assert.equal(all.descriptor_version, 4);
+    assert.equal(all.descriptor_version, 5);
     assert.equal(all.primary.mode, "parent_mutation");
     if (all.primary.mode !== "parent_mutation") throw new Error("expected repair mutation");
     assert.equal("specialization" in all.primary, true);
@@ -879,7 +889,7 @@ test("operator projection requests parent-owned manual evidence before review", 
     const collection = store.operatorDecisionGet(id).execution.primary;
     assert.equal(collection.mode, "collect_evidence");
     if (collection.mode !== "collect_evidence") throw new Error("expected evidence collection");
-    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 4);
+    assert.equal(store.operatorDecisionGet(id).execution.descriptor_version, 5);
     assert.equal(collection.validation_id, "VAL-002");
     assert.equal(collection.outcomes.unavailable.mode, "wait");
     assert.equal(collection.outcomes.observed.passed.invocations.length, 1);
@@ -1195,7 +1205,7 @@ test("operator projection routes implementation and is read-only and sanitized",
     assert.deepEqual(first.primary, { kind: "no_user_action", route: "implement" });
     assert.equal(first.intent.scope_kind, "direct");
     assert.equal("workflow_id" in first, false);
-    assert.equal(first.execution.descriptor_version, 4);
+    assert.equal(first.execution.descriptor_version, 5);
     assert.equal(first.execution.primary.mode, "dispatch");
     assert.deepEqual(first.execution.primary, {
       mode: "dispatch",

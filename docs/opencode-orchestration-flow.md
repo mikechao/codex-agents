@@ -102,7 +102,7 @@ discriminator; the semantic `decision` remains the user-facing summary and autho
 The projection is bounded to the requested workflow and reciprocal explicit linked lineage, read-only,
 sanitized, and not a proposal store or bearer capability.
 
-Consumers check `descriptor_version` before interpreting execution guidance. Only descriptor version 4
+Consumers check `descriptor_version` before interpreting execution guidance. Only descriptor version 5
 is executable and it supports all five modes, semantic action choices, and exact input provenance.
 Any other, missing, malformed,
 contradictory, or incomplete version stops with no fallback mutation or dispatch; the parent never
@@ -158,6 +158,15 @@ Exact repair, concern/context/review recovery, bounded linked continuation, scop
 changed-intent classification, final reconciliation, and commit authorization remain explicit parent
 policies. The parent compares newly supplied objective, outcome, criteria, and logical-change scope at
 its input boundary; an ID-only projection never makes that classification.
+
+Blocked plan-backed implementations have one descriptor-only recovery exception. When the same
+PlanArtifact has a newer current approved compatible revision, the server advertises
+`workflow_rebind_implementation_plan` with fixed plan identity and suppresses ordinary resume and
+scope expansion. Rebind keeps the workflow, original Git baseline, and partial tree; replaces
+plan-derived authority; invalidates stale lifecycle evidence; and resumes fresh implementation.
+Added paths are monotonic and must be clean or absent. Raw recovery authorization remains audit
+evidence, while the semantic recovery summary is deterministic server text. Draft revisions leave
+ordinary resume unchanged, and incompatible newer approved revisions fail closed.
 
 Explicit linked chains can report their existing combined-review requirement. Separately created
 workflows are not joined through matching work items, paths, branches, or conversation history. If

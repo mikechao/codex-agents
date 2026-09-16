@@ -560,7 +560,7 @@ test("parent adjudication removes only the dismissed blocker and avoids a no-op 
       "workflow_authorize_repair",
       "workflow_expand_scope",
     ]);
-    assert.equal(adjudicated.committed_execution.descriptor_version, 4);
+    assert.equal(adjudicated.committed_execution.descriptor_version, 5);
     assert.deepEqual(adjudicated.committed_execution.primary.repair_binding, {
       eligible_finding_ids: ["REPAIR-1"],
       selected_finding_ids: ["REPAIR-1"],

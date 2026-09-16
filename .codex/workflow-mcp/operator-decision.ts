@@ -104,6 +104,7 @@ function recoveryDecision(action: WorkflowAction): OperatorDecision["primary"] {
   const candidates = new Map<WorkflowAction, OperatorRecovery>([
     ["workflow_accept_concerns", "accept_concerns"],
     ["workflow_adopt_dirty_scope", "adopt_dirty_scope"],
+    ["workflow_rebind_implementation_plan", "rebind_implementation_plan"],
     ["workflow_resume_implementation", "resume_implementation"],
     ["workflow_resume_review", "resume_review"],
     ["workflow_retry_commit", "retry_commit"],

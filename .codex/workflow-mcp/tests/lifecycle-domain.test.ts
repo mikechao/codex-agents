@@ -1,7 +1,23 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { roleView, validateWorkflowStateV10, workflowLegality } from "../transitions.js";
-import type { GitCommitSha, WorkflowState } from "../types.js";
+import {
+  rebindImplementationPlan,
+  roleView,
+  submitImplementation,
+  validateWorkflowStateV10,
+  workflowLegality,
+} from "../transitions.js";
+import type {
+  AcceptanceCriterionId,
+  ContentDigest,
+  GitCommitSha,
+  IsoTimestamp,
+  PlanId,
+  PlanRevision,
+  ValidationRequirementId,
+  WorkflowState,
+  WorkflowVersion,
+} from "../types.js";
 import { objectDigest } from "../validation.js";
 import {
   blockingFinding,
@@ -306,6 +322,113 @@ test("deterministic readiness fails closed without invoking repository integrati
 
   const prepared = workflowState({ phase: "COMMIT_PREPARED" });
   assert.deepEqual(workflowLegality(prepared).actions.committer, []);
+});
+
+test("plan rebind after a repair block clears active lifecycle authority and resumes fresh implementation", () => {
+  const repairing = workflowState({ phase: "REPAIRING" });
+  const planId = "00000000-0000-4000-8000-000000000155" as PlanId;
+  repairing.approved_plan = "revision one plan";
+  repairing.execution_brief = "revision one brief";
+  repairing.plan_provenance = {
+    plan_id: planId,
+    revision: 1 as PlanRevision,
+    artifact_digest:
+      "1111111111111111111111111111111111111111111111111111111111111111" as ContentDigest,
+    approved_at: "2026-01-01T00:00:00.000Z" as IsoTimestamp,
+  };
+  const blocked = submitImplementation(
+    repairing,
+    {
+      workflow_id: repairing.workflow_id,
+      expected_version: repairing.version,
+      status: "BLOCKED",
+      summary: "repair plan is blocked",
+      agent_touched_paths: ["note.txt"],
+      acceptance_results: repairing.acceptance_criteria.map(({ criterion_id }) => ({
+        criterion_id,
+        status: "not_satisfied",
+        evidence: "blocked",
+      })),
+      validation_results: repairing.validation_requirements.map(({ validation_id }) => ({
+        validation_id,
+        status: "not_run",
+        evidence: "blocked",
+      })),
+      known_failures: ["blocked repair"],
+      finding_resolution_map: Object.fromEntries(
+        repairing.repair_authorized_ids.map((id) => [id, "still_present"]),
+      ),
+    },
+    "/deterministic-workflow-fixture",
+    syntheticReceipt(),
+  );
+  blocked.version = (repairing.version + 1) as WorkflowVersion;
+  const adjudications = blocked.finding_adjudications;
+  const remediation = blocked.remediation_context;
+  const rebound = rebindImplementationPlan(
+    blocked,
+    {
+      plan_schema_version: 3,
+      plan_id: planId,
+      revision: 2 as PlanRevision,
+      workflow_type: "change",
+      full_plan: "revision two plan",
+      execution_brief: "revision two brief",
+      objective: "revision two objective",
+      approved_paths: blocked.approved_paths,
+      acceptance_criteria: [
+        {
+          criterion_id: "AC-001" as AcceptanceCriterionId,
+          description: "revision two acceptance",
+        },
+      ],
+      validation_requirements: [
+        {
+          validation_id: "VAL-001" as ValidationRequirementId,
+          description: "revision two validation",
+          kind: "command",
+          argv: ["true"],
+        },
+      ],
+      created_at: "2026-01-02T00:00:00.000Z" as IsoTimestamp,
+    },
+    {
+      plan_id: planId,
+      revision: 2 as PlanRevision,
+      artifact_digest:
+        "2222222222222222222222222222222222222222222222222222222222222222" as ContentDigest,
+      approved_at: "2026-01-02T00:01:00.000Z" as IsoTimestamp,
+    },
+    syntheticReceipt(),
+    "authorization must not enter semantic state",
+  );
+
+  assert.equal(rebound.phase, "IMPLEMENTING");
+  assert.equal(rebound.repair_cycle, 0);
+  assert.deepEqual(rebound.blocking_findings, []);
+  assert.deepEqual(rebound.optional_findings, []);
+  assert.deepEqual(rebound.prior_finding_classifications, {});
+  assert.equal(rebound.review_result_version, null);
+  assert.equal(rebound.review_start_receipt, null);
+  assert.equal(rebound.review_receipt, null);
+  assert.deepEqual(rebound.repair_authorized_ids, []);
+  assert.equal(rebound.repair_directive, null);
+  assert.equal(rebound.concern_acceptance, null);
+  assert.equal(rebound.commit_authorization, null);
+  assert.equal(rebound.commit_preparation, null);
+  assert.equal(rebound.commit_result, null);
+  assert.deepEqual(rebound.finding_adjudications, adjudications);
+  assert.deepEqual(rebound.remediation_context, remediation);
+  assert.equal(
+    JSON.stringify(rebound).includes("authorization must not enter semantic state"),
+    false,
+  );
+  assert.doesNotThrow(() =>
+    validateWorkflowStateV10({
+      ...rebound,
+      version: (blocked.version + 1) as WorkflowVersion,
+    }),
+  );
 });
 
 test("deterministic fixture histories preserve reachable versions and evidence", () => {

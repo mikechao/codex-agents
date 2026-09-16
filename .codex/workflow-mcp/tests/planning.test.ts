@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkflowError } from "../errors.js";
 import { planReference } from "../plan-reference.js";
@@ -114,6 +114,29 @@ function planInput(path = "planned.txt") {
   };
 }
 
+function blockedPlanWorkflow(store: any, approvedPaths = ["note.txt"]) {
+  const draft = store.planCreate({ ...revisionInput(), approved_paths: approvedPaths });
+  const approved = store.planApprove({
+    plan_id: draft.plan_id,
+    revision: draft.revision,
+    user_authorization: "approve initial blocked recovery plan",
+  });
+  const created = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+  const blocked = store.submitImplementation({
+    workflow_id: created.workflow_id,
+    expected_version: 0,
+    status: "BLOCKED",
+    summary: "blocked before recovery",
+    agent_touched_paths: [],
+    acceptance_results: [{ criterion_id: "AC-001", status: "not_satisfied", evidence: "blocked" }],
+    validation_results: [{ validation_id: "VAL-001", status: "not_run", evidence: "blocked" }],
+    known_failures: ["blocked"],
+    finding_resolution_map: {},
+  });
+  assert.equal(blocked.phase, "STOPPED_IMPLEMENTATION_BLOCKED");
+  return { draft, approved, created };
+}
+
 test("plan references are deterministic UUID-derived display values", () => {
   const planId = "00000000-0000-4000-8000-000000000001";
   assert.equal(planReference(planId), "elaborate-orange-monkey");
@@ -155,6 +178,430 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
   reopened.close();
   rmSync(databasePath, { force: true });
   disposeFixture(target.root);
+});
+
+test("stale legacy recovery mutations reject a compatible approved plan revision atomically", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const initial = blockedPlanWorkflow(store);
+    const id = initial.created.workflow_id;
+    const priorDecision: any = store.operatorDecisionGet(id);
+    assert.deepEqual(priorDecision.primary, {
+      kind: "approve_recovery",
+      recovery: "resume_implementation",
+      authorization_required: true,
+    });
+    const resumeInvocation = priorDecision.execution.primary.invocations[0];
+    const scopeInvocation = priorDecision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_expand_scope",
+    ).descriptor.invocations[0];
+    assert.equal(resumeInvocation.fixed_arguments.expected_version, 1);
+    assert.equal(scopeInvocation.fixed_arguments.expected_version, 1);
+
+    const revised = store.planRevise({
+      plan_id: initial.draft.plan_id,
+      base_revision: initial.draft.revision,
+      replacements: {
+        approved_paths: ["note.txt", "recovery-new.txt"],
+        full_plan: "revision two plan",
+      },
+    });
+    store.planApprove({
+      plan_id: initial.draft.plan_id,
+      revision: revised.revision,
+      user_authorization: "approve compatible revision two",
+    });
+    assert.equal(store.parentGet(id).version, 1);
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "approve_recovery",
+      recovery: "rebind_implementation_plan",
+      authorization_required: true,
+    });
+
+    const snapshot = () => ({
+      workflow: store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id),
+      auditCount: store.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE workflow_id = ?")
+        .get(id).count,
+      status: target.git("status", "--short"),
+    });
+    const before = snapshot();
+    assert.equal(
+      category(() =>
+        store.resumeImplementation({
+          ...resumeInvocation.fixed_arguments,
+          resume_context: "stale resume authorization",
+        }),
+      ),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.equal(
+      category(() =>
+        store.expandScope({
+          ...scopeInvocation.fixed_arguments,
+          added_paths: ["recovery-new.txt"],
+          reason: "stale scope authorization",
+          user_authorization: "stale scope authorization",
+        }),
+      ),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.deepEqual(snapshot(), before);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("stale legacy recovery mutations fail closed for an incompatible approved plan revision", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const initial = blockedPlanWorkflow(store, ["note.txt", "retained.txt"]);
+    const id = initial.created.workflow_id;
+    const priorDecision: any = store.operatorDecisionGet(id);
+    const resumeInvocation = priorDecision.execution.primary.invocations[0];
+    const scopeInvocation = priorDecision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_expand_scope",
+    ).descriptor.invocations[0];
+
+    const revised = store.planRevise({
+      plan_id: initial.draft.plan_id,
+      base_revision: initial.draft.revision,
+      replacements: { approved_paths: ["note.txt"] },
+    });
+    store.planApprove({
+      plan_id: initial.draft.plan_id,
+      revision: revised.revision,
+      user_authorization: "approve incompatible contraction",
+    });
+    assert.deepEqual(store.operatorDecisionGet(id).primary, {
+      kind: "operator_intervention",
+      reason: "no supported recovery is available",
+    });
+
+    const snapshot = () => ({
+      workflow: store.db
+        .prepare("SELECT version, state_json, state_digest FROM workflows WHERE workflow_id = ?")
+        .get(id),
+      auditCount: store.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE workflow_id = ?")
+        .get(id).count,
+      status: target.git("status", "--short"),
+    });
+    const before = snapshot();
+    assert.equal(
+      category(() =>
+        store.resumeImplementation({
+          ...resumeInvocation.fixed_arguments,
+          resume_context: "stale incompatible resume",
+        }),
+      ),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.equal(
+      category(() =>
+        store.expandScope({
+          ...scopeInvocation.fixed_arguments,
+          added_paths: ["ordinary-new.txt"],
+          reason: "stale incompatible scope",
+          user_authorization: "stale incompatible scope",
+        }),
+      ),
+      "ERROR_PLAN_INVALID",
+    );
+    assert.deepEqual(snapshot(), before);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan-backed blocked workflows preserve ordinary resume and scope recovery without a newer approval", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const resumable = blockedPlanWorkflow(store);
+    const expandable = blockedPlanWorkflow(store);
+    const resumeDecision: any = store.operatorDecisionGet(resumable.created.workflow_id);
+    const scopeDecision: any = store.operatorDecisionGet(expandable.created.workflow_id);
+    const resumeInvocation = resumeDecision.execution.primary.invocations[0];
+    const scopeInvocation = scopeDecision.execution.parent_actions.find(
+      (action: any) => action.action === "workflow_expand_scope",
+    ).descriptor.invocations[0];
+
+    const resumed = store.resumeImplementation({
+      ...resumeInvocation.fixed_arguments,
+      resume_context: "ordinary context recovery",
+    });
+    assert.equal(resumed.phase, "IMPLEMENTING");
+    const expanded = store.expandScope({
+      ...scopeInvocation.fixed_arguments,
+      added_paths: ["ordinary-new.txt"],
+      reason: "ordinary scope expansion",
+      user_authorization: "ordinary scope authorization",
+    });
+    assert.equal(expanded.phase, "STOPPED_IMPLEMENTATION_BLOCKED");
+    assert.ok(expanded.approved_paths.includes("ordinary-new.txt"));
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("blocked implementation rebinds atomically to the exact current approved plan revision", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      ...revisionInput(),
+      full_plan: "revision one plan",
+      execution_brief: "revision one brief",
+      approved_paths: ["note.txt", "partial-new.txt"],
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve revision one",
+    });
+    const created = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const id = created.workflow_id;
+
+    writeFileSync(join(target.root, "note.txt"), "staged partial\n");
+    target.git("add", "note.txt");
+    writeFileSync(join(target.root, "note.txt"), "staged partial\nunstaged partial\n");
+    writeFileSync(join(target.root, "partial-new.txt"), "untracked partial\n");
+    const blocked = store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "BLOCKED",
+      summary: "revision one cannot complete",
+      agent_touched_paths: ["note.txt", "partial-new.txt"],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "blocked" },
+      ],
+      validation_results: [{ validation_id: "VAL-001", status: "not_run", evidence: "blocked" }],
+      known_failures: ["the original requirement is infeasible"],
+      finding_resolution_map: {},
+    });
+    assert.equal(blocked.phase, "STOPPED_IMPLEMENTATION_BLOCKED");
+    const beforeStatus = target.git("status", "--short");
+    const beforeStaged = target.git("diff", "--cached", "--", "note.txt");
+    const beforeUnstaged = target.git("diff", "--", "note.txt");
+    const beforeUntracked = readFileSync(join(target.root, "partial-new.txt"), "utf8");
+    const beforeState = JSON.parse(
+      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
+    );
+
+    const revisedDraft = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: {
+        full_plan: "revision two corrected plan",
+        execution_brief: "revision two brief",
+        objective: "revised achievable objective",
+        approved_paths: ["note.txt", "partial-new.txt", "recovery-new.txt"],
+        acceptance_criteria: ["the revised outcome is complete", "partial work is preserved"],
+        validation_requirements: [
+          {
+            description: "exact workflow suite",
+            kind: "command",
+            argv: ["bun", "run", "test:workflow-mcp"],
+          },
+          { description: "manual revised inspection", kind: "inspection" },
+        ],
+      },
+    });
+    assert.equal(revisedDraft.revision, 2);
+    const draftDecision = store.operatorDecisionGet(id);
+    assert.deepEqual(draftDecision.primary, {
+      kind: "approve_recovery",
+      recovery: "resume_implementation",
+      authorization_required: true,
+    });
+
+    const approved = store.planApprove({
+      plan_id: draft.plan_id,
+      revision: revisedDraft.revision,
+      user_authorization: "approve revision two",
+    });
+    const decision = store.operatorDecisionGet(id);
+    assert.deepEqual(decision.primary, {
+      kind: "approve_recovery",
+      recovery: "rebind_implementation_plan",
+      authorization_required: true,
+    });
+    assert.equal(decision.execution.primary.mode, "parent_mutation");
+    if (decision.execution.primary.mode !== "parent_mutation") {
+      throw new Error("expected plan rebind descriptor");
+    }
+    const invocation = decision.execution.primary.invocations[0];
+    assert.deepEqual(invocation.fixed_arguments, {
+      workflow_id: id,
+      expected_version: 1,
+      plan_id: draft.plan_id,
+      revision: 2,
+    });
+    assert.deepEqual(invocation.required_inputs, []);
+    assert.deepEqual(invocation.plan_binding, {
+      plan_id: draft.plan_id,
+      revision: 2,
+      source: "approved_recovery_plan_context",
+    });
+    assert.deepEqual(invocation.stale_binding.references, [
+      { kind: "plan", plan_id: draft.plan_id, revision: 2 },
+    ]);
+    assert.deepEqual(invocation.on_success.expected, ["implement", "wait"]);
+
+    writeFileSync(join(target.root, "note.txt"), "drifted after block\n");
+    assert.equal(
+      category(() =>
+        store.rebindImplementationPlan({
+          ...invocation.fixed_arguments,
+          user_authorization: "authorize exact revision two recovery",
+        }),
+      ),
+      "ERROR_STALE_RECEIPT",
+    );
+    writeFileSync(join(target.root, "note.txt"), "staged partial\nunstaged partial\n");
+    writeFileSync(join(target.root, "recovery-new.txt"), "dirty candidate\n");
+    assert.equal(
+      category(() =>
+        store.rebindImplementationPlan({
+          ...invocation.fixed_arguments,
+          user_authorization: "authorize exact revision two recovery",
+        }),
+      ),
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+    );
+    rmSync(join(target.root, "recovery-new.txt"));
+    assert.equal(store.parentGet(id).version, 1);
+    assert.equal(store.audit(id).length, 2);
+
+    const authorization = "authorize exact revision two recovery";
+    const rebound = store.rebindImplementationPlan({
+      ...invocation.fixed_arguments,
+      user_authorization: authorization,
+    });
+    assert.equal(rebound.workflow_id, id);
+    assert.equal(rebound.phase, "IMPLEMENTING");
+    assert.equal(rebound.base_head, created.base_head);
+    assert.equal(rebound.objective, "revised achievable objective");
+    assert.equal(rebound.approved_plan, "revision two corrected plan");
+    assert.equal(rebound.execution_brief, "revision two brief");
+    assert.deepEqual(rebound.approved_paths, ["note.txt", "partial-new.txt", "recovery-new.txt"]);
+    assert.equal(rebound.plan_provenance?.revision, 2);
+    assert.equal(rebound.plan_provenance?.artifact_digest, approved.artifact_digest);
+    assert.equal(rebound.scope_expansions.at(-1)?.reason, "approved revised plan scope");
+    assert.deepEqual(rebound.scope_expansions.at(-1)?.added_paths, ["recovery-new.txt"]);
+    assert.equal(rebound.scope_expansions.at(-1)?.user_authorization, authorization);
+    assert.equal(rebound.approved_path_baselines.at(-1)?.path, "recovery-new.txt");
+    assert.equal(rebound.approved_path_baselines.at(-1)?.baseline.state, "absent");
+    assert.equal(rebound.implementation_summary, null);
+    assert.equal(rebound.implementation_status, null);
+    assert.deepEqual(rebound.implementation_known_failures, []);
+    assert.deepEqual(rebound.agent_touched_paths, []);
+    assert.deepEqual(rebound.acceptance_results, []);
+    assert.deepEqual(rebound.validation_results, []);
+    assert.deepEqual(rebound.finding_resolution_map, {});
+    assert.equal(rebound.repair_cycle, 0);
+    assert.equal(rebound.stop_context, null);
+    assert.equal(
+      rebound.recovery_context?.context,
+      "Implementation resumed after rebinding to approved PlanArtifact revision 2.",
+    );
+    assert.equal(rebound.recovery_context?.context.includes(authorization), false);
+    assert.equal(rebound.recovery_context?.context.includes(draft.plan_id), false);
+    assert.deepEqual(rebound.permitted_next_actions, ["workflow_expand_scope"]);
+    assert.deepEqual(store.implementerGet(id).permitted_next_actions, [
+      "workflow_submit_implementation",
+    ]);
+
+    assert.equal(target.git("status", "--short"), beforeStatus);
+    assert.equal(target.git("diff", "--cached", "--", "note.txt"), beforeStaged);
+    assert.equal(target.git("diff", "--", "note.txt"), beforeUnstaged);
+    assert.equal(readFileSync(join(target.root, "partial-new.txt"), "utf8"), beforeUntracked);
+
+    const persisted = JSON.parse(
+      store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
+    );
+    assert.deepEqual(persisted.initial_receipt, beforeState.initial_receipt);
+    assert.equal(persisted.implementation_receipt, null);
+    assert.equal(JSON.stringify(persisted).split(authorization).length - 1, 1);
+    const audit = store.audit(id).at(-1);
+    assert.equal(audit?.event_type, "IMPLEMENTATION_PLAN_REBOUND");
+    assert.deepEqual(audit?.plan_rebind, {
+      prior_plan_provenance: beforeState.plan_provenance,
+      replacement_plan_provenance: rebound.plan_provenance,
+      added_paths: ["recovery-new.txt"],
+      user_authorization: authorization,
+      rebound_at: rebound.recovery_context?.recovered_at,
+    });
+    assert.deepEqual(audit?.scope_expansion?.expansion, rebound.scope_expansions.at(-1));
+    assert.equal(decision.recovery_summary.recovery_context, null);
+    assert.equal(
+      store.operatorDecisionGet(id).recovery_summary.recovery_context,
+      "Implementation resumed after rebinding to approved PlanArtifact revision 2.",
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("an incompatible newer approved plan revision fails blocked recovery closed", () => {
+  const target = fixture();
+  const store = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      ...revisionInput(),
+      approved_paths: ["note.txt", "retained.txt"],
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve initial recovery plan",
+    });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    store.submitImplementation({
+      workflow_id: workflow.workflow_id,
+      expected_version: 0,
+      status: "BLOCKED",
+      summary: "blocked before incompatible revision",
+      agent_touched_paths: [],
+      acceptance_results: [
+        { criterion_id: "AC-001", status: "not_satisfied", evidence: "blocked" },
+      ],
+      validation_results: [{ validation_id: "VAL-001", status: "not_run", evidence: "blocked" }],
+      known_failures: ["blocked"],
+      finding_resolution_map: {},
+    });
+    assert.equal(store.operatorDecisionGet(workflow.workflow_id).primary.kind, "approve_recovery");
+    const contracted = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: { approved_paths: ["note.txt"] },
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: contracted.revision,
+      user_authorization: "approve incompatible contraction",
+    });
+    const decision = store.operatorDecisionGet(workflow.workflow_id);
+    assert.deepEqual(decision.primary, {
+      kind: "operator_intervention",
+      reason: "no supported recovery is available",
+    });
+    assert.equal(decision.execution.primary.mode, "wait");
+    assert.deepEqual(decision.execution.parent_actions, []);
+    assert.deepEqual(store.parentGet(workflow.workflow_id).permitted_next_actions, []);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
 });
 
 test("plan creation preflights exact validation policy and preserves inspection contracts", () => {

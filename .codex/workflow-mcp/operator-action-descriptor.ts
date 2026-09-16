@@ -195,6 +195,13 @@ export const ACTION_DESCRIPTOR_METADATA = {
     authorization: metadataAuthorization([["resume_context"]]),
     inputs: [input(["resume_context"], "user_authored")],
   },
+  workflow_rebind_implementation_plan: {
+    classification: "descriptorized_in_155",
+    mode: "parent_mutation",
+    operation: "workflow_rebind_implementation_plan",
+    authorization: fieldAuthorization(["user_authorization"], [["plan_id"], ["revision"]]),
+    inputs: [],
+  },
   workflow_accept_concerns: {
     classification: "descriptorized_in_143",
     mode: "parent_mutation",
@@ -494,6 +501,13 @@ function fixedArguments(
     fixed.plan_id = planIdentity.plan_id;
     fixed.revision = planIdentity.revision;
   }
+  if (action === "workflow_rebind_implementation_plan") {
+    if (planIdentity?.source !== "approved_recovery_plan_context") {
+      throw new Error("implementation plan rebind requires an approved recovery plan");
+    }
+    fixed.plan_id = planIdentity.plan_id;
+    fixed.revision = planIdentity.revision;
+  }
   if (action === "workflow_create_linked_followup") fixed.approved_plan = null;
   return fixed;
 }
@@ -503,6 +517,7 @@ function expectedAfter(action: OperatorParentMutationOperation): OperatorExpecte
     case "workflow_adopt_dirty_scope":
       return ["adopt_dirty_scope", "collect_evidence", "resume_review", "wait"];
     case "workflow_resume_implementation":
+    case "workflow_rebind_implementation_plan":
       return ["implement", "wait"];
     case "workflow_accept_concerns":
       return ["collect_evidence", "review", "re_review", "wait"];
@@ -645,10 +660,19 @@ function invocation(
     ...(adjudicationBinding ? { adjudication_binding: adjudicationBinding } : {}),
     ...(linkedFollowupBinding ? { linked_followup_binding: linkedFollowupBinding } : {}),
     ...(reconciliationBinding ? { scope_reconciliation_binding: reconciliationBinding } : {}),
-    ...(action === "workflow_create_linked_followup_from_plan" && planIdentity
+    ...((action === "workflow_create_linked_followup_from_plan" ||
+      action === "workflow_rebind_implementation_plan") &&
+    planIdentity
       ? { plan_binding: planIdentity }
       : {}),
-    stale_binding: staleBinding(state, action, [], selectedFindingIds),
+    stale_binding: staleBinding(
+      state,
+      action,
+      action === "workflow_rebind_implementation_plan" && planIdentity
+        ? [{ kind: "plan", plan_id: planIdentity.plan_id, revision: planIdentity.revision }]
+        : [],
+      selectedFindingIds,
+    ),
     on_success: {
       kind: "refresh_required",
       expected: expectedAfter(action),
@@ -676,6 +700,7 @@ function semanticChoice(action: OperatorParentMutationOperation): {
     workflow_expand_scope: "authorize_more_paths",
     workflow_record_manual_validation: "record_observed_validation",
     workflow_resume_implementation: "continue_implementation",
+    workflow_rebind_implementation_plan: "adopt_approved_plan_revision",
     workflow_accept_concerns: "accept_bounded_concerns",
     workflow_authorize_repair: "authorize_bounded_repair",
     workflow_adjudicate_findings: "resolve_inconsistent_findings",
@@ -706,6 +731,11 @@ function semanticChoice(action: OperatorParentMutationOperation): {
     workflow_resume_implementation: {
       label: "Resume implementation with context",
       summary: "Supply bounded context and resume the currently authorized implementation.",
+    },
+    workflow_rebind_implementation_plan: {
+      label: "Rebind to the approved plan revision",
+      summary:
+        "Replace stale plan authority with the exact current approved revision and resume implementation.",
     },
     workflow_accept_concerns: {
       label: "Accept the implementation concerns",
@@ -954,7 +984,14 @@ function primaryDescriptor(
       return {
         mode: "parent_mutation",
         selection: "single",
-        invocations: [invocation(state, legality.next.action as OperatorParentMutationOperation)],
+        invocations: [
+          invocation(
+            state,
+            legality.next.action as OperatorParentMutationOperation,
+            undefined,
+            planIdentity,
+          ),
+        ],
       };
     case "recovery_choice":
       return {
@@ -1002,7 +1039,7 @@ export function descriptorForLegality(
       ),
     );
   return {
-    descriptor_version: 4,
+    descriptor_version: 5,
     primary: primaryDescriptor(state, legality, selectedFindingIds, planIdentity),
     parent_actions: parentActions,
   };

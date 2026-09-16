@@ -46,7 +46,7 @@ a bearer capability. It covers automatic implementation/review/re-review routing
 explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
 separately.
 
-The current execution guidance is descriptor version 4 and contains a primary descriptor plus every currently legal
+The current execution guidance is descriptor version 5 and contains a primary descriptor plus every currently legal
 parent action as a complete executable descriptor. Parent mutation invocations expose semantic choice
 labels and summaries, and input sources distinguish fresh `user_authored` meaning from exact parent
 context, server bindings, and observed evidence. Linked follow-ups bind their current blocking and
@@ -261,6 +261,17 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - Implementation context and block stops resume to their prior active phase with
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
+- A plan-backed `STOPPED_IMPLEMENTATION_BLOCKED` workflow may instead use
+  `workflow_rebind_implementation_plan` when PlanStore resolves a newer current approved revision of
+  the same PlanArtifact. The replacement must remain a working-tree `change`, retain every effective
+  approved path, fit persisted scope limits, and add only clean or absent paths. Rebind preserves the
+  workflow ID, original base and receipts, and repository contents; replaces all plan-derived
+  authority; clears stale implementation, review, repair, and commit evidence; and resumes fresh
+  `IMPLEMENTING`. The exact recovery authorization is retained in the rebind audit only, except for
+  the existing scope-expansion record required when paths are added. Semantic recovery context is
+  deterministic server text and contains neither raw authorization nor PlanArtifact identity.
+  Draft revisions leave ordinary resume unchanged; an incompatible newer approved revision fails
+  closed instead of permitting old-plan resume or ordinary expansion.
 - Required inspection evidence remains explicit and parent-owned. Implementation results are handoff
   evidence; fresh reviewer command results are approval authority. For `change` workflows, a complete
   authoritative required result set containing a failed validation may enable independent review and

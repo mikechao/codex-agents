@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { fail } from "../errors.js";
 import type {
   ChangeReceipt,
+  PlanProvenance,
+  PlanRevisionArtifact,
   StoppingImplementationStatus,
   WorkflowPhase,
   WorkflowState,
@@ -25,6 +27,7 @@ import {
 import { IMPLEMENTATION_STATUS_VALUES, isValue } from "../values.js";
 import {
   hasFailedRequiredValidation,
+  implementationPlanRebindStateReadiness,
   implementationRecoveryStateReady,
   scopeMutationReadiness,
   stagedScopeReconciliationFeasible,
@@ -474,6 +477,113 @@ export function resumeImplementation(state: WorkflowState, input: unknown): Work
   const stoppedFrom = state.stop_context?.stopped_from as "IMPLEMENTING" | "REPAIRING";
   const next = clone<WorkflowState>(state);
   applyRecovery(next, stoppedFrom, "implementation", args.resume_context, "resume_context");
+  return next;
+}
+
+export function rebindImplementationPlan(
+  state: WorkflowState,
+  artifact: PlanRevisionArtifact,
+  provenance: PlanProvenance,
+  addedReceipt: ChangeReceipt,
+  userAuthorizationValue: string,
+): WorkflowState {
+  ensurePhase(state, "STOPPED_IMPLEMENTATION_BLOCKED");
+  if (!implementationRecoveryStateReady(state)) {
+    fail("ERROR_STATE_CORRUPT", "blocked implementation stop context is invalid");
+  }
+  if (implementationPlanRebindStateReadiness(state, artifact) !== "ready") {
+    fail("ERROR_PLAN_INVALID", "approved replacement plan is incompatible with this workflow");
+  }
+  if (
+    provenance.plan_id !== artifact.plan_id ||
+    provenance.revision !== artifact.revision ||
+    state.plan_provenance === null
+  ) {
+    fail("ERROR_PLAN_INVALID", "replacement plan provenance is invalid");
+  }
+
+  const addedPaths = artifact.approved_paths.filter((path) => !state.approved_paths.includes(path));
+  if (
+    addedPaths.length > 0 &&
+    (addedReceipt.base_head !== state.base_head ||
+      !samePathList(addedReceipt.approved_paths, addedPaths))
+  ) {
+    fail("ERROR_PLAN_INVALID", "replacement plan baseline scope is invalid");
+  }
+  if (
+    addedPaths.length > 0 &&
+    addedReceipt.paths.some((entry) => entry.state !== "unchanged" && entry.state !== "absent")
+  ) {
+    fail(
+      "ERROR_SCOPE_EXPANSION_DIRTY",
+      "replacement plan paths must have clean or absent baselines",
+    );
+  }
+
+  const now = isoNow();
+  const resultingVersion = (state.version + 1) as WorkflowVersion;
+  const next = clone<WorkflowState>(state);
+  next.objective = artifact.objective;
+  next.approved_plan = artifact.full_plan;
+  next.execution_brief = artifact.execution_brief;
+  next.plan_provenance = clone(provenance);
+  next.acceptance_criteria = clone(artifact.acceptance_criteria);
+  next.validation_requirements = clone(artifact.validation_requirements);
+
+  if (addedPaths.length > 0) {
+    next.scope_expansions.push({
+      expansion_id: randomUUID(),
+      added_paths: addedPaths,
+      reason: "approved revised plan scope",
+      user_authorization: userAuthorizationValue,
+      prior_version: state.version,
+      resulting_version: resultingVersion,
+      authorized_at: now,
+    });
+    next.approved_path_baselines.push(
+      ...addedReceipt.paths.map((entry) => ({
+        path: entry.path,
+        approved_at_version: resultingVersion,
+        baseline: clone(entry),
+      })),
+    );
+  }
+  next.approved_paths = clone(artifact.approved_paths);
+  next.review_target = {
+    review_mode: "working_tree",
+    base_revision: state.base_head,
+    head_revision: null,
+    approved_paths: clone(artifact.approved_paths),
+    include_staged: true,
+    include_unstaged: true,
+    include_untracked: true,
+  };
+  if (next.linked_continuation) {
+    next.linked_continuation.combined_review_paths = [
+      ...new Set([...next.linked_continuation.combined_review_paths, ...addedPaths]),
+    ].sort();
+    next.linked_continuation.remediation_review_receipt = null;
+    next.linked_continuation.review_stage = "remediation";
+  }
+
+  clearStaleImplementationEvidence(next);
+  clearStaleReviewEvidence(next);
+  next.blocking_findings = [];
+  next.optional_findings = [];
+  next.prior_finding_classifications = {};
+  next.review_result_version = null;
+  next.concern_acceptance = null;
+  next.repair_authorized_ids = [];
+  next.repair_directive = null;
+  clearFullCommitEvidence(next);
+  next.repair_cycle = 0;
+  next.phase = "IMPLEMENTING";
+  next.stop_context = null;
+  next.recovery_context = {
+    kind: "implementation",
+    context: `Implementation resumed after rebinding to approved PlanArtifact revision ${artifact.revision}.`,
+    recovered_at: now,
+  };
   return next;
 }
 

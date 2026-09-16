@@ -42,6 +42,7 @@ test("closed protocol registry and schema contract exposes workflow actions with
     "workflow_operator_decision_get",
     "workflow_parent_get",
     "workflow_prepare_commit",
+    "workflow_rebind_implementation_plan",
     "workflow_reconcile_commit_result",
     "workflow_reconcile_staged_scope",
     "workflow_record_manual_validation",
@@ -309,6 +310,8 @@ test("descriptorized parent metadata matches exact MCP tool schemas", () => {
     if (metadata.operation === "workflow_reconcile_commit_result") fixedFields.push("attempt_id");
     if (metadata.operation === "workflow_create_linked_followup") fixedFields.push("approved_plan");
     if (metadata.operation === "workflow_create_linked_followup_from_plan")
+      fixedFields.push("plan_id", "revision");
+    if (metadata.operation === "workflow_rebind_implementation_plan")
       fixedFields.push("plan_id", "revision");
     const semanticFields = metadata.inputs
       .map((requiredInput) => requiredInput.path[0])

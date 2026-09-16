@@ -27,7 +27,7 @@ import {
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { assertSupportedStateSchema } from "./migration.js";
 import { deriveOperatorDecision, type OperatorLineageRecord } from "./operator-decision.js";
-import { PlanStore, validatePersistedPlanRows } from "./plan-store.js";
+import { type ApprovedPlan, PlanStore, validatePersistedPlanRows } from "./plan-store.js";
 import {
   findReviewerValidationCommand,
   loadReviewerValidationPolicy,
@@ -62,12 +62,15 @@ import {
   expandScope,
   finalizeRepairExhausted,
   IMPLEMENTATION_STOP_PHASES,
+  implementationPlanRebindStateReadiness,
+  implementationRecoveryStateReady,
   linkedFollowupChildState,
   linkedFollowupInput,
   linkedFollowupInputFromPlan,
   linkedFollowupStateReadiness,
   prepareCommit,
   rangeDirtyBaselinePaths,
+  rebindImplementationPlan,
   reconcileStagedScope,
   recordManualValidation,
   resumeImplementation,
@@ -107,12 +110,12 @@ import type {
   GitCommitSha,
   IsoTimestamp,
   OperatorDecision,
+  OperatorPlanBinding,
   ParentMutationResult,
   ParentView,
-  PlanId,
   PlannerPlanRead,
   PlanRead,
-  PlanRevision,
+  PlanRebindAudit,
   PlanRevisionArtifact,
   Role,
   RoleView,
@@ -137,6 +140,7 @@ import {
   planRevision,
   repairCycle,
   revision,
+  userAuthorization,
   runtimeId as validateRuntimeId,
   workItems,
 } from "./validation.js";
@@ -664,7 +668,12 @@ function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>)
 type MutationAuditDetails = {
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   finding_adjudications?: FindingAdjudication[];
+  plan_rebind?: PlanRebindAudit;
 };
+
+type ImplementationPlanRecoveryPreflight =
+  | { status: "rebind"; plan: ApprovedPlan }
+  | { status: "no_replacement" | "incompatible" | "unavailable"; plan: null };
 
 type RawDirtyScopeAdoptionAudit = Omit<
   DirtyScopeAdoptionAudit,
@@ -1061,6 +1070,7 @@ export class WorkflowStore {
     details: {
       dirty_scope_adoption?: DirtyScopeAdoptionAudit;
       finding_adjudications?: FindingAdjudication[];
+      plan_rebind?: PlanRebindAudit;
     } = {},
   ): void {
     this.db
@@ -1351,7 +1361,55 @@ export class WorkflowStore {
     }
   }
 
-  #legalityReadiness(state: WorkflowState): WorkflowLegalityReadiness {
+  #implementationPlanRecovery(state: WorkflowState): ImplementationPlanRecoveryPreflight {
+    if (
+      state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" ||
+      !implementationRecoveryStateReady(state) ||
+      state.plan_provenance === null ||
+      state.workflow_type !== "change" ||
+      state.review_target.review_mode !== "working_tree" ||
+      state.superseded_by_workflow_id !== null
+    ) {
+      return { status: "unavailable", plan: null };
+    }
+    const plan = this.planStore.resolveCurrentApprovedPlan(state.plan_provenance.plan_id);
+    if (plan === null || plan.artifact.revision <= state.plan_provenance.revision) {
+      return { status: "no_replacement", plan: null };
+    }
+    if (implementationPlanRebindStateReadiness(state, plan.artifact) !== "ready") {
+      return { status: "incompatible", plan: null };
+    }
+    try {
+      assertPlanValidationPolicy(this.root, plan.artifact.validation_requirements);
+    } catch (error) {
+      if (error instanceof WorkflowError && error.category === "ERROR_PLAN_INVALID") {
+        return { status: "incompatible", plan: null };
+      }
+      throw error;
+    }
+    return { status: "rebind", plan };
+  }
+
+  #assertLegacyImplementationRecoveryAuthority(state: WorkflowState): void {
+    if (state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" || state.plan_provenance === null) {
+      return;
+    }
+    const recovery = this.#implementationPlanRecovery(state);
+    if (recovery.status === "rebind") {
+      fail("ERROR_PLAN_INVALID", "current approved plan revision requires plan rebind");
+    }
+    if (recovery.status === "incompatible") {
+      fail(
+        "ERROR_PLAN_INVALID",
+        "current approved plan revision is incompatible with legacy recovery",
+      );
+    }
+  }
+
+  #legalityReadiness(
+    state: WorkflowState,
+    planRecovery: ImplementationPlanRecoveryPreflight = this.#implementationPlanRecovery(state),
+  ): WorkflowLegalityReadiness {
     const head = this.#headReadiness();
     const readiness: WorkflowLegalityReadiness = {
       head,
@@ -1362,6 +1420,7 @@ export class WorkflowStore {
       commit_preparation: { status: "unavailable" },
       commit_review_return: { status: "unavailable" },
       staged_scope_recovery: { status: "unavailable" },
+      implementation_plan_recovery: { status: planRecovery.status },
       commit_result:
         state.phase === "COMMIT_PREPARED"
           ? this.#commitSubmissionReadiness(head)
@@ -1548,7 +1607,8 @@ export class WorkflowStore {
     else this.#assertRuntimeOwnership(row);
     if (!state.workflow_id) fail("ERROR_STATE_CORRUPT", "workflow ID is missing");
 
-    const readiness = this.#legalityReadiness(state);
+    const planRecovery = this.#implementationPlanRecovery(state);
+    const readiness = this.#legalityReadiness(state, planRecovery);
     const legality = workflowLegality(state, readiness);
     const repairFindingIds =
       repairFindingIdsValue === undefined
@@ -1567,7 +1627,21 @@ export class WorkflowStore {
         }
       : undefined;
     if (childPlan) this.planStore.resolveApprovedPlan(childPlan.plan_id, childPlan.revision);
-    return this.#deriveOperatorDecision(state, row, readiness, repairFindingIds, childPlan);
+    const recoveryPlan: OperatorPlanBinding | undefined =
+      planRecovery.status === "rebind"
+        ? {
+            plan_id: planRecovery.plan.provenance.plan_id,
+            revision: planRecovery.plan.provenance.revision,
+            source: "approved_recovery_plan_context",
+          }
+        : undefined;
+    return this.#deriveOperatorDecision(
+      state,
+      row,
+      readiness,
+      repairFindingIds,
+      recoveryPlan ?? childPlan,
+    );
   }
 
   #deriveOperatorDecision(
@@ -1575,7 +1649,7 @@ export class WorkflowStore {
     row: WorkflowRow,
     readiness: WorkflowLegalityReadiness,
     selectedFindingIds?: ReadonlyArray<import("./types.js").FindingId>,
-    childPlan?: { plan_id: PlanId; revision: PlanRevision; source: "approved_child_plan_context" },
+    planIdentity?: OperatorPlanBinding,
   ): OperatorDecision {
     const records = new Map<string, OperatorLineageRecord>();
     const currentWorkflowId = state.workflow_id;
@@ -1599,7 +1673,7 @@ export class WorkflowStore {
         if (!records.has(reference)) pending.push(reference);
       }
     }
-    return deriveOperatorDecision(state, [...records.values()], selectedFindingIds, childPlan);
+    return deriveOperatorDecision(state, [...records.values()], selectedFindingIds, planIdentity);
   }
 
   reconciliationPermittedActions(workflowIdValue: unknown): WorkflowAction[] {
@@ -1685,7 +1759,9 @@ export class WorkflowStore {
                 : entry,
           ) as typeof baseline.paths;
         }
-        return expandScope(state, args, baseline, this.root);
+        const next = expandScope(state, args, baseline, this.root);
+        this.#assertLegacyImplementationRecoveryAuthority(state);
+        return next;
       },
     );
   }
@@ -1841,6 +1917,7 @@ export class WorkflowStore {
     ).map((event) => {
       const rawSummary = JSON.parse(event.summary_json) as AuditEnvelope & {
         dirty_scope_adoption?: unknown;
+        plan_rebind?: PlanRebindAudit;
         finding_adjudications?: FindingAdjudication[];
       };
       const result: AuditEvent = {
@@ -1859,7 +1936,8 @@ export class WorkflowStore {
         result.dirty_scope_adoption = parseDirtyScopeAdoptionAudit(rawSummary.dirty_scope_adoption);
       if (
         result.event_type === "SCOPE_EXPANDED" ||
-        result.event_type === "STAGED_SCOPE_RECONCILED"
+        result.event_type === "STAGED_SCOPE_RECONCILED" ||
+        result.event_type === "IMPLEMENTATION_PLAN_REBOUND"
       ) {
         const expansion = state.scope_expansions.find(
           (candidate) => candidate.resulting_version === result.version,
@@ -1873,6 +1951,9 @@ export class WorkflowStore {
           };
           result.scope_expansion = auditProjection;
         }
+      }
+      if (result.event_type === "IMPLEMENTATION_PLAN_REBOUND") {
+        result.plan_rebind = rawSummary.plan_rebind;
       }
       if (result.event_type === "FINDINGS_ADJUDICATED") {
         result.finding_adjudications = rawSummary.finding_adjudications;
@@ -2373,8 +2454,123 @@ export class WorkflowStore {
       "parent",
       args.expected_version,
       "IMPLEMENTATION_RESUMED",
-      (state) => resumeImplementation(state, args),
+      (state) => {
+        const next = resumeImplementation(state, args);
+        this.#assertLegacyImplementationRecoveryAuthority(state);
+        return next;
+      },
     );
+  }
+
+  rebindImplementationPlan(input: unknown): RoleView {
+    const args = parentMutation(input);
+    exactKeys(
+      args,
+      ["workflow_id", "expected_version", "plan_id", "revision", "user_authorization"],
+      "implementation plan rebind",
+    );
+    const expectedVersionNumber = expectedVersion(args.expected_version);
+    const result = this.db
+      .transaction(() => {
+        const row = this.#row(args.workflow_id);
+        this.#assertRuntimeOwnership(row);
+        if (row.version !== expectedVersionNumber) {
+          fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
+        }
+        const state = parseState(row);
+        if (state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED") {
+          fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
+        }
+        if (!implementationRecoveryStateReady(state)) {
+          fail("ERROR_STATE_CORRUPT", "blocked implementation stop context is invalid");
+        }
+        if (state.plan_provenance === null) {
+          fail("ERROR_PLAN_INVALID", "blocked workflow has no approved plan provenance");
+        }
+
+        const resolved = this.planStore.resolveApprovedPlan(args.plan_id, args.revision);
+        if (
+          resolved.provenance.plan_id !== state.plan_provenance.plan_id ||
+          resolved.provenance.revision <= state.plan_provenance.revision ||
+          implementationPlanRebindStateReadiness(state, resolved.artifact) !== "ready"
+        ) {
+          fail(
+            "ERROR_PLAN_INVALID",
+            "approved replacement plan is incompatible with this workflow",
+          );
+        }
+        assertPlanValidationPolicy(this.root, resolved.artifact.validation_requirements);
+
+        const head = currentHead(this.root);
+        if (head !== state.base_head) {
+          fail("ERROR_STALE_BASE", "workflow base HEAD changed before plan recovery");
+        }
+        if (state.implementation_receipt === null) {
+          fail("ERROR_STATE_CORRUPT", "blocked implementation receipt is missing");
+        }
+        const currentReceipt = createReceipt(this.root, state.approved_paths, true);
+        if (currentReceipt.base_head !== state.base_head) {
+          fail("ERROR_STALE_BASE", "workflow base HEAD changed before plan recovery");
+        }
+        if (canonicalJson(currentReceipt) !== canonicalJson(state.implementation_receipt)) {
+          fail("ERROR_STALE_RECEIPT", "blocked implementation changed after its receipt");
+        }
+
+        const addedPaths = resolved.artifact.approved_paths.filter(
+          (path) => !state.approved_paths.includes(path),
+        );
+        const addedReceipt =
+          addedPaths.length === 0 ? currentReceipt : createReceipt(this.root, addedPaths, true);
+        if (addedPaths.length > 0) {
+          if (addedReceipt.base_head !== state.base_head) {
+            fail("ERROR_STALE_BASE", "replacement plan baseline is stale");
+          }
+          if (
+            addedReceipt.paths.some(
+              (entry) => entry.state !== "unchanged" && entry.state !== "absent",
+            )
+          ) {
+            fail(
+              "ERROR_SCOPE_EXPANSION_DIRTY",
+              "replacement plan paths must have clean or absent baselines",
+            );
+          }
+        }
+
+        const normalizedAuthorization = userAuthorization(args.user_authorization);
+        const priorProvenance = state.plan_provenance;
+        const next = rebindImplementationPlan(
+          state,
+          resolved.artifact,
+          resolved.provenance,
+          addedReceipt,
+          normalizedAuthorization,
+        );
+        assertWorkItemsUnchanged(state, next);
+        assertFindingAdjudicationsAppendOnly(state, next, "IMPLEMENTATION_PLAN_REBOUND");
+        const reboundAt = next.recovery_context?.recovered_at;
+        if (!reboundAt) fail("ERROR_STATE_CORRUPT", "plan recovery timestamp is missing");
+        return this.#persistExistingTransition({
+          row,
+          current: state,
+          expectedVersion: expectedVersionNumber,
+          next,
+          eventType: "IMPLEMENTATION_PLAN_REBOUND",
+          actorRole: "parent",
+          outcome: "IMPLEMENTING",
+          details: {
+            plan_rebind: {
+              prior_plan_provenance: priorProvenance,
+              replacement_plan_provenance: resolved.provenance,
+              added_paths: addedPaths,
+              user_authorization: normalizedAuthorization,
+              rebound_at: reboundAt,
+            },
+          },
+        });
+      })
+      .immediate();
+    return this.#roleView(result, "parent");
   }
 
   acceptConcerns(input: unknown): RoleView {

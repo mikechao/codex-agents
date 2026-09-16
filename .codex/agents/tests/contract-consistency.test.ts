@@ -609,6 +609,7 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
     "workflow_reconcile_commit_result",
     "workflow_get_audit",
     "workflow_resume_implementation",
+    "workflow_rebind_implementation_plan",
     "workflow_accept_concerns",
     "workflow_record_manual_validation",
     "workflow_authorize_repair",
@@ -771,7 +772,7 @@ test("direct orchestration preserves explicit null-plan and empty-validation aut
   assert.match(orchestrator, /do not probe alternate payload shapes after rejection/u);
 });
 
-test("descriptor version 4 is the only executable descriptor", () => {
+test("descriptor version 5 is the only executable descriptor", () => {
   const orchestratorSource = opencode("orchestrator.md");
   const orchestrator = orchestratorSource.replace(/\s+/gu, " ");
   const guide = readFileSync(
@@ -782,7 +783,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
 
   for (const contract of [orchestrator, guide, workflow]) {
     assert.match(contract, /descriptor_version/u);
-    assert.match(contract, /descriptor version.{0,20}(?:4|`4`)|v4/u);
+    assert.match(contract, /descriptor version.{0,20}(?:5|`5`)|v5/u);
     assert.match(contract, /fail(?:s)? closed/u);
     assert.match(contract, /(?:no|without fallback) (?:fallback )?mutation or dispatch/u);
     assert.match(contract, /unknown/iu);
@@ -984,10 +985,10 @@ test("descriptor version 4 is the only executable descriptor", () => {
     },
   };
 
-  const v4Fixtures = [
+  const v5Fixtures = [
     {
       name: "dispatch",
-      descriptor: descriptor(4, {
+      descriptor: descriptor(5, {
         mode: "dispatch",
         route: "implement",
         operation: "workflow_submit_implementation",
@@ -999,7 +1000,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
     {
       name: "parent mutation with required authorization",
       descriptor: descriptor(
-        4,
+        5,
         {
           mode: "parent_mutation",
           selection: "single",
@@ -1011,14 +1012,14 @@ test("descriptor version 4 is the only executable descriptor", () => {
     },
     {
       name: "direct linked follow-up with server-fixed null plan authority",
-      descriptor: descriptor(4, { mode: "wait", reason: "awaiting direct follow-up selection" }, [
+      descriptor: descriptor(5, { mode: "wait", reason: "awaiting direct follow-up selection" }, [
         completeLinkedDirectAction,
       ]),
       expected: "wait",
     },
     {
       name: "collect evidence observed",
-      descriptor: descriptor(4, {
+      descriptor: descriptor(5, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         outcomes: {
@@ -1043,7 +1044,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
     },
     {
       name: "collect evidence unavailable",
-      descriptor: descriptor(4, {
+      descriptor: descriptor(5, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         outcomes: {
@@ -1068,12 +1069,12 @@ test("descriptor version 4 is the only executable descriptor", () => {
     },
     {
       name: "wait",
-      descriptor: descriptor(4, { mode: "wait", reason: "authoritative action is unavailable" }),
+      descriptor: descriptor(5, { mode: "wait", reason: "authoritative action is unavailable" }),
       expected: "wait",
     },
     {
       name: "terminal",
-      descriptor: descriptor(4, { mode: "terminal", outcome: "committed" }),
+      descriptor: descriptor(5, { mode: "terminal", outcome: "committed" }),
       expected: "terminal",
     },
   ] as const;
@@ -1448,7 +1449,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   ): "dispatch" | "parent_mutation" | "wait" | "terminal" | "fail_closed" => {
     if (
       !isRecord(value) ||
-      value.descriptor_version !== 4 ||
+      value.descriptor_version !== 5 ||
       !isRecord(value.primary) ||
       !Array.isArray(value.parent_actions) ||
       !value.parent_actions.every(isParentAction)
@@ -1483,11 +1484,11 @@ test("descriptor version 4 is the only executable descriptor", () => {
     return observed === "passed" || observed === "failed" ? "parent_mutation" : "fail_closed";
   };
 
-  for (const fixture of v4Fixtures) {
+  for (const fixture of v5Fixtures) {
     const observed = "observed" in fixture ? fixture.observed : undefined;
     assert.equal(classify(fixture.descriptor, observed), fixture.expected, fixture.name);
   }
-  for (const version of [undefined, null, 0, 1, 2, 3, 5, "4"]) {
+  for (const version of [undefined, null, 0, 1, 2, 3, 4, "5"]) {
     assert.equal(
       classify(
         descriptor(version, {
@@ -1504,7 +1505,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   }
   assert.equal(
     classify(
-      descriptor(4, {
+      descriptor(5, {
         mode: "dispatch",
         route: "bogus",
         operation: "workflow_submit_implementation",
@@ -1513,11 +1514,11 @@ test("descriptor version 4 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "malformed v4 dispatch",
+    "malformed v5 dispatch",
   );
   assert.equal(
     classify(
-      descriptor(4, {
+      descriptor(5, {
         mode: "dispatch",
         route: "implement",
         operation: "bogus",
@@ -1526,22 +1527,22 @@ test("descriptor version 4 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unusable v4 dispatch operation",
+    "unusable v5 dispatch operation",
   );
   assert.equal(
     classify(
-      descriptor(4, {
+      descriptor(5, {
         mode: "parent_mutation",
         selection: "single",
         invocations: [{ ...parentInvocation, authorization: { required: true } }],
       }),
     ),
     "fail_closed",
-    "malformed v4 authorization",
+    "malformed v5 authorization",
   );
   assert.equal(
     classify(
-      descriptor(4, {
+      descriptor(5, {
         mode: "parent_mutation",
         selection: "single",
         invocations: [
@@ -1553,17 +1554,17 @@ test("descriptor version 4 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unusable v4 input source",
+    "unusable v5 input source",
   );
-  assert.equal(classify(descriptor(4, { mode: "unknown" })), "fail_closed", "unsupported v4 mode");
+  assert.equal(classify(descriptor(5, { mode: "unknown" })), "fail_closed", "unsupported v5 mode");
   assert.equal(
-    classify(descriptor(4, { mode: "wait" })),
+    classify(descriptor(5, { mode: "wait" })),
     "fail_closed",
-    "incomplete v4 wait descriptor",
+    "incomplete v5 wait descriptor",
   );
   assert.equal(
     classify({
-      descriptor_version: 4,
+      descriptor_version: 5,
       primary: {
         mode: "dispatch",
         route: "implement",
@@ -1578,7 +1579,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   );
   assert.equal(
     classify(
-      descriptor(4, { mode: "wait", reason: "stop" }, [
+      descriptor(5, { mode: "wait", reason: "stop" }, [
         { ...completeParentAction, action: "workflow_reconcile_staged_scope" },
       ]),
     ),
@@ -1587,7 +1588,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   );
   assert.equal(
     classify(
-      descriptor(4, { mode: "wait", reason: "stop" }, [
+      descriptor(5, { mode: "wait", reason: "stop" }, [
         {
           action: "workflow_submit_review",
           status: "executable",
@@ -1608,13 +1609,13 @@ test("descriptor version 4 is the only executable descriptor", () => {
     "parent action operations outside the Orchestrator host allowlist fail closed",
   );
   assert.equal(
-    classify(descriptor(4, { mode: "wait", reason: "stop" }, [completeLinkedPlanAction])),
+    classify(descriptor(5, { mode: "wait", reason: "stop" }, [completeLinkedPlanAction])),
     "wait",
     "complete plan-native alternative binds its exact child identity and finding candidates",
   );
   assert.equal(
     classify(
-      descriptor(4, { mode: "wait", reason: "stop" }, [
+      descriptor(5, { mode: "wait", reason: "stop" }, [
         {
           ...completeLinkedPlanAction,
           descriptor: {
@@ -1657,7 +1658,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   };
   assert.equal(
     classify(
-      descriptor(4, { mode: "wait", reason: "stop" }, [
+      descriptor(5, { mode: "wait", reason: "stop" }, [
         {
           action: "workflow_reconcile_staged_scope",
           status: "executable",
@@ -1674,7 +1675,7 @@ test("descriptor version 4 is the only executable descriptor", () => {
   );
   assert.equal(
     classify(
-      descriptor(4, {
+      descriptor(5, {
         mode: "collect_evidence",
         validation_id: "VAL-001",
         specialization: "deferred",
@@ -1688,10 +1689,10 @@ test("descriptor version 4 is the only executable descriptor", () => {
       }),
     ),
     "fail_closed",
-    "unsupported v4 specialization",
+    "unsupported v5 specialization",
   );
-  assert.equal(classify(descriptor(3, { mode: "wait", reason: "old descriptor" })), "fail_closed");
-  assert.match(orchestrator, /descriptor_version.*exactly `4`/u);
+  assert.equal(classify(descriptor(4, { mode: "wait", reason: "old descriptor" })), "fail_closed");
+  assert.match(orchestrator, /descriptor_version.*exactly `5`/u);
   assert.match(orchestrator, /input_alternatives/u);
   assert.match(orchestrator, /authorization\.required.*false.*(?:do not invent|block)/u);
   assert.match(orchestrator, /contradictory.*descriptor.*fail(?:s)? closed/iu);
@@ -1783,7 +1784,7 @@ test("orchestrator and flow guide do not duplicate descriptor protocol maps", ()
 
   for (const contract of [orchestrator, guide]) {
     assert.match(contract, /descriptor/u);
-    assert.doesNotMatch(contract, /\b(?:resume_context|retry_context|review_context)\b/u);
+    assert.doesNotMatch(contract, /\b(?:retry_context|review_context)\b/u);
     assert.doesNotMatch(
       contract,
       /workflow_(?:authorize_repair|authorize_commit|retry_commit|return_commit_to_review)[^\n]*(?:->|then).*?(?:implementer|committer|reviewer)/u,
@@ -1797,6 +1798,7 @@ test("orchestrator and flow guide do not duplicate descriptor protocol maps", ()
       /phase[^\n]*(?:selects|routes|dispatches).*?(?:implementer|reviewer|committer)/iu,
     );
   }
+  assert.match(orchestrator, /Never put revised-plan authority.*`resume_context`/su);
 
   assert.match(orchestrator, /execution\.primary/u);
   assert.match(compactOrchestrator, /server-fixed arguments/u);
