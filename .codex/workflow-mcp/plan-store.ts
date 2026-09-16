@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { fail } from "./errors.js";
+import { fail, isWorkflowError } from "./errors.js";
 import { planReference } from "./plan-reference.js";
 import type {
   ContentDigest,
@@ -388,6 +388,38 @@ export class PlanStore {
   /** Resolve an approved artifact without opening or nesting a transaction. */
   resolveApprovedPlan(planValue: unknown, revisionValue: unknown): ApprovedPlan {
     return this.#approvedPlan(planValue, revisionValue);
+  }
+
+  /** Resolve the exact historical approval named by persisted workflow provenance. */
+  resolveHistoricalApprovedPlan(provenance: PlanProvenance): ApprovedPlan {
+    let resolved: ResolvedPlan;
+    try {
+      resolved = this.#planRevision(provenance.plan_id, provenance.revision);
+    } catch (error) {
+      if (isWorkflowError(error, "ERROR_PLAN_NOT_FOUND")) {
+        fail("ERROR_STATE_CORRUPT", "workflow plan revision is missing");
+      }
+      throw error;
+    }
+    if (!resolved.approval) {
+      fail("ERROR_STATE_CORRUPT", "workflow plan revision is not approved");
+    }
+    const artifactDigest = resolved.revision.artifact_digest as ContentDigest;
+    const approved: ApprovedPlan = {
+      artifact: resolved.artifact,
+      artifact_digest: artifactDigest,
+      approval: resolved.approval,
+      provenance: {
+        plan_id: resolved.artifact.plan_id,
+        revision: resolved.artifact.revision,
+        artifact_digest: artifactDigest,
+        approved_at: resolved.approval.approved_at,
+      },
+    };
+    if (canonicalJson(approved.provenance) !== canonicalJson(provenance)) {
+      fail("ERROR_STATE_CORRUPT", "workflow plan provenance is inconsistent");
+    }
+    return approved;
   }
 
   /** Resolve only the aggregate's exact current revision when that revision is approved. */

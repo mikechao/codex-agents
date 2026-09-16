@@ -35,6 +35,19 @@ function category(action: () => unknown): string {
   }
 }
 
+function workflowState(store: any, workflowId: string): Record<string, any> {
+  const row = store.db
+    .prepare("SELECT state_json FROM workflows WHERE workflow_id = ?")
+    .get(workflowId) as { state_json: string };
+  return JSON.parse(row.state_json) as Record<string, any>;
+}
+
+function persistWorkflowState(store: any, workflowId: string, state: Record<string, any>): void {
+  store.db
+    .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+    .run(JSON.stringify(state), objectDigest(state), workflowId);
+}
+
 function sourceInput(git: (...args: string[]) => string) {
   const approvedPaths = ["note.txt"];
   return {
@@ -176,6 +189,241 @@ test("plans preserve exact revisions, approval, and workflow provenance", () => 
     revisionInput().full_plan,
   );
   reopened.close();
+  rmSync(databasePath, { force: true });
+  disposeFixture(target.root);
+});
+
+test("plan-backed workflows remain bound to an approved historical revision", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve historical revision one",
+    });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const revised = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: { full_plan: "new current plan" },
+    });
+
+    assert.equal(revised.metadata.status, "draft");
+    assert.equal(store.parentGet(workflow.workflow_id).approved_plan, revisionInput().full_plan);
+
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: revised.revision,
+      user_authorization: "approve current revision two",
+    });
+    const historical = store.parentGet(workflow.workflow_id);
+    assert.equal(historical.approved_plan, revisionInput().full_plan);
+    assert.equal(historical.plan_provenance?.revision, 1);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan-backed workflow reads reject frozen contract mismatches", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve snapshot contract",
+    });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const original = workflowState(store, workflow.workflow_id);
+    const corruptions: Array<(state: Record<string, any>) => void> = [
+      (state) => {
+        state.workflow_type = "review_only";
+      },
+      (state) => {
+        state.objective = "different objective";
+      },
+      (state) => {
+        state.approved_plan = "different approved plan";
+      },
+      (state) => {
+        state.execution_brief = "different execution brief";
+      },
+      (state) => {
+        state.acceptance_criteria[0].description = "different acceptance criterion";
+      },
+      (state) => {
+        state.validation_requirements[0].description = "different validation requirement";
+      },
+      (state) => {
+        state.approved_paths = ["different.txt"];
+        state.review_target.approved_paths = ["different.txt"];
+        state.initial_receipt.approved_paths = ["different.txt"];
+        state.initial_receipt.paths[0].path = "different.txt";
+      },
+    ];
+
+    for (const corrupt of corruptions) {
+      const state = structuredClone(original);
+      corrupt(state);
+      persistWorkflowState(store, workflow.workflow_id, state);
+      assert.equal(
+        category(() => store.parentGet(workflow.workflow_id)),
+        "ERROR_STATE_CORRUPT",
+      );
+      persistWorkflowState(store, workflow.workflow_id, original);
+    }
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("plan-backed workflow reads reject missing or inconsistent historical authority", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate(revisionInput());
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve exact historical authority",
+    });
+    const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const originalState = workflowState(store, workflow.workflow_id);
+    const provenanceCorruptions: Array<(state: Record<string, any>) => void> = [
+      (state) => {
+        state.plan_provenance.plan_id = "00000000-0000-4000-8000-000000000001";
+      },
+      (state) => {
+        state.plan_provenance.revision = 999;
+      },
+      (state) => {
+        state.plan_provenance.artifact_digest = "0".repeat(64);
+      },
+      (state) => {
+        state.plan_provenance.approved_at = "2020-01-01T00:00:00.000Z";
+      },
+    ];
+    for (const corrupt of provenanceCorruptions) {
+      const state = structuredClone(originalState);
+      corrupt(state);
+      persistWorkflowState(store, workflow.workflow_id, state);
+      assert.equal(
+        category(() => store.parentGet(workflow.workflow_id)),
+        "ERROR_STATE_CORRUPT",
+      );
+      persistWorkflowState(store, workflow.workflow_id, originalState);
+    }
+
+    const revision = store.db
+      .prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+      .get(draft.plan_id);
+    const approval = store.db
+      .prepare("SELECT * FROM plan_approvals WHERE plan_id = ? AND revision = 1")
+      .get(draft.plan_id);
+
+    store.db
+      .prepare("DELETE FROM plan_approvals WHERE plan_id = ? AND revision = 1")
+      .run(draft.plan_id);
+    assert.equal(
+      category(() => store.parentGet(workflow.workflow_id)),
+      "ERROR_STATE_CORRUPT",
+    );
+    store.db
+      .prepare(
+        "INSERT INTO plan_approvals (plan_id, revision, artifact_digest, user_authorization, approved_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        approval.plan_id,
+        approval.revision,
+        approval.artifact_digest,
+        approval.user_authorization,
+        approval.approved_at,
+      );
+
+    store.db
+      .prepare("DELETE FROM plan_approvals WHERE plan_id = ? AND revision = 1")
+      .run(draft.plan_id);
+    store.db
+      .prepare("DELETE FROM plan_revisions WHERE plan_id = ? AND revision = 1")
+      .run(draft.plan_id);
+    assert.equal(
+      category(() => store.parentGet(workflow.workflow_id)),
+      "ERROR_STATE_CORRUPT",
+    );
+    store.db
+      .prepare(
+        "INSERT INTO plan_revisions (plan_id, revision, artifact_json, artifact_digest, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        revision.plan_id,
+        revision.revision,
+        revision.artifact_json,
+        revision.artifact_digest,
+        revision.created_at,
+      );
+    store.db
+      .prepare(
+        "INSERT INTO plan_approvals (plan_id, revision, artifact_digest, user_authorization, approved_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        approval.plan_id,
+        approval.revision,
+        approval.artifact_digest,
+        approval.user_authorization,
+        approval.approved_at,
+      );
+
+    store.db
+      .prepare("UPDATE plan_revisions SET artifact_digest = ? WHERE plan_id = ? AND revision = 1")
+      .run("0".repeat(64), draft.plan_id);
+    assert.equal(
+      category(() => store.parentGet(workflow.workflow_id)),
+      "ERROR_STATE_CORRUPT",
+    );
+    store.db
+      .prepare("UPDATE plan_revisions SET artifact_digest = ? WHERE plan_id = ? AND revision = 1")
+      .run(revision.artifact_digest, draft.plan_id);
+
+    store.db
+      .prepare("UPDATE plan_approvals SET artifact_digest = ? WHERE plan_id = ? AND revision = 1")
+      .run("0".repeat(64), draft.plan_id);
+    assert.equal(
+      category(() => store.parentGet(workflow.workflow_id)),
+      "ERROR_STATE_CORRUPT",
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("persisted snapshot verification fails closed on startup and ignores direct workflows", () => {
+  const target = fixture();
+  const databasePath = join(target.root, "snapshot-verification.sqlite");
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath });
+  const direct = store.create(sourceInput(target.git));
+  assert.equal(store.parentGet(direct.workflow_id).plan_provenance, null);
+  const draft = store.planCreate(revisionInput());
+  store.planApprove({
+    plan_id: draft.plan_id,
+    revision: draft.revision,
+    user_authorization: "approve startup snapshot",
+  });
+  const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+  const corrupted = workflowState(store, workflow.workflow_id);
+  corrupted.objective = "corrupted persisted objective";
+  persistWorkflowState(store, workflow.workflow_id, corrupted);
+  store.close();
+
+  assert.equal(
+    category(() => new WorkflowStore({ repositoryRoot: target.root, databasePath })),
+    "ERROR_STATE_CORRUPT",
+  );
   rmSync(databasePath, { force: true });
   disposeFixture(target.root);
 });
@@ -346,6 +594,9 @@ test("plan-backed blocked workflows preserve ordinary resume and scope recovery 
     });
     assert.equal(expanded.phase, "STOPPED_IMPLEMENTATION_BLOCKED");
     assert.ok(expanded.approved_paths.includes("ordinary-new.txt"));
+    assert.ok(
+      store.parentGet(expandable.created.workflow_id).approved_paths.includes("ordinary-new.txt"),
+    );
   } finally {
     store.close();
     disposeFixture(target.root);
@@ -1330,6 +1581,37 @@ test("plan-native linked follow-up binds only the exact current approved child a
     assert.equal(childView.repair_cycle, 0);
     assert.equal(childView.remediation_context.authorized_finding_ids[0], optional.finding_id);
     assert.equal(store.parentGet(id).superseded_by_workflow_id, child.workflow_id);
+
+    store.submitImplementation({
+      workflow_id: child.workflow_id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "completed plan-backed linked remediation",
+      agent_touched_paths: ["planned.txt"],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "remediated" }],
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "validated" }],
+      known_failures: [],
+      finding_resolution_map: { [optional.finding_id]: "resolved" },
+    });
+    writeFileSync(join(target.root, "planned.txt"), "linked remediation\n");
+    store.beginReview({ workflow_id: child.workflow_id, expected_version: 1 });
+    const remediationApproved = store.submitReview({
+      workflow_id: child.workflow_id,
+      expected_version: 2,
+      review_status: "APPROVED",
+      blocking_findings: [],
+      optional_findings: [],
+      prior_finding_classifications: { [optional.finding_id]: "resolved" },
+      validation_results: [{ validation_id: "VAL-001", status: "passed", evidence: "reviewed" }],
+    });
+    assert.equal(remediationApproved.phase, "REVIEWING");
+    const combined = store.parentGet(child.workflow_id);
+    assert.equal(combined.linked_continuation.review_stage, "combined");
+    assert.deepEqual(
+      combined.review_target.approved_paths,
+      combined.linked_continuation.combined_review_paths,
+    );
+    assert.ok(combined.review_target.approved_paths.includes("planned.txt"));
   } finally {
     store.close();
     disposeFixture(target.root);

@@ -630,9 +630,32 @@ function parseState(row: WorkflowRow): WorkflowState {
   return validateWorkflowStateV10(parsed);
 }
 
-function validatePersistedRows(db: Database): void {
+function assertHistoricalPlanSnapshot(state: WorkflowState, planStore: PlanStore): void {
+  if (state.plan_provenance === null) return;
+  const artifact = planStore.resolveHistoricalApprovedPlan(state.plan_provenance).artifact;
+  if (
+    state.workflow_type !== artifact.workflow_type ||
+    state.objective !== artifact.objective ||
+    state.approved_plan !== artifact.full_plan ||
+    state.execution_brief !== artifact.execution_brief ||
+    canonicalJson(state.acceptance_criteria) !== canonicalJson(artifact.acceptance_criteria) ||
+    canonicalJson(state.validation_requirements) !==
+      canonicalJson(artifact.validation_requirements) ||
+    artifact.approved_paths.some((path) => !state.approved_paths.includes(path))
+  ) {
+    fail("ERROR_STATE_CORRUPT", "workflow plan snapshot is inconsistent");
+  }
+}
+
+function parseValidatedState(row: WorkflowRow, planStore: PlanStore): WorkflowState {
+  const state = parseState(row);
+  assertHistoricalPlanSnapshot(state, planStore);
+  return state;
+}
+
+function validatePersistedRows(db: Database, planStore: PlanStore): void {
   const rows = db.prepare("SELECT * FROM workflows").all() as WorkflowRow[];
-  for (const row of rows) parseState(row);
+  for (const row of rows) parseValidatedState(row, planStore);
 }
 
 function adoptionStates(
@@ -903,13 +926,13 @@ export class WorkflowStore {
     this.db = new Database(this.path, { strict: true });
     try {
       requireCurrentSchema(this.db);
-      validatePersistedRows(this.db);
       validatePersistedPlanRows(this.db, this.root);
+      this.planStore = new PlanStore(this.db, this.root);
+      validatePersistedRows(this.db, this.planStore);
       if (this.path !== ":memory:")
         this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
       else this.db.exec("PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF;");
       this.db.exec("PRAGMA foreign_keys = ON;");
-      this.planStore = new PlanStore(this.db, this.root);
     } catch (error) {
       this.db.close();
       throw error;
@@ -1047,7 +1070,7 @@ export class WorkflowStore {
       });
       fail("ERROR_NOT_FOUND", "workflow is not found");
     }
-    const state = parseState(row);
+    const state = parseValidatedState(row, this.planStore);
     this.diagnostics.record({
       ...common,
       event: "workflow_lookup",
