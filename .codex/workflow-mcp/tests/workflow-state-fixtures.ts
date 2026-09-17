@@ -5,6 +5,7 @@ import {
   authorizeRepair,
   beginReview,
   commitMismatch,
+  commitPreparationFailed,
   createState,
   finalizeRepairExhausted,
   prepareCommit,
@@ -366,6 +367,18 @@ export function workflowState(options: WorkflowStateFixtureOptions = {}): Workfl
     case "COMMIT_PREPARED":
       state = commitPreparedState(options);
       break;
+    case "STOPPED_COMMIT_PREPARATION": {
+      const authorized = commitAuthorizedState(options);
+      state = persistTransition(
+        authorized,
+        commitPreparationFailed(
+          authorized,
+          "ERROR_STAGED_CONTENT",
+          "deterministic commit preparation failure",
+        ),
+      );
+      break;
+    }
     case "STOPPED_NOT_COMMITTED": {
       const prepared = commitPreparedState(options);
       state = persistTransition(

@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { WorkflowError } from "../errors.js";
 import { authoritativeImplementationContract } from "../implementation-contract.js";
 import { repairProposalForFindings } from "../repair-proposal.js";
 import { replaceAuthoritativeImplementationContract } from "../transitions/state.js";
@@ -518,6 +519,168 @@ test("deterministic readiness fails closed without invoking repository integrati
   assert.deepEqual(workflowLegality(prepared).actions.committer, []);
 });
 
+function assertStateCorrupt(
+  state: WorkflowState,
+  mutate: (candidate: WorkflowState) => void,
+  name: string,
+): void {
+  const candidate = structuredClone(state);
+  mutate(candidate);
+  assert.throws(
+    () => validateWorkflowStateV10(candidate),
+    (error) => error instanceof WorkflowError && error.category === "ERROR_STATE_CORRUPT",
+    name,
+  );
+}
+
+test("state validation rejects phase and authority-substate contradictions", () => {
+  const phases = [
+    "IMPLEMENTING",
+    "REVIEWING",
+    "REPAIR_REQUIRED",
+    "REPAIRING",
+    "STOPPED_APPROVED",
+    "STOPPED_INCONCLUSIVE",
+    "STOPPED_CONCERNS",
+    "STOPPED_NEEDS_CONTEXT",
+    "STOPPED_IMPLEMENTATION_BLOCKED",
+    "STOPPED_REPAIR_EXHAUSTED",
+    "COMMIT_AUTHORIZED",
+    "COMMIT_PREPARED",
+    "STOPPED_COMMIT_PREPARATION",
+    "STOPPED_NOT_COMMITTED",
+    "STOPPED_COMMIT_MISMATCH",
+    "COMMITTED",
+  ] as const;
+  for (const phase of phases) {
+    assert.doesNotThrow(() => validateWorkflowStateV10(workflowState({ phase })), phase);
+  }
+
+  const implementationStop = workflowState({ phase: "STOPPED_NEEDS_CONTEXT" });
+  assertStateCorrupt(
+    implementationStop,
+    (candidate) => {
+      candidate.stop_context = null;
+    },
+    "implementation stop without stop context",
+  );
+  assertStateCorrupt(
+    implementationStop,
+    (candidate) => {
+      (candidate.stop_context as any).status = "BLOCKED";
+    },
+    "implementation stop with mismatched stop status",
+  );
+  assertStateCorrupt(
+    workflowState({ phase: "IMPLEMENTING" }),
+    (candidate) => {
+      candidate.stop_context = structuredClone(implementationStop.stop_context);
+    },
+    "non-stopped phase with stop context",
+  );
+
+  const repairing = workflowState({ phase: "REPAIRING" });
+  assertStateCorrupt(
+    repairing,
+    (candidate) => {
+      candidate.repair_authorized_ids = [];
+      candidate.repair_directive = null;
+    },
+    "repairing phase without repair authority",
+  );
+  for (const phase of ["REPAIR_REQUIRED", "STOPPED_REPAIR_EXHAUSTED"] as const) {
+    const state = workflowState({ phase });
+    assertStateCorrupt(
+      state,
+      (candidate) => {
+        candidate.repair_authorized_ids = structuredClone(repairing.repair_authorized_ids);
+        candidate.repair_directive = structuredClone(repairing.repair_directive);
+      },
+      `${phase} with active repair authority`,
+    );
+  }
+
+  const repairOriginStop = structuredClone(repairing);
+  repairOriginStop.phase = "STOPPED_NEEDS_CONTEXT";
+  repairOriginStop.stop_context = {
+    status: "NEEDS_CONTEXT",
+    summary: "repair context is unavailable",
+    stopped_from: "REPAIRING",
+  };
+  assertStateCorrupt(
+    repairOriginStop,
+    (candidate) => {
+      candidate.repair_authorized_ids = [];
+      candidate.repair_directive = null;
+    },
+    "repair-origin implementation stop without repair authority",
+  );
+
+  const authorized = workflowState({ phase: "COMMIT_AUTHORIZED" });
+  const prepared = workflowState({ phase: "COMMIT_PREPARED" });
+  const notCommitted = workflowState({ phase: "STOPPED_NOT_COMMITTED" });
+  const mismatch = workflowState({ phase: "STOPPED_COMMIT_MISMATCH" });
+  const committed = workflowState({ phase: "COMMITTED" });
+  assertStateCorrupt(
+    authorized,
+    (candidate) => {
+      candidate.commit_authorization = null;
+    },
+    "authorized phase without authorization",
+  );
+  assertStateCorrupt(
+    authorized,
+    (candidate) => {
+      candidate.commit_preparation = structuredClone(prepared.commit_preparation);
+    },
+    "authorized phase with preparation evidence",
+  );
+  assertStateCorrupt(
+    authorized,
+    (candidate) => {
+      candidate.commit_result = structuredClone(notCommitted.commit_result);
+    },
+    "authorized phase with result evidence",
+  );
+  assertStateCorrupt(
+    prepared,
+    (candidate) => {
+      candidate.commit_preparation = null;
+    },
+    "prepared phase without preparation evidence",
+  );
+  assertStateCorrupt(
+    notCommitted,
+    (candidate) => {
+      candidate.commit_result = structuredClone(mismatch.commit_result);
+    },
+    "not-committed phase with mismatch result",
+  );
+  assertStateCorrupt(
+    mismatch,
+    (candidate) => {
+      candidate.commit_result = structuredClone(notCommitted.commit_result);
+    },
+    "mismatch phase with not-committed result",
+  );
+  assertStateCorrupt(
+    committed,
+    (candidate) => {
+      candidate.commit_result = structuredClone(notCommitted.commit_result);
+    },
+    "committed phase with not-committed result",
+  );
+
+  const preparationStopped = workflowState({ phase: "STOPPED_COMMIT_PREPARATION" });
+  assertStateCorrupt(
+    preparationStopped,
+    (candidate) => {
+      candidate.stop_context = null;
+    },
+    "commit preparation stop without failure context",
+  );
+});
+
 test("workflow transitions invalidate only their typed evidence families", () => {
   const evidenceCases: Array<Parameters<typeof verifyEvidenceTransition>> = [];
   const assertEvidenceTransition = (...args: Parameters<typeof verifyEvidenceTransition>) => {
@@ -670,12 +833,6 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     phase: "REPAIR_REQUIRED",
     blocking_findings: [firstBlocker, secondBlocker],
   });
-  const seededAuthority = workflowState({
-    phase: "REPAIRING",
-    blocking_findings: [firstBlocker, secondBlocker],
-  });
-  adjudicationBefore.repair_authorized_ids = structuredClone(seededAuthority.repair_authorized_ids);
-  adjudicationBefore.repair_directive = structuredClone(seededAuthority.repair_directive);
   validateWorkflowStateV10(adjudicationBefore);
   const partialAdjudication = adjudicateFindings(adjudicationBefore, {
     workflow_id: adjudicationBefore.workflow_id,
@@ -705,13 +862,9 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     })),
     user_authorization: "authorize all adjudications",
   });
-  assertEvidenceTransition(
-    "all findings adjudicated",
-    adjudicationBefore,
-    allAdjudicated,
-    ["adjudications", "repair_authority"],
-    { repair_authority: emptyEvidence.repair_authority },
-  );
+  assertEvidenceTransition("all findings adjudicated", adjudicationBefore, allAdjudicated, [
+    "adjudications",
+  ]);
 
   const returnBefore = commitPreparationFailed(
     workflowState({ phase: "COMMIT_AUTHORIZED" }),

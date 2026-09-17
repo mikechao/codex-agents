@@ -262,6 +262,20 @@ test("rejects current-schema digest corruption distinctly", () => {
   }
 });
 
+test("rejects digest-consistent phase and authority-substate corruption at startup", () => {
+  const { root, path, state } = persistedValidationState();
+  try {
+    state.phase = "COMMIT_AUTHORIZED";
+    rewritePersistedState(path, state);
+    assert.equal(
+      category(() => new WorkflowStore({ repositoryRoot: root.root, databasePath: path })),
+      "ERROR_STATE_CORRUPT",
+    );
+  } finally {
+    rmSync(root.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects inconsistent persisted validation identity and never treats it as commit-complete", () => {
   const corruptions: Array<{
     name: string;

@@ -703,6 +703,131 @@ function commitResultShape(value: unknown): void {
   }
 }
 
+type AuthorityPresence = "required" | "optional" | "absent";
+
+function assertAuthorityPresence(present: boolean, expected: AuthorityPresence): void {
+  if ((expected === "required" && !present) || (expected === "absent" && present)) corrupt();
+}
+
+function phaseAuthoritySubstatesShape(value: Record<string, unknown>): void {
+  const phase = value.phase as WorkflowPhase;
+  const stopContext = value.stop_context as Record<string, unknown> | null | undefined;
+  const hasStopContext = stopContext !== null && stopContext !== undefined;
+  const hasRepairAuthority = (value.repair_authorized_ids as unknown[]).length > 0;
+  const hasCommitAuthorization =
+    value.commit_authorization !== null && value.commit_authorization !== undefined;
+  const hasCommitPreparation =
+    value.commit_preparation !== null && value.commit_preparation !== undefined;
+  const commitResult = value.commit_result as Record<string, unknown> | null | undefined;
+  const hasCommitResult = commitResult !== null && commitResult !== undefined;
+
+  const requireNoStopContext = (): void => {
+    if (hasStopContext) corrupt();
+  };
+  const requireStopContext = (status: string, stoppedFrom?: string): void => {
+    if (stopContext === null || stopContext === undefined || stopContext.status !== status)
+      corrupt();
+    if (stoppedFrom !== undefined && stopContext.stopped_from !== stoppedFrom) corrupt();
+  };
+  const requireNoCommitEvidence = (): void => {
+    assertAuthorityPresence(hasCommitAuthorization, "absent");
+    assertAuthorityPresence(hasCommitPreparation, "absent");
+    assertAuthorityPresence(hasCommitResult, "absent");
+  };
+  const requireCommitResult = (outcome: string): void => {
+    if (!hasCommitResult || commitResult.outcome !== outcome) corrupt();
+  };
+
+  switch (phase) {
+    case "IMPLEMENTING":
+    case "REVIEWING":
+    case "REPAIR_REQUIRED":
+    case "STOPPED_APPROVED":
+    case "STOPPED_REPAIR_EXHAUSTED":
+      requireNoStopContext();
+      requireNoCommitEvidence();
+      assertAuthorityPresence(hasRepairAuthority, phase === "REVIEWING" ? "optional" : "absent");
+      return;
+    case "REPAIRING":
+      requireNoStopContext();
+      requireNoCommitEvidence();
+      assertAuthorityPresence(hasRepairAuthority, "required");
+      return;
+    case "STOPPED_CONCERNS":
+      requireStopContext("DONE_WITH_CONCERNS");
+      requireNoCommitEvidence();
+      assertAuthorityPresence(
+        hasRepairAuthority,
+        stopContext?.stopped_from === "REPAIRING" ? "required" : "absent",
+      );
+      return;
+    case "STOPPED_NEEDS_CONTEXT":
+      requireStopContext("NEEDS_CONTEXT");
+      requireNoCommitEvidence();
+      assertAuthorityPresence(
+        hasRepairAuthority,
+        stopContext?.stopped_from === "REPAIRING" ? "required" : "absent",
+      );
+      return;
+    case "STOPPED_IMPLEMENTATION_BLOCKED":
+      requireStopContext("BLOCKED");
+      requireNoCommitEvidence();
+      assertAuthorityPresence(
+        hasRepairAuthority,
+        stopContext?.stopped_from === "REPAIRING" ? "required" : "absent",
+      );
+      return;
+    case "STOPPED_INCONCLUSIVE":
+      requireStopContext("INCONCLUSIVE", "REVIEWING");
+      requireNoCommitEvidence();
+      assertAuthorityPresence(hasRepairAuthority, "optional");
+      return;
+    case "COMMIT_AUTHORIZED":
+      requireNoStopContext();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "absent");
+      assertAuthorityPresence(hasCommitResult, "absent");
+      return;
+    case "STOPPED_COMMIT_PREPARATION":
+      requireStopContext("COMMIT_PREPARATION_FAILED", "COMMIT_AUTHORIZED");
+      if (stopContext?.failed_version !== value.version) corrupt();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "absent");
+      assertAuthorityPresence(hasCommitResult, "absent");
+      return;
+    case "COMMIT_PREPARED":
+      requireNoStopContext();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "required");
+      assertAuthorityPresence(hasCommitResult, "absent");
+      return;
+    case "STOPPED_NOT_COMMITTED":
+      requireNoStopContext();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "required");
+      requireCommitResult("not_committed");
+      return;
+    case "STOPPED_COMMIT_MISMATCH":
+      requireNoStopContext();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "required");
+      requireCommitResult("mismatch");
+      return;
+    case "COMMITTED":
+      requireNoStopContext();
+      assertAuthorityPresence(hasRepairAuthority, "absent");
+      assertAuthorityPresence(hasCommitAuthorization, "required");
+      assertAuthorityPresence(hasCommitPreparation, "required");
+      requireCommitResult("committed");
+      return;
+  }
+}
+
 // Runtime validation of a parsed, digest-verified schema-v10 state before it enters the domain as
 // WorkflowState. See store.#parseValidated; every failure is ERROR_STATE_CORRUPT.
 export function validateWorkflowStateV10(value: unknown): WorkflowState {
@@ -985,6 +1110,7 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
   commitAuthorizationShape(value.commit_authorization);
   commitPreparationShape(value.commit_preparation);
   commitResultShape(value.commit_result);
+  phaseAuthoritySubstatesShape(value);
   return {
     ...(value as unknown as WorkflowState),
     runtime_id: validatedRuntime,

@@ -1813,14 +1813,18 @@ test("digest-consistent rows that violate state validation still fail closed", (
     const created = store.create(input(git, { objective: "runtime validation" }));
     const id = created.workflow_id;
     const original = rawState(store, id);
-    const invalid = { ...original, phase: "NOT_A_PHASE" };
-    store.db
-      .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
-      .run(JSON.stringify(invalid), objectDigest(invalid), id);
-    assert.equal(
-      category(() => store.parentGet(id)),
-      "ERROR_STATE_CORRUPT",
-    );
+    for (const invalid of [
+      { ...original, phase: "NOT_A_PHASE" },
+      { ...original, phase: "COMMIT_AUTHORIZED" },
+    ]) {
+      store.db
+        .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
+        .run(JSON.stringify(invalid), objectDigest(invalid), id);
+      assert.equal(
+        category(() => store.parentGet(id)),
+        "ERROR_STATE_CORRUPT",
+      );
+    }
     store.db
       .prepare("UPDATE workflows SET state_json = ?, state_digest = ? WHERE workflow_id = ?")
       .run(JSON.stringify(original), objectDigest(original), id);
