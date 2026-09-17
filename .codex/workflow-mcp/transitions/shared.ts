@@ -1,5 +1,10 @@
 import { fail } from "../errors.js";
-import type { RecoveryContext, WorkflowPhase, WorkflowState } from "../types.js";
+import type {
+  RecoveryContext,
+  WorkflowEvidenceState,
+  WorkflowPhase,
+  WorkflowState,
+} from "../types.js";
 import { boundedString, isoNow } from "../validation.js";
 
 export function clone<T>(value: T): T {
@@ -30,43 +35,72 @@ export function applyRecovery(
   };
 }
 
-export function invalidateImplementationSubmissionEvidence(state: WorkflowState): void {
-  state.implementation_summary = null;
-  state.implementation_status = null;
-  state.implementation_known_failures = [];
-  state.agent_touched_paths = [];
-  state.scope_changed_paths = [];
-  state.acceptance_results = [];
-  state.validation_results = [];
-  state.finding_resolution_map = {};
-  state.implementation_receipt = null;
+export function invalidateImplementationSubmissionEvidence(
+  state: WorkflowEvidenceState<"implementation_submission">,
+): void {
+  Object.assign(state, {
+    implementation_summary: null,
+    implementation_status: null,
+    implementation_known_failures: [],
+    agent_touched_paths: [],
+    scope_changed_paths: [],
+    acceptance_results: [],
+    validation_results: [],
+    finding_resolution_map: {},
+    implementation_receipt: null,
+  } satisfies WorkflowEvidenceState<"implementation_submission">);
 }
 
-export function invalidateReviewReceipts(state: WorkflowState): void {
-  state.review_start_receipt = null;
-  state.review_receipt = null;
+export function invalidateReviewReceipts(state: WorkflowEvidenceState<"review_receipts">): void {
+  Object.assign(state, {
+    review_start_receipt: null,
+    review_receipt: null,
+  } satisfies WorkflowEvidenceState<"review_receipts">);
 }
 
-export function invalidateRepairAuthorization(state: WorkflowState): void {
-  state.repair_authorized_ids = [];
-  state.repair_directive = null;
+export function invalidateRepairAuthorization(
+  state: WorkflowEvidenceState<"repair_authority">,
+): void {
+  Object.assign(state, {
+    repair_authorized_ids: [],
+    repair_directive: null,
+  } satisfies WorkflowEvidenceState<"repair_authority">);
 }
 
-export function invalidateCurrentReviewResultAndRepairAuthority(state: WorkflowState): void {
-  state.blocking_findings = [];
-  state.optional_findings = [];
-  state.prior_finding_classifications = {};
-  state.review_result_version = null;
+function invalidateCurrentReviewResult(
+  state: WorkflowEvidenceState<"current_review_result">,
+): void {
+  Object.assign(state, {
+    blocking_findings: [],
+    optional_findings: [],
+    prior_finding_classifications: {},
+    review_result_version: null,
+  } satisfies WorkflowEvidenceState<"current_review_result">);
+}
+
+export function invalidateCurrentReviewResultAndRepairAuthority(
+  state: WorkflowEvidenceState<"current_review_result"> & WorkflowEvidenceState<"repair_authority">,
+): void {
+  invalidateCurrentReviewResult(state);
   invalidateRepairAuthorization(state);
 }
 
-export function invalidateFullCommitAuthorityAndEvidence(state: WorkflowState): void {
-  state.commit_authorization = null;
-  state.commit_preparation = null;
-  state.commit_result = null;
+export function invalidateFullCommitAuthorityAndEvidence(
+  state: WorkflowEvidenceState<"commit_authorization"> &
+    WorkflowEvidenceState<"commit_attempt_evidence">,
+): void {
+  Object.assign(state, {
+    commit_authorization: null,
+  } satisfies WorkflowEvidenceState<"commit_authorization">);
+  Object.assign(state, {
+    commit_preparation: null,
+    commit_result: null,
+  } satisfies WorkflowEvidenceState<"commit_attempt_evidence">);
 }
 
-export function invalidateLinkedReviewProgress(state: WorkflowState): void {
+export function invalidateLinkedReviewProgress(
+  state: WorkflowEvidenceState<"linked_continuation">,
+): void {
   if (!state.linked_continuation) return;
   state.linked_continuation.remediation_review_receipt = null;
   state.linked_continuation.review_stage = "remediation";

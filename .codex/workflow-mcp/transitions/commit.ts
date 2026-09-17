@@ -7,6 +7,7 @@ import type {
   CommitPreparationFailureCategory,
   ExactRepoPath,
   GitCommitSha,
+  WorkflowEvidenceState,
   WorkflowState,
   WorkflowVersion,
 } from "../types.js";
@@ -34,9 +35,13 @@ import {
 export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
   COMMIT_MISMATCH_CATEGORY_SET;
 
-function invalidateRetryablePreparedCommitAttemptEvidence(state: WorkflowState): void {
-  state.commit_preparation = null;
-  state.commit_result = null;
+function invalidateRetryablePreparedCommitAttemptEvidence(
+  state: WorkflowEvidenceState<"commit_attempt_evidence">,
+): void {
+  Object.assign(state, {
+    commit_preparation: null,
+    commit_result: null,
+  } satisfies WorkflowEvidenceState<"commit_attempt_evidence">);
 }
 
 export function authorizeCommit(state: WorkflowState, authorization: unknown): WorkflowState {

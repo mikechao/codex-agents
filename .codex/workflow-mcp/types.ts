@@ -863,6 +863,99 @@ export interface WorkflowState {
   commit_result: CommitResult | null;
 }
 
+export type WorkflowStateFieldClass =
+  | "contract_authority"
+  | "scope_history"
+  | "work_items"
+  | "implementation_submission"
+  | "review_receipts"
+  | "current_review_result"
+  | "adjudications"
+  | "repair_authority"
+  | "repair_cycle"
+  | "concern_acceptance"
+  | "commit_authorization"
+  | "commit_attempt_evidence"
+  | "lineage"
+  | "linked_continuation"
+  | "linked_findings"
+  | "remediation_context"
+  | "outside_lifecycle_evidence";
+
+type ClassifyWorkflowStateFields<
+  Classification extends Record<keyof WorkflowState, WorkflowStateFieldClass>,
+> = Classification;
+
+/** Compile-time ownership classification only; this is not generated lifecycle policy. */
+export type WorkflowStateFieldClassification = ClassifyWorkflowStateFields<{
+  schema_version: "outside_lifecycle_evidence";
+  version: "outside_lifecycle_evidence";
+  workflow_id: "outside_lifecycle_evidence";
+  workflow_type: "outside_lifecycle_evidence";
+  runtime_id: "outside_lifecycle_evidence";
+  runtime_revision: "outside_lifecycle_evidence";
+  phase: "outside_lifecycle_evidence";
+  objective: "outside_lifecycle_evidence";
+  approved_plan: "contract_authority";
+  execution_brief: "contract_authority";
+  plan_provenance: "contract_authority";
+  work_items: "work_items";
+  base_head: "outside_lifecycle_evidence";
+  approved_paths: "outside_lifecycle_evidence";
+  scope_expansions: "scope_history";
+  approved_path_baselines: "scope_history";
+  acceptance_criteria: "contract_authority";
+  validation_requirements: "contract_authority";
+  review_target: "outside_lifecycle_evidence";
+  initial_receipt: "scope_history";
+  review_start_receipt: "review_receipts";
+  dirty_baseline_paths: "outside_lifecycle_evidence";
+  repair_cycle: "repair_cycle";
+  max_repair_cycles: "outside_lifecycle_evidence";
+  parent_workflow_id: "lineage";
+  source_workflow_id: "lineage";
+  superseded_by_workflow_id: "lineage";
+  linked_continuation: "linked_continuation";
+  linked_findings: "linked_findings";
+  remediation_context: "remediation_context";
+  implementation_summary: "implementation_submission";
+  implementation_status: "implementation_submission";
+  agent_touched_paths: "implementation_submission";
+  scope_changed_paths: "implementation_submission";
+  acceptance_results: "implementation_submission";
+  validation_results: "implementation_submission";
+  implementation_receipt: "implementation_submission";
+  implementation_known_failures: "implementation_submission";
+  finding_resolution_map: "implementation_submission";
+  prior_finding_classifications: "current_review_result";
+  blocking_findings: "current_review_result";
+  optional_findings: "current_review_result";
+  finding_adjudications: "adjudications";
+  review_result_version: "current_review_result";
+  review_receipt: "review_receipts";
+  stop_context: "outside_lifecycle_evidence";
+  recovery_context: "outside_lifecycle_evidence";
+  repair_authorized_ids: "repair_authority";
+  repair_directive: "repair_authority";
+  concern_acceptance: "concern_acceptance";
+  commit_authorization: "commit_authorization";
+  commit_preparation: "commit_attempt_evidence";
+  commit_result: "commit_attempt_evidence";
+}>;
+
+export type WorkflowEvidenceFamily = Exclude<WorkflowStateFieldClass, "outside_lifecycle_evidence">;
+
+export type WorkflowEvidenceField<Family extends WorkflowEvidenceFamily> = {
+  [Field in keyof WorkflowState]: WorkflowStateFieldClassification[Field] extends Family
+    ? Field
+    : never;
+}[keyof WorkflowState];
+
+export type WorkflowEvidenceState<Family extends WorkflowEvidenceFamily> = Pick<
+  WorkflowState,
+  WorkflowEvidenceField<Family>
+>;
+
 export type LinkedReviewStage = "remediation" | "combined";
 
 export interface LinkedContinuation {

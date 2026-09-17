@@ -36,6 +36,8 @@ import type {
   PlanRevision,
   PlanRevisionArtifact,
   ValidationRequirementId,
+  WorkflowEvidenceFamily,
+  WorkflowEvidenceField,
   WorkflowId,
   WorkflowState,
   WorkflowVersion,
@@ -52,66 +54,87 @@ import {
 const ROLES = ["parent", "implementer", "reviewer", "committer"] as const;
 const TEST_ROOT = "/deterministic-workflow-fixture";
 
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? true
+    : false;
+type Expect<Value extends true> = Value;
+
+const TEST_EVIDENCE_FIELDS = {
+  contract_authority: [
+    "approved_plan",
+    "execution_brief",
+    "plan_provenance",
+    "acceptance_criteria",
+    "validation_requirements",
+  ],
+  scope_history: ["initial_receipt", "scope_expansions", "approved_path_baselines"],
+  work_items: ["work_items"],
+  implementation_submission: [
+    "implementation_summary",
+    "implementation_status",
+    "implementation_known_failures",
+    "agent_touched_paths",
+    "scope_changed_paths",
+    "acceptance_results",
+    "validation_results",
+    "finding_resolution_map",
+    "implementation_receipt",
+  ],
+  review_receipts: ["review_start_receipt", "review_receipt"],
+  current_review_result: [
+    "blocking_findings",
+    "optional_findings",
+    "prior_finding_classifications",
+    "review_result_version",
+  ],
+  adjudications: ["finding_adjudications"],
+  repair_authority: ["repair_authorized_ids", "repair_directive"],
+  repair_cycle: ["repair_cycle"],
+  concern_acceptance: ["concern_acceptance"],
+  commit_authorization: ["commit_authorization"],
+  commit_attempt_evidence: ["commit_preparation", "commit_result"],
+  lineage: ["parent_workflow_id", "source_workflow_id", "superseded_by_workflow_id"],
+  linked_continuation: ["linked_continuation"],
+  linked_findings: ["linked_findings"],
+  remediation_context: ["remediation_context"],
+} as const satisfies Record<WorkflowEvidenceFamily, readonly (keyof WorkflowState)[]>;
+
+type TestEvidenceField<Family extends WorkflowEvidenceFamily> =
+  (typeof TEST_EVIDENCE_FIELDS)[Family][number];
+type _EveryTestEvidenceInventoryIsExact = Expect<
+  Equal<
+    {
+      [Family in WorkflowEvidenceFamily]: Equal<
+        TestEvidenceField<Family>,
+        WorkflowEvidenceField<Family>
+      >;
+    }[WorkflowEvidenceFamily],
+    true
+  >
+>;
+
 function actions(state: WorkflowState, readiness = deterministicReadiness(state)) {
   return workflowLegality(state, readiness).actions;
 }
 
+function projectEvidenceFamily<Family extends WorkflowEvidenceFamily>(
+  state: WorkflowState,
+  family: Family,
+): Pick<WorkflowState, TestEvidenceField<Family>> {
+  return Object.fromEntries(
+    TEST_EVIDENCE_FIELDS[family].map((field) => [field, state[field]]),
+  ) as Pick<WorkflowState, TestEvidenceField<Family>>;
+}
+
 function evidenceProjection(state: WorkflowState) {
-  return {
-    contract: {
-      approved_plan: state.approved_plan,
-      execution_brief: state.execution_brief,
-      plan_provenance: state.plan_provenance,
-      acceptance_criteria: state.acceptance_criteria,
-      validation_requirements: state.validation_requirements,
-    },
-    scope_history: {
-      initial_receipt: state.initial_receipt,
-      scope_expansions: state.scope_expansions,
-      approved_path_baselines: state.approved_path_baselines,
-    },
-    work_items: state.work_items,
-    implementation: {
-      implementation_summary: state.implementation_summary,
-      implementation_status: state.implementation_status,
-      implementation_known_failures: state.implementation_known_failures,
-      agent_touched_paths: state.agent_touched_paths,
-      scope_changed_paths: state.scope_changed_paths,
-      acceptance_results: state.acceptance_results,
-      validation_results: state.validation_results,
-      finding_resolution_map: state.finding_resolution_map,
-      implementation_receipt: state.implementation_receipt,
-    },
-    review_receipts: {
-      review_start_receipt: state.review_start_receipt,
-      review_receipt: state.review_receipt,
-    },
-    current_review_result: {
-      blocking_findings: state.blocking_findings,
-      optional_findings: state.optional_findings,
-      prior_finding_classifications: state.prior_finding_classifications,
-      review_result_version: state.review_result_version,
-    },
-    adjudications: state.finding_adjudications,
-    repair_authority: {
-      repair_authorized_ids: state.repair_authorized_ids,
-      repair_directive: state.repair_directive,
-    },
-    repair_cycle: state.repair_cycle,
-    concern_acceptance: state.concern_acceptance,
-    commit: {
-      commit_authorization: state.commit_authorization,
-      commit_preparation: state.commit_preparation,
-      commit_result: state.commit_result,
-    },
-    lineage: {
-      parent_workflow_id: state.parent_workflow_id,
-      source_workflow_id: state.source_workflow_id,
-      superseded_by_workflow_id: state.superseded_by_workflow_id,
-    },
-    linked_continuation: state.linked_continuation,
-    linked_findings: state.linked_findings,
-    remediation_context: state.remediation_context,
+  return Object.fromEntries(
+    (Object.keys(TEST_EVIDENCE_FIELDS) as WorkflowEvidenceFamily[]).map((family) => [
+      family,
+      projectEvidenceFamily(state, family),
+    ]),
+  ) as {
+    [Family in WorkflowEvidenceFamily]: Pick<WorkflowState, TestEvidenceField<Family>>;
   };
 }
 
@@ -711,11 +734,18 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     "scope expansion",
     scopeBefore,
     scopeAfter,
-    ["scope_history", "implementation", "review_receipts", "commit"],
+    [
+      "scope_history",
+      "implementation_submission",
+      "review_receipts",
+      "commit_authorization",
+      "commit_attempt_evidence",
+    ],
     {
-      implementation: emptyEvidence.implementation,
+      implementation_submission: emptyEvidence.implementation_submission,
       review_receipts: emptyEvidence.review_receipts,
-      commit: emptyEvidence.commit,
+      commit_authorization: emptyEvidence.commit_authorization,
+      commit_attempt_evidence: emptyEvidence.commit_attempt_evidence,
     },
   );
 
@@ -778,10 +808,11 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     "staged-scope reconciliation",
     reconciliationBefore,
     reconciliationAfter,
-    ["scope_history", "review_receipts", "commit"],
+    ["scope_history", "review_receipts", "commit_authorization"],
     {
       review_receipts: emptyEvidence.review_receipts,
-      commit: emptyEvidence.commit,
+      commit_authorization: emptyEvidence.commit_authorization,
+      commit_attempt_evidence: emptyEvidence.commit_attempt_evidence,
     },
   );
 
@@ -809,7 +840,7 @@ test("workflow transitions invalidate only their typed evidence families", () =>
   const completionBefore = workflowState({ phase: "REPAIRING" });
   const completionAfter = submitCompletedRepair(completionBefore);
   assertEvidenceTransition("repair completion", completionBefore, completionAfter, [
-    "implementation",
+    "implementation_submission",
   ]);
 
   const conclusive = submitRepairReview(workflowState({ phase: "REPAIRING" }), "APPROVED");
@@ -880,8 +911,12 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     "return commit to review",
     returnBefore,
     returnAfter,
-    ["review_receipts", "commit"],
-    { review_receipts: emptyEvidence.review_receipts, commit: emptyEvidence.commit },
+    ["review_receipts", "commit_authorization"],
+    {
+      review_receipts: emptyEvidence.review_receipts,
+      commit_authorization: emptyEvidence.commit_authorization,
+      commit_attempt_evidence: emptyEvidence.commit_attempt_evidence,
+    },
   );
 
   const staleAttemptBefore = workflowState({ phase: "COMMIT_AUTHORIZED" });
@@ -898,10 +933,9 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     "commit-preparation failure",
     staleAttemptBefore,
     preparationFailure,
-    ["commit"],
+    ["commit_attempt_evidence"],
     {
-      commit: {
-        commit_authorization: staleAttemptBefore.commit_authorization,
+      commit_attempt_evidence: {
         commit_preparation: null,
         commit_result: null,
       },
@@ -924,10 +958,9 @@ test("workflow transitions invalidate only their typed evidence families", () =>
     "known-not-committed retry",
     commitRetryBefore,
     commitRetryAfter,
-    ["commit"],
+    ["commit_attempt_evidence"],
     {
-      commit: {
-        commit_authorization: commitRetryBefore.commit_authorization,
+      commit_attempt_evidence: {
         commit_preparation: null,
         commit_result: null,
       },
@@ -962,15 +995,21 @@ test("workflow transitions invalidate only their typed evidence families", () =>
   const child = linkedFollowupChildState(followup);
   assert.deepEqual(source, sourceBefore, "linked follow-up construction preserves source evidence");
   const childEvidence = evidenceProjection(child);
-  assert.deepEqual(childEvidence.implementation, emptyEvidence.implementation);
+  assert.deepEqual(
+    childEvidence.implementation_submission,
+    emptyEvidence.implementation_submission,
+  );
   assert.deepEqual(childEvidence.review_receipts, emptyEvidence.review_receipts);
   assert.deepEqual(childEvidence.current_review_result, emptyEvidence.current_review_result);
-  assert.deepEqual(childEvidence.adjudications, []);
+  assert.deepEqual(childEvidence.adjudications, { finding_adjudications: [] });
   assert.deepEqual(childEvidence.repair_authority, emptyEvidence.repair_authority);
-  assert.deepEqual(childEvidence.commit, emptyEvidence.commit);
-  assert.deepEqual(childEvidence.linked_findings, [optionalFinding("LINKED-1")]);
-  assert.equal(childEvidence.linked_continuation?.review_stage, "remediation");
-  assert.deepEqual(childEvidence.remediation_context?.authorized_finding_ids, ["LINKED-1"]);
+  assert.deepEqual(childEvidence.commit_authorization, emptyEvidence.commit_authorization);
+  assert.deepEqual(childEvidence.commit_attempt_evidence, emptyEvidence.commit_attempt_evidence);
+  assert.deepEqual(childEvidence.linked_findings.linked_findings, [optionalFinding("LINKED-1")]);
+  assert.equal(childEvidence.linked_continuation.linked_continuation?.review_stage, "remediation");
+  assert.deepEqual(childEvidence.remediation_context.remediation_context?.authorized_finding_ids, [
+    "LINKED-1",
+  ]);
 });
 
 test("authoritative contract replacement reports scope reconciliation without clearing overlays", () => {

@@ -54,11 +54,15 @@ import type {
   ValidationRequirementId,
   ValidationResult,
   WorkflowAction,
+  WorkflowEvidenceFamily,
+  WorkflowEvidenceField,
   WorkflowId,
   WorkflowNonProjectableOperation,
   WorkflowPhase,
   WorkflowQueryOperation,
   WorkflowState,
+  WorkflowStateFieldClass,
+  WorkflowStateFieldClassification,
   WorkflowVersion,
 } from "../types.js";
 import {
@@ -288,6 +292,30 @@ function _compilePlannerAuthoringView(): void {
 }
 
 type _StateKeysAreExhaustive = Expect<Equal<(typeof V10_STATE_KEYS)[number], keyof WorkflowState>>;
+type _ClassificationKeysAreExhaustive = Expect<
+  Equal<keyof WorkflowStateFieldClassification, keyof WorkflowState>
+>;
+type ClassifiedOutsideLifecycleEvidenceField = {
+  [Field in keyof WorkflowState]: WorkflowStateFieldClassification[Field] extends "outside_lifecycle_evidence"
+    ? Field
+    : never;
+}[keyof WorkflowState];
+type ClassifiedEvidenceField = WorkflowEvidenceField<WorkflowEvidenceFamily>;
+type _EvidenceAndOutsidePartitionsAreDisjoint = Expect<
+  Equal<Extract<ClassifiedEvidenceField, ClassifiedOutsideLifecycleEvidenceField>, never>
+>;
+type _EvidenceAndOutsidePartitionsAreExhaustive = Expect<
+  Equal<ClassifiedEvidenceField | ClassifiedOutsideLifecycleEvidenceField, keyof WorkflowState>
+>;
+type WorkflowStateWithUnclassifiedEvidence = WorkflowState & {
+  newly_added_evidence: string;
+};
+// @ts-expect-error extending WorkflowState requires an explicit classification for the new field
+const _extendedClassification: Record<
+  keyof WorkflowStateWithUnclassifiedEvidence,
+  WorkflowStateFieldClass
+> = undefined as unknown as WorkflowStateFieldClassification;
+void _extendedClassification;
 type _RoleValuesAreCanonical = Expect<Equal<Role, (typeof ROLE_VALUES)[number]>>;
 type _PhaseValuesAreCanonical = Expect<
   Equal<WorkflowPhase, (typeof WORKFLOW_PHASE_VALUES)[number]>
