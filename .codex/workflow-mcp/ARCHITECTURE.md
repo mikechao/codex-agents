@@ -9,9 +9,14 @@ persistence authority, or role contract. For those boundaries, see the authorita
 
 The low-level/common layer provides reusable domain primitives:
 
-- `types.ts` declares domain types, branded data shapes, and type-only dependencies on finite
-  values.
-- `values.ts` owns runtime finite-domain constants, sets, and predicates.
+- `workflow-action-registry.ts` owns workflow action identity and mechanical protocol metadata:
+  durable classification, actor ownership, static descriptor metadata, recovery identifiers, and
+  server-handler linkage. It does not own legality, schemas, transitions, stale bindings, or audit
+  meaning.
+- `types.ts` declares domain types and branded data shapes, and re-exports action types derived from
+  the registry.
+- `values.ts` owns the remaining runtime finite-domain constants, sets, and predicates and
+  compatibility-re-exports the registry-derived workflow action values.
 - `errors.ts` defines typed workflow errors and converts unknown errors to safe public errors.
 - `validation.ts` provides shared bounded and exact input, contract, path, digest, and shape
   validation helpers.
@@ -66,8 +71,10 @@ they do not move domain ownership into the facade.
 `operator-decision.ts` derives a semantic operator projection from state and query helpers. These
 source boundaries do not replace or reproduce the runtime and workflow authority described by the
 authoritative documentation. `operator-action-descriptor.ts` adds the versioned executable guidance
-projection from the `WorkflowLegality` result and the exhaustive action-classification registry; it
-does not calculate legality, readiness, or precedence and does not execute mutations.
+projection from the `WorkflowLegality` result and the registry's static descriptor metadata; it does
+not calculate legality, readiness, or precedence and does not execute mutations. Action-specific
+authoritative bindings and stale references remain in that projection rather than in the structural
+registry.
 
 When changing this directory, preserve these ownership and downward-dependency boundaries unless
 an architecture change is explicitly in scope.

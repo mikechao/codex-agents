@@ -14,12 +14,12 @@ import type {
   FindingId,
   OperatorDecision,
   OperatorPlanBinding,
-  OperatorRecovery,
   OptionalFinding,
   WorkflowAction,
   WorkflowId,
   WorkflowState,
 } from "./types.js";
+import { recoveryForAction } from "./workflow-action-registry.js";
 
 const MAX_SUMMARY = 240;
 const MAX_OPTIONAL_FINDINGS = 200;
@@ -101,18 +101,7 @@ function repairDecision(
 }
 
 function recoveryDecision(action: WorkflowAction): OperatorDecision["primary"] {
-  const candidates = new Map<WorkflowAction, OperatorRecovery>([
-    ["workflow_accept_concerns", "accept_concerns"],
-    ["workflow_adopt_dirty_scope", "adopt_dirty_scope"],
-    ["workflow_rebind_implementation_plan", "rebind_implementation_plan"],
-    ["workflow_resume_implementation", "resume_implementation"],
-    ["workflow_resume_review", "resume_review"],
-    ["workflow_retry_commit", "retry_commit"],
-    ["workflow_retry_commit_preparation", "retry_commit_preparation"],
-    ["workflow_reconcile_staged_scope", "reconcile_staged_scope"],
-    ["workflow_return_commit_to_review", "return_commit_to_review"],
-  ]);
-  const recovery = candidates.get(action);
+  const recovery = recoveryForAction(action);
   if (!recovery) {
     return {
       kind: "operator_intervention",

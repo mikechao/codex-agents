@@ -16,10 +16,36 @@ import type {
   ROLE_VALUES,
   VALIDATION_KIND_VALUES,
   VALIDATION_STATUS_VALUES,
-  WORKFLOW_ACTION_VALUES,
   WORKFLOW_PHASE_VALUES,
   WORKFLOW_TYPE_VALUES,
 } from "./values.js";
+import type {
+  OperatorAuthorizationMetadata,
+  OperatorExpectedNext,
+  OperatorInputAlternative,
+  OperatorParentMutationOperation,
+  OperatorRecovery,
+  OperatorRequiredInput,
+  OperatorWorkerDispatchOperation,
+  WorkflowAction,
+} from "./workflow-action-registry.js";
+
+export type {
+  OperatorActionDescriptorMetadata,
+  OperatorAuthorizationBinding,
+  OperatorAuthorizationMetadata,
+  OperatorExpectedNext,
+  OperatorInputAlternative,
+  OperatorInputSource,
+  OperatorParentMutationOperation,
+  OperatorRecovery,
+  OperatorRequiredInput,
+  OperatorWorkerDispatchOperation,
+  WorkflowAction,
+  WorkflowActionClassification,
+  WorkflowNonProjectableOperation,
+  WorkflowQueryOperation,
+} from "./workflow-action-registry.js";
 
 type TupleValue<T extends readonly string[]> = T[number];
 
@@ -136,142 +162,11 @@ export interface WorktreePlan {
 
 export type WorktreePlanResult = WorktreePlan;
 
-// Phase-driven workflow action names. Planning tool names remain a separate domain.
-export type WorkflowAction = TupleValue<typeof WORKFLOW_ACTION_VALUES>;
-
 // Read-only semantic projection used by the parent orchestrator. Semantic fields intentionally
 // contain no workflow or PlanArtifact identity, capabilities, receipts, audit data, or raw phase
 // names; the versioned execution guidance carries only fixed invocation metadata and exact typed
 // operation names. The persisted WorkflowState remains the sole authority.
 export type OperatorRoute = "implement" | "review" | "re_review" | "commit";
-export type OperatorRecovery =
-  | "accept_concerns"
-  | "adopt_dirty_scope"
-  | "rebind_implementation_plan"
-  | "resume_implementation"
-  | "resume_review"
-  | "retry_commit"
-  | "retry_commit_preparation"
-  | "reconcile_staged_scope"
-  | "return_commit_to_review";
-
-export type OperatorParentMutationOperation =
-  | "workflow_adopt_dirty_scope"
-  | "workflow_expand_scope"
-  | "workflow_rebind_implementation_plan"
-  | "workflow_record_manual_validation"
-  | "workflow_resume_implementation"
-  | "workflow_accept_concerns"
-  | "workflow_authorize_repair"
-  | "workflow_adjudicate_findings"
-  | "workflow_resume_review"
-  | "workflow_finalize_repair_exhausted"
-  | "workflow_create_linked_followup"
-  | "workflow_create_linked_followup_from_plan"
-  | "workflow_authorize_commit"
-  | "workflow_retry_commit_preparation"
-  | "workflow_reconcile_staged_scope"
-  | "workflow_return_commit_to_review"
-  | "workflow_reconcile_commit_result"
-  | "workflow_retry_commit";
-
-export type OperatorWorkerDispatchOperation =
-  | "workflow_submit_implementation"
-  | "workflow_begin_review"
-  | "workflow_submit_review"
-  | "workflow_prepare_commit"
-  | "workflow_submit_commit_result";
-
-export type OperatorInputSource =
-  | "user_authored"
-  | "parent_context"
-  | "server_derived"
-  | "observed_evidence";
-
-export interface OperatorRequiredInput {
-  path: string[];
-  source: OperatorInputSource;
-  /**
-   * Exact source path in ParentView when source is parent_context. For a repair
-   * server_derived input, this is instead relative to the current mutation
-   * invocation's descriptor-owned repair binding.
-   */
-  source_path?: string[];
-  required: true;
-}
-
-export interface OperatorInputAlternative {
-  paths: string[][];
-  source: OperatorInputSource;
-  /** Exact source path in ParentView when source is parent_context. */
-  source_path?: string[];
-  required: true;
-}
-
-export type OperatorAuthorizationBinding =
-  | { kind: "none" }
-  | { kind: "all"; paths: string[][] }
-  | { kind: "exclusive_one_of"; common_paths: string[][]; alternatives: string[][] };
-
-export type OperatorAuthorizationMetadata =
-  | {
-      required: false;
-      representation: { kind: "none" };
-      binding: { kind: "none" };
-    }
-  | {
-      required: true;
-      representation: { kind: "field"; path: string[] };
-      binding: Exclude<OperatorAuthorizationBinding, { kind: "none" }>;
-    }
-  | {
-      required: true;
-      representation: { kind: "metadata_only" };
-      binding: Exclude<OperatorAuthorizationBinding, { kind: "none" }>;
-    };
-
-export type OperatorDescriptorClassification =
-  | "descriptorized_in_142"
-  | "descriptorized_in_143"
-  | "descriptorized_in_144"
-  | "descriptorized_in_155"
-  | "protocol_or_query_only";
-
-export type OperatorActionDescriptorMetadata =
-  | {
-      classification: "protocol_or_query_only";
-      mode: "non_projectable";
-      authorization: OperatorAuthorizationMetadata;
-      inputs: OperatorRequiredInput[];
-      input_alternatives?: OperatorInputAlternative[];
-    }
-  | {
-      classification: "descriptorized_in_142";
-      mode: "dispatch";
-      operation: WorkflowAction;
-      authorization: OperatorAuthorizationMetadata;
-      inputs: OperatorRequiredInput[];
-      input_alternatives?: OperatorInputAlternative[];
-    }
-  | {
-      classification:
-        | "descriptorized_in_142"
-        | "descriptorized_in_143"
-        | "descriptorized_in_144"
-        | "descriptorized_in_155";
-      mode: "parent_mutation";
-      operation: OperatorParentMutationOperation;
-      authorization: OperatorAuthorizationMetadata;
-      inputs: OperatorRequiredInput[];
-      input_alternatives?: OperatorInputAlternative[];
-    }
-  | {
-      classification: "descriptorized_in_143";
-      mode: "collect_evidence";
-      operation: "workflow_record_manual_validation";
-      authorization: OperatorAuthorizationMetadata;
-      inputs: OperatorRequiredInput[];
-    };
 
 export type OperatorBindingReference =
   | { kind: "finding"; finding_ids: FindingId[] }
@@ -293,20 +188,6 @@ export interface OperatorStaleBinding {
   expected_version: WorkflowVersion;
   references: OperatorBindingReference[];
 }
-
-export type OperatorExpectedNext =
-  | "implement"
-  | "review"
-  | "re_review"
-  | "commit"
-  | "collect_evidence"
-  | "accept_concerns"
-  | "adopt_dirty_scope"
-  | "resume_review"
-  | "bounded_continuation"
-  | "terminal_committed"
-  | "terminal_commit_mismatch"
-  | "wait";
 
 export interface OperatorMutationInvocation {
   operation: OperatorParentMutationOperation;

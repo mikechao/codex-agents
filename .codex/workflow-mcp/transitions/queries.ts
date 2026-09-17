@@ -23,6 +23,7 @@ import type {
 } from "../types.js";
 import { canonicalJson, exactPaths, MAX_DETAIL, MAX_PATHS, MAX_TEXT, role } from "../validation.js";
 import { VALIDATION_STATUS_SET } from "../values.js";
+import { isRecoveryWorkflowAction } from "../workflow-action-registry.js";
 import { dirtyBaselinePaths } from "./receipts.js";
 import { clone } from "./shared.js";
 
@@ -790,16 +791,6 @@ function nextStep(
       ? { kind: "bounded_continuation" }
       : { kind: "unsupported", reason: "bounded continuation authority is unavailable" };
   }
-  const recoveries: WorkflowAction[] = [
-    "workflow_accept_concerns",
-    "workflow_rebind_implementation_plan",
-    "workflow_resume_implementation",
-    "workflow_resume_review",
-    "workflow_retry_commit",
-    "workflow_retry_commit_preparation",
-    "workflow_reconcile_staged_scope",
-    "workflow_return_commit_to_review",
-  ];
   if (
     state.phase === "STOPPED_CONCERNS" ||
     state.phase === "STOPPED_NEEDS_CONTEXT" ||
@@ -808,7 +799,7 @@ function nextStep(
     state.phase === "STOPPED_NOT_COMMITTED" ||
     state.phase === "STOPPED_COMMIT_PREPARATION"
   ) {
-    const available = actions.parent.filter((action) => recoveries.includes(action));
+    const available = actions.parent.filter(isRecoveryWorkflowAction);
     if (
       state.phase === "STOPPED_COMMIT_PREPARATION" &&
       state.stop_context?.status === "COMMIT_PREPARATION_FAILED" &&

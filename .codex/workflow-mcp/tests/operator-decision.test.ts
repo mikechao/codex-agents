@@ -290,11 +290,10 @@ test("every workflow action has explicit descriptor treatment and authorization 
   );
   for (const [action, metadata] of Object.entries(ACTION_DESCRIPTOR_METADATA)) {
     assert.ok(
-      metadata.classification === "descriptorized_in_142" ||
-        metadata.classification === "descriptorized_in_143" ||
-        metadata.classification === "descriptorized_in_144" ||
-        metadata.classification === "descriptorized_in_155" ||
-        metadata.classification === "protocol_or_query_only",
+      metadata.classification === "parent" ||
+        metadata.classification === "worker" ||
+        metadata.classification === "query" ||
+        metadata.classification === "non_projectable",
       action,
     );
     if (metadata.authorization.required) {
@@ -401,6 +400,66 @@ test("descriptor authorization metadata distinguishes payload fields from metada
       ],
     },
   });
+});
+
+test("scope-expansion descriptor serialization remains structurally unchanged", () => {
+  const { root, git } = fixture();
+  const store = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+  try {
+    const created = create(store, git);
+    const descriptor = descriptorForLegality(created as any, {
+      actions: {
+        parent: ["workflow_expand_scope"],
+        implementer: [],
+        reviewer: [],
+        committer: [],
+      },
+      next: { kind: "recovery", action: "workflow_expand_scope" },
+    });
+    assert.deepEqual(descriptor.primary, {
+      mode: "parent_mutation",
+      selection: "single",
+      invocations: [
+        {
+          operation: "workflow_expand_scope",
+          semantic_choice: {
+            id: "authorize_more_paths",
+            label: "Expand the approved scope",
+            summary: "Authorize additional paths for implementation and subsequent review.",
+          },
+          fixed_arguments: {
+            workflow_id: created.workflow_id,
+            expected_version: created.version,
+          },
+          required_inputs: [
+            { path: ["added_paths"], source: "user_authored", required: true },
+            { path: ["reason"], source: "user_authored", required: true },
+          ],
+          authorization: {
+            required: true,
+            representation: { kind: "field", path: ["user_authorization"] },
+            binding: { kind: "all", paths: [["added_paths"], ["reason"]] },
+          },
+          stale_binding: {
+            workflow_id: created.workflow_id,
+            expected_version: created.version,
+            references: [
+              { kind: "scope", paths: ["note.txt"] },
+              { kind: "finding", finding_ids: [] },
+            ],
+          },
+          on_success: {
+            kind: "refresh_required",
+            expected: ["implement", "review", "re_review", "wait"],
+            dispatch_authority: false,
+          },
+        },
+      ],
+    });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("#143 recovery descriptors preserve exact operations, inputs, authorization, and routes", () => {

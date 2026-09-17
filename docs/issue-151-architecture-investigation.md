@@ -1,5 +1,17 @@
 # Issue #151 read-only architecture investigation report
 
+## Implementation follow-up
+
+Issue #160 implements the third bounded recommendation from this report. Workflow action identity,
+durable structural classification, static descriptor metadata, recovery identifiers, server-handler
+linkage, and host-role expectations now originate in the typed
+`workflow-action-registry.ts`. Legality and readiness, explicit JSON schemas, action-specific stale
+bindings, transitions, repository and PlanStore preflights, audit semantics, and mutation-time
+revalidation remain independently owned and fail closed.
+
+The historical baseline and analysis below are retained as the evidence that motivated that
+boundary; references to the pre-#160 duplicated registries describe the investigated state.
+
 Baseline verified before analysis:
 
 - Checkout is clean on `main`.

@@ -345,7 +345,7 @@ test("descriptorized parent metadata matches exact MCP tool schemas", () => {
 
 test("inspection metadata has no semantic user-authorization requirement", () => {
   assert.deepEqual(ACTION_DESCRIPTOR_METADATA.workflow_record_manual_validation, {
-    classification: "descriptorized_in_143",
+    classification: "parent",
     mode: "collect_evidence",
     operation: "workflow_record_manual_validation",
     authorization: {

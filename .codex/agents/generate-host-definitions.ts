@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { YAML } from "bun";
+import { WORKFLOW_ACTION_VALUES_BY_ACTOR } from "../workflow-mcp/workflow-action-registry.js";
 
 const ROOT = resolve(import.meta.dir);
 const CONTRACTS_DIR = resolve(ROOT, "contracts");
@@ -83,9 +84,9 @@ interface RoleSpec {
 // in model-policy.yaml, which is intentionally limited to model assignments
 // and reasoning effort.
 export const CODEX_WORKFLOW_MCP_ENABLED_TOOLS = {
-  implementer: ["workflow_implementer_get", "workflow_submit_implementation"],
-  code_reviewer: ["workflow_reviewer_get", "workflow_begin_review", "workflow_submit_review"],
-  committer: ["workflow_committer_get", "workflow_prepare_commit", "workflow_submit_commit_result"],
+  implementer: WORKFLOW_ACTION_VALUES_BY_ACTOR.implementer,
+  code_reviewer: WORKFLOW_ACTION_VALUES_BY_ACTOR.reviewer,
+  committer: WORKFLOW_ACTION_VALUES_BY_ACTOR.committer,
 } as const satisfies Record<(typeof EXECUTION_ROLE_NAMES)[number], readonly string[]>;
 
 // A standalone Codex custom-agent file is parsed as a complete ConfigToml
@@ -165,8 +166,9 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_implementer_get: allow",
-        "  workflow_state_workflow_submit_implementation: allow",
+        ...CODEX_WORKFLOW_MCP_ENABLED_TOOLS.implementer.map(
+          (tool) => `  workflow_state_${tool}: allow`,
+        ),
       ],
       terminalTool: "workflow_submit_implementation",
       finalReportLabel: "final implementation report",
@@ -202,9 +204,9 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_reviewer_get: allow",
-        "  workflow_state_workflow_begin_review: allow",
-        "  workflow_state_workflow_submit_review: allow",
+        ...CODEX_WORKFLOW_MCP_ENABLED_TOOLS.code_reviewer.map(
+          (tool) => `  workflow_state_${tool}: allow`,
+        ),
       ],
       terminalTool: "workflow_submit_review",
       finalReportLabel: "final review report",
@@ -271,9 +273,9 @@ const ROLES: readonly RoleSpec[] = [
         "  task:",
         '    "*": deny',
         "  workflow_state_*: deny",
-        "  workflow_state_workflow_committer_get: allow",
-        "  workflow_state_workflow_prepare_commit: allow",
-        "  workflow_state_workflow_submit_commit_result: allow",
+        ...CODEX_WORKFLOW_MCP_ENABLED_TOOLS.committer.map(
+          (tool) => `  workflow_state_${tool}: allow`,
+        ),
       ],
       terminalTool: "workflow_submit_commit_result",
       finalReportLabel: "final commit report",

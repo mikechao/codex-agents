@@ -6,15 +6,12 @@ import {
 } from "./transitions/queries.js";
 import type {
   FindingId,
-  OperatorActionDescriptorMetadata,
   OperatorAdjudicationBinding,
-  OperatorAuthorizationBinding,
   OperatorAuthorizationMetadata,
   OperatorBindingReference,
   OperatorCollectEvidenceDescriptor,
   OperatorExecutionDescriptor,
   OperatorExpectedNext,
-  OperatorInputAlternative,
   OperatorInputSource,
   OperatorLinkedFollowupBinding,
   OperatorMutationInvocation,
@@ -33,52 +30,15 @@ import type {
   WorkflowState,
   WorkflowVersion,
 } from "./types.js";
+import {
+  ACTION_DESCRIPTOR_METADATA,
+  WORKFLOW_ACTION_REGISTRY,
+} from "./workflow-action-registry.js";
 
 const noAuthorization = (): OperatorAuthorizationMetadata => ({
   required: false,
   representation: { kind: "none" },
   binding: { kind: "none" },
-});
-
-type RequiredAuthorizationBinding = Exclude<OperatorAuthorizationBinding, { kind: "none" }>;
-
-const allBinding = (paths: string[][]): RequiredAuthorizationBinding => ({
-  kind: "all",
-  paths,
-});
-
-const exclusiveBinding = (
-  commonPaths: string[][],
-  alternatives: string[][],
-): RequiredAuthorizationBinding => ({
-  kind: "exclusive_one_of",
-  common_paths: commonPaths,
-  alternatives,
-});
-
-const fieldAuthorization = (
-  path: string[],
-  boundSemanticInputPaths: string[][],
-  alternatives: string[][] = [],
-): OperatorAuthorizationMetadata => ({
-  required: true,
-  representation: { kind: "field", path },
-  binding:
-    alternatives.length === 0
-      ? allBinding(boundSemanticInputPaths)
-      : exclusiveBinding(boundSemanticInputPaths, alternatives),
-});
-
-const metadataAuthorization = (
-  boundSemanticInputPaths: string[][],
-  alternatives: string[][] = [],
-): OperatorAuthorizationMetadata => ({
-  required: true,
-  representation: { kind: "metadata_only" },
-  binding:
-    alternatives.length === 0
-      ? allBinding(boundSemanticInputPaths)
-      : exclusiveBinding(boundSemanticInputPaths, alternatives),
 });
 
 const input = (
@@ -103,290 +63,7 @@ function linkedFindingSummary(finding: {
   return summary.length <= 240 ? summary : `${summary.slice(0, 239)}…`;
 }
 
-const inputAlternative = (
-  paths: string[][],
-  source: OperatorInputSource,
-): OperatorInputAlternative => ({
-  paths,
-  source,
-  required: true,
-});
-
-type DescriptorActionMetadata = OperatorActionDescriptorMetadata;
-
-/**
- * This is an invocation/protocol classification registry, not a legality table. Its complete
- * key set is deliberately tied to WorkflowAction so a new action cannot silently lack treatment.
- */
-export const ACTION_DESCRIPTOR_METADATA = {
-  workflow_create: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_adopt_dirty_scope: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_adopt_dirty_scope",
-    authorization: fieldAuthorization(
-      ["user_authorization"],
-      [["reason"]],
-      [["added_paths"], ["adopted_paths"]],
-    ),
-    inputs: [input(["reason"], "user_authored")],
-    input_alternatives: [inputAlternative([["added_paths"], ["adopted_paths"]], "user_authored")],
-  },
-  workflow_expand_scope: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_expand_scope",
-    authorization: fieldAuthorization(["user_authorization"], [["added_paths"], ["reason"]]),
-    inputs: [input(["added_paths"], "user_authored"), input(["reason"], "user_authored")],
-  },
-  workflow_parent_get: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_implementer_get: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_reviewer_get: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_committer_get: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_get_audit: {
-    classification: "protocol_or_query_only",
-    mode: "non_projectable",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_submit_implementation: {
-    classification: "descriptorized_in_142",
-    mode: "dispatch",
-    operation: "workflow_submit_implementation",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_record_manual_validation: {
-    classification: "descriptorized_in_143",
-    mode: "collect_evidence",
-    operation: "workflow_record_manual_validation",
-    authorization: noAuthorization(),
-    inputs: [input(["evidence"], "observed_evidence")],
-  },
-  workflow_resume_implementation: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_resume_implementation",
-    authorization: metadataAuthorization([["resume_context"]]),
-    inputs: [input(["resume_context"], "user_authored")],
-  },
-  workflow_rebind_implementation_plan: {
-    classification: "descriptorized_in_155",
-    mode: "parent_mutation",
-    operation: "workflow_rebind_implementation_plan",
-    authorization: fieldAuthorization(["user_authorization"], [["plan_id"], ["revision"]]),
-    inputs: [],
-  },
-  workflow_accept_concerns: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_accept_concerns",
-    authorization: fieldAuthorization(["user_authorization"], []),
-    inputs: [],
-  },
-  workflow_begin_review: {
-    classification: "descriptorized_in_142",
-    mode: "dispatch",
-    operation: "workflow_begin_review",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_submit_review: {
-    classification: "descriptorized_in_142",
-    mode: "dispatch",
-    operation: "workflow_submit_review",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_authorize_repair: {
-    classification: "descriptorized_in_144",
-    mode: "parent_mutation",
-    operation: "workflow_authorize_repair",
-    authorization: fieldAuthorization(
-      ["repair_directive", "user_authorization"],
-      [
-        ["finding_ids"],
-        ["repair_directive", "selected_finding_ids"],
-        ["repair_directive", "required_outcome"],
-        ["repair_directive", "strategy_constraints"],
-        ["repair_directive", "fallbacks"],
-        ["repair_directive", "required_paths"],
-        ["repair_directive", "forbidden_paths"],
-      ],
-    ),
-    inputs: [
-      input(["finding_ids"], "server_derived", ["selected_finding_ids"]),
-      input(["repair_directive", "selected_finding_ids"], "server_derived", [
-        "selected_finding_ids",
-      ]),
-      input(["repair_directive", "required_outcome"], "server_derived", [
-        "proposal",
-        "required_outcome",
-      ]),
-      input(["repair_directive", "strategy_constraints"], "server_derived", [
-        "proposal",
-        "strategy_constraints",
-      ]),
-      input(["repair_directive", "fallbacks"], "server_derived", ["proposal", "fallbacks"]),
-      input(["repair_directive", "required_paths"], "server_derived", [
-        "proposal",
-        "required_paths",
-      ]),
-      input(["repair_directive", "forbidden_paths"], "server_derived", [
-        "proposal",
-        "forbidden_paths",
-      ]),
-    ],
-  },
-  workflow_adjudicate_findings: {
-    classification: "descriptorized_in_144",
-    mode: "parent_mutation",
-    operation: "workflow_adjudicate_findings",
-    authorization: fieldAuthorization(
-      ["user_authorization"],
-      [
-        ["findings", "*", "finding_id"],
-        ["findings", "*", "disposition"],
-        ["findings", "*", "reason"],
-      ],
-    ),
-    inputs: [
-      input(["findings", "*", "finding_id"], "server_derived"),
-      input(["findings", "*", "disposition"], "user_authored"),
-      input(["findings", "*", "reason"], "user_authored"),
-    ],
-  },
-  workflow_resume_review: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_resume_review",
-    authorization: metadataAuthorization([["resume_context"]]),
-    inputs: [input(["resume_context"], "user_authored")],
-  },
-  workflow_finalize_repair_exhausted: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_finalize_repair_exhausted",
-    authorization: metadataAuthorization([]),
-    inputs: [],
-  },
-  workflow_create_linked_followup: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_create_linked_followup",
-    authorization: fieldAuthorization(
-      ["user_authorization"],
-      [
-        ["objective"],
-        ["approved_paths"],
-        ["acceptance_criteria"],
-        ["validation_requirements"],
-        ["finding_ids"],
-      ],
-    ),
-    inputs: [
-      input(["objective"], "user_authored"),
-      input(["approved_paths"], "user_authored"),
-      input(["acceptance_criteria"], "user_authored"),
-      input(["validation_requirements"], "user_authored"),
-      input(["finding_ids"], "server_derived"),
-    ],
-  },
-  workflow_create_linked_followup_from_plan: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_create_linked_followup_from_plan",
-    authorization: fieldAuthorization(
-      ["user_authorization"],
-      [["plan_id"], ["revision"], ["finding_ids"]],
-    ),
-    inputs: [input(["finding_ids"], "server_derived")],
-  },
-  workflow_authorize_commit: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_authorize_commit",
-    authorization: fieldAuthorization(["user_authorization"], []),
-    inputs: [],
-  },
-  workflow_prepare_commit: {
-    classification: "descriptorized_in_142",
-    mode: "dispatch",
-    operation: "workflow_prepare_commit",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_submit_commit_result: {
-    classification: "descriptorized_in_142",
-    mode: "dispatch",
-    operation: "workflow_submit_commit_result",
-    authorization: noAuthorization(),
-    inputs: [],
-  },
-  workflow_reconcile_commit_result: {
-    classification: "descriptorized_in_142",
-    mode: "parent_mutation",
-    operation: "workflow_reconcile_commit_result",
-    authorization: metadataAuthorization([]),
-    inputs: [],
-  },
-  workflow_retry_commit_preparation: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_retry_commit_preparation",
-    authorization: metadataAuthorization([["retry_context"]]),
-    inputs: [input(["retry_context"], "user_authored")],
-  },
-  workflow_reconcile_staged_scope: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_reconcile_staged_scope",
-    authorization: fieldAuthorization(
-      ["user_authorization"],
-      [["added_paths"], ["review_context"]],
-    ),
-    inputs: [input(["added_paths"], "server_derived"), input(["review_context"], "user_authored")],
-  },
-  workflow_return_commit_to_review: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_return_commit_to_review",
-    authorization: metadataAuthorization([["review_context"]]),
-    inputs: [input(["review_context"], "user_authored")],
-  },
-  workflow_retry_commit: {
-    classification: "descriptorized_in_143",
-    mode: "parent_mutation",
-    operation: "workflow_retry_commit",
-    authorization: metadataAuthorization([["retry_context"]]),
-    inputs: [input(["retry_context"], "user_authored")],
-  },
-} as const satisfies Record<WorkflowAction, DescriptorActionMetadata>;
+export { ACTION_DESCRIPTOR_METADATA } from "./workflow-action-registry.js";
 
 function identity(
   state: WorkflowState,
@@ -513,41 +190,8 @@ function fixedArguments(
 }
 
 function expectedAfter(action: OperatorParentMutationOperation): OperatorExpectedNext[] {
-  switch (action) {
-    case "workflow_adopt_dirty_scope":
-      return ["adopt_dirty_scope", "collect_evidence", "resume_review", "wait"];
-    case "workflow_resume_implementation":
-    case "workflow_rebind_implementation_plan":
-      return ["implement", "wait"];
-    case "workflow_accept_concerns":
-      return ["collect_evidence", "review", "re_review", "wait"];
-    case "workflow_resume_review":
-      return ["re_review", "wait"];
-    case "workflow_retry_commit_preparation":
-    case "workflow_retry_commit":
-      return ["commit", "wait"];
-    case "workflow_return_commit_to_review":
-      return ["re_review", "wait"];
-    case "workflow_reconcile_staged_scope":
-      return ["re_review", "wait"];
-    case "workflow_expand_scope":
-      return ["implement", "review", "re_review", "wait"];
-    case "workflow_finalize_repair_exhausted":
-      return ["bounded_continuation", "wait"];
-    case "workflow_authorize_repair":
-      return ["implement", "wait"];
-    case "workflow_adjudicate_findings":
-      return ["review", "re_review", "wait"];
-    case "workflow_create_linked_followup":
-    case "workflow_create_linked_followup_from_plan":
-      return ["implement", "wait"];
-    case "workflow_authorize_commit":
-      return ["commit", "wait"];
-    case "workflow_reconcile_commit_result":
-      return ["terminal_committed", "terminal_commit_mismatch"];
-    default:
-      return ["wait"];
-  }
+  const definition = WORKFLOW_ACTION_REGISTRY[action];
+  return "expected_after" in definition ? [...definition.expected_after] : ["wait"];
 }
 
 function workerOperation(
@@ -695,107 +339,7 @@ function semanticChoice(action: OperatorParentMutationOperation): {
   label: string;
   summary: string;
 } {
-  const ids: Record<OperatorParentMutationOperation, string> = {
-    workflow_adopt_dirty_scope: "adopt_existing_changes",
-    workflow_expand_scope: "authorize_more_paths",
-    workflow_record_manual_validation: "record_observed_validation",
-    workflow_resume_implementation: "continue_implementation",
-    workflow_rebind_implementation_plan: "adopt_approved_plan_revision",
-    workflow_accept_concerns: "accept_bounded_concerns",
-    workflow_authorize_repair: "authorize_bounded_repair",
-    workflow_adjudicate_findings: "resolve_inconsistent_findings",
-    workflow_resume_review: "continue_review",
-    workflow_finalize_repair_exhausted: "stop_at_repair_limit",
-    workflow_create_linked_followup: "start_direct_followup",
-    workflow_create_linked_followup_from_plan: "start_approved_plan_followup",
-    workflow_authorize_commit: "authorize_commit_preparation",
-    workflow_retry_commit_preparation: "retry_preparation",
-    workflow_reconcile_staged_scope: "authorize_scope_reconciliation",
-    workflow_return_commit_to_review: "refresh_review_authority",
-    workflow_reconcile_commit_result: "resolve_commit_result",
-    workflow_retry_commit: "retry_commit_attempt",
-  };
-  const choices: Record<OperatorParentMutationOperation, { label: string; summary: string }> = {
-    workflow_adopt_dirty_scope: {
-      label: "Adopt the selected dirty paths",
-      summary: "Add the exact selected existing dirty paths to the current workflow authority.",
-    },
-    workflow_expand_scope: {
-      label: "Expand the approved scope",
-      summary: "Authorize additional paths for implementation and subsequent review.",
-    },
-    workflow_record_manual_validation: {
-      label: "Record observed validation evidence",
-      summary: "Record only evidence from the declared validation inspection.",
-    },
-    workflow_resume_implementation: {
-      label: "Resume implementation with context",
-      summary: "Supply bounded context and resume the currently authorized implementation.",
-    },
-    workflow_rebind_implementation_plan: {
-      label: "Rebind to the approved plan revision",
-      summary:
-        "Replace stale plan authority with the exact current approved revision and resume implementation.",
-    },
-    workflow_accept_concerns: {
-      label: "Accept the implementation concerns",
-      summary: "Accept the current bounded concerns and continue to review.",
-    },
-    workflow_authorize_repair: {
-      label: "Authorize the selected repair",
-      summary:
-        "Authorize the exact selected blocking findings under the displayed repair proposal.",
-    },
-    workflow_adjudicate_findings: {
-      label: "Adjudicate the current blocking findings",
-      summary:
-        "Record user-authored dispositions for current blockers inconsistent with the approved contract or outside approved scope; this does not authorize repair.",
-    },
-    workflow_resume_review: {
-      label: "Resume review with context",
-      summary: "Supply bounded context and resume the current review.",
-    },
-    workflow_finalize_repair_exhausted: {
-      label: "Stop the exhausted repair cycle",
-      summary: "Finalize the current bounded repair limit without authorizing more work.",
-    },
-    workflow_create_linked_followup: {
-      label: "Create a directly authored linked follow-up",
-      summary: "Authorize a narrow follow-up using the declared user-authored work fields.",
-    },
-    workflow_create_linked_followup_from_plan: {
-      label: "Create a linked follow-up from the approved child plan",
-      summary: "Use the exact approved child PlanArtifact bound in this invocation.",
-    },
-    workflow_authorize_commit: {
-      label: "Authorize commit preparation",
-      summary: "Give fresh authorization for commit preparation of the currently reviewed change.",
-    },
-    workflow_retry_commit_preparation: {
-      label: "Retry commit preparation",
-      summary:
-        "Keep the reviewed scope unchanged and retry only after any out-of-scope staged paths are removed; this does not authorize new paths.",
-    },
-    workflow_reconcile_staged_scope: {
-      label: "Reconcile the staged change scope",
-      summary:
-        "Authorize exactly the newly observed staged paths, then require fresh review and fresh commit authorization.",
-    },
-    workflow_return_commit_to_review: {
-      label: "Return the change to review",
-      summary: "Discard stale review and commit authority and obtain a fresh review.",
-    },
-    workflow_reconcile_commit_result: {
-      label: "Reconcile the commit result",
-      summary: "Resolve the exact recorded commit attempt from authoritative repository state.",
-    },
-    workflow_retry_commit: {
-      label: "Retry the commit attempt",
-      summary: "Retry the exact recorded commit attempt using the supplied bounded context.",
-    },
-  };
-  const choice = choices[action];
-  return { id: ids[action], ...choice };
+  return WORKFLOW_ACTION_REGISTRY[action].semantic_choice;
 }
 
 function inspectionInvocation(

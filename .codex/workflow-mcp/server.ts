@@ -24,6 +24,11 @@ import {
   VALIDATION_STATUS_VALUES,
   WORKFLOW_TYPE_VALUES,
 } from "./values.js";
+import {
+  type WORKFLOW_ACTION_REGISTRY,
+  WORKFLOW_ACTION_VALUES,
+  type WorkflowAction,
+} from "./workflow-action-registry.js";
 
 type JsonSchema = Record<string, JSONValue>;
 
@@ -291,49 +296,6 @@ export const PARENT_PLANNING_OPERATIONS = [
   "workflow_create_from_plan",
   "workflow_create_linked_followup_from_plan",
 ] as const;
-
-/** Closed protocol names. This is deliberately separate from WorkflowAction: planning and the
- * semantic operator read are server surfaces, not phase transition actions. */
-export const SERVER_TOOL_NAMES = [
-  "plan_create",
-  "plan_get",
-  "plan_revise",
-  "plan_parent_get",
-  "plan_approve",
-  "workflow_create_from_plan",
-  "workflow_adopt_dirty_scope",
-  "workflow_expand_scope",
-  "workflow_reconcile_staged_scope",
-  "workflow_create",
-  "workflow_parent_get",
-  "workflow_operator_decision_get",
-  "workflow_implementer_get",
-  "workflow_reviewer_get",
-  "workflow_committer_get",
-  "workflow_get_audit",
-  "workflow_submit_implementation",
-  "workflow_record_manual_validation",
-  "workflow_resume_implementation",
-  "workflow_rebind_implementation_plan",
-  "workflow_accept_concerns",
-  "workflow_begin_review",
-  "workflow_submit_review",
-  "workflow_authorize_repair",
-  "workflow_adjudicate_findings",
-  "workflow_resume_review",
-  "workflow_finalize_repair_exhausted",
-  "workflow_create_linked_followup",
-  "workflow_create_linked_followup_from_plan",
-  "workflow_authorize_commit",
-  "workflow_prepare_commit",
-  "workflow_retry_commit_preparation",
-  "workflow_return_commit_to_review",
-  "workflow_submit_commit_result",
-  "workflow_reconcile_commit_result",
-  "workflow_retry_commit",
-] as const;
-export type ServerToolName = (typeof SERVER_TOOL_NAMES)[number];
-type ServerToolDefinition = Omit<Tool, "name"> & { name: ServerToolName };
 
 export const toolDefinitions = [
   {
@@ -1130,7 +1092,28 @@ export const toolDefinitions = [
       openWorldHint: false,
     },
   },
-] as const satisfies readonly ServerToolDefinition[];
+] as const satisfies readonly Tool[];
+export type ServerToolName = (typeof toolDefinitions)[number]["name"];
+export const SERVER_TOOL_NAMES = Object.freeze(
+  toolDefinitions.map((tool) => tool.name),
+) as readonly ServerToolName[];
+
+type NonActionServerToolName =
+  | "plan_create"
+  | "plan_get"
+  | "plan_revise"
+  | "plan_parent_get"
+  | "plan_approve"
+  | "workflow_create_from_plan"
+  | "workflow_operator_decision_get";
+type MissingWorkflowActionTool = Exclude<WorkflowAction, ServerToolName>;
+type UnknownServerTool = Exclude<ServerToolName, WorkflowAction | NonActionServerToolName>;
+const SERVER_TOOL_TYPES_ARE_EXACT: MissingWorkflowActionTool extends never
+  ? UnknownServerTool extends never
+    ? true
+    : never
+  : never = true;
+void SERVER_TOOL_TYPES_ARE_EXACT;
 export const tools: Tool[] = [...toolDefinitions];
 
 type MissingServerToolDefinition = Exclude<
@@ -1160,6 +1143,159 @@ function errorResult(error: unknown): CallToolResult {
 type ToolArguments = Record<string, unknown>;
 type ToolHandler = (args: ToolArguments) => unknown;
 
+type WorkflowActionsWithServerArgument<Argument extends "input" | "workflow_id"> = {
+  [Action in WorkflowAction]: (typeof WORKFLOW_ACTION_REGISTRY)[Action]["server"]["argument"] extends Argument
+    ? Action
+    : never;
+}[WorkflowAction];
+
+type WorkflowStoreHandlerFor<Action extends WorkflowAction> = Extract<
+  (typeof WORKFLOW_ACTION_REGISTRY)[Action]["server"]["handler"],
+  keyof WorkflowStore
+>;
+
+interface WorkflowActionStoreAdapter<Action extends WorkflowAction> {
+  readonly action: Action;
+  bind(store: WorkflowStore): ToolHandler;
+}
+
+function inputActionAdapter<Action extends WorkflowActionsWithServerArgument<"input">>(
+  action: Action,
+  invoke: (
+    store: Pick<WorkflowStore, WorkflowStoreHandlerFor<Action>>,
+    input: ToolArguments,
+  ) => unknown,
+): WorkflowActionStoreAdapter<Action> {
+  return { action, bind: (store) => (input) => invoke(store, input) };
+}
+
+function workflowIdActionAdapter<Action extends WorkflowActionsWithServerArgument<"workflow_id">>(
+  action: Action,
+  invoke: (
+    store: Pick<WorkflowStore, WorkflowStoreHandlerFor<Action>>,
+    workflowId: ToolArguments["workflow_id"],
+  ) => unknown,
+): WorkflowActionStoreAdapter<Action> {
+  return { action, bind: (store) => (input) => invoke(store, input.workflow_id) };
+}
+
+/**
+ * Exhaustive typed dispatch adapters. Each callback can access only the store method named by its
+ * registry entry, while the builder fixes whether the full validated input or only workflow_id is
+ * forwarded. This keeps boundary schemas independent from mechanical dispatch linkage.
+ */
+export const WORKFLOW_ACTION_STORE_ADAPTERS = {
+  workflow_create: inputActionAdapter("workflow_create", (store, input) => store.create(input)),
+  workflow_adopt_dirty_scope: inputActionAdapter("workflow_adopt_dirty_scope", (store, input) =>
+    store.adoptDirtyScope(input),
+  ),
+  workflow_expand_scope: inputActionAdapter("workflow_expand_scope", (store, input) =>
+    store.expandScope(input),
+  ),
+  workflow_parent_get: workflowIdActionAdapter("workflow_parent_get", (store, workflowId) =>
+    store.parentGet(workflowId),
+  ),
+  workflow_implementer_get: workflowIdActionAdapter(
+    "workflow_implementer_get",
+    (store, workflowId) => store.implementerGet(workflowId),
+  ),
+  workflow_reviewer_get: workflowIdActionAdapter("workflow_reviewer_get", (store, workflowId) =>
+    store.reviewerGet(workflowId),
+  ),
+  workflow_committer_get: workflowIdActionAdapter("workflow_committer_get", (store, workflowId) =>
+    store.committerGet(workflowId),
+  ),
+  workflow_get_audit: workflowIdActionAdapter("workflow_get_audit", (store, workflowId) =>
+    store.audit(workflowId),
+  ),
+  workflow_submit_implementation: inputActionAdapter(
+    "workflow_submit_implementation",
+    (store, input) => store.submitImplementation(input),
+  ),
+  workflow_record_manual_validation: inputActionAdapter(
+    "workflow_record_manual_validation",
+    (store, input) => store.recordManualValidation(input),
+  ),
+  workflow_resume_implementation: inputActionAdapter(
+    "workflow_resume_implementation",
+    (store, input) => store.resumeImplementation(input),
+  ),
+  workflow_rebind_implementation_plan: inputActionAdapter(
+    "workflow_rebind_implementation_plan",
+    (store, input) => store.rebindImplementationPlan(input),
+  ),
+  workflow_accept_concerns: inputActionAdapter("workflow_accept_concerns", (store, input) =>
+    store.acceptConcerns(input),
+  ),
+  workflow_begin_review: inputActionAdapter("workflow_begin_review", (store, input) =>
+    store.beginReview(input),
+  ),
+  workflow_submit_review: inputActionAdapter("workflow_submit_review", (store, input) =>
+    store.submitReview(input),
+  ),
+  workflow_authorize_repair: inputActionAdapter("workflow_authorize_repair", (store, input) =>
+    store.authorizeRepair(input),
+  ),
+  workflow_adjudicate_findings: inputActionAdapter("workflow_adjudicate_findings", (store, input) =>
+    store.adjudicateFindings(input),
+  ),
+  workflow_resume_review: inputActionAdapter("workflow_resume_review", (store, input) =>
+    store.resumeReview(input),
+  ),
+  workflow_finalize_repair_exhausted: inputActionAdapter(
+    "workflow_finalize_repair_exhausted",
+    (store, input) => store.finalizeRepairExhausted(input),
+  ),
+  workflow_create_linked_followup: inputActionAdapter(
+    "workflow_create_linked_followup",
+    (store, input) => store.createLinkedFollowup(input),
+  ),
+  workflow_create_linked_followup_from_plan: inputActionAdapter(
+    "workflow_create_linked_followup_from_plan",
+    (store, input) => store.createLinkedFollowupFromPlan(input),
+  ),
+  workflow_authorize_commit: inputActionAdapter("workflow_authorize_commit", (store, input) =>
+    store.authorizeCommit(input),
+  ),
+  workflow_prepare_commit: inputActionAdapter("workflow_prepare_commit", (store, input) =>
+    store.prepareCommit(input),
+  ),
+  workflow_submit_commit_result: inputActionAdapter(
+    "workflow_submit_commit_result",
+    (store, input) => store.submitCommitResult(input),
+  ),
+  workflow_reconcile_commit_result: inputActionAdapter(
+    "workflow_reconcile_commit_result",
+    (store, input) => store.reconcileCommitResult(input),
+  ),
+  workflow_retry_commit_preparation: inputActionAdapter(
+    "workflow_retry_commit_preparation",
+    (store, input) => store.retryCommitPreparation(input),
+  ),
+  workflow_reconcile_staged_scope: inputActionAdapter(
+    "workflow_reconcile_staged_scope",
+    (store, input) => store.reconcileStagedScope(input),
+  ),
+  workflow_return_commit_to_review: inputActionAdapter(
+    "workflow_return_commit_to_review",
+    (store, input) => store.returnCommitToReview(input),
+  ),
+  workflow_retry_commit: inputActionAdapter("workflow_retry_commit", (store, input) =>
+    store.retryCommit(input),
+  ),
+} satisfies {
+  [Action in WorkflowAction]: WorkflowActionStoreAdapter<Action>;
+};
+
+function workflowDispatchFor(store: WorkflowStore): Record<WorkflowAction, ToolHandler> {
+  return Object.fromEntries(
+    WORKFLOW_ACTION_VALUES.map((action) => [
+      action,
+      WORKFLOW_ACTION_STORE_ADAPTERS[action].bind(store),
+    ]),
+  ) as Record<WorkflowAction, ToolHandler>;
+}
+
 function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> {
   return {
     plan_create: (args) => store.planCreate(args),
@@ -1168,10 +1304,6 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
     plan_parent_get: (args) => store.planParentGet(args),
     plan_approve: (args) => store.planApprove(args),
     workflow_create_from_plan: (args) => store.createFromPlan(args),
-    workflow_adopt_dirty_scope: (args) => store.adoptDirtyScope(args),
-    workflow_expand_scope: (args) => store.expandScope(args),
-    workflow_create: (args) => store.create(args),
-    workflow_parent_get: (args) => store.parentGet(args.workflow_id),
     workflow_operator_decision_get: (args) =>
       store.operatorDecisionGet(
         args.workflow_id,
@@ -1179,31 +1311,7 @@ function dispatchFor(store: WorkflowStore): Record<ServerToolName, ToolHandler> 
         args.child_plan_id,
         args.child_plan_revision,
       ),
-    workflow_implementer_get: (args) => store.implementerGet(args.workflow_id),
-    workflow_reviewer_get: (args) => store.reviewerGet(args.workflow_id),
-    workflow_committer_get: (args) => store.committerGet(args.workflow_id),
-    workflow_get_audit: (args) => store.audit(args.workflow_id),
-    workflow_submit_implementation: (args) => store.submitImplementation(args),
-    workflow_record_manual_validation: (args) => store.recordManualValidation(args),
-    workflow_resume_implementation: (args) => store.resumeImplementation(args),
-    workflow_rebind_implementation_plan: (args) => store.rebindImplementationPlan(args),
-    workflow_accept_concerns: (args) => store.acceptConcerns(args),
-    workflow_begin_review: (args) => store.beginReview(args),
-    workflow_submit_review: (args) => store.submitReview(args),
-    workflow_authorize_repair: (args) => store.authorizeRepair(args),
-    workflow_adjudicate_findings: (args) => store.adjudicateFindings(args),
-    workflow_resume_review: (args) => store.resumeReview(args),
-    workflow_finalize_repair_exhausted: (args) => store.finalizeRepairExhausted(args),
-    workflow_create_linked_followup: (args) => store.createLinkedFollowup(args),
-    workflow_create_linked_followup_from_plan: (args) => store.createLinkedFollowupFromPlan(args),
-    workflow_authorize_commit: (args) => store.authorizeCommit(args),
-    workflow_prepare_commit: (args) => store.prepareCommit(args),
-    workflow_retry_commit_preparation: (args) => store.retryCommitPreparation(args),
-    workflow_reconcile_staged_scope: (args) => store.reconcileStagedScope(args),
-    workflow_return_commit_to_review: (args) => store.returnCommitToReview(args),
-    workflow_submit_commit_result: (args) => store.submitCommitResult(args),
-    workflow_reconcile_commit_result: (args) => store.reconcileCommitResult(args),
-    workflow_retry_commit: (args) => store.retryCommit(args),
+    ...workflowDispatchFor(store),
   };
 }
 

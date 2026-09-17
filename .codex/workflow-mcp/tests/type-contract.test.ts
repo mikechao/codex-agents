@@ -32,6 +32,8 @@ import type {
   ImplementationStatus,
   ImplementerHandoffView,
   ImplementerView,
+  OperatorParentMutationOperation,
+  OperatorWorkerDispatchOperation,
   ParentView,
   PersistedImplementationAuthority,
   PlanAuthoringContent,
@@ -53,7 +55,9 @@ import type {
   ValidationResult,
   WorkflowAction,
   WorkflowId,
+  WorkflowNonProjectableOperation,
   WorkflowPhase,
+  WorkflowQueryOperation,
   WorkflowState,
   WorkflowVersion,
 } from "../types.js";
@@ -358,6 +362,71 @@ type _PlanningNamesAreNotActions = Expect<
   Equal<Exclude<ServerToolName, WorkflowAction> extends never ? true : false, false>
 >;
 type _WorkflowActionsAreClosed = Expect<Equal<Exclude<WorkflowAction, ServerToolName>, never>>;
+type ExpectedParentMutationOperation =
+  | "workflow_accept_concerns"
+  | "workflow_adjudicate_findings"
+  | "workflow_adopt_dirty_scope"
+  | "workflow_authorize_commit"
+  | "workflow_authorize_repair"
+  | "workflow_create_linked_followup"
+  | "workflow_create_linked_followup_from_plan"
+  | "workflow_expand_scope"
+  | "workflow_finalize_repair_exhausted"
+  | "workflow_rebind_implementation_plan"
+  | "workflow_reconcile_commit_result"
+  | "workflow_reconcile_staged_scope"
+  | "workflow_record_manual_validation"
+  | "workflow_resume_implementation"
+  | "workflow_resume_review"
+  | "workflow_retry_commit"
+  | "workflow_retry_commit_preparation"
+  | "workflow_return_commit_to_review";
+type ExpectedWorkerDispatchOperation =
+  | "workflow_begin_review"
+  | "workflow_prepare_commit"
+  | "workflow_submit_commit_result"
+  | "workflow_submit_implementation"
+  | "workflow_submit_review";
+type ExpectedQueryOperation =
+  | "workflow_committer_get"
+  | "workflow_get_audit"
+  | "workflow_implementer_get"
+  | "workflow_parent_get"
+  | "workflow_reviewer_get";
+type ExpectedNonProjectableOperation = "workflow_create";
+type _ParentMutationPartitionIsExact = Expect<
+  Equal<OperatorParentMutationOperation, ExpectedParentMutationOperation>
+>;
+type _WorkerDispatchPartitionIsExact = Expect<
+  Equal<OperatorWorkerDispatchOperation, ExpectedWorkerDispatchOperation>
+>;
+type _QueryPartitionIsExact = Expect<Equal<WorkflowQueryOperation, ExpectedQueryOperation>>;
+type _NonProjectablePartitionIsExact = Expect<
+  Equal<WorkflowNonProjectableOperation, ExpectedNonProjectableOperation>
+>;
+type _WorkflowActionPartitionsAreExhaustive = Expect<
+  Equal<
+    | OperatorParentMutationOperation
+    | OperatorWorkerDispatchOperation
+    | WorkflowQueryOperation
+    | WorkflowNonProjectableOperation,
+    WorkflowAction
+  >
+>;
+type _WorkflowActionPartitionsAreDisjoint = Expect<
+  Equal<
+    | Extract<
+        OperatorParentMutationOperation,
+        OperatorWorkerDispatchOperation | WorkflowQueryOperation | WorkflowNonProjectableOperation
+      >
+    | Extract<
+        OperatorWorkerDispatchOperation,
+        WorkflowQueryOperation | WorkflowNonProjectableOperation
+      >
+    | Extract<WorkflowQueryOperation, WorkflowNonProjectableOperation>,
+    never
+  >
+>;
 
 test("canonical values and closed protocol registries are runtime-observable", () => {
   assert.equal(new Set(SERVER_TOOL_NAMES).size, SERVER_TOOL_NAMES.length);

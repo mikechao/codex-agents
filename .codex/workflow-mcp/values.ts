@@ -58,37 +58,7 @@ export const COMMIT_MISMATCH_CATEGORY_VALUES = [
   "TREE_MISMATCH",
   "PATH_MISMATCH",
 ] as const;
-export const WORKFLOW_ACTION_VALUES = [
-  "workflow_create",
-  "workflow_adopt_dirty_scope",
-  "workflow_expand_scope",
-  "workflow_parent_get",
-  "workflow_implementer_get",
-  "workflow_reviewer_get",
-  "workflow_committer_get",
-  "workflow_get_audit",
-  "workflow_submit_implementation",
-  "workflow_record_manual_validation",
-  "workflow_resume_implementation",
-  "workflow_rebind_implementation_plan",
-  "workflow_accept_concerns",
-  "workflow_begin_review",
-  "workflow_submit_review",
-  "workflow_authorize_repair",
-  "workflow_adjudicate_findings",
-  "workflow_resume_review",
-  "workflow_finalize_repair_exhausted",
-  "workflow_create_linked_followup",
-  "workflow_create_linked_followup_from_plan",
-  "workflow_authorize_commit",
-  "workflow_prepare_commit",
-  "workflow_submit_commit_result",
-  "workflow_reconcile_commit_result",
-  "workflow_retry_commit_preparation",
-  "workflow_reconcile_staged_scope",
-  "workflow_return_commit_to_review",
-  "workflow_retry_commit",
-] as const;
+export { WORKFLOW_ACTION_VALUES } from "./workflow-action-registry.js";
 
 export const FINDING_SEVERITIES = new Set(FINDING_SEVERITY_VALUES);
 export const RESOLUTION_STATUS_SET = new Set(FINDING_RESOLUTION_VALUES);

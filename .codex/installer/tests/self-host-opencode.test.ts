@@ -8,6 +8,7 @@ import {
   trustedBootstrapCommand,
 } from "../../../install-into.js";
 import { tools } from "../../workflow-mcp/server.js";
+import { PARENT_WORKFLOW_ACTION_VALUES } from "../../workflow-mcp/workflow-action-registry.js";
 
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
@@ -200,34 +201,18 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     assert.match(orchestrator, new RegExp(`^    "${agent}": allow$`, "m"));
   }
   assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
-  for (const tool of [
-    "plan_parent_get",
-    "workflow_create_from_plan",
-    "workflow_create_linked_followup_from_plan",
-    "workflow_create",
-    "workflow_adopt_dirty_scope",
-    "workflow_expand_scope",
-    "workflow_parent_get",
-    "workflow_operator_decision_get",
-    "workflow_reconcile_commit_result",
-    "workflow_get_audit",
-    "workflow_resume_implementation",
-    "workflow_rebind_implementation_plan",
-    "workflow_accept_concerns",
-    "workflow_record_manual_validation",
-    "workflow_authorize_repair",
-    "workflow_adjudicate_findings",
-    "workflow_resume_review",
-    "workflow_finalize_repair_exhausted",
-    "workflow_create_linked_followup",
-    "workflow_create_linked_followup_from_plan",
-    "workflow_authorize_commit",
-    "workflow_retry_commit_preparation",
-    "workflow_return_commit_to_review",
-    "workflow_retry_commit",
-  ]) {
-    assert.match(orchestrator, new RegExp(`^  workflow_state_${tool}: allow$`, "m"));
-  }
+  const allowedWorkflowTools = [...orchestrator.matchAll(/^  workflow_state_([^:]+): allow$/gmu)]
+    .map((match) => match[1])
+    .sort();
+  assert.deepEqual(
+    allowedWorkflowTools,
+    [
+      "plan_parent_get",
+      "workflow_create_from_plan",
+      "workflow_operator_decision_get",
+      ...PARENT_WORKFLOW_ACTION_VALUES,
+    ].sort(),
+  );
   for (const forbidden of [
     "workflow_submit_implementation",
     "workflow_submit_review",

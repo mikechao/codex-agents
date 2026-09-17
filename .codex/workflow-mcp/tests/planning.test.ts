@@ -701,22 +701,42 @@ test("blocked implementation rebinds atomically to the exact current approved pl
       throw new Error("expected plan rebind descriptor");
     }
     const invocation = decision.execution.primary.invocations[0];
-    assert.deepEqual(invocation.fixed_arguments, {
-      workflow_id: id,
-      expected_version: 1,
-      plan_id: draft.plan_id,
-      revision: 2,
+    assert.deepEqual(invocation, {
+      operation: "workflow_rebind_implementation_plan",
+      semantic_choice: {
+        id: "adopt_approved_plan_revision",
+        label: "Rebind to the approved plan revision",
+        summary:
+          "Replace stale plan authority with the exact current approved revision and resume implementation.",
+      },
+      fixed_arguments: {
+        workflow_id: id,
+        expected_version: 1,
+        plan_id: draft.plan_id,
+        revision: 2,
+      },
+      required_inputs: [],
+      authorization: {
+        required: true,
+        representation: { kind: "field", path: ["user_authorization"] },
+        binding: { kind: "all", paths: [["plan_id"], ["revision"]] },
+      },
+      plan_binding: {
+        plan_id: draft.plan_id,
+        revision: 2,
+        source: "approved_recovery_plan_context",
+      },
+      stale_binding: {
+        workflow_id: id,
+        expected_version: 1,
+        references: [{ kind: "plan", plan_id: draft.plan_id, revision: 2 }],
+      },
+      on_success: {
+        kind: "refresh_required",
+        expected: ["implement", "wait"],
+        dispatch_authority: false,
+      },
     });
-    assert.deepEqual(invocation.required_inputs, []);
-    assert.deepEqual(invocation.plan_binding, {
-      plan_id: draft.plan_id,
-      revision: 2,
-      source: "approved_recovery_plan_context",
-    });
-    assert.deepEqual(invocation.stale_binding.references, [
-      { kind: "plan", plan_id: draft.plan_id, revision: 2 },
-    ]);
-    assert.deepEqual(invocation.on_success.expected, ["implement", "wait"]);
 
     writeFileSync(join(target.root, "note.txt"), "drifted after block\n");
     assert.equal(
