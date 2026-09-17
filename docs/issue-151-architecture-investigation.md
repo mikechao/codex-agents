@@ -214,6 +214,22 @@ receipts and its name overstates its scope:
 A single `resetWorkflow()` would be unsafe. Scope expansion, staged reconciliation, plan rebind, and
 commit-review return intentionally have different survival rules.
 
+### #159 follow-through
+
+The bounded centralization was completed with typed internal operations named
+`invalidateImplementationSubmissionEvidence`, `invalidateReviewReceipts`,
+`invalidateRepairAuthorization`, `invalidateCurrentReviewResultAndRepairAuthority`,
+`invalidateFullCommitAuthorityAndEvidence`, and `invalidateLinkedReviewProgress`. Commit retry
+handling keeps the narrower commit-local `invalidateRetryablePreparedCommitAttemptEvidence`, which
+deliberately preserves commit authorization. Revised-plan rebind continues to compose the narrow
+operations explicitly alongside its concern-acceptance and repair-cycle resets; no generic reset
+profile was introduced.
+
+The evidence-survival matrix above is unchanged. These names centralize the already-established
+semantics without changing schemas, phases, legality, protocol surfaces, or persisted behavior. The
+#155 case study below remains the historical account of the helpers and call sites that existed at
+that time.
+
 ## 6. #155 maintenance-surface case study
 
 Conceptual change:

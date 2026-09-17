@@ -38,7 +38,7 @@ import {
   reviewRecoveryStateReady,
   reviewTargetStateReady,
 } from "./queries.js";
-import { applyRecovery, clone, ensurePhase } from "./shared.js";
+import { applyRecovery, clone, ensurePhase, invalidateRepairAuthorization } from "./shared.js";
 
 function parseReviewerValidationResults(
   value: unknown,
@@ -262,8 +262,7 @@ export function submitReview(
   // A completed review result replaces any prior repair authorization. An inconclusive review
   // remains recoverable, so retain the directive for the resumed reviewer.
   if (args.review_status !== "INCONCLUSIVE") {
-    next.repair_authorized_ids = [];
-    next.repair_directive = null;
+    invalidateRepairAuthorization(next);
   }
   if (args.review_status === "APPROVED") {
     const continuation = state.linked_continuation;
@@ -365,8 +364,7 @@ export function adjudicateFindings(state: WorkflowState, input: unknown): Workfl
   next.finding_adjudications.push(...records);
   if (effectiveBlockingFindings(next).length === 0) {
     next.phase = "REVIEWING";
-    next.repair_authorized_ids = [];
-    next.repair_directive = null;
+    invalidateRepairAuthorization(next);
   }
   return next;
 }
@@ -417,6 +415,7 @@ export function authorizeRepair(
   }
   const next = clone<WorkflowState>(state);
   next.repair_cycle += 1;
+  invalidateRepairAuthorization(next);
   next.repair_authorized_ids = [...ids].sort();
   next.repair_directive = directive;
   next.phase = "REPAIRING";

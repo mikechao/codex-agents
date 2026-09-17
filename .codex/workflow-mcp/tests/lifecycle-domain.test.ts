@@ -1,24 +1,41 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { authoritativeImplementationContract } from "../implementation-contract.js";
+import { repairProposalForFindings } from "../repair-proposal.js";
 import { replaceAuthoritativeImplementationContract } from "../transitions/state.js";
 import {
+  adjudicateFindings,
+  adoptDirtyScope,
+  authorizeRepair,
+  beginReview,
+  commitPreparationFailed,
+  expandScope,
+  linkedFollowupChildState,
+  linkedFollowupInput,
   rebindImplementationPlan,
+  reconcileStagedScope,
+  retryCommit,
+  retryCommitPreparation,
+  returnCommitToReview,
   roleView,
   submitImplementation,
+  submitReview,
   validateWorkflowStateV10,
   workflowLegality,
 } from "../transitions.js";
 import type {
   AcceptanceCriterionId,
+  ChangeReceipt,
   ContentDigest,
   ExactRepoPath,
+  FindingId,
   GitCommitSha,
   IsoTimestamp,
   PlanId,
   PlanRevision,
   PlanRevisionArtifact,
   ValidationRequirementId,
+  WorkflowId,
   WorkflowState,
   WorkflowVersion,
 } from "../types.js";
@@ -32,9 +49,182 @@ import {
 } from "./workflow-state-fixtures.js";
 
 const ROLES = ["parent", "implementer", "reviewer", "committer"] as const;
+const TEST_ROOT = "/deterministic-workflow-fixture";
 
 function actions(state: WorkflowState, readiness = deterministicReadiness(state)) {
   return workflowLegality(state, readiness).actions;
+}
+
+function evidenceProjection(state: WorkflowState) {
+  return {
+    contract: {
+      approved_plan: state.approved_plan,
+      execution_brief: state.execution_brief,
+      plan_provenance: state.plan_provenance,
+      acceptance_criteria: state.acceptance_criteria,
+      validation_requirements: state.validation_requirements,
+    },
+    scope_history: {
+      initial_receipt: state.initial_receipt,
+      scope_expansions: state.scope_expansions,
+      approved_path_baselines: state.approved_path_baselines,
+    },
+    work_items: state.work_items,
+    implementation: {
+      implementation_summary: state.implementation_summary,
+      implementation_status: state.implementation_status,
+      implementation_known_failures: state.implementation_known_failures,
+      agent_touched_paths: state.agent_touched_paths,
+      scope_changed_paths: state.scope_changed_paths,
+      acceptance_results: state.acceptance_results,
+      validation_results: state.validation_results,
+      finding_resolution_map: state.finding_resolution_map,
+      implementation_receipt: state.implementation_receipt,
+    },
+    review_receipts: {
+      review_start_receipt: state.review_start_receipt,
+      review_receipt: state.review_receipt,
+    },
+    current_review_result: {
+      blocking_findings: state.blocking_findings,
+      optional_findings: state.optional_findings,
+      prior_finding_classifications: state.prior_finding_classifications,
+      review_result_version: state.review_result_version,
+    },
+    adjudications: state.finding_adjudications,
+    repair_authority: {
+      repair_authorized_ids: state.repair_authorized_ids,
+      repair_directive: state.repair_directive,
+    },
+    repair_cycle: state.repair_cycle,
+    concern_acceptance: state.concern_acceptance,
+    commit: {
+      commit_authorization: state.commit_authorization,
+      commit_preparation: state.commit_preparation,
+      commit_result: state.commit_result,
+    },
+    lineage: {
+      parent_workflow_id: state.parent_workflow_id,
+      source_workflow_id: state.source_workflow_id,
+      superseded_by_workflow_id: state.superseded_by_workflow_id,
+    },
+    linked_continuation: state.linked_continuation,
+    linked_findings: state.linked_findings,
+    remediation_context: state.remediation_context,
+  };
+}
+
+type EvidenceProjection = ReturnType<typeof evidenceProjection>;
+type EvidenceKey = keyof EvidenceProjection;
+
+function verifyEvidenceTransition(
+  name: string,
+  before: WorkflowState,
+  after: WorkflowState,
+  changed: ReadonlyArray<EvidenceKey>,
+  expected: Partial<EvidenceProjection> = {},
+): void {
+  const beforeEvidence = evidenceProjection(before);
+  const afterEvidence = evidenceProjection(after);
+  const changedSet = new Set(changed);
+  for (const key of Object.keys(beforeEvidence) as EvidenceKey[]) {
+    if (changedSet.has(key)) {
+      assert.notDeepEqual(afterEvidence[key], beforeEvidence[key], `${name}: ${key} changed`);
+    } else {
+      assert.deepEqual(afterEvidence[key], beforeEvidence[key], `${name}: ${key} survived`);
+    }
+  }
+  for (const [key, value] of Object.entries(expected) as Array<
+    [EvidenceKey, EvidenceProjection[EvidenceKey]]
+  >) {
+    assert.deepEqual(afterEvidence[key], value, `${name}: ${key} expected value`);
+  }
+}
+
+function receiptFor(path: string, state: "absent" | "modified"): ChangeReceipt {
+  const source = syntheticReceipt();
+  return {
+    ...source,
+    approved_paths: [path as ExactRepoPath],
+    paths:
+      state === "absent"
+        ? [{ path: path as ExactRepoPath, state: "absent" as const, kind: "missing" as const }]
+        : [
+            {
+              path: path as ExactRepoPath,
+              state: "modified",
+              kind: "file",
+              mode: "100644",
+              digest:
+                "5555555555555555555555555555555555555555555555555555555555555555" as ContentDigest,
+            },
+          ],
+  };
+}
+
+function submitCompletedRepair(state: WorkflowState): WorkflowState {
+  return submitImplementation(
+    state,
+    {
+      workflow_id: state.workflow_id,
+      expected_version: state.version,
+      status: "DONE",
+      summary: "deterministic repair completed",
+      agent_touched_paths: ["note.txt"],
+      acceptance_results: state.acceptance_criteria.map(({ criterion_id }) => ({
+        criterion_id,
+        status: "satisfied",
+        evidence: "repaired",
+      })),
+      validation_results: state.validation_requirements.map(({ validation_id }) => ({
+        validation_id,
+        status: "passed",
+        evidence: "validated repair",
+      })),
+      known_failures: [],
+      finding_resolution_map: Object.fromEntries(
+        state.repair_authorized_ids.map((id) => [id, "resolved"]),
+      ),
+    },
+    TEST_ROOT,
+    syntheticReceipt(),
+  );
+}
+
+function submitRepairReview(
+  state: WorkflowState,
+  reviewStatus: "APPROVED" | "INCONCLUSIVE",
+): { before: WorkflowState; after: WorkflowState } {
+  const reviewing = submitCompletedRepair(state);
+  const begun = beginReview(
+    reviewing,
+    { workflow_id: reviewing.workflow_id, expected_version: reviewing.version },
+    syntheticReceipt(),
+  );
+  const prior = Object.fromEntries(
+    begun.blocking_findings.map((finding) => [
+      finding.finding_id,
+      reviewStatus === "APPROVED" ? "resolved" : "still_present",
+    ]),
+  );
+  const after = submitReview(
+    begun,
+    {
+      workflow_id: begun.workflow_id,
+      expected_version: begun.version,
+      review_status: reviewStatus,
+      blocking_findings: reviewStatus === "APPROVED" ? [] : begun.blocking_findings,
+      optional_findings: [],
+      prior_finding_classifications: prior,
+      validation_results: begun.validation_results,
+      repair_conformance: {
+        status: "conforming",
+        evidence: "the deterministic repair follows its directive",
+      },
+    },
+    syntheticReceipt(),
+  );
+  return { before: begun, after };
 }
 
 test("deterministic lifecycle phases expose the complete role action matrix", () => {
@@ -328,6 +518,308 @@ test("deterministic readiness fails closed without invoking repository integrati
   assert.deepEqual(workflowLegality(prepared).actions.committer, []);
 });
 
+test("workflow transitions invalidate only their typed evidence families", () => {
+  const evidenceCases: Array<Parameters<typeof verifyEvidenceTransition>> = [];
+  const assertEvidenceTransition = (...args: Parameters<typeof verifyEvidenceTransition>) => {
+    evidenceCases.push(args);
+  };
+  const emptyEvidence = evidenceProjection(workflowState({ phase: "IMPLEMENTING" }));
+  const extraPath = "extra.txt" as ExactRepoPath;
+  const extraBaseline = receiptFor(extraPath, "absent");
+
+  const scopeBefore = workflowState({ phase: "REPAIRING" });
+  const committed = workflowState({ phase: "COMMITTED" });
+  scopeBefore.commit_authorization = structuredClone(committed.commit_authorization);
+  scopeBefore.commit_preparation = structuredClone(committed.commit_preparation);
+  scopeBefore.commit_result = structuredClone(committed.commit_result);
+  const scopeAfter = expandScope(
+    scopeBefore,
+    {
+      workflow_id: scopeBefore.workflow_id,
+      expected_version: scopeBefore.version,
+      added_paths: [extraPath],
+      reason: "deterministic scope expansion",
+      user_authorization: "authorize deterministic scope expansion",
+    },
+    extraBaseline,
+    TEST_ROOT,
+  );
+  assertEvidenceTransition(
+    "scope expansion",
+    scopeBefore,
+    scopeAfter,
+    ["scope_history", "implementation", "review_receipts", "commit"],
+    {
+      implementation: emptyEvidence.implementation,
+      review_receipts: emptyEvidence.review_receipts,
+      commit: emptyEvidence.commit,
+    },
+  );
+
+  const dirtyBefore = workflowState({ phase: "STOPPED_INCONCLUSIVE" });
+  dirtyBefore.approved_paths = [...dirtyBefore.approved_paths, extraPath].sort();
+  dirtyBefore.review_target.approved_paths = [...dirtyBefore.approved_paths];
+  dirtyBefore.scope_expansions.push({
+    expansion_id: "00000000-0000-4000-8000-000000000159",
+    added_paths: [extraPath],
+    reason: "authorize dirty path",
+    user_authorization: "authorize deterministic dirty path",
+    prior_version: 1 as WorkflowVersion,
+    resulting_version: 2 as WorkflowVersion,
+    authorized_at: "2026-01-01T00:00:00.000Z" as IsoTimestamp,
+  });
+  dirtyBefore.approved_path_baselines.push({
+    path: extraPath,
+    approved_at_version: 2 as WorkflowVersion,
+    baseline: extraBaseline.paths[0],
+  });
+  validateWorkflowStateV10(dirtyBefore);
+  const dirtyAfter = adoptDirtyScope(
+    dirtyBefore,
+    {
+      workflow_id: dirtyBefore.workflow_id,
+      expected_version: dirtyBefore.version,
+      adopted_paths: [extraPath],
+      reason: "adopt deterministic dirty path",
+      user_authorization: "authorize dirty adoption",
+    },
+    receiptFor(extraPath, "modified"),
+    TEST_ROOT,
+  );
+  assertEvidenceTransition("dirty-scope adoption", dirtyBefore, dirtyAfter, ["review_receipts"], {
+    review_receipts: emptyEvidence.review_receipts,
+  });
+
+  const authorized = workflowState({ phase: "COMMIT_AUTHORIZED" });
+  const reconciliationBefore = commitPreparationFailed(
+    authorized,
+    "ERROR_STAGED_SCOPE",
+    "a staged path is outside reviewed scope",
+    "choose",
+    [extraPath],
+  );
+  const reconciliationAfter = reconcileStagedScope(
+    reconciliationBefore,
+    {
+      workflow_id: reconciliationBefore.workflow_id,
+      expected_version: reconciliationBefore.version,
+      added_paths: [extraPath],
+      review_context: "review the reconciled staged scope",
+      user_authorization: "authorize staged scope reconciliation",
+    },
+    extraBaseline,
+    TEST_ROOT,
+    [extraPath],
+  );
+  assertEvidenceTransition(
+    "staged-scope reconciliation",
+    reconciliationBefore,
+    reconciliationAfter,
+    ["scope_history", "review_receipts", "commit"],
+    {
+      review_receipts: emptyEvidence.review_receipts,
+      commit: emptyEvidence.commit,
+    },
+  );
+
+  const repairBefore = workflowState({ phase: "REPAIR_REQUIRED" });
+  const repairFindingIds = repairBefore.blocking_findings.map((finding) => finding.finding_id);
+  const repairAfter = authorizeRepair(
+    repairBefore,
+    {
+      workflow_id: repairBefore.workflow_id,
+      expected_version: repairBefore.version,
+      finding_ids: repairFindingIds,
+      repair_directive: {
+        selected_finding_ids: repairFindingIds,
+        ...repairProposalForFindings(repairBefore.blocking_findings),
+        user_authorization: "authorize deterministic repair",
+      },
+    },
+    TEST_ROOT,
+  );
+  assertEvidenceTransition("repair authorization", repairBefore, repairAfter, [
+    "repair_authority",
+    "repair_cycle",
+  ]);
+
+  const completionBefore = workflowState({ phase: "REPAIRING" });
+  const completionAfter = submitCompletedRepair(completionBefore);
+  assertEvidenceTransition("repair completion", completionBefore, completionAfter, [
+    "implementation",
+  ]);
+
+  const conclusive = submitRepairReview(workflowState({ phase: "REPAIRING" }), "APPROVED");
+  assertEvidenceTransition(
+    "conclusive review",
+    conclusive.before,
+    conclusive.after,
+    ["review_receipts", "current_review_result", "repair_authority"],
+    { repair_authority: emptyEvidence.repair_authority },
+  );
+
+  const inconclusive = submitRepairReview(workflowState({ phase: "REPAIRING" }), "INCONCLUSIVE");
+  assertEvidenceTransition("inconclusive review", inconclusive.before, inconclusive.after, [
+    "review_receipts",
+    "current_review_result",
+  ]);
+
+  const firstBlocker = blockingFinding("ADJUDICATE-1");
+  const secondBlocker = blockingFinding("ADJUDICATE-2");
+  const adjudicationBefore = workflowState({
+    phase: "REPAIR_REQUIRED",
+    blocking_findings: [firstBlocker, secondBlocker],
+  });
+  const seededAuthority = workflowState({
+    phase: "REPAIRING",
+    blocking_findings: [firstBlocker, secondBlocker],
+  });
+  adjudicationBefore.repair_authorized_ids = structuredClone(seededAuthority.repair_authorized_ids);
+  adjudicationBefore.repair_directive = structuredClone(seededAuthority.repair_directive);
+  validateWorkflowStateV10(adjudicationBefore);
+  const partialAdjudication = adjudicateFindings(adjudicationBefore, {
+    workflow_id: adjudicationBefore.workflow_id,
+    expected_version: adjudicationBefore.version,
+    findings: [
+      {
+        finding_id: firstBlocker.finding_id,
+        disposition: "CONTRACT_INCONSISTENT",
+        reason: "accept one deterministic risk",
+      },
+    ],
+    user_authorization: "authorize one adjudication",
+  });
+  assertEvidenceTransition(
+    "partial finding adjudication",
+    adjudicationBefore,
+    partialAdjudication,
+    ["adjudications"],
+  );
+  const allAdjudicated = adjudicateFindings(adjudicationBefore, {
+    workflow_id: adjudicationBefore.workflow_id,
+    expected_version: adjudicationBefore.version,
+    findings: [firstBlocker, secondBlocker].map((finding) => ({
+      finding_id: finding.finding_id,
+      disposition: "CONTRACT_INCONSISTENT",
+      reason: "accept deterministic risk",
+    })),
+    user_authorization: "authorize all adjudications",
+  });
+  assertEvidenceTransition(
+    "all findings adjudicated",
+    adjudicationBefore,
+    allAdjudicated,
+    ["adjudications", "repair_authority"],
+    { repair_authority: emptyEvidence.repair_authority },
+  );
+
+  const returnBefore = commitPreparationFailed(
+    workflowState({ phase: "COMMIT_AUTHORIZED" }),
+    "ERROR_STALE_RECEIPT",
+    "the reviewed tree changed",
+  );
+  const returnAfter = returnCommitToReview(returnBefore, {
+    workflow_id: returnBefore.workflow_id,
+    expected_version: returnBefore.version,
+    review_context: "review the current tree",
+  });
+  assertEvidenceTransition(
+    "return commit to review",
+    returnBefore,
+    returnAfter,
+    ["review_receipts", "commit"],
+    { review_receipts: emptyEvidence.review_receipts, commit: emptyEvidence.commit },
+  );
+
+  const staleAttemptBefore = workflowState({ phase: "COMMIT_AUTHORIZED" });
+  const prepared = workflowState({ phase: "COMMIT_PREPARED" });
+  const notCommitted = workflowState({ phase: "STOPPED_NOT_COMMITTED" });
+  staleAttemptBefore.commit_preparation = structuredClone(prepared.commit_preparation);
+  staleAttemptBefore.commit_result = structuredClone(notCommitted.commit_result);
+  const preparationFailure = commitPreparationFailed(
+    staleAttemptBefore,
+    "ERROR_STAGED_CONTENT",
+    "the staged content is not ready",
+  );
+  assertEvidenceTransition(
+    "commit-preparation failure",
+    staleAttemptBefore,
+    preparationFailure,
+    ["commit"],
+    {
+      commit: {
+        commit_authorization: staleAttemptBefore.commit_authorization,
+        commit_preparation: null,
+        commit_result: null,
+      },
+    },
+  );
+  const preparationRetry = retryCommitPreparation(preparationFailure, {
+    workflow_id: preparationFailure.workflow_id,
+    expected_version: preparationFailure.version,
+    retry_context: "retry deterministic preparation",
+  });
+  assertEvidenceTransition("commit-preparation retry", preparationFailure, preparationRetry, []);
+
+  const commitRetryBefore = workflowState({ phase: "STOPPED_NOT_COMMITTED" });
+  const commitRetryAfter = retryCommit(commitRetryBefore, {
+    workflow_id: commitRetryBefore.workflow_id,
+    expected_version: commitRetryBefore.version,
+    retry_context: "retry deterministic commit",
+  });
+  assertEvidenceTransition(
+    "known-not-committed retry",
+    commitRetryBefore,
+    commitRetryAfter,
+    ["commit"],
+    {
+      commit: {
+        commit_authorization: commitRetryBefore.commit_authorization,
+        commit_preparation: null,
+        commit_result: null,
+      },
+    },
+  );
+
+  for (const evidenceCase of evidenceCases) verifyEvidenceTransition(...evidenceCase);
+
+  const source = workflowState({
+    phase: "STOPPED_APPROVED",
+    optional_findings: [optionalFinding("LINKED-1")],
+  });
+  const sourceBefore = structuredClone(source);
+  const followup = linkedFollowupInput(
+    source,
+    {
+      workflow_id: source.workflow_id,
+      expected_version: source.version,
+      objective: "deterministic linked remediation",
+      approved_plan: null,
+      approved_paths: ["note.txt"],
+      acceptance_criteria: ["the linked remediation is complete"],
+      validation_requirements: [
+        { description: "deterministic linked validation", kind: "command", argv: ["true"] },
+      ],
+      finding_ids: ["LINKED-1"],
+      user_authorization: "authorize deterministic linked remediation",
+    },
+    TEST_ROOT,
+    source.base_head,
+  );
+  const child = linkedFollowupChildState(followup);
+  assert.deepEqual(source, sourceBefore, "linked follow-up construction preserves source evidence");
+  const childEvidence = evidenceProjection(child);
+  assert.deepEqual(childEvidence.implementation, emptyEvidence.implementation);
+  assert.deepEqual(childEvidence.review_receipts, emptyEvidence.review_receipts);
+  assert.deepEqual(childEvidence.current_review_result, emptyEvidence.current_review_result);
+  assert.deepEqual(childEvidence.adjudications, []);
+  assert.deepEqual(childEvidence.repair_authority, emptyEvidence.repair_authority);
+  assert.deepEqual(childEvidence.commit, emptyEvidence.commit);
+  assert.deepEqual(childEvidence.linked_findings, [optionalFinding("LINKED-1")]);
+  assert.equal(childEvidence.linked_continuation?.review_stage, "remediation");
+  assert.deepEqual(childEvidence.remediation_context?.authorized_finding_ids, ["LINKED-1"]);
+});
+
 test("authoritative contract replacement reports scope reconciliation without clearing overlays", () => {
   const state = workflowState({ workflow_type: "review_only", phase: "REVIEWING" });
   const planId = "00000000-0000-4000-8000-000000000158" as PlanId;
@@ -431,8 +923,51 @@ test("plan rebind after a repair block clears active lifecycle authority and res
     syntheticReceipt(),
   );
   blocked.version = (repairing.version + 1) as WorkflowVersion;
-  const adjudications = blocked.finding_adjudications;
-  const remediation = blocked.remediation_context;
+  blocked.work_items = [{ provider: "github", id: "159", display_ref: "#159", url: null }];
+  blocked.parent_workflow_id = "00000000-0000-4000-8000-000000000150" as WorkflowId;
+  blocked.source_workflow_id = "00000000-0000-4000-8000-000000000151" as WorkflowId;
+  blocked.linked_findings = [blockingFinding("LINKED-REBIND")];
+  blocked.remediation_context = {
+    policy: "explicitly_authorized",
+    authorized_finding_ids: [blocked.linked_findings[0].finding_id],
+    repair_cycle: 0,
+    user_authorization: "authorize linked rebind fixture",
+  };
+  blocked.linked_continuation = {
+    root_workflow_id: "00000000-0000-4000-8000-000000000150" as WorkflowId,
+    predecessor_workflow_id: blocked.source_workflow_id,
+    lineage_workflow_ids: [
+      "00000000-0000-4000-8000-000000000150" as WorkflowId,
+      blocked.source_workflow_id,
+    ],
+    original_base_head: blocked.base_head,
+    combined_review_paths: [...blocked.approved_paths],
+    review_stage: "combined",
+    remediation_review_receipt: syntheticReceipt(),
+  };
+  blocked.finding_adjudications = [
+    {
+      finding_id: "HISTORICAL-REBIND" as FindingId,
+      finding_snapshot: blockingFinding("HISTORICAL-REBIND"),
+      source_review_version: blocked.review_result_version as WorkflowVersion,
+      disposition: "CONTRACT_INCONSISTENT",
+      reason: "preserve historical adjudication",
+      user_authorization: "authorize historical adjudication",
+      adjudicated_at: "2026-01-01T00:00:00.000Z" as IsoTimestamp,
+      resulting_workflow_version: blocked.version,
+    },
+  ];
+  const adjudications = structuredClone(blocked.finding_adjudications);
+  const remediation = structuredClone(blocked.remediation_context);
+  const workItems = structuredClone(blocked.work_items);
+  const linkedFindings = structuredClone(blocked.linked_findings);
+  const lineage = {
+    parent_workflow_id: blocked.parent_workflow_id,
+    source_workflow_id: blocked.source_workflow_id,
+    root_workflow_id: blocked.linked_continuation.root_workflow_id,
+    predecessor_workflow_id: blocked.linked_continuation.predecessor_workflow_id,
+    lineage_workflow_ids: structuredClone(blocked.linked_continuation.lineage_workflow_ids),
+  };
   const replacementArtifact: PlanRevisionArtifact = {
     plan_schema_version: 3,
     plan_id: planId,
@@ -488,6 +1023,20 @@ test("plan rebind after a repair block clears active lifecycle authority and res
   assert.equal(rebound.commit_result, null);
   assert.deepEqual(rebound.finding_adjudications, adjudications);
   assert.deepEqual(rebound.remediation_context, remediation);
+  assert.deepEqual(rebound.work_items, workItems);
+  assert.deepEqual(rebound.linked_findings, linkedFindings);
+  assert.deepEqual(
+    {
+      parent_workflow_id: rebound.parent_workflow_id,
+      source_workflow_id: rebound.source_workflow_id,
+      root_workflow_id: rebound.linked_continuation?.root_workflow_id,
+      predecessor_workflow_id: rebound.linked_continuation?.predecessor_workflow_id,
+      lineage_workflow_ids: rebound.linked_continuation?.lineage_workflow_ids,
+    },
+    lineage,
+  );
+  assert.equal(rebound.linked_continuation?.review_stage, "remediation");
+  assert.equal(rebound.linked_continuation?.remediation_review_receipt, null);
   assert.equal(
     JSON.stringify(rebound).includes("authorization must not enter semantic state"),
     false,

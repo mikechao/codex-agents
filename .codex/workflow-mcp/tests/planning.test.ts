@@ -618,7 +618,18 @@ test("blocked implementation rebinds atomically to the exact current approved pl
       revision: draft.revision,
       user_authorization: "approve revision one",
     });
-    const created = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const created = store.createFromPlan({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      work_items: [
+        {
+          provider: "github",
+          id: "159",
+          display_ref: "#159",
+          url: "https://github.com/example/repository/issues/159",
+        },
+      ],
+    });
     const id = created.workflow_id;
 
     writeFileSync(join(target.root, "note.txt"), "staged partial\n");
@@ -780,6 +791,7 @@ test("blocked implementation rebinds atomically to the exact current approved pl
       store.db.prepare("SELECT state_json FROM workflows WHERE workflow_id = ?").get(id).state_json,
     );
     assert.deepEqual(persisted.initial_receipt, beforeState.initial_receipt);
+    assert.deepEqual(persisted.work_items, beforeState.work_items);
     assert.equal(persisted.implementation_receipt, null);
     assert.equal(JSON.stringify(persisted).split(authorization).length - 1, 1);
     const audit = store.audit(id).at(-1);

@@ -25,16 +25,16 @@ import {
 import { commitAuthorizationStateReady } from "./queries.js";
 import {
   applyRecovery,
-  clearFullCommitEvidence,
-  clearStaleReviewEvidence,
   clone,
   ensurePhase,
+  invalidateFullCommitAuthorityAndEvidence,
+  invalidateReviewReceipts,
 } from "./shared.js";
 
 export const MISMATCH_CATEGORIES: ReadonlySet<CommitMismatchCategory> =
   COMMIT_MISMATCH_CATEGORY_SET;
 
-function clearRetryablePreparedAttempt(state: WorkflowState): void {
+function invalidateRetryablePreparedCommitAttemptEvidence(state: WorkflowState): void {
   state.commit_preparation = null;
   state.commit_result = null;
 }
@@ -102,7 +102,7 @@ export function commitPreparationFailed(
     failed_version: (state.version + 1) as WorkflowVersion,
     stopped_from: "COMMIT_AUTHORIZED",
   };
-  clearRetryablePreparedAttempt(next);
+  invalidateRetryablePreparedCommitAttemptEvidence(next);
   return next;
 }
 
@@ -154,7 +154,7 @@ export function retryCommitPreparation(
     );
   }
   const next = clone<WorkflowState>(state);
-  clearRetryablePreparedAttempt(next);
+  invalidateRetryablePreparedCommitAttemptEvidence(next);
   applyRecovery(next, "COMMIT_AUTHORIZED", "commit", args.retry_context, "retry_context");
   return next;
 }
@@ -176,8 +176,8 @@ export function returnCommitToReview(state: WorkflowState, input: unknown): Work
     fail("ERROR_INVALID_TRANSITION", "preparation failure is retryable");
   }
   const next = clone<WorkflowState>(state);
-  clearStaleReviewEvidence(next);
-  clearFullCommitEvidence(next);
+  invalidateReviewReceipts(next);
+  invalidateFullCommitAuthorityAndEvidence(next);
   applyRecovery(next, "REVIEWING", "review", args.review_context, "review_context");
   return next;
 }
@@ -253,7 +253,7 @@ export function retryCommit(state: WorkflowState, input: unknown): WorkflowState
   );
   ensurePhase(state, "STOPPED_NOT_COMMITTED");
   const next = clone<WorkflowState>(state);
-  clearRetryablePreparedAttempt(next);
+  invalidateRetryablePreparedCommitAttemptEvidence(next);
   applyRecovery(next, "COMMIT_AUTHORIZED", "commit", args.retry_context, "retry_context");
   return next;
 }

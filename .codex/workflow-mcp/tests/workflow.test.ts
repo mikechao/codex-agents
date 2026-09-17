@@ -917,6 +917,7 @@ test("linked follow-up inherits findings and gets a direct parent view", () => {
     writeFileSync(join(root, "note.txt"), "source\n");
     const optional = finding("OPTIONAL-1", "P3", false);
     review(store, source, undefined, "APPROVED", [], [optional]);
+    const sourceBeforeFollowup = rawState(store, source.workflow_id);
     const child = store.createLinkedFollowup({
       workflow_id: source.workflow_id,
       expected_version: store.parentGet(source.workflow_id).version,
@@ -934,6 +935,68 @@ test("linked follow-up inherits findings and gets a direct parent view", () => {
     assert.equal("capabilities" in child, false);
     assert.deepEqual(store.implementerGet(child.workflow_id).linked_findings, [optional]);
     assert.equal(store.parentGet(child.workflow_id).version, 0);
+    const sourceAfterFollowup = rawState(store, source.workflow_id);
+    assert.deepEqual(
+      {
+        ...sourceAfterFollowup,
+        version: sourceBeforeFollowup.version,
+        superseded_by_workflow_id: sourceBeforeFollowup.superseded_by_workflow_id,
+      },
+      sourceBeforeFollowup,
+    );
+    assert.equal(sourceAfterFollowup.version, sourceBeforeFollowup.version + 1);
+    assert.equal(sourceAfterFollowup.superseded_by_workflow_id, child.workflow_id);
+    const childState = rawState(store, child.workflow_id);
+    assert.deepEqual(
+      {
+        implementation_summary: childState.implementation_summary,
+        implementation_status: childState.implementation_status,
+        implementation_known_failures: childState.implementation_known_failures,
+        agent_touched_paths: childState.agent_touched_paths,
+        scope_changed_paths: childState.scope_changed_paths,
+        acceptance_results: childState.acceptance_results,
+        validation_results: childState.validation_results,
+        finding_resolution_map: childState.finding_resolution_map,
+        implementation_receipt: childState.implementation_receipt,
+        review_start_receipt: childState.review_start_receipt,
+        review_receipt: childState.review_receipt,
+        blocking_findings: childState.blocking_findings,
+        optional_findings: childState.optional_findings,
+        prior_finding_classifications: childState.prior_finding_classifications,
+        finding_adjudications: childState.finding_adjudications,
+        review_result_version: childState.review_result_version,
+        repair_authorized_ids: childState.repair_authorized_ids,
+        repair_directive: childState.repair_directive,
+        concern_acceptance: childState.concern_acceptance,
+        commit_authorization: childState.commit_authorization,
+        commit_preparation: childState.commit_preparation,
+        commit_result: childState.commit_result,
+      },
+      {
+        implementation_summary: null,
+        implementation_status: null,
+        implementation_known_failures: [],
+        agent_touched_paths: [],
+        scope_changed_paths: [],
+        acceptance_results: [],
+        validation_results: [],
+        finding_resolution_map: {},
+        implementation_receipt: null,
+        review_start_receipt: null,
+        review_receipt: null,
+        blocking_findings: [],
+        optional_findings: [],
+        prior_finding_classifications: {},
+        finding_adjudications: [],
+        review_result_version: null,
+        repair_authorized_ids: [],
+        repair_directive: null,
+        concern_acceptance: null,
+        commit_authorization: null,
+        commit_preparation: null,
+        commit_result: null,
+      },
+    );
     assert.equal(store.audit(source.workflow_id).at(-1).event_type, "LINKED_FOLLOWUP_CREATED");
     store.close();
   } finally {

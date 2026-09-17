@@ -34,10 +34,13 @@ import {
 import { scopeChangedPaths } from "./receipts.js";
 import {
   applyRecovery,
-  clearFullCommitEvidence,
-  clearStaleReviewEvidence,
   clone,
   ensurePhase,
+  invalidateCurrentReviewResultAndRepairAuthority,
+  invalidateFullCommitAuthorityAndEvidence,
+  invalidateImplementationSubmissionEvidence,
+  invalidateLinkedReviewProgress,
+  invalidateReviewReceipts,
 } from "./shared.js";
 import { replaceAuthoritativeImplementationContract } from "./state.js";
 
@@ -134,22 +137,10 @@ function scopeExpansion(
       baseline: clone(entry),
     })),
   );
-  clearStaleImplementationEvidence(next);
-  clearStaleReviewEvidence(next);
-  clearFullCommitEvidence(next);
+  invalidateImplementationSubmissionEvidence(next);
+  invalidateReviewReceipts(next);
+  invalidateFullCommitAuthorityAndEvidence(next);
   return next;
-}
-
-function clearStaleImplementationEvidence(state: WorkflowState): void {
-  state.implementation_summary = null;
-  state.implementation_status = null;
-  state.implementation_known_failures = [];
-  state.agent_touched_paths = [];
-  state.scope_changed_paths = [];
-  state.acceptance_results = [];
-  state.validation_results = [];
-  state.finding_resolution_map = {};
-  state.implementation_receipt = null;
 }
 
 function samePathList(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
@@ -399,8 +390,8 @@ export function reconcileStagedScope(
       baseline: clone(entry),
     })),
   );
-  clearStaleReviewEvidence(next);
-  clearFullCommitEvidence(next);
+  invalidateReviewReceipts(next);
+  invalidateFullCommitAuthorityAndEvidence(next);
   applyRecovery(next, "REVIEWING", "review", args.review_context, "review_context");
   return next;
 }
@@ -456,8 +447,7 @@ export function adoptDirtyScope(
   const next = clone<WorkflowState>(state);
   // Adoption changes only the authorization/audit version. The existing expansion remains the
   // immutable provenance for the paths and its historical baseline.
-  next.review_start_receipt = null;
-  next.review_receipt = null;
+  invalidateReviewReceipts(next);
   return next;
 }
 
@@ -551,20 +541,14 @@ export function rebindImplementationPlan(
     next.linked_continuation.combined_review_paths = [
       ...new Set([...next.linked_continuation.combined_review_paths, ...addedPaths]),
     ].sort();
-    next.linked_continuation.remediation_review_receipt = null;
-    next.linked_continuation.review_stage = "remediation";
   }
 
-  clearStaleImplementationEvidence(next);
-  clearStaleReviewEvidence(next);
-  next.blocking_findings = [];
-  next.optional_findings = [];
-  next.prior_finding_classifications = {};
-  next.review_result_version = null;
+  invalidateImplementationSubmissionEvidence(next);
+  invalidateReviewReceipts(next);
+  invalidateCurrentReviewResultAndRepairAuthority(next);
   next.concern_acceptance = null;
-  next.repair_authorized_ids = [];
-  next.repair_directive = null;
-  clearFullCommitEvidence(next);
+  invalidateFullCommitAuthorityAndEvidence(next);
+  invalidateLinkedReviewProgress(next);
   next.repair_cycle = 0;
   next.phase = "IMPLEMENTING";
   next.stop_context = null;
