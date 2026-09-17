@@ -4,6 +4,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { SdkErrorCode } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { diagnosticsDirectory } from "../diagnostics.js";
 import { WorkflowStore } from "../store.js";
 import {
@@ -13,6 +15,92 @@ import {
   workflowCreateInput,
 } from "./protocol-fixtures.js";
 import { disposeFixture, fixture } from "./test-fixtures.js";
+
+test("failed SDK initialization awaits stdio child cleanup", async () => {
+  const { root } = fixture();
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [
+      "-e",
+      "process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+    ],
+    cwd: root,
+    env,
+    stderr: "pipe",
+  });
+  const cleanupError = new Error("synthetic transport cleanup failure");
+  const actualClose = transport.close.bind(transport);
+  transport.close = async () => {
+    await actualClose();
+    throw cleanupError;
+  };
+  let spawnedPid: number | undefined;
+  let closed = false;
+  let sharedCloseSettled = false;
+  let sharedCloseSettledAtChildClose: boolean | undefined;
+  const lifecycleEvents: string[] = [];
+  let resolveClosed!: () => void;
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const start = transport.start.bind(transport);
+  transport.start = async () => {
+    await start();
+    spawnedPid = transport.pid ?? undefined;
+  };
+  transport.onclose = () => {
+    lifecycleEvents.push("child-close");
+    sharedCloseSettledAtChildClose = sharedCloseSettled;
+    closed = true;
+    resolveClosed();
+  };
+  const unhandledCleanupRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    if (reason === cleanupError) unhandledCleanupRejections.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+
+  try {
+    await assert.rejects(
+      connectProtocol(root, false, {
+        transport,
+        timeout: 25,
+        observeClosePromise: (promise) => {
+          promise.then(() => {
+            sharedCloseSettled = true;
+            lifecycleEvents.push("shared-close");
+          });
+        },
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: unknown }).code, SdkErrorCode.RequestTimeout);
+        return true;
+      },
+    );
+    assert.deepEqual(unhandledCleanupRejections, []);
+    assert.ok(spawnedPid);
+    assert.equal(closed, true);
+    assert.equal(sharedCloseSettledAtChildClose, false);
+    assert.deepEqual(lifecycleEvents, ["child-close", "shared-close"]);
+    assert.equal(sharedCloseSettled, true);
+    assert.throws(
+      () => process.kill(spawnedPid!, 0),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH",
+    );
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+    if (!closed) {
+      await transport.close().catch(() => undefined);
+      await closedPromise;
+    }
+    disposeFixture(root);
+  }
+});
 
 test("raw STDIO remains JSON-RPC clean and does not expose generic getter or worker capabilities", async () => {
   const { root, git } = fixture();

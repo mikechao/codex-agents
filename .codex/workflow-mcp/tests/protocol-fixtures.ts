@@ -74,32 +74,102 @@ export interface ProtocolResponse {
 
 export interface ProtocolSession {
   client: Client;
-  transport: StdioClientTransport;
   callRaw(name: string, arguments_: Record<string, unknown>): Promise<ProtocolResponse>;
   call(name: string, arguments_: Record<string, unknown>): Promise<ReturnType<typeof JSON.parse>>;
   version(workflowId: string): Promise<number>;
 }
 
-export async function connectProtocol(root: string, diagnostics = false): Promise<ProtocolSession> {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: ["--no-warnings", SERVER],
-    cwd: root,
-    env: {
-      ...process.env,
-      WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite"),
-      ...(diagnostics
-        ? {
-            HOME: root,
-            USERPROFILE: root,
-            WORKFLOW_MCP_DIAGNOSTICS: "1",
-          }
-        : {}),
-    },
-    stderr: "pipe",
+export interface ProtocolConnectOptions {
+  transport?: StdioClientTransport;
+  timeout?: number;
+  observeClosePromise?: (promise: Promise<void>) => void;
+}
+
+interface TransportLifecycle {
+  childClosed: Promise<void>;
+}
+
+function makeCloseSingleFlight(
+  transport: StdioClientTransport,
+  lifecycle: TransportLifecycle,
+  observeClosePromise?: (promise: Promise<void>) => void,
+): void {
+  const close = transport.close.bind(transport);
+  let closePromise: Promise<void> | undefined;
+  transport.close = () => {
+    if (!closePromise) {
+      closePromise = Promise.resolve()
+        .then(close)
+        .catch(() => undefined)
+        .then(() => lifecycle.childClosed)
+        .catch(() => undefined);
+      observeClosePromise?.(closePromise);
+    }
+    return closePromise;
+  };
+}
+
+function observeTransportLifecycle(transport: StdioClientTransport): TransportLifecycle {
+  let resolveChildClosed!: () => void;
+  const childClosed = new Promise<void>((resolve) => {
+    resolveChildClosed = resolve;
   });
+  const start = transport.start.bind(transport);
+  transport.start = async () => {
+    try {
+      await start();
+    } catch (error) {
+      resolveChildClosed();
+      throw error;
+    }
+  };
+  const onclose = transport.onclose;
+  transport.onclose = () => {
+    try {
+      onclose?.();
+    } finally {
+      resolveChildClosed();
+    }
+  };
+  return { childClosed };
+}
+
+export async function connectProtocol(
+  root: string,
+  diagnostics = false,
+  options: ProtocolConnectOptions = {},
+): Promise<ProtocolSession> {
+  const transport =
+    options.transport ??
+    new StdioClientTransport({
+      command: process.execPath,
+      args: ["--no-warnings", SERVER],
+      cwd: root,
+      env: {
+        ...process.env,
+        WORKFLOW_MCP_DB_PATH: join(root, "state.sqlite"),
+        ...(diagnostics
+          ? {
+              HOME: root,
+              USERPROFILE: root,
+              WORKFLOW_MCP_DIAGNOSTICS: "1",
+            }
+          : {}),
+      },
+      stderr: "pipe",
+    });
+  const lifecycle = observeTransportLifecycle(transport);
+  makeCloseSingleFlight(transport, lifecycle, options.observeClosePromise);
   const client = new Client({ name: "workflow-test", version: "1.0.0" }, { capabilities: {} });
-  await client.connect(transport);
+  try {
+    await client.connect(
+      transport,
+      options.timeout === undefined ? undefined : { timeout: options.timeout },
+    );
+  } catch (error) {
+    await transport.close();
+    throw error;
+  }
   const callRaw = async (name: string, arguments_: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: arguments_ });
     return {
@@ -114,7 +184,6 @@ export async function connectProtocol(root: string, diagnostics = false): Promis
   };
   return {
     client,
-    transport,
     callRaw,
     call,
     version: async (workflowId: string) =>
@@ -124,7 +193,6 @@ export async function connectProtocol(root: string, diagnostics = false): Promis
 
 export async function closeProtocol(session: ProtocolSession): Promise<void> {
   await session.client.close();
-  await session.transport.close();
 }
 
 export async function disposeProtocolFixture(
