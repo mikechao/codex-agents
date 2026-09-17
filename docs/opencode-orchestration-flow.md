@@ -18,7 +18,7 @@ or working-tree `review_only`. A selected report finding is supporting context o
 fresh planner for a normal change-only plan and separate approval. Orchestrator only parent-reads the
 exact current approved plan and executes it through `workflow_create_from_plan`.
 
-Plan schema v2 is a deliberate development clean break: retained pre-change artifacts are rejected
+Plan schema v3 is a deliberate development clean break: retained pre-change artifacts are rejected
 with reset-required diagnostics and must be recreated, never migrated or retranscribed. The documented
 Native Plan -> Orchestrator reviewer-first `review_only` dogfood is a post-commit, fresh-host-reload
 manual activity described in [the provider-only live dogfood guide](../.codex/agents/DOGFOOD.md); it is
@@ -242,7 +242,7 @@ prose and contracts are never retranscribed.
 
 The orchestrator passes only explicit user-approved work-item metadata to `workflow_create` or
 `workflow_create_from_plan`; absent tracker metadata is represented as `work_items: []`. These generic
-immutable references are schema v9 state, shown only to parent and committer, and inherited automatically
+immutable references are schema v10 state, shown only to parent and committer, and inherited automatically
 by linked follow-ups. Linked creation never accepts retranscribed replacements or externally discovered identifiers. The committer
 renders exact authoritative display references as neutral `Refs <display_ref>` lines, with no tracker
 API calls and no `Fixes`/`Closes`/`Resolves` completion semantics.

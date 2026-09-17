@@ -1920,6 +1920,10 @@ test("descriptor routing is projection-first and fail-closed", () => {
 });
 
 test("orchestration contracts classify intent and reconcile the final tree explicitly", () => {
+  const repositoryPolicy = readFileSync(
+    resolve(import.meta.dir, "../../../AGENTS.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   const workflow = readFileSync(resolve(agentsDir, "WORKFLOW.md"), "utf8").replace(/\s+/gu, " ");
   const guide = readFileSync(
@@ -2012,6 +2016,56 @@ test("orchestration contracts classify intent and reconcile the final tree expli
     workflow,
     /Schema v10 is a clean break from schema v9 and earlier/u,
     "Workflow contract must document the schema v10 clean break",
+  );
+  assert.match(
+    repositoryPolicy,
+    /Resettable internal state and protocol contracts are latest-version-only by default/u,
+    "repository policy must default resettable internal contracts to latest-version-only support",
+  );
+  assert.match(
+    repositoryPolicy,
+    /Older or unknown versions fail closed and require reset or recreation; do not infer migrations, backward interpreters, historical execution compatibility, or compatibility fixtures/u,
+    "repository policy must reject inferred historical compatibility",
+  );
+  assert.match(
+    repositoryPolicy,
+    /An exception requires an explicit issue and architecture approval/u,
+    "repository policy must require approval for compatibility exceptions",
+  );
+  assert.match(
+    repositoryPolicy,
+    /excludes public APIs, user-owned or other non-resettable data, installer\/configuration compatibility, and other external interfaces/u,
+    "repository policy must exclude external and non-resettable contracts",
+  );
+  assert.match(
+    repositoryPolicy,
+    /historical immutable runtime may still own and recover an unfinished workflow.*?does not make its older protocol executable by the current consumer/u,
+    "repository policy must separate historical runtime ownership from current protocol support",
+  );
+  assert.match(
+    workflowMcpReadme,
+    /Current consumers execute only descriptor version 5.*?Missing, older, unknown, malformed, or contradictory descriptors fail closed/u,
+    "Workflow MCP README must define current descriptor-v5-only fail-closed consumption",
+  );
+  assert.doesNotMatch(
+    workflowMcpReadme,
+    /Consumers must branch on `descriptor_version`|versions 1, 2, and 3 are not wire-compatible/u,
+    "Workflow MCP README must not require historical descriptor branching",
+  );
+  assert.match(
+    workflow,
+    /current-consumer protocol boundary is separate from self-hosting runtime affinity.*?historical immutable runtime.*?older descriptor protocol executable by the current consumer/u,
+    "Workflow contract must separate current descriptor support from historical runtime ownership",
+  );
+  assert.match(
+    guide,
+    /Plan schema v3 is a deliberate development clean break/u,
+    "OpenCode flow guide must describe the current PlanArtifact schema",
+  );
+  assert.match(
+    guide,
+    /immutable references are schema v10 state/u,
+    "OpenCode flow guide must describe current work-item state",
   );
   const terminalRefresh = orchestrator.indexOf("After every terminal subagent handoff");
   const conciseSummary = orchestrator.indexOf("before summarizing or routing", terminalRefresh);

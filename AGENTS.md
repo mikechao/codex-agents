@@ -38,6 +38,14 @@ state.
 - Self-hosting bootstrap, immutable runtime artifacts, runtime affinity, and reload recovery are
   self-hosting concerns; do not make them installed-target requirements without an independent
   target-repository need.
+- Resettable internal state and protocol contracts are latest-version-only by default. Older or
+  unknown versions fail closed and require reset or recreation; do not infer migrations, backward
+  interpreters, historical execution compatibility, or compatibility fixtures. An exception requires
+  an explicit issue and architecture approval. This rule excludes public APIs, user-owned or other
+  non-resettable data, installer/configuration compatibility, and other external interfaces. It is
+  also separate from self-hosting runtime affinity: a historical immutable runtime may still own
+  and recover an unfinished workflow under its loaded contract, but that does not make its older
+  protocol executable by the current consumer.
 - A running self-hosted workflow is governed by the workflow/agent/runtime contract loaded by its
   current live runtime. Newer Workflow MCP schemas, projections, tools, generated agent
   definitions, permissions, or host-loaded behavior that exists only in the current repository or

@@ -202,6 +202,10 @@ The descriptor is guidance, not authorization or a bearer capability. Its `descr
 be exactly `5` before interpretation. Any other, missing, malformed, contradictory, or incomplete
 descriptor is a fail-closed stop without fallback mutation or dispatch; the parent must not
 reconstruct a route from semantic decisions, raw phases, parent state, or conversation memory.
+This current-consumer protocol boundary is separate from self-hosting runtime affinity: an unfinished
+workflow may remain owned by and recover under its historical immutable runtime and its loaded
+contract, but that ownership does not make an older descriptor protocol executable by the current
+consumer.
 
 For `dispatch`, the parent delegates only the returned route with the exact workflow ID. For
 `parent_mutation`, it selects one advertised invocation, passes its fixed arguments, obtains only
@@ -656,8 +660,8 @@ Incompatible databases are rejected at startup
 with an actionable reset-required `ERROR_MIGRATION_REQUIRED` diagnostic; startup never rewrites rows
 or upgrades SQLite tables. Current workflows use `workflow_authorize_commit`,
 `workflow_prepare_commit`, external commit, and `workflow_submit_commit_result`.
-The current schema is v9, including planning tables, finding-adjudication fields, and the bounded
-semantic repair directive; schema-v8 and earlier databases require a clean durable-state reset, so unfinished historical
+The current schema is v10, including planning tables, finding-adjudication fields, and the bounded
+semantic repair directive; schema-v9 and earlier databases require a clean durable-state reset, so unfinished historical
 workflows cannot cross this schema break.
 
 ## Observed end-to-end run

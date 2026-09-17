@@ -46,8 +46,10 @@ a bearer capability. It covers automatic implementation/review/re-review routing
 explicit repair, recovery, continuation, scope/new-intent, reconciliation, and commit boundaries
 separately.
 
-The current execution guidance is descriptor version 5 and contains a primary descriptor plus every currently legal
-parent action as a complete executable descriptor. Parent mutation invocations expose semantic choice
+Current consumers execute only descriptor version 5, which contains a primary descriptor plus every
+currently legal parent action as a complete executable descriptor. Missing, older, unknown, malformed,
+or contradictory descriptors fail closed with no historical-protocol fallback, mutation, or dispatch.
+Parent mutation invocations expose semantic choice
 labels and summaries, and input sources distinguish fresh `user_authored` meaning from exact parent
 context, server bindings, and observed evidence. Linked follow-ups bind their current blocking and
 optional finding candidates by bucket so `finding_ids` never come from stale-binding inference.
@@ -71,10 +73,11 @@ write, the parent refreshes the operator decision before collecting another insp
 to recovery/review routing. Unavailable observations are execution-local and are not persisted, so a
 later fresh decision may select the same inspection again.
 
-Older unfinished workflows may continue under their owning historical runtime and return descriptor
-version 1 or version 2 with an earlier execution shape. Consumers must branch on `descriptor_version`
-before interpreting execution guidance; versions 1, 2, and 3 are not wire-compatible for repair
-authorization or inspection collection.
+Self-hosting historical-runtime routing is a separate concern. An older unfinished workflow may
+continue under its owning immutable runtime, including after restart recovery, runtime-affinity
+resolution, and artifact validation, under the contract loaded by that runtime. That ownership does
+not make an older descriptor protocol executable by the current consumer; if the current consumer
+receives an older or otherwise unsupported descriptor, it fails closed.
 
 Lineage traversal is exact and bounded. Workflows with matching work items, paths, branches, or
 finding locations remain unrelated. An explicit linked chain may summarize its combined-review
