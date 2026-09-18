@@ -283,6 +283,12 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
   enables final approval and commit authorization. A parent may record unresolved inspection evidence from
   `STOPPED_CONCERNS`; a valid failure enters review without fabricating concern acceptance, while a
   concern-only stop still requires explicit `workflow_accept_concerns`.
+- Inspection requirements may declare a closed exact `repository_paths` dependency set within approved
+  scope. Manual recording captures an internal receipt for those paths. A completed repair retains prior
+  manual evidence only when comparison with the fresh repaired receipt proves the dependency set unchanged;
+  intersection or any missing, legacy, malformed, unsupported, or otherwise unprovable relationship marks
+  it stale and `not_run`. Intermediate `INCOMPLETE` repair submissions preserve the original observation
+  baseline, and executable validation results keep their existing replacement semantics.
 - An inconclusive review normally resumes with `workflow_resume_review`. When a review-blocking
   parent-owned inspection requirement is still `not_run`, the parent records its concrete evidence while
   the workflow remains stopped; only then may explicit `workflow_resume_review` recover the review.

@@ -1,11 +1,12 @@
 import { fail } from "../errors.js";
 import type {
+  AcceptanceCriterion,
   AuthoritativeImplementationContract,
   ExactRepoPath,
   FindingId,
   GitCommitSha,
   ReviewFinding,
-  ValidationAuthoringRequirement,
+  ValidationRequirement,
   WorkflowId,
   WorkflowState,
   WorkItemReference,
@@ -30,8 +31,8 @@ type LinkedFollowupAuthority =
       workflow_type: "change";
       objective: string;
       approved_paths: ExactRepoPath[];
-      acceptance_criteria: string[];
-      validation_requirements: ValidationAuthoringRequirement[];
+      acceptance_criteria: AcceptanceCriterion[];
+      validation_requirements: ValidationRequirement[];
     }
   | {
       kind: "approved_plan";
@@ -80,13 +81,26 @@ export function linkedFollowupInput(
     "linked follow-up",
   );
   directFollowupPlan(args.approved_plan);
+  const approvedPaths = exactPaths(args.approved_paths, repositoryRoot);
   return linkedFollowupInputCore(state, args, currentHead, {
     kind: "direct",
     workflow_type: "change",
     objective: boundedString(args.objective, "objective"),
-    approved_paths: exactPaths(args.approved_paths, repositoryRoot),
-    acceptance_criteria: args.acceptance_criteria as string[],
-    validation_requirements: args.validation_requirements as ValidationAuthoringRequirement[],
+    approved_paths: approvedPaths,
+    acceptance_criteria: contractList(
+      args.acceptance_criteria,
+      "acceptance_criteria",
+      "AC",
+      "criterion_id",
+    ),
+    validation_requirements: contractList(
+      args.validation_requirements,
+      "validation_requirements",
+      "VAL",
+      "validation_id",
+      true,
+      { repositoryRoot, approvedPaths },
+    ),
   });
 }
 
@@ -204,19 +218,8 @@ export function linkedFollowupChildState(followup: LinkedFollowupPlan): Workflow
           workItems: followup.work_items,
         });
   if (followup.authority.kind === "direct") {
-    state.acceptance_criteria = contractList(
-      followup.authority.acceptance_criteria,
-      "acceptance_criteria",
-      "AC",
-      "criterion_id",
-    );
-    state.validation_requirements = contractList(
-      followup.authority.validation_requirements,
-      "validation_requirements",
-      "VAL",
-      "validation_id",
-      true,
-    );
+    state.acceptance_criteria = clone(followup.authority.acceptance_criteria);
+    state.validation_requirements = clone(followup.authority.validation_requirements);
   }
   state.parent_workflow_id = followup.parent_workflow_id;
   state.source_workflow_id = followup.source_workflow_id;

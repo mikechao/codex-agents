@@ -38,6 +38,7 @@ import {
   parseRuntimeManifest,
   type RuntimeArtifact,
 } from "./runtime-artifact.js";
+import { manualValidationRepairDecisionAudit } from "./transitions/shared.js";
 import type {
   LinkedFollowupPlan,
   WorkflowCommitResultReadiness,
@@ -110,6 +111,7 @@ import type {
   FindingAdjudication,
   GitCommitSha,
   IsoTimestamp,
+  ManualValidationRepairDecisionAudit,
   OperatorDecision,
   OperatorPlanBinding,
   ParentMutationResult,
@@ -688,6 +690,7 @@ type MutationAuditDetails = {
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   finding_adjudications?: FindingAdjudication[];
   plan_rebind?: PlanRebindAudit;
+  manual_validation_repair_decision?: ManualValidationRepairDecisionAudit;
 };
 
 type ImplementationPlanRecoveryPreflight =
@@ -1090,6 +1093,7 @@ export class WorkflowStore {
       dirty_scope_adoption?: DirtyScopeAdoptionAudit;
       finding_adjudications?: FindingAdjudication[];
       plan_rebind?: PlanRebindAudit;
+      manual_validation_repair_decision?: ManualValidationRepairDecisionAudit;
     } = {},
   ): void {
     this.db
@@ -1940,6 +1944,7 @@ export class WorkflowStore {
         dirty_scope_adoption?: unknown;
         plan_rebind?: PlanRebindAudit;
         finding_adjudications?: FindingAdjudication[];
+        manual_validation_repair_decision?: ManualValidationRepairDecisionAudit;
       };
       const result: AuditEvent = {
         version: event.version,
@@ -1978,6 +1983,9 @@ export class WorkflowStore {
       }
       if (result.event_type === "FINDINGS_ADJUDICATED") {
         result.finding_adjudications = rawSummary.finding_adjudications;
+      }
+      if (rawSummary.manual_validation_repair_decision) {
+        result.manual_validation_repair_decision = rawSummary.manual_validation_repair_decision;
       }
       return result;
     });
@@ -2438,6 +2446,10 @@ export class WorkflowStore {
         return submitImplementation(state, args, this.root, currentReceipt);
       },
       args.status === "INCOMPLETE" ? (next) => next.phase : outcome,
+      (before, next) => {
+        const decision = manualValidationRepairDecisionAudit(before, next);
+        return decision ? { manual_validation_repair_decision: decision } : {};
+      },
     );
   }
 
@@ -2737,7 +2749,19 @@ export class WorkflowStore {
       "parent",
       args.expected_version,
       "MANUAL_VALIDATION_RECORDED",
-      (state) => recordManualValidation(state, args),
+      (state) => {
+        const requirement = state.validation_requirements.find(
+          (candidate) => candidate.validation_id === args.validation_id,
+        );
+        const dependencyReceipt =
+          requirement?.kind === "inspection" && requirement.dependencies
+            ? createReceipt(this.root, requirement.dependencies.paths, true)
+            : null;
+        if (dependencyReceipt !== null && dependencyReceipt.base_head !== state.base_head) {
+          fail("ERROR_STALE_RECEIPT", "manual validation dependency receipt base is stale");
+        }
+        return recordManualValidation(state, args, dependencyReceipt);
+      },
     );
   }
 

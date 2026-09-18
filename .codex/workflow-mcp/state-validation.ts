@@ -219,8 +219,15 @@ function contractsShape(value: unknown, prefix: "AC" | "VAL"): void {
     if (!isObject(item)) corrupt();
     if (prefix === "VAL") {
       if (item.kind === "command") checkKeys(item, [idField, "description", "kind", "argv"]);
-      else if (item.kind === "inspection") checkKeys(item, [idField, "description", "kind"]);
-      else corrupt();
+      else if (item.kind === "inspection") {
+        checkKeys(item, [idField, "description", "kind"], ["dependencies"]);
+        if (item.dependencies !== undefined) {
+          if (!isObject(item.dependencies)) corrupt();
+          checkKeys(item.dependencies, ["kind", "paths"]);
+          if (item.dependencies.kind !== "repository_paths") corrupt();
+          pathList(item.dependencies.paths, false);
+        }
+      } else corrupt();
     } else checkKeys(item, [idField, "description"]);
     const id = item[idField];
     const expectedId = `${prefix}-${String(index + 1).padStart(3, "0")}`;
@@ -244,7 +251,7 @@ function resultsShape(
   if (!Array.isArray(value) || value.length > MAX_CONTRACTS) corrupt();
   for (const item of value) {
     if (!isObject(item)) corrupt();
-    checkKeys(item, [idField, "status", "evidence"]);
+    checkKeys(item, [idField, "status", "evidence"], prefix === "VAL" ? ["manual_lifecycle"] : []);
     const id = item[idField];
     if (typeof id !== "string" || !new RegExp(`^${prefix}-\\d{3}$`, "u").test(id)) corrupt();
     if (!statuses.has(item.status as string)) corrupt();
@@ -252,7 +259,118 @@ function resultsShape(
   }
 }
 
-function orderedValidationResultsShape(value: unknown, requirements: unknown): void {
+function manualValidationLifecycleShape(
+  lifecycle: unknown,
+  result: Record<string, unknown>,
+  requirement: Record<string, unknown>,
+  state: Record<string, unknown>,
+): void {
+  if (!isObject(lifecycle) || requirement.kind !== "inspection") corrupt();
+  const currentVersion = state.version as number;
+  const currentCycle = state.repair_cycle as number;
+  const dependencies = isObject(requirement.dependencies) ? requirement.dependencies : null;
+  if (lifecycle.state === "observed") {
+    checkKeys(lifecycle, [
+      "state",
+      "observed_at_version",
+      "observed_repair_cycle",
+      "dependency_receipt",
+      "retained_at",
+    ]);
+    if (result.status === "not_run") corrupt();
+    if (
+      !Number.isSafeInteger(lifecycle.observed_at_version) ||
+      (lifecycle.observed_at_version as number) < 1 ||
+      (lifecycle.observed_at_version as number) > currentVersion ||
+      !Number.isSafeInteger(lifecycle.observed_repair_cycle) ||
+      (lifecycle.observed_repair_cycle as number) < 0 ||
+      (lifecycle.observed_repair_cycle as number) > currentCycle
+    )
+      corrupt();
+    if (dependencies === null) {
+      if (lifecycle.dependency_receipt !== null) corrupt();
+    } else {
+      receiptShape(lifecycle.dependency_receipt);
+      const receipt = lifecycle.dependency_receipt as Record<string, unknown>;
+      if (
+        canonicalJson(receipt.approved_paths) !== canonicalJson(dependencies.paths) ||
+        receipt.base_head !== state.base_head
+      )
+        corrupt();
+    }
+    if (!Array.isArray(lifecycle.retained_at) || lifecycle.retained_at.length > 2) corrupt();
+    if (dependencies === null && lifecycle.retained_at.length > 0) corrupt();
+    let previousVersion = lifecycle.observed_at_version as number;
+    let previousCycle = lifecycle.observed_repair_cycle as number;
+    for (const retention of lifecycle.retained_at) {
+      if (!isObject(retention)) corrupt();
+      checkKeys(retention, ["repair_cycle", "workflow_version"]);
+      if (
+        !Number.isSafeInteger(retention.repair_cycle) ||
+        (retention.repair_cycle as number) <= previousCycle ||
+        (retention.repair_cycle as number) > currentCycle ||
+        !Number.isSafeInteger(retention.workflow_version) ||
+        (retention.workflow_version as number) <= previousVersion ||
+        (retention.workflow_version as number) > currentVersion
+      )
+        corrupt();
+      previousCycle = retention.repair_cycle as number;
+      previousVersion = retention.workflow_version as number;
+    }
+    return;
+  }
+  if (lifecycle.state !== "stale") corrupt();
+  checkKeys(lifecycle, [
+    "state",
+    "observed_at_version",
+    "observed_repair_cycle",
+    "stale_at_version",
+    "stale_at_repair_cycle",
+    "reason",
+    "affected_paths",
+  ]);
+  if (result.status !== "not_run") corrupt();
+  if ((lifecycle.observed_at_version === null) !== (lifecycle.observed_repair_cycle === null))
+    corrupt();
+  if (
+    (lifecycle.observed_at_version !== null &&
+      (!Number.isSafeInteger(lifecycle.observed_at_version) ||
+        (lifecycle.observed_at_version as number) < 1 ||
+        (lifecycle.observed_at_version as number) > currentVersion)) ||
+    (lifecycle.observed_repair_cycle !== null &&
+      (!Number.isSafeInteger(lifecycle.observed_repair_cycle) ||
+        (lifecycle.observed_repair_cycle as number) < 0 ||
+        (lifecycle.observed_repair_cycle as number) > currentCycle)) ||
+    !Number.isSafeInteger(lifecycle.stale_at_version) ||
+    (lifecycle.stale_at_version as number) < 1 ||
+    (lifecycle.stale_at_version as number) > currentVersion ||
+    !Number.isSafeInteger(lifecycle.stale_at_repair_cycle) ||
+    (lifecycle.stale_at_repair_cycle as number) < 0 ||
+    (lifecycle.stale_at_repair_cycle as number) > currentCycle ||
+    (lifecycle.reason !== "dependency_intersection" && lifecycle.reason !== "dependency_unprovable")
+  )
+    corrupt();
+  if (lifecycle.reason === "dependency_intersection" && lifecycle.observed_at_version === null)
+    corrupt();
+  if (
+    lifecycle.observed_at_version !== null &&
+    ((lifecycle.stale_at_version as number) <= (lifecycle.observed_at_version as number) ||
+      (lifecycle.stale_at_repair_cycle as number) <= (lifecycle.observed_repair_cycle as number))
+  )
+    corrupt();
+  pathList(lifecycle.affected_paths, true);
+  const affected = lifecycle.affected_paths as string[];
+  const dependencyPaths = dependencies ? (dependencies.paths as string[]) : [];
+  if (affected.some((path) => !dependencyPaths.includes(path))) corrupt();
+  if (lifecycle.reason === "dependency_intersection" && affected.length === 0) corrupt();
+  if (lifecycle.reason === "dependency_unprovable" && affected.length !== 0) corrupt();
+}
+
+function orderedValidationResultsShape(
+  value: unknown,
+  requirements: unknown,
+  state: Record<string, unknown>,
+): void {
   resultsShape(value, "validation_id", "VAL", VALIDATION_STATUS_SET as ReadonlySet<string>);
   if (!Array.isArray(requirements) || !Array.isArray(value) || value.length > requirements.length) {
     corrupt();
@@ -264,6 +382,11 @@ function orderedValidationResultsShape(value: unknown, requirements: unknown): v
       (requirement) => isObject(requirement) && requirement.validation_id === result.validation_id,
     );
     if (requirementIndex <= previousRequirementIndex) corrupt();
+    const requirement = requirements[requirementIndex];
+    if (!isObject(requirement)) corrupt();
+    if (result.manual_lifecycle !== undefined) {
+      manualValidationLifecycleShape(result.manual_lifecycle, result, requirement, state);
+    }
     previousRequirementIndex = requirementIndex;
   }
 }
@@ -1032,6 +1155,17 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
   contractsShape(value.acceptance_criteria, "AC");
   contractsShape(value.validation_requirements, "VAL");
   reviewTargetShape(value.review_target);
+  for (const requirement of value.validation_requirements as Array<Record<string, unknown>>) {
+    if (requirement.kind === "inspection" && isObject(requirement.dependencies)) {
+      if (
+        (requirement.dependencies.paths as string[]).some(
+          (path) => !(value.approved_paths as string[]).includes(path),
+        ) ||
+        (value.review_target as { review_mode?: unknown }).review_mode === "commit_range"
+      )
+        corrupt();
+    }
+  }
   nullableReceipt(value.initial_receipt);
   nullableReceipt(value.review_start_receipt);
   pathList(value.dirty_baseline_paths, true);
@@ -1068,7 +1202,7 @@ export function validateWorkflowStateV10(value: unknown): WorkflowState {
     "AC",
     ACCEPTANCE_STATUS_SET as ReadonlySet<string>,
   );
-  orderedValidationResultsShape(value.validation_results, value.validation_requirements);
+  orderedValidationResultsShape(value.validation_results, value.validation_requirements, value);
   nullableReceipt(value.implementation_receipt);
   stringArrayShape(value.implementation_known_failures, 50, MAX_DETAIL);
   resolutionMapShape(value.finding_resolution_map);

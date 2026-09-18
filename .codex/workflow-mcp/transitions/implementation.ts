@@ -41,6 +41,7 @@ import {
   invalidateImplementationSubmissionEvidence,
   invalidateLinkedReviewProgress,
   invalidateReviewReceipts,
+  reconcileRepairManualValidationEvidence,
 } from "./shared.js";
 import { replaceAuthoritativeImplementationContract } from "./state.js";
 
@@ -230,7 +231,10 @@ export function submitImplementation(
   next.implementation_status = args.status;
   next.agent_touched_paths = touchedPaths;
   next.acceptance_results = acceptanceResults;
-  next.validation_results = validationResults;
+  next.validation_results =
+    state.phase === "REPAIRING"
+      ? reconcileRepairManualValidationEvidence(state, validationResults, freshReceipt, args.status)
+      : validationResults;
   // The store verified canonical equality with the fresh receipt first.
   next.implementation_receipt = clone(freshReceipt);
   next.implementation_known_failures = knownFailures;

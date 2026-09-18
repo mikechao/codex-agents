@@ -332,7 +332,19 @@ export function createState(
     "VAL",
     "validation_id",
     true,
+    { repositoryRoot, approvedPaths },
   );
+  if (
+    target.review_mode === "commit_range" &&
+    state.validation_requirements.some(
+      (requirement) => requirement.kind === "inspection" && requirement.dependencies !== undefined,
+    )
+  ) {
+    fail(
+      "ERROR_INVALID_SHAPE",
+      "repository-path inspection dependencies require a working-tree workflow",
+    );
+  }
   state.review_target = target;
   return state;
 }

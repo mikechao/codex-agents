@@ -704,6 +704,251 @@ test("state validation rejects phase and authority-substate contradictions", () 
   );
 });
 
+test("manual validation lifecycle metadata is closed, cross-bound, and legacy-compatible", () => {
+  const observed = workflowState({ phase: "REVIEWING" });
+  observed.validation_requirements = [
+    {
+      validation_id: "VAL-001" as ValidationRequirementId,
+      description: "inspect exact path",
+      kind: "inspection",
+      dependencies: { kind: "repository_paths", paths: ["note.txt" as ExactRepoPath] },
+    },
+  ];
+  observed.validation_results = [
+    {
+      validation_id: "VAL-001" as ValidationRequirementId,
+      status: "passed",
+      evidence: "observed",
+      manual_lifecycle: {
+        state: "observed",
+        observed_at_version: observed.version,
+        observed_repair_cycle: 0,
+        dependency_receipt: syntheticReceipt(),
+        retained_at: [],
+      },
+    },
+  ];
+  assert.doesNotThrow(() => validateWorkflowStateV10(observed));
+
+  const legacy = structuredClone(observed);
+  delete legacy.validation_results[0]?.manual_lifecycle;
+  assert.doesNotThrow(() => validateWorkflowStateV10(legacy));
+  const unscopedObserved = structuredClone(observed);
+  unscopedObserved.version = (observed.version + 1) as WorkflowVersion;
+  unscopedObserved.repair_cycle = 1;
+  unscopedObserved.validation_requirements[0] = {
+    validation_id: "VAL-001" as ValidationRequirementId,
+    description: "inspection without path dependencies",
+    kind: "inspection",
+  };
+  unscopedObserved.validation_results[0] = {
+    validation_id: "VAL-001" as ValidationRequirementId,
+    status: "passed",
+    evidence: "unscoped observation",
+    manual_lifecycle: {
+      state: "observed",
+      observed_at_version: observed.version,
+      observed_repair_cycle: 0,
+      dependency_receipt: null,
+      retained_at: [],
+    },
+  };
+  assert.doesNotThrow(() => validateWorkflowStateV10(unscopedObserved));
+  assertStateCorrupt(
+    unscopedObserved,
+    (candidate) => {
+      const lifecycle = candidate.validation_results[0]?.manual_lifecycle;
+      if (lifecycle?.state === "observed") {
+        lifecycle.retained_at = [{ repair_cycle: 1, workflow_version: candidate.version }];
+      }
+    },
+    "unscoped evidence cannot claim repair retention",
+  );
+  assertStateCorrupt(
+    observed,
+    (candidate) => {
+      const result = candidate.validation_results[0];
+      if (result?.manual_lifecycle?.state === "observed") {
+        result.manual_lifecycle.dependency_receipt = null;
+      }
+    },
+    "dependency metadata without its authoritative receipt",
+  );
+  assertStateCorrupt(
+    observed,
+    (candidate) => {
+      candidate.validation_requirements[0] = {
+        validation_id: "VAL-001" as ValidationRequirementId,
+        description: "command",
+        kind: "command",
+        argv: ["true"],
+      };
+    },
+    "manual lifecycle metadata on an executable validation",
+  );
+  assertStateCorrupt(
+    observed,
+    (candidate) => {
+      (candidate.validation_requirements[0] as any).dependencies.kind = "semantic_label";
+    },
+    "unsupported dependency domain",
+  );
+
+  const stale = structuredClone(observed);
+  stale.version = (observed.version + 1) as WorkflowVersion;
+  stale.repair_cycle = 1;
+  stale.validation_results[0] = {
+    validation_id: "VAL-001" as ValidationRequirementId,
+    status: "not_run",
+    evidence: "stale after repair",
+    manual_lifecycle: {
+      state: "stale",
+      observed_at_version: observed.version,
+      observed_repair_cycle: 0,
+      stale_at_version: stale.version,
+      stale_at_repair_cycle: 1,
+      reason: "dependency_intersection",
+      affected_paths: ["note.txt" as ExactRepoPath],
+    },
+  };
+  assert.doesNotThrow(() => validateWorkflowStateV10(stale));
+  assertStateCorrupt(
+    stale,
+    (candidate) => {
+      const lifecycle = candidate.validation_results[0]?.manual_lifecycle;
+      if (lifecycle?.state === "stale") lifecycle.stale_at_version = observed.version;
+    },
+    "staleness version must follow observation",
+  );
+  assertStateCorrupt(
+    stale,
+    (candidate) => {
+      const lifecycle = candidate.validation_results[0]?.manual_lifecycle;
+      if (lifecycle?.state === "stale") {
+        if (lifecycle.observed_repair_cycle === null) {
+          throw new Error("expected observation provenance fixture");
+        }
+        lifecycle.stale_at_repair_cycle = lifecycle.observed_repair_cycle;
+      }
+    },
+    "staleness repair cycle must follow observation",
+  );
+  assertStateCorrupt(
+    stale,
+    (candidate) => {
+      const lifecycle = candidate.validation_results[0]?.manual_lifecycle;
+      if (lifecycle?.state === "stale") {
+        lifecycle.observed_at_version = null;
+        lifecycle.observed_repair_cycle = null;
+      }
+    },
+    "proven dependency intersection requires observation provenance",
+  );
+
+  const repairing = workflowState({ phase: "REPAIRING" });
+  repairing.validation_requirements = structuredClone(observed.validation_requirements);
+  repairing.validation_results = [
+    {
+      validation_id: "VAL-001" as ValidationRequirementId,
+      status: "passed",
+      evidence: "legacy observation without lifecycle metadata",
+    },
+  ];
+  const repaired = submitImplementation(
+    repairing,
+    {
+      workflow_id: repairing.workflow_id,
+      expected_version: repairing.version,
+      status: "DONE",
+      summary: "completed repair",
+      agent_touched_paths: [],
+      acceptance_results: repairing.acceptance_criteria.map(({ criterion_id }) => ({
+        criterion_id,
+        status: "satisfied",
+        evidence: "satisfied",
+      })),
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "parent-owned" },
+      ],
+      known_failures: [],
+      finding_resolution_map: Object.fromEntries(
+        repairing.repair_authorized_ids.map((id) => [id, "resolved"]),
+      ),
+    },
+    TEST_ROOT,
+    syntheticReceipt(),
+  );
+  assert.equal(repaired.validation_results[0]?.status, "not_run");
+  assert.equal(
+    repaired.validation_results[0]?.manual_lifecycle?.state === "stale"
+      ? repaired.validation_results[0].manual_lifecycle.reason
+      : null,
+    "dependency_unprovable",
+  );
+  assert.equal(repaired.validation_results[0]?.manual_lifecycle?.observed_at_version, null);
+  assert.equal(repaired.validation_results[0]?.manual_lifecycle?.observed_repair_cycle, null);
+
+  const legacyUnprovable = structuredClone(stale);
+  const legacyLifecycle = legacyUnprovable.validation_results[0]?.manual_lifecycle;
+  if (legacyLifecycle?.state !== "stale") throw new Error("expected stale lifecycle fixture");
+  legacyLifecycle.observed_at_version = null;
+  legacyLifecycle.observed_repair_cycle = null;
+  legacyLifecycle.reason = "dependency_unprovable";
+  legacyLifecycle.affected_paths = [];
+  assert.doesNotThrow(() => validateWorkflowStateV10(legacyUnprovable));
+
+  const unscoped = structuredClone(repairing);
+  unscoped.validation_requirements = [
+    {
+      validation_id: "VAL-001" as ValidationRequirementId,
+      description: "inspection without path dependencies",
+      kind: "inspection",
+    },
+  ];
+  unscoped.validation_results[0] = {
+    validation_id: "VAL-001" as ValidationRequirementId,
+    status: "passed",
+    evidence: "observed without a mechanically bounded dependency",
+    manual_lifecycle: {
+      state: "observed",
+      observed_at_version: unscoped.version,
+      observed_repair_cycle: unscoped.repair_cycle - 1,
+      dependency_receipt: null,
+      retained_at: [],
+    },
+  };
+  const unscopedRepair = submitImplementation(
+    unscoped,
+    {
+      workflow_id: unscoped.workflow_id,
+      expected_version: unscoped.version,
+      status: "DONE",
+      summary: "completed repair",
+      agent_touched_paths: [],
+      acceptance_results: unscoped.acceptance_criteria.map(({ criterion_id }) => ({
+        criterion_id,
+        status: "satisfied",
+        evidence: "satisfied",
+      })),
+      validation_results: [
+        { validation_id: "VAL-001", status: "not_run", evidence: "parent-owned" },
+      ],
+      known_failures: [],
+      finding_resolution_map: Object.fromEntries(
+        unscoped.repair_authorized_ids.map((id) => [id, "resolved"]),
+      ),
+    },
+    TEST_ROOT,
+    syntheticReceipt(),
+  );
+  assert.equal(
+    unscopedRepair.validation_results[0]?.manual_lifecycle?.state === "stale"
+      ? unscopedRepair.validation_results[0].manual_lifecycle.reason
+      : null,
+    "dependency_unprovable",
+  );
+});
+
 test("workflow transitions invalidate only their typed evidence families", () => {
   const evidenceCases: Array<Parameters<typeof verifyEvidenceTransition>> = [];
   const assertEvidenceTransition = (...args: Parameters<typeof verifyEvidenceTransition>) => {

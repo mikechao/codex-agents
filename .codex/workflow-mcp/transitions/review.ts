@@ -453,7 +453,11 @@ export function finalizeRepairExhausted(state: WorkflowState, input: unknown): W
   return next;
 }
 
-export function recordManualValidation(state: WorkflowState, input: unknown): WorkflowState {
+export function recordManualValidation(
+  state: WorkflowState,
+  input: unknown,
+  dependencyReceipt: ChangeReceipt | null,
+): WorkflowState {
   if (!input || typeof input !== "object" || Array.isArray(input))
     fail("ERROR_INVALID_SHAPE", "manual validation input is invalid");
   const args = exactKeys(
@@ -474,6 +478,9 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
   if (!requirement) fail("ERROR_INVALID_SHAPE", "manual validation ID is unknown");
   if (requirement.kind !== "inspection")
     fail("ERROR_INVALID_SHAPE", "validation requirement is executable");
+  if ((requirement.dependencies === undefined) !== (dependencyReceipt === null)) {
+    fail("ERROR_INVALID_TRANSITION", "manual validation dependency evidence is incomplete");
+  }
   const matching = state.validation_results.filter(
     (result) => result.validation_id === validationId,
   );
@@ -486,6 +493,13 @@ export function recordManualValidation(state: WorkflowState, input: unknown): Wo
     validation_id: validationId as ValidationResult["validation_id"],
     status: args.status,
     evidence: boundedString(args.evidence, "evidence", MAX_DETAIL),
+    manual_lifecycle: {
+      state: "observed",
+      observed_at_version: (state.version + 1) as WorkflowVersion,
+      observed_repair_cycle: state.repair_cycle,
+      dependency_receipt: dependencyReceipt === null ? null : clone(dependencyReceipt),
+      retained_at: [],
+    },
   };
   const next = clone<WorkflowState>(state);
   const existingIndex = next.validation_results.findIndex(

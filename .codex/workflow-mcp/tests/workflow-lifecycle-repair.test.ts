@@ -17,6 +17,156 @@ import {
   reviewerValidationResults,
 } from "./workflow-test-helpers.js";
 
+test("repair retains only manually observed evidence with proven-disjoint exact-path dependencies", () => {
+  const { root, git } = fixture();
+  try {
+    writeFileSync(join(root, "other.txt"), "other baseline\n");
+    git("add", "other.txt");
+    git("commit", "-m", "add second validation surface");
+    const store: any = new WorkflowStore({ repositoryRoot: root, databasePath: ":memory:" });
+    const created = store.create(
+      input(git, {
+        approved_paths: ["note.txt", "other.txt"],
+        max_repair_cycles: 2,
+        validation_requirements: [
+          {
+            description: "inspect note",
+            kind: "inspection",
+            dependencies: { kind: "repository_paths", paths: ["note.txt"] },
+          },
+          {
+            description: "inspect other",
+            kind: "inspection",
+            dependencies: { kind: "repository_paths", paths: ["other.txt"] },
+          },
+        ],
+      }),
+    );
+    const id = created.workflow_id;
+    const submit = (status: "DONE" | "INCOMPLETE", resolution: Record<string, string> = {}) =>
+      store.submitImplementation({
+        workflow_id: id,
+        expected_version: currentVersion(store, id),
+        status,
+        summary: "repair submission",
+        agent_touched_paths: [],
+        acceptance_results: [
+          { criterion_id: "AC-001", status: "satisfied", evidence: "satisfied" },
+        ],
+        validation_results: [
+          { validation_id: "VAL-001", status: "not_run", evidence: "parent-owned" },
+          { validation_id: "VAL-002", status: "not_run", evidence: "parent-owned" },
+        ],
+        known_failures: status === "DONE" ? [] : ["repair remains in progress"],
+        finding_resolution_map: resolution,
+      });
+
+    submit("DONE");
+    for (const validationId of ["VAL-001", "VAL-002"]) {
+      store.recordManualValidation({
+        workflow_id: id,
+        expected_version: currentVersion(store, id),
+        validation_id: validationId,
+        status: "passed",
+        evidence: `${validationId} observed`,
+      });
+    }
+    const observed = rawState(store, id).validation_results;
+    assert.equal(observed[0].manual_lifecycle.dependency_receipt.approved_paths[0], "note.txt");
+    assert.equal(
+      "dependency_receipt" in store.parentGet(id).validation_results[0].manual_lifecycle,
+      false,
+    );
+    for (const view of [store.implementerGet(id), store.reviewerGet(id), store.committerGet(id)]) {
+      assert.equal(
+        "dependency_receipt" in view.validation_results[0].manual_lifecycle,
+        false,
+        "worker validation projections must redact dependency receipts",
+      );
+    }
+
+    review(store, created, undefined, "CHANGES_REQUESTED", [finding("REPAIR-1")]);
+    store.authorizeRepair({
+      workflow_id: id,
+      expected_version: currentVersion(store, id),
+      finding_ids: ["REPAIR-1"],
+      repair_directive: repairDirectiveFor(store, id, ["REPAIR-1"]),
+    });
+    writeFileSync(join(root, "note.txt"), "first repair\n");
+    submit("INCOMPLETE", { "REPAIR-1": "still_present" });
+    assert.deepEqual(
+      rawState(store, id).validation_results.map((result: any) => result.status),
+      ["passed", "passed"],
+    );
+    submit("DONE", { "REPAIR-1": "resolved" });
+    let results = store.parentGet(id).validation_results;
+    assert.equal(results[0].status, "not_run");
+    assert.equal(results[0].manual_lifecycle.reason, "dependency_intersection");
+    assert.deepEqual(results[0].manual_lifecycle.affected_paths, ["note.txt"]);
+    assert.equal(results[1].status, "passed");
+    assert.equal(results[1].manual_lifecycle.retained_at.length, 1);
+    const firstDecision = store.audit(id).at(-1).manual_validation_repair_decision;
+    assert.deepEqual(
+      firstDecision.retained.map((item: any) => item.validation_id),
+      ["VAL-002"],
+    );
+    assert.deepEqual(
+      firstDecision.stale.map((item: any) => item.validation_id),
+      ["VAL-001"],
+    );
+    assert.equal(
+      firstDecision.retained[0].baseline_dependency_digest,
+      firstDecision.retained[0].repaired_dependency_digest,
+    );
+    assert.notEqual(
+      firstDecision.stale[0].baseline_dependency_digest,
+      firstDecision.stale[0].repaired_dependency_digest,
+    );
+    assert.match(firstDecision.retained[0].baseline_dependency_digest, /^[0-9a-f]{64}$/u);
+
+    assert.equal(store.operatorDecisionGet(id).primary.validations[0].evidence_state, "stale");
+    store.recordManualValidation({
+      workflow_id: id,
+      expected_version: currentVersion(store, id),
+      validation_id: "VAL-001",
+      status: "passed",
+      evidence: "note recollected",
+    });
+    review(store, created, undefined, "CHANGES_REQUESTED", [finding("REPAIR-2")], [], {
+      "REPAIR-1": "resolved",
+    });
+    store.authorizeRepair({
+      workflow_id: id,
+      expected_version: currentVersion(store, id),
+      finding_ids: ["REPAIR-2"],
+      repair_directive: repairDirectiveFor(store, id, ["REPAIR-2"]),
+    });
+    writeFileSync(join(root, "other.txt"), "second repair\n");
+    submit("DONE", { "REPAIR-2": "resolved" });
+    results = store.parentGet(id).validation_results;
+    assert.equal(results[0].status, "passed");
+    assert.equal(results[0].manual_lifecycle.retained_at.length, 1);
+    assert.equal(results[1].status, "not_run");
+    assert.equal(results[1].manual_lifecycle.reason, "dependency_intersection");
+    const retainedAudit = store
+      .audit(id)
+      .find(
+        (event: any) => event.version === firstDecision.submission_version,
+      ).manual_validation_repair_decision;
+    assert.equal(
+      retainedAudit.retained[0].baseline_dependency_digest,
+      firstDecision.retained[0].baseline_dependency_digest,
+    );
+    assert.equal(
+      retainedAudit.retained[0].repaired_dependency_digest,
+      firstDecision.retained[0].repaired_dependency_digest,
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("incomplete implementation attempts stay active and preserve repair authorization", () => {
   const { root, git } = fixture();
   try {
@@ -100,6 +250,8 @@ test("incomplete implementation attempts stay active and preserve repair authori
     assert.equal(repairing.repair_cycle, repairBefore.repair_cycle);
     assert.deepEqual(repairing.repair_authorized_ids, ["REPAIR-1"]);
     assert.equal(repairing.stop_context, null);
+    assert.equal(repairing.validation_results[0].status, "not_run");
+    assert.equal("manual_lifecycle" in repairing.validation_results[0], false);
     assert.deepEqual(store.implementerGet(id).permitted_next_actions, [
       "workflow_submit_implementation",
     ]);

@@ -356,7 +356,11 @@ export type OperatorPrimaryDecision =
     }
   | {
       kind: "inspection_required";
-      validations: Array<{ validation_id: ValidationRequirementId; description: string }>;
+      validations: Array<{
+        validation_id: ValidationRequirementId;
+        description: string;
+        evidence_state: "pending" | "stale";
+      }>;
     }
   | {
       kind: "approve_exact_repairs";
@@ -731,9 +735,18 @@ export interface AcceptanceCriterion {
   description: string;
 }
 
+export interface RepositoryPathValidationDependencies {
+  kind: "repository_paths";
+  paths: ExactRepoPath[];
+}
+
 export type ValidationAuthoringRequirement =
   | { description: string; kind: "command"; argv: string[] }
-  | { description: string; kind: "inspection" };
+  | {
+      description: string;
+      kind: "inspection";
+      dependencies?: RepositoryPathValidationDependencies;
+    };
 
 export type ValidationRequirement =
   | ({ validation_id: ValidationRequirementId } & Extract<
@@ -754,7 +767,39 @@ export interface ValidationResult {
   validation_id: ValidationRequirementId;
   status: ValidationStatus;
   evidence: string;
+  manual_lifecycle?: ManualValidationLifecycle;
 }
+
+export interface ManualValidationRetention {
+  repair_cycle: number;
+  workflow_version: WorkflowVersion;
+}
+
+export type ManualValidationLifecycle =
+  | {
+      state: "observed";
+      observed_at_version: WorkflowVersion;
+      observed_repair_cycle: number;
+      dependency_receipt: ChangeReceipt | null;
+      retained_at: ManualValidationRetention[];
+    }
+  | {
+      state: "stale";
+      observed_at_version: WorkflowVersion | null;
+      observed_repair_cycle: number | null;
+      stale_at_version: WorkflowVersion;
+      stale_at_repair_cycle: number;
+      reason: "dependency_intersection" | "dependency_unprovable";
+      affected_paths: ExactRepoPath[];
+    };
+
+export type ManualValidationLifecycleView =
+  | Omit<Extract<ManualValidationLifecycle, { state: "observed" }>, "dependency_receipt">
+  | Extract<ManualValidationLifecycle, { state: "stale" }>;
+
+export type ValidationResultView = Omit<ValidationResult, "manual_lifecycle"> & {
+  manual_lifecycle?: ManualValidationLifecycleView;
+};
 
 // ---------------------------------------------------------------------------
 // 7. Receipts and Git metadata
@@ -1070,9 +1115,11 @@ export type ParentView = RoleViewCommon &
     | "review_receipt"
     | "approved_path_baselines"
     | "commit_preparation"
+    | "validation_results"
   > & {
     approved_path_baselines: ApprovedPathBaselineView[];
     commit_preparation: CommitPreparationView | null;
+    validation_results: ValidationResultView[];
   };
 
 export interface ImplementerView extends RoleViewCommon {
@@ -1090,7 +1137,7 @@ export interface ImplementerView extends RoleViewCommon {
   agent_touched_paths: ExactRepoPath[];
   scope_changed_paths: ExactRepoPath[];
   acceptance_results: AcceptanceResult[];
-  validation_results: ValidationResult[];
+  validation_results: ValidationResultView[];
   finding_resolution_map: FindingResolutionMap;
   blocking_findings: BlockingFinding[];
   repair_authorized_ids: FindingId[];
@@ -1113,7 +1160,7 @@ export type ImplementerHandoffView = {
 export interface ReviewerViewBase extends RoleViewCommon {
   acceptance_criteria: AcceptanceCriterion[];
   validation_requirements: ValidationRequirement[];
-  validation_results: ValidationResult[];
+  validation_results: ValidationResultView[];
   dirty_baseline_paths: ExactRepoPath[];
   linked_findings: ReviewFinding[];
   blocking_findings: BlockingFinding[];
@@ -1142,7 +1189,7 @@ export interface CommitterView extends RoleViewCommon {
   implementation_status: ImplementationStatus | null;
   implementation_known_failures: string[];
   acceptance_results: AcceptanceResult[];
-  validation_results: ValidationResult[];
+  validation_results: ValidationResultView[];
   blocking_findings: BlockingFinding[];
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;
@@ -1194,6 +1241,7 @@ export interface AuditEnvelope {
   outcome: AuditOutcome;
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   plan_rebind?: PlanRebindAudit;
+  manual_validation_repair_decision?: ManualValidationRepairDecisionAudit;
 }
 
 export interface AuditEvent {
@@ -1204,6 +1252,7 @@ export interface AuditEvent {
   scope_expansion?: ScopeExpansionAudit;
   dirty_scope_adoption?: DirtyScopeAdoptionAudit;
   plan_rebind?: PlanRebindAudit;
+  manual_validation_repair_decision?: ManualValidationRepairDecisionAudit;
   finding_adjudications?: FindingAdjudication[];
   created_at: IsoTimestamp;
 }
@@ -1214,6 +1263,26 @@ export interface PlanRebindAudit {
   added_paths: ExactRepoPath[];
   user_authorization: string;
   rebound_at: IsoTimestamp;
+}
+
+export interface ManualValidationRepairDecisionAudit {
+  repair_cycle: number;
+  submission_version: WorkflowVersion;
+  retained: Array<{
+    validation_id: ValidationRequirementId;
+    observed_at_version: WorkflowVersion;
+    dependency_paths: ExactRepoPath[];
+    baseline_dependency_digest: StateDigest;
+    repaired_dependency_digest: StateDigest;
+  }>;
+  stale: Array<{
+    validation_id: ValidationRequirementId;
+    observed_at_version: WorkflowVersion | null;
+    reason: "dependency_intersection" | "dependency_unprovable";
+    affected_paths: ExactRepoPath[];
+    baseline_dependency_digest: StateDigest | null;
+    repaired_dependency_digest: StateDigest | null;
+  }>;
 }
 
 export interface DirtyScopeAdoptionState {

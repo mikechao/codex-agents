@@ -233,6 +233,20 @@ const validationRequirementSchema: JsonSchema = {
       properties: {
         description: { type: "string", minLength: 1, maxLength: 4000 },
         kind: { type: "string", const: "inspection" },
+        dependencies: {
+          type: "object",
+          properties: {
+            kind: { type: "string", const: "repository_paths" },
+            paths: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 300 },
+              minItems: 1,
+              maxItems: 200,
+            },
+          },
+          required: ["kind", "paths"],
+          additionalProperties: false,
+        },
       },
       required: ["description", "kind"],
       additionalProperties: false,

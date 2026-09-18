@@ -943,7 +943,9 @@ test("operator projection requests parent-owned manual evidence before review", 
     });
     assert.deepEqual(store.operatorDecisionGet(id).primary, {
       kind: "inspection_required",
-      validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+      validations: [
+        { validation_id: "VAL-002", description: "manual inspection", evidence_state: "pending" },
+      ],
     });
     const collection = store.operatorDecisionGet(id).execution.primary;
     assert.equal(collection.mode, "collect_evidence");
@@ -994,7 +996,9 @@ test("operator projection requests parent-owned manual evidence before review", 
       .run(JSON.stringify(stopped), objectDigest(stopped), id);
     assert.deepEqual(store.operatorDecisionGet(id).primary, {
       kind: "inspection_required",
-      validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+      validations: [
+        { validation_id: "VAL-002", description: "manual inspection", evidence_state: "pending" },
+      ],
     });
     const stoppedCollection = store.operatorDecisionGet(id).execution.primary;
     assert.equal(stoppedCollection.mode, "collect_evidence");
@@ -1161,7 +1165,13 @@ test("operator projection routes failed-plus-pending change review and preserves
       ]).primary,
       {
         kind: "inspection_required",
-        validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+        validations: [
+          {
+            validation_id: "VAL-002",
+            description: "manual inspection",
+            evidence_state: "pending",
+          },
+        ],
       },
     );
 
@@ -1186,7 +1196,13 @@ test("operator projection routes failed-plus-pending change review and preserves
       ]).primary,
       {
         kind: "inspection_required",
-        validations: [{ validation_id: "VAL-002", description: "manual inspection" }],
+        validations: [
+          {
+            validation_id: "VAL-002",
+            description: "manual inspection",
+            evidence_state: "pending",
+          },
+        ],
       },
     );
 

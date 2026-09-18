@@ -1,11 +1,16 @@
 import { fail } from "../errors.js";
 import type {
+  ChangeReceipt,
+  ImplementationStatus,
+  ManualValidationRepairDecisionAudit,
   RecoveryContext,
+  ValidationResult,
   WorkflowEvidenceState,
   WorkflowPhase,
   WorkflowState,
 } from "../types.js";
 import { boundedString, isoNow } from "../validation.js";
+import { compareDependencyReceipt, dependencyReceiptIdentityDigest } from "./receipts.js";
 
 export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -49,6 +54,162 @@ export function invalidateImplementationSubmissionEvidence(
     finding_resolution_map: {},
     implementation_receipt: null,
   } satisfies WorkflowEvidenceState<"implementation_submission">);
+}
+
+const STALE_INTERSECTION_EVIDENCE =
+  "manual validation evidence is stale after repair changed an authorized dependency";
+const STALE_UNPROVABLE_EVIDENCE =
+  "manual validation evidence is stale because repair impact could not be proven disjoint";
+
+/** Repair-only reconciliation. Generic authority invalidators remain conservatively unchanged. */
+export function reconcileRepairManualValidationEvidence(
+  state: WorkflowState,
+  submitted: ValidationResult[],
+  freshReceipt: ChangeReceipt,
+  status: ImplementationStatus,
+): ValidationResult[] {
+  const priorById = new Map(
+    state.validation_results.map((result) => [result.validation_id, result]),
+  );
+  if (status === "INCOMPLETE") {
+    return submitted.map((result) => {
+      const requirement = state.validation_requirements.find(
+        (candidate) => candidate.validation_id === result.validation_id,
+      );
+      const prior = priorById.get(result.validation_id);
+      return requirement?.kind === "inspection" &&
+        prior &&
+        (prior.status !== "not_run" || prior.manual_lifecycle !== undefined)
+        ? clone(prior)
+        : result;
+    });
+  }
+  if (status !== "DONE" && status !== "DONE_WITH_CONCERNS") return submitted;
+
+  return submitted.map((result) => {
+    const requirement = state.validation_requirements.find(
+      (candidate) => candidate.validation_id === result.validation_id,
+    );
+    const prior = priorById.get(result.validation_id);
+    if (requirement?.kind !== "inspection" || !prior || prior.status === "not_run") return result;
+    const lifecycle = prior.manual_lifecycle;
+    const dependencies = requirement.dependencies;
+    if (
+      lifecycle?.state === "observed" &&
+      dependencies?.kind === "repository_paths" &&
+      lifecycle.dependency_receipt !== null
+    ) {
+      const comparison = compareDependencyReceipt(
+        lifecycle.dependency_receipt,
+        freshReceipt,
+        dependencies.paths,
+      );
+      if (comparison.status === "proven" && comparison.changed_paths.length === 0) {
+        return {
+          ...clone(prior),
+          manual_lifecycle: {
+            ...clone(lifecycle),
+            retained_at: [
+              ...clone(lifecycle.retained_at),
+              {
+                repair_cycle: state.repair_cycle,
+                workflow_version: (state.version + 1) as WorkflowState["version"],
+              },
+            ],
+          },
+        };
+      }
+      if (comparison.status === "proven") {
+        return {
+          validation_id: result.validation_id,
+          status: "not_run",
+          evidence: STALE_INTERSECTION_EVIDENCE,
+          manual_lifecycle: {
+            state: "stale",
+            observed_at_version: lifecycle.observed_at_version,
+            observed_repair_cycle: lifecycle.observed_repair_cycle,
+            stale_at_version: (state.version + 1) as WorkflowState["version"],
+            stale_at_repair_cycle: state.repair_cycle,
+            reason: "dependency_intersection",
+            affected_paths: comparison.changed_paths,
+          },
+        };
+      }
+    }
+    return {
+      validation_id: result.validation_id,
+      status: "not_run",
+      evidence: STALE_UNPROVABLE_EVIDENCE,
+      manual_lifecycle: {
+        state: "stale",
+        observed_at_version: lifecycle?.state === "observed" ? lifecycle.observed_at_version : null,
+        observed_repair_cycle:
+          lifecycle?.state === "observed" ? lifecycle.observed_repair_cycle : null,
+        stale_at_version: (state.version + 1) as WorkflowState["version"],
+        stale_at_repair_cycle: state.repair_cycle,
+        reason: "dependency_unprovable",
+        affected_paths: [],
+      },
+    };
+  });
+}
+
+export function manualValidationRepairDecisionAudit(
+  before: WorkflowState,
+  after: WorkflowState,
+): ManualValidationRepairDecisionAudit | undefined {
+  if (
+    before.phase !== "REPAIRING" ||
+    (after.implementation_status !== "DONE" && after.implementation_status !== "DONE_WITH_CONCERNS")
+  )
+    return undefined;
+  const retained: ManualValidationRepairDecisionAudit["retained"] = [];
+  const stale: ManualValidationRepairDecisionAudit["stale"] = [];
+  const priorById = new Map(
+    before.validation_results.map((result) => [result.validation_id, result]),
+  );
+  for (const result of after.validation_results) {
+    const lifecycle = result.manual_lifecycle;
+    const requirement = after.validation_requirements.find(
+      (candidate) => candidate.validation_id === result.validation_id,
+    );
+    const dependencyPaths =
+      requirement?.kind === "inspection" ? requirement.dependencies?.paths : undefined;
+    const priorLifecycle = priorById.get(result.validation_id)?.manual_lifecycle;
+    const baselineDigest = dependencyReceiptIdentityDigest(
+      priorLifecycle?.state === "observed" ? priorLifecycle.dependency_receipt : null,
+      dependencyPaths ?? [],
+    );
+    const repairedDigest = dependencyReceiptIdentityDigest(
+      after.implementation_receipt,
+      dependencyPaths ?? [],
+    );
+    if (
+      lifecycle?.state === "observed" &&
+      lifecycle.retained_at.at(-1)?.workflow_version === after.version
+    ) {
+      if (!dependencyPaths || baselineDigest === null || repairedDigest === null) {
+        fail("ERROR_STATE_CORRUPT", "retained validation audit evidence is incomplete");
+      }
+      retained.push({
+        validation_id: result.validation_id,
+        observed_at_version: lifecycle.observed_at_version,
+        dependency_paths: clone(dependencyPaths),
+        baseline_dependency_digest: baselineDigest,
+        repaired_dependency_digest: repairedDigest,
+      });
+    } else if (lifecycle?.state === "stale" && lifecycle.stale_at_version === after.version) {
+      stale.push({
+        validation_id: result.validation_id,
+        observed_at_version: lifecycle.observed_at_version,
+        reason: lifecycle.reason,
+        affected_paths: clone(lifecycle.affected_paths),
+        baseline_dependency_digest: baselineDigest,
+        repaired_dependency_digest: dependencyPaths ? repairedDigest : null,
+      });
+    }
+  }
+  return { repair_cycle: after.repair_cycle, submission_version: after.version, retained, stale };
 }
 
 export function invalidateReviewReceipts(state: WorkflowEvidenceState<"review_receipts">): void {

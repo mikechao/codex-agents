@@ -206,6 +206,13 @@ test("closed protocol registry and schema contract exposes workflow actions with
   const planCreateSchema = planCreate.inputSchema as any;
   assert.equal(planCreateSchema.properties.workflow_type.enum.join(","), "change,review_only");
   assert.equal(planCreateSchema.required.includes("workflow_type"), true);
+  const inspectionRequirement = planCreateSchema.properties.validation_requirements.items.oneOf[1];
+  assert.equal(
+    inspectionRequirement.properties.dependencies.properties.kind.const,
+    "repository_paths",
+  );
+  assert.deepEqual(inspectionRequirement.properties.dependencies.required, ["kind", "paths"]);
+  assert.equal(inspectionRequirement.required.includes("dependencies"), false);
   const createFromPlanSchema = createFromPlan.inputSchema as any;
   assert.deepEqual(Object.keys(createFromPlanSchema.properties).sort(), [
     "max_repair_cycles",

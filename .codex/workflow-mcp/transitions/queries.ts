@@ -17,6 +17,7 @@ import type {
   RoleViewCommon,
   ValidationRequirement,
   ValidationResult,
+  ValidationResultView,
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
@@ -58,6 +59,13 @@ export function approvedPathBaselineView(value: ApprovedPathBaseline): ApprovedP
       mode: baseline.mode,
     },
   };
+}
+
+export function validationResultView(value: ValidationResult): ValidationResultView {
+  if (!value.manual_lifecycle) return clone(value);
+  if (value.manual_lifecycle.state === "stale") return clone(value) as ValidationResultView;
+  const { dependency_receipt: _receipt, ...lifecycle } = value.manual_lifecycle;
+  return { ...clone(value), manual_lifecycle: clone(lifecycle) };
 }
 
 export const ROLE_VIEW_COMMON = [
@@ -919,7 +927,9 @@ export function hasFailedRequiredValidation(state: WorkflowState): boolean {
     const expectedRequirementKeys =
       requirementRecord.kind === "command"
         ? ["argv", "description", "kind", "validation_id"]
-        : ["description", "kind", "validation_id"];
+        : requirementRecord.dependencies === undefined
+          ? ["description", "kind", "validation_id"]
+          : ["dependencies", "description", "kind", "validation_id"];
     if (
       (requirementRecord.kind !== "command" && requirementRecord.kind !== "inspection") ||
       requirementKeys.length !== expectedRequirementKeys.length ||
@@ -929,10 +939,56 @@ export function hasFailedRequiredValidation(state: WorkflowState): boolean {
     }
     const resultKeys = Object.keys(resultRecord).sort();
     if (
-      resultKeys.length !== 3 ||
-      resultKeys.some((key, keyIndex) => key !== ["evidence", "status", "validation_id"][keyIndex])
+      (resultKeys.length !== 3 && resultKeys.length !== 4) ||
+      resultKeys.some(
+        (key, keyIndex) =>
+          key !==
+          (resultKeys.length === 3
+            ? ["evidence", "status", "validation_id"]
+            : ["evidence", "manual_lifecycle", "status", "validation_id"])[keyIndex],
+      )
     ) {
       return false;
+    }
+    if (requirementRecord.kind === "inspection" && requirementRecord.dependencies !== undefined) {
+      const dependencies = requirementRecord.dependencies;
+      if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+        return false;
+      }
+      const dependencyRecord = dependencies as Record<string, unknown>;
+      if (
+        Object.keys(dependencyRecord).sort().join(",") !== "kind,paths" ||
+        dependencyRecord.kind !== "repository_paths" ||
+        !Array.isArray(dependencyRecord.paths) ||
+        dependencyRecord.paths.length === 0 ||
+        dependencyRecord.paths.length > MAX_PATHS ||
+        dependencyRecord.paths.some(
+          (path, pathIndex, paths) =>
+            typeof path !== "string" ||
+            path.length === 0 ||
+            path.length > 300 ||
+            !state.approved_paths.includes(path as ExactRepoPath) ||
+            (pathIndex > 0 && (paths[pathIndex - 1] as string) >= path),
+        )
+      )
+        return false;
+    }
+    if (resultRecord.manual_lifecycle !== undefined) {
+      const lifecycle = resultRecord.manual_lifecycle;
+      if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle)) return false;
+      const lifecycleRecord = lifecycle as Record<string, unknown>;
+      const lifecycleKeys = Object.keys(lifecycleRecord).sort().join(",");
+      if (
+        requirementRecord.kind !== "inspection" ||
+        (lifecycleRecord.state === "observed"
+          ? lifecycleKeys !==
+            "dependency_receipt,observed_at_version,observed_repair_cycle,retained_at,state"
+          : lifecycleRecord.state === "stale"
+            ? lifecycleKeys !==
+              "affected_paths,observed_at_version,observed_repair_cycle,reason,stale_at_repair_cycle,stale_at_version,state"
+            : true)
+      )
+        return false;
     }
     const validationId = requirementRecord.validation_id;
     if (
@@ -1045,6 +1101,10 @@ export function roleView(
         view[key] = (raw[key] as ApprovedPathBaseline[]).map(approvedPathBaselineView);
         continue;
       }
+      if (key === "validation_results") {
+        view[key] = state.validation_results.map(validationResultView);
+        continue;
+      }
       if (INTERNAL_RECEIPT_FIELDS.has(key as keyof WorkflowState)) continue;
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
@@ -1071,6 +1131,10 @@ export function roleView(
       )
         continue;
       if (INTERNAL_RECEIPT_FIELDS.has(key as keyof WorkflowState)) continue;
+      if (key === "validation_results") {
+        view[key] = state.validation_results.map(validationResultView);
+        continue;
+      }
       if (key === "commit_preparation" && raw[key] !== null) {
         const { review_receipt_digest: _digest, ...sanitized } = raw[key] as Record<
           string,

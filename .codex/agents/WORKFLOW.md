@@ -377,7 +377,8 @@ Validation requirements are workflow-local contracts. Implementation results are
 while fresh reviewer command results are approval authority. The server assigns `VAL-001`, `VAL-002`, and
 so on in caller order; those IDs correlate a requirement with its result within that workflow and
 are never repository-global command selectors. Each requirement exposes `description` plus either
-an exact structured command `argv` array, or `kind: "inspection"` without `argv`. The reviewer
+an exact structured command `argv` array, or `kind: "inspection"` without `argv`. An inspection may
+also declare a closed `repository_paths` dependency set drawn from its approved workflow paths. The reviewer
 policy authorizes exact argv entries independently, so descriptions are never parsed as commands
 and inspection requirements are never executed.
 
@@ -389,9 +390,11 @@ authoritative required result set containing a failed validation is terminal blo
 allows independent reviewer routing and repair even while unrelated inspection evidence remains pending;
 pending evidence stays explicit and the parent retains recording authority. Pending-only state, and
 all `review_only` pending-inspection state, remains gated until the parent records it. Only all required
-validations passing enables final approval and commit authorization. Later implementation or repair
-replaces the current validation results, returning inspection checks to unresolved `not_run` and
-requiring fresh parent evidence.
+validations passing enables final approval and commit authorization. Ordinary implementation submission
+still replaces the current validation result set. During repair, parent-observed inspection evidence is
+retained only when its server-captured dependency receipt proves every declared exact path unchanged;
+changed paths, missing dependencies or provenance, unsupported relationships, and any other unprovable
+comparison return that inspection to explicit stale `not_run`. Executable validation semantics are unchanged.
 
 The OpenCode orchestrator performs a bounded, read-only policy preflight before
 `workflow_create`: it reads `.codex/reviewer-validation.json` and checks every proposed command

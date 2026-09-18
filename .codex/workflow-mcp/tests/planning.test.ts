@@ -1014,7 +1014,11 @@ test("plan creation preflights exact validation policy and preserves inspection 
     const draft = store.planCreate({
       ...revisionInput(),
       validation_requirements: [
-        { description: "manual inspection", kind: "inspection" },
+        {
+          description: "manual inspection",
+          kind: "inspection",
+          dependencies: { kind: "repository_paths", paths: ["note.txt"] },
+        },
         {
           description: "exact workflow suite",
           kind: "command",
@@ -1030,7 +1034,12 @@ test("plan creation preflights exact validation policy and preserves inspection 
     const beforePlan = store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision });
     const workflow = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
     assert.deepEqual(workflow.validation_requirements, [
-      { validation_id: "VAL-001", description: "manual inspection", kind: "inspection" },
+      {
+        validation_id: "VAL-001",
+        description: "manual inspection",
+        kind: "inspection",
+        dependencies: { kind: "repository_paths", paths: ["note.txt"] },
+      },
       {
         validation_id: "VAL-002",
         description: "exact workflow suite",
@@ -1047,6 +1056,49 @@ test("plan creation preflights exact validation policy and preserves inspection 
     assert.deepEqual(
       store.planParentGet({ plan_id: draft.plan_id, revision: draft.revision }),
       beforePlan,
+    );
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
+test("inspection dependency authoring rejects unsupported, empty, and out-of-scope domains", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    for (const dependencies of [
+      { kind: "semantic_label", paths: ["note.txt"] },
+      { kind: "repository_paths", paths: [] },
+      { kind: "repository_paths", paths: ["outside.txt"] },
+    ]) {
+      assert.notEqual(
+        category(() =>
+          store.planCreate({
+            ...revisionInput(),
+            validation_requirements: [
+              { description: "manual inspection", kind: "inspection", dependencies },
+            ],
+          }),
+        ),
+        "none",
+      );
+    }
+    assert.equal(
+      category(() =>
+        store.planCreate({
+          ...revisionInput(),
+          validation_requirements: [
+            {
+              description: "command",
+              kind: "command",
+              argv: ["bun", "run", "test:workflow-mcp"],
+              dependencies: { kind: "repository_paths", paths: ["note.txt"] },
+            },
+          ],
+        }),
+      ),
+      "ERROR_INVALID_SHAPE",
     );
   } finally {
     store.close();

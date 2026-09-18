@@ -27,6 +27,7 @@ import type {
   RepairConformance,
   RepairDirective,
   RepairFallback,
+  RepositoryPathValidationDependencies,
   ReviewFinding,
   Role,
   RuntimeId,
@@ -238,6 +239,8 @@ export function planRevisionInput(
     "validation_requirements",
     "VAL",
     "validation_id",
+    false,
+    { repositoryRoot, approvedPaths },
   );
   return {
     plan_schema_version: 3,
@@ -289,7 +292,11 @@ export function planRevisionInputFromArtifact(
     validation_requirements: artifact.validation_requirements.map((item) =>
       item.kind === "command"
         ? { description: item.description, kind: item.kind, argv: item.argv }
-        : { description: item.description, kind: item.kind },
+        : {
+            description: item.description,
+            kind: item.kind,
+            ...(item.dependencies ? { dependencies: item.dependencies } : {}),
+          },
     ),
   };
 }
@@ -339,7 +346,11 @@ export function planArtifact(value: unknown, repositoryRoot: string): PlanRevisi
         validation_requirements: validationRequirements.map((item) => ({
           description: item.description,
           kind: item.kind,
-          ...(item.kind === "command" ? { argv: item.argv } : {}),
+          ...(item.kind === "command"
+            ? { argv: item.argv }
+            : item.dependencies
+              ? { dependencies: item.dependencies }
+              : {}),
         })),
       },
       repositoryRoot,
@@ -395,7 +406,9 @@ function persistedValidationRecords(value: unknown): Record<string, unknown>[] {
     if (record.kind === "command") {
       exactKeys(record, ["validation_id", "description", "kind", "argv"], "validation requirement");
     } else if (record.kind === "inspection") {
-      exactKeys(record, ["validation_id", "description", "kind"], "validation requirement");
+      exactKeys(record, ["validation_id", "description", "kind"], "validation requirement", [
+        "dependencies",
+      ]);
     } else {
       fail("ERROR_STATE_CORRUPT", "validation requirement kind is invalid");
     }
@@ -817,6 +830,7 @@ export function contractList(
   idPrefix: "AC",
   idField: "criterion_id",
   allowEmpty?: boolean,
+  dependencyContext?: { repositoryRoot: string; approvedPaths: ExactRepoPath[] },
 ): AcceptanceCriterion[];
 export function contractList(
   value: unknown,
@@ -824,6 +838,7 @@ export function contractList(
   idPrefix: "VAL",
   idField: "validation_id",
   allowEmpty?: boolean,
+  dependencyContext?: { repositoryRoot: string; approvedPaths: ExactRepoPath[] },
 ): ValidationRequirement[];
 export function contractList(
   value: unknown,
@@ -831,6 +846,7 @@ export function contractList(
   idPrefix: string,
   idField: "criterion_id" | "validation_id",
   allowEmpty = false,
+  dependencyContext?: { repositoryRoot: string; approvedPaths: ExactRepoPath[] },
 ): AcceptanceCriterion[] | ValidationRequirement[] {
   if (
     !Array.isArray(value) ||
@@ -865,11 +881,31 @@ export function contractList(
       };
     }
     if (record.kind === "inspection") {
-      exactKeys(item, ["description", "kind"], `${name} requirement`);
+      exactKeys(item, ["description", "kind"], `${name} requirement`, ["dependencies"]);
+      let dependencies: RepositoryPathValidationDependencies | undefined;
+      if (record.dependencies !== undefined) {
+        if (!dependencyContext) {
+          fail("ERROR_INVALID_SHAPE", `${name} dependencies are not supported`);
+        }
+        const dependencyRecord = exactKeys(
+          record.dependencies,
+          ["kind", "paths"],
+          `${name} dependencies`,
+        );
+        if (dependencyRecord.kind !== "repository_paths") {
+          fail("ERROR_INVALID_SHAPE", `${name} dependency kind is invalid`);
+        }
+        const paths = exactPaths(dependencyRecord.paths, dependencyContext.repositoryRoot);
+        if (paths.some((path) => !dependencyContext.approvedPaths.includes(path))) {
+          fail("ERROR_INVALID_PATHS", `${name} dependency path is outside approved scope`);
+        }
+        dependencies = { kind: "repository_paths", paths };
+      }
       return {
         validation_id: id as ValidationRequirementId,
         description: boundedString(record.description, `${name} description`),
         kind: "inspection",
+        ...(dependencies ? { dependencies } : {}),
       };
     }
     if (!VALIDATION_KIND_SET.has(record.kind as "command" | "inspection"))

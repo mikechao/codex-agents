@@ -166,6 +166,12 @@ function primaryDecision(
         validations: pendingInspectionValidations(state).map((requirement) => ({
           validation_id: requirement.validation_id,
           description: bounded(requirement.description),
+          evidence_state:
+            state.validation_results.find(
+              (result) => result.validation_id === requirement.validation_id,
+            )?.manual_lifecycle?.state === "stale"
+              ? "stale"
+              : "pending",
         })),
       };
     case "repair_required":

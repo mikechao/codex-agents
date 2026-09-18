@@ -1005,7 +1005,17 @@ test("review-only reviewer validation evidence merges with parent manual evidenc
     assert.equal(store.parentGet(id).phase, "STOPPED_APPROVED");
     assert.deepEqual(store.parentGet(id).validation_results, [
       { validation_id: "VAL-001", status: "passed", evidence: "reviewer ran the check" },
-      { validation_id: "VAL-002", status: "passed", evidence: "parent inspected the manual check" },
+      {
+        validation_id: "VAL-002",
+        status: "passed",
+        evidence: "parent inspected the manual check",
+        manual_lifecycle: {
+          state: "observed",
+          observed_at_version: 1,
+          observed_repair_cycle: 0,
+          retained_at: [],
+        },
+      },
     ]);
     store.authorizeCommit({
       workflow_id: id,
@@ -1235,7 +1245,17 @@ test("manual validation evidence is parent-owned, ordered, audited, and commit-g
     });
     assert.deepEqual(store.parentGet(id).validation_results, [
       { validation_id: "VAL-001", status: "passed", evidence: "checked" },
-      { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
+      {
+        validation_id: "VAL-002",
+        status: "passed",
+        evidence: "operator inspected the result",
+        manual_lifecycle: {
+          state: "observed",
+          observed_at_version: 2,
+          observed_repair_cycle: 0,
+          retained_at: [],
+        },
+      },
     ]);
     assert.equal(store.audit(id).at(-1).event_type, "MANUAL_VALIDATION_RECORDED");
     assert.equal(JSON.stringify(store.audit(id)).includes("operator inspected"), false);
@@ -1361,7 +1381,17 @@ test("manual failure from concern stop enables review without fabricating concer
     assert.equal(store.parentGet(id).phase, "REVIEWING");
     assert.equal(store.parentGet(id).concern_acceptance, null);
     assert.deepEqual(store.parentGet(id).validation_results, [
-      { validation_id: "VAL-001", status: "failed", evidence: "operator check failed" },
+      {
+        validation_id: "VAL-001",
+        status: "failed",
+        evidence: "operator check failed",
+        manual_lifecycle: {
+          state: "observed",
+          observed_at_version: 2,
+          observed_repair_cycle: 0,
+          retained_at: [],
+        },
+      },
       { validation_id: "VAL-002", status: "not_run", evidence: "pending" },
     ]);
     assert.deepEqual(store.parentGet(id).permitted_next_actions, [
@@ -2091,7 +2121,17 @@ test("blocking manual evidence is recorded while inconclusive review remains sto
     assert.equal(recorded.phase, "STOPPED_INCONCLUSIVE");
     assert.deepEqual(recorded.validation_results, [
       { validation_id: "VAL-001", status: "passed", evidence: "checked" },
-      { validation_id: "VAL-002", status: "passed", evidence: "operator inspected the result" },
+      {
+        validation_id: "VAL-002",
+        status: "passed",
+        evidence: "operator inspected the result",
+        manual_lifecycle: {
+          state: "observed",
+          observed_at_version: 2,
+          observed_repair_cycle: 0,
+          retained_at: [],
+        },
+      },
     ]);
     assert.deepEqual(recorded.permitted_next_actions, ["workflow_resume_review"]);
     assert.equal(store.audit(id).at(-1).event_type, "MANUAL_VALIDATION_RECORDED");
