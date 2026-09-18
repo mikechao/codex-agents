@@ -1714,6 +1714,152 @@ test("descriptor routing preserves worker and mutation fail-closed boundaries", 
   );
 });
 
+test("ambiguous parent mutations reconcile semantic postconditions before bounded retry", () => {
+  const orchestratorSource = opencode("orchestrator.md");
+  const orchestrator = orchestratorSource.replace(/\s+/gu, " ");
+  const guide = readFileSync(
+    resolve(import.meta.dir, "../../../docs/opencode-orchestration-flow.md"),
+    "utf8",
+  ).replace(/\s+/gu, " ");
+
+  const boundedBlock = (contract: string, start: string, ends: string[]): string => {
+    const startIndex = contract.indexOf(start);
+    assert.ok(startIndex >= 0, `missing bounded contract block: ${start}`);
+    const endIndex = Math.min(
+      ...ends
+        .map((end) => contract.indexOf(end, startIndex + start.length))
+        .filter((index) => index >= 0),
+    );
+    assert.ok(Number.isFinite(endIndex) && endIndex > startIndex, `unterminated block: ${start}`);
+    return contract.slice(startIndex, endIndex);
+  };
+
+  const assertManualValidationRetryRule = (block: string): void => {
+    assert.match(block, /`workflow_record_manual_validation`/u);
+    assert.match(block, /fresh `collect_evidence` descriptor/u);
+    assert.match(block, /same attempted `validation_id`/u);
+    assert.match(
+      block,
+      /newly observed terminal status and evidence equal(?: to)? the attempted status and evidence exactly/u,
+    );
+    assert.match(
+      block,
+      /validation ID alone.*?(?:status-only match|status-only).*?missing or differently represented evidence.*?fails closed/u,
+    );
+    assert.match(block, /second inspection.*?different semantic write/u);
+    assert.doesNotMatch(
+      block,
+      /(?:descriptor (?:is )?available|operation availability|workflow version advanced|version advancement)[^.?!]*(?:retry|replay)/iu,
+      "manual-validation retry must not be authorized by descriptor availability or version advancement",
+    );
+  };
+
+  const assertScopeExpansionRetryRule = (block: string): void => {
+    assert.match(block, /`workflow_expand_scope`/u);
+    assert.match(
+      block,
+      /exact proposal and authorization binding.*?originally requested path set.*?(?:compare equal|equal to).*?attempted set/u,
+    );
+    assert.match(block, /v5 generic `user_authored` `added_paths` input is not that binding/u);
+    assert.match(
+      block,
+      /exact fresh proposal\/authorization comparison is unavailable.*?stop without retry/u,
+    );
+    assert.match(block, /The original path proposal is never reconstructed from parent state/u);
+    assert.doesNotMatch(
+      block,
+      /(?:descriptor (?:is )?available|operation availability|workflow version advanced|version advancement)[^.?!]*(?:retry|replay)/iu,
+      "scope retry must not be authorized by descriptor availability or version advancement",
+    );
+  };
+  const manualEvidencePredicate =
+    /newly observed terminal status and evidence equal(?: to)? the attempted status and evidence exactly/u;
+  const scopeProposalPredicate =
+    /exact proposal and authorization binding for the originally requested path set and both compare equal to the attempted set/u;
+  const genericAvailabilityRetry =
+    "A fresh descriptor is available and the workflow version advanced, so retry.";
+
+  for (const contract of [orchestrator, guide]) {
+    assert.match(contract, /ambiguous parent-? ?mutation completion.*?`ERROR_VERSION_CONFLICT`/u);
+    assert.match(
+      contract,
+      /`workflow_parent_get`.*?reconcile the attempted semantic postcondition.*?never the workflow version alone/u,
+      "ambiguous completion must reconcile semantic state before retry",
+    );
+    assert.match(
+      contract,
+      /scope[- ]expansion record.*?exact requested (?:path set|paths).*?(?:superset|version advancement).*?not (?:sufficient|qualif)/u,
+      "scope expansion must match the exact requested paths",
+    );
+    assert.match(contract, /fresh operator descriptor.*?route only from (?:that descriptor|it)/u);
+    assert.match(contract, /(?:at most one retry|retry at most once)/u);
+    assert.match(contract, /fresh descriptor.*?same semantic mutation/u);
+    assert.match(contract, /authorization and legality remain valid/u);
+    assert.match(contract, /fresh authorization/iu);
+    assert.match(contract, /never (?:reuse authorization|reused)/iu);
+    assert.match(contract, /Version advancement alone never authorizes replay or retry/iu);
+    const manualValidationBlock = boundedBlock(
+      contract,
+      "For `workflow_record_manual_validation`",
+      ["For `workflow_expand_scope`"],
+    );
+    const scopeExpansionBlock = boundedBlock(contract, "For `workflow_expand_scope`", [
+      "The operator experience",
+      "The operator question",
+    ]);
+    assertManualValidationRetryRule(manualValidationBlock);
+    assertScopeExpansionRetryRule(scopeExpansionBlock);
+
+    assert.throws(
+      () =>
+        assertManualValidationRetryRule(
+          manualValidationBlock.replace(manualEvidencePredicate, genericAvailabilityRetry),
+        ),
+      "manual-validation retry must reject availability/version-only replacement",
+    );
+    assert.throws(
+      () =>
+        assertScopeExpansionRetryRule(
+          scopeExpansionBlock.replace(scopeProposalPredicate, genericAvailabilityRetry),
+        ),
+      "scope retry must reject availability/version-only replacement",
+    );
+    assert.throws(
+      () => assertManualValidationRetryRule(`${manualValidationBlock} ${genericAvailabilityRetry}`),
+      "manual-validation retry must reject an availability/version-only exception",
+    );
+    assert.throws(
+      () => assertScopeExpansionRetryRule(`${scopeExpansionBlock} ${genericAvailabilityRetry}`),
+      "scope retry must reject an availability/version-only exception",
+    );
+    assert.match(
+      contract,
+      /material(?:ly)? (?:changed )?(?:state|proposal|authorization|legality)/iu,
+    );
+    assert.match(contract, /malformed descriptors/u);
+    assert.match(contract, /insufficient authoritative information fail(?:s)? closed/u);
+    assert.match(
+      contract,
+      /retry (?:count|bookkeeping).*?execution-local.*?(?:not|never) persist/iu,
+    );
+    assert.match(
+      contract,
+      /Do not reconstruct the operation, payload, bindings, routing, or authorization from `workflow_parent_get`|does not reconstruct the original path proposal, operation, payload, binding, routing, or authorization from parent state/u,
+      "parent state must not become a protocol reconstruction source",
+    );
+  }
+
+  const confirmedSuccess =
+    "After a successful parent mutation, use `committed_execution` when the invocation advertises that response path; otherwise read a fresh operator projection. A mutation response is not itself a capability: dispatch is allowed only when the committed or freshly read descriptor contains the dispatch route. Never route from `on_success.expected`, mutation success alone, raw phases, or prompt-local sequencing.";
+  const normalizedConfirmedSuccess = confirmedSuccess.replace(/\s+/gu, " ");
+  assert.ok(orchestrator.includes(normalizedConfirmedSuccess));
+  assert.ok(
+    orchestrator.indexOf(normalizedConfirmedSuccess) <
+      orchestrator.indexOf("Mutation-specific ambiguity is a separate path"),
+    "confirmed-success handling must remain before the separate ambiguity rule",
+  );
+});
+
 test("orchestrator selects separately authorized parent actions from descriptors", () => {
   const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
   assert.match(orchestrator, /execution\.parent_actions.*execution\.primary/u);

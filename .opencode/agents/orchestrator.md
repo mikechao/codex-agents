@@ -118,6 +118,38 @@ capability: dispatch is allowed only when the committed or freshly read descript
 dispatch route. Never route from `on_success.expected`, mutation success alone, raw phases, or
 prompt-local sequencing.
 
+Mutation-specific ambiguity is a separate path from confirmed success. After an ambiguous parent-
+mutation completion or `ERROR_VERSION_CONFLICT`, read `workflow_parent_get` and reconcile the
+attempted semantic postcondition, never the workflow version alone. A manual validation is complete
+only when the authoritative parent view represents the exact attempted `validation_id`, its exact
+terminal status, and the attempted evidence; missing or insufficient evidence equality fails closed.
+Scope expansion is complete only when an authoritative scope-expansion record represents the exact
+requested path set; a superset, version advancement, or changed path set does not qualify. A
+definitive server rejection remains a rejection and is never reinterpreted as proof of success.
+
+If the attempted postcondition is complete, consume or fetch a fresh operator descriptor and route
+only from that descriptor. If it is absent, fetch a fresh descriptor and permit at most one retry,
+only when it advertises the same semantic mutation and current authorization and legality remain
+valid. Require fresh authorization when the new descriptor requires it; never reuse authorization
+from stale or changed intent. Materially changed state, proposal, authorization, or legality,
+malformed descriptors, and insufficient authoritative information fail closed. Keep the retry count
+execution-local; never persist it in WorkflowState. Version advancement alone never authorizes
+replay or retry.
+
+For `workflow_record_manual_validation`, an absent postcondition may be retried only when a fresh
+`collect_evidence` descriptor binds the same attempted `validation_id` and the newly observed
+terminal status and evidence equal the attempted status and evidence exactly. The validation ID
+alone, a status-only match, missing or differently represented evidence, or an insufficient binding
+fails closed; never let a second inspection select a different semantic write. For
+`workflow_expand_scope`, retry only when the fresh descriptor exposes an exact proposal and
+authorization binding for the originally requested path set and both compare equal to the attempted
+set. The v5 generic `user_authored` `added_paths` input is not that binding; if an exact fresh
+proposal/authorization comparison is unavailable, stop without retry. Do not recover the original
+path proposal from parent state. The original path proposal is never reconstructed from parent state.
+Do not reconstruct the operation, payload, bindings, routing, or authorization from
+`workflow_parent_get`; if the exact postcondition cannot be determined from authoritative views,
+stop without retry.
+
 The operator experience asks for semantic decisions, not machine-field restatement. Present one
 concrete safe proposal in domain language, exact visible repository-relative paths when
 deterministic, and bounded semantic alternatives when consequences differ. Ask only for the genuine
@@ -301,8 +333,9 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
    authorization invariant, and must not be persisted in Workflow MCP.
 3. For every parent mutation, present its bounded semantic proposal, obtain fresh affirmative
    authorization when required, bind only declared inputs, invoke the advertised operation, and
-   process its committed or freshly refetched descriptor. A failed, stale, rejected, unavailable, or
-   contradictory mutation has no dispatch consequence.
+   process its committed or freshly refetched descriptor. A definitive failed, rejected, unavailable,
+   or contradictory mutation has no dispatch consequence; an ambiguous or stale completion follows
+   the mutation-specific reconciliation rule before any retry or routing.
 4. For every worker dispatch, pass only the exact workflow ID and require the worker's dedicated
    authoritative getter and role-local fail-closed checks. A fresh descriptor—not retained findings,
    phase names, or a prior route—selects the next worker.

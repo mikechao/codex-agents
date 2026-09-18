@@ -128,6 +128,35 @@ After successful mutation, use the advertised `committed_execution` when present
 fresh descriptor. Never route from `on_success.expected`, mutation success alone, stale prose, dirty
 path inference, raw phases, or a prior projection.
 
+Confirmed success and ambiguous completion have different handling. After an ambiguous parent
+mutation completion or `ERROR_VERSION_CONFLICT`, first read `workflow_parent_get` and reconcile the
+attempted semantic postcondition, never the workflow version alone. Manual validation is complete
+only when the authoritative view represents the exact attempted `validation_id`, terminal status,
+and evidence; insufficient evidence equality fails closed. Scope expansion is complete only when an
+authoritative scope-expansion record represents the exact requested paths; a containing superset,
+version advancement, or changed path set is not sufficient. A definitive server rejection remains a
+rejection.
+
+When reconciliation proves the attempted postcondition complete, consume or fetch a fresh operator
+descriptor and route only from it. When the postcondition is absent, retry at most once and only if a
+fresh descriptor advertises the same semantic mutation and current authorization and legality remain
+valid. Fresh authorization is required whenever that descriptor requires it; stale authorization is
+never reused for changed intent. Material state, proposal, authorization, or legality changes,
+malformed descriptors, and insufficient authoritative information fail closed. Retry bookkeeping is
+execution-local and is not persisted in Workflow MCP. Version advancement alone never authorizes
+replay or retry. For `workflow_record_manual_validation`, a retry after an absent postcondition
+requires a fresh `collect_evidence` descriptor bound to the same attempted `validation_id`, with
+newly observed terminal status and evidence equal to the attempted status and evidence exactly. The
+validation ID alone, a status-only match, missing or differently represented evidence, or an
+insufficient binding fails closed; a second inspection must not select a different semantic write.
+For `workflow_expand_scope`, retry only when the fresh descriptor exposes an exact proposal and
+authorization binding for the originally requested path set and both compare equal to the attempted
+set. The v5 generic `user_authored` `added_paths` input is not that binding; if exact fresh
+proposal/authorization comparison is unavailable, stop without retry. The parent does not
+reconstruct the original path proposal, operation, payload, binding, routing, or authorization from
+parent state. The original path proposal is never reconstructed from parent state; if exact evidence
+or scope postconditions cannot be determined from authoritative views, it stops without retry.
+
 The operator question remains decision-first. Present one concrete safe proposal in domain language,
 exact visible repository-relative paths when deterministic, and bounded semantic alternatives when
 consequences differ. For `parent_mutation`, require fresh affirmative authorization tied to the
@@ -383,11 +412,12 @@ parent does not infer a move from summary prose, reuse historical staged paths a
 substitute another workflow.
 They cannot serve as changed intent or reconciliation shortcuts. After every terminal worker handoff and parent mutation, refresh the
 read-only `workflow_operator_decision_get` projection, summarize only its bounded semantic result,
-and route from its fresh descriptor; stale prose and dirty-path inference grant no authority. Use
-`workflow_parent_get` for explicit debug/status inspection and when an advertised `parent_context`
-input needs its exact current value. It must not be used to reconstruct operation selection, payload
-shape, authorization placement, routing, or other descriptor-declared protocol knowledge. An
-undeclared required input fails closed.
+and route from its fresh descriptor; stale prose and dirty-path inference grant no authority. An
+ambiguous or stale completion is not an unconditional failure or a success: it first follows the
+bounded reconciliation rule above. Use `workflow_parent_get` for that reconciliation, explicit
+debug/status inspection, and when an advertised `parent_context` input needs its exact current value.
+It must not be used to reconstruct operation selection, payload shape, authorization placement,
+routing, or other descriptor-declared protocol knowledge. An undeclared required input fails closed.
 
 ```mermaid
 sequenceDiagram
