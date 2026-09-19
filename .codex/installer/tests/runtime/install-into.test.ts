@@ -296,8 +296,11 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     }
     const installedExplorer = readFileSync(join(root, ".opencode/agents/explorer.md"), "utf8");
     assert.match(installedExplorer, /^hidden: true$/m);
-    assert.match(installedExplorer, /^    "\*": deny$/m);
-    assert.match(installedExplorer, /^  runEvidence: allow$/m);
+    assert.match(installedExplorer, /^  - action: shell\n    resource: "\*"\n    effect: deny$/m);
+    assert.match(
+      installedExplorer,
+      /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m,
+    );
     assert.ok(!installedExplorer.includes("reviewer-validation.ts --evidence-id"));
     assert.ok(!installedExplorer.includes("workflow_state_plan_create"));
     for (const definition of installedManifest.filter(
@@ -371,10 +374,10 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
       assert.notEqual(statSync(join(root, ".codex/runtime/workflow-mcp")).mode & 0o111, 0);
     const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
-      subagent_depth: number;
+      experimental: { subagent_depth: number };
     };
     assert.equal(opencodeConfig.default_agent, "orchestrator");
-    assert.equal(opencodeConfig.subagent_depth, 2);
+    assert.equal(opencodeConfig.experimental.subagent_depth, 2);
     assert.ok(!existsSync(join(root, ".codex/planner-policy.json")));
     const config = readFileSync(join(root, ".codex/config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.workflow_state\]/);

@@ -1,43 +1,111 @@
 ---
 description: Gathers bounded, read-only repository evidence for Native Plan and planner.
 mode: subagent
-model: openai/gpt-5.6-sol
-reasoningEffort: low
+model: openai/gpt-5.6-sol#low
 hidden: true
-permission:
-  edit: deny
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  bash:
-    "*": deny
-    "git status": allow
-    "git status --short": allow
-    "git status --porcelain": allow
-    "git diff": allow
-    "git diff --cached": allow
-    "git diff HEAD": allow
-    "git log": allow
-    "git log -1": allow
-    "git log --oneline": allow
-    "git show": allow
-    "git show HEAD": allow
-    "git rev-parse --show-toplevel": allow
-    "git rev-parse --is-inside-work-tree": allow
-    "git ls-files": allow
-    "git grep": allow
-  runEvidence: allow
-  inspectGitRange: allow
-  task: deny
-  external_directory: deny
-  webfetch: deny
-  websearch: deny
-  lsp: deny
-  skill: deny
-  todowrite: deny
-  question: deny
-  workflow_state_*: deny
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status"
+    effect: allow
+  - action: shell
+    resource: "git status --short"
+    effect: allow
+  - action: shell
+    resource: "git status --porcelain"
+    effect: allow
+  - action: shell
+    resource: "git diff"
+    effect: allow
+  - action: shell
+    resource: "git diff --cached"
+    effect: allow
+  - action: shell
+    resource: "git diff HEAD"
+    effect: allow
+  - action: shell
+    resource: "git log"
+    effect: allow
+  - action: shell
+    resource: "git log -1"
+    effect: allow
+  - action: shell
+    resource: "git log --oneline"
+    effect: allow
+  - action: shell
+    resource: "git show"
+    effect: allow
+  - action: shell
+    resource: "git show HEAD"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse --show-toplevel"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse --is-inside-work-tree"
+    effect: allow
+  - action: shell
+    resource: "git ls-files"
+    effect: allow
+  - action: shell
+    resource: "git grep"
+    effect: allow
+  - action: runEvidence
+    resource: "*"
+    effect: allow
+  - action: inspectGitRange
+    resource: "*"
+    effect: allow
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: external_directory
+    resource: "*"
+    effect: deny
+  - action: webfetch
+    resource: "*"
+    effect: deny
+  - action: websearch
+    resource: "*"
+    effect: deny
+  - action: lsp
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: deny
+  - action: todoread
+    resource: "*"
+    effect: deny
+  - action: doom_loop
+    resource: "*"
+    effect: deny
+  - action: question
+    resource: "*"
+    effect: deny
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
 ---
 You are the read-only `explorer` subagent.
 

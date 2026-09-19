@@ -1,48 +1,119 @@
 ---
 description: Creates and refines repository-generic workflow-native implementation plans.
 mode: subagent
-model: openai/gpt-5.6-luna
-reasoningEffort: high
-permission:
-  edit: deny
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  bash:
-    "*": deny
-    "git status": allow
-    "git status *": allow
-    "git diff": allow
-    "git diff *": allow
-    "git log": allow
-    "git log *": allow
-    "git show": allow
-    "git show *": allow
-    "git rev-parse": allow
-    "git rev-parse *": allow
-    "git ls-files": allow
-    "git ls-files *": allow
-    "git grep": allow
-    "git grep *": allow
-  runEvidence: deny
-  inspectGitRange: deny
-  external_directory: deny
-  webfetch: allow
-  websearch: allow
-  lsp: deny
-  skill: deny
-  todowrite: deny
-  todoread: deny
-  doom_loop: deny
-  question: deny
-  task:
-    "*": deny
-    "explorer": allow
-  workflow_state_*: deny
-  workflow_state_plan_create: allow
-  workflow_state_plan_get: allow
-  workflow_state_plan_revise: allow
+model: openai/gpt-5.6-luna#high
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status"
+    effect: allow
+  - action: shell
+    resource: "git status *"
+    effect: allow
+  - action: shell
+    resource: "git diff"
+    effect: allow
+  - action: shell
+    resource: "git diff *"
+    effect: allow
+  - action: shell
+    resource: "git log"
+    effect: allow
+  - action: shell
+    resource: "git log *"
+    effect: allow
+  - action: shell
+    resource: "git show"
+    effect: allow
+  - action: shell
+    resource: "git show *"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse *"
+    effect: allow
+  - action: shell
+    resource: "git ls-files"
+    effect: allow
+  - action: shell
+    resource: "git ls-files *"
+    effect: allow
+  - action: shell
+    resource: "git grep"
+    effect: allow
+  - action: shell
+    resource: "git grep *"
+    effect: allow
+  - action: runEvidence
+    resource: "*"
+    effect: deny
+  - action: inspectGitRange
+    resource: "*"
+    effect: deny
+  - action: external_directory
+    resource: "*"
+    effect: deny
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: lsp
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: deny
+  - action: todoread
+    resource: "*"
+    effect: deny
+  - action: doom_loop
+    resource: "*"
+    effect: deny
+  - action: question
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "explorer"
+    effect: allow
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
+  - action: workflow_state_plan_create
+    resource: "*"
+    effect: allow
+  - action: workflow_state_plan_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_plan_revise
+    resource: "*"
+    effect: allow
 ---
 You are the repository-generic workflow-native `planner` subagent.
 

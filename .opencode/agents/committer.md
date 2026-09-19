@@ -1,61 +1,158 @@
 ---
 description: Stages relevant project changes, generates an accurate commit message, and creates a Git commit.
 mode: subagent
-model: openai/gpt-5.6-luna
-reasoningEffort: high
-permission:
-  edit: deny
-  bash:
-    "*": deny
-    "git status": allow
-    "git status *": allow
-    "git diff": allow
-    "git diff *": allow
-    "git log": allow
-    "git log *": allow
-    "git show *": allow
-    "git rev-parse": allow
-    "git rev-parse *": allow
-    "git ls-files": allow
-    "git ls-files *": allow
-    "git add *": allow
-    "git commit": allow
-    "git commit *": allow
-    "bun .codex/agents/change-receipt.ts *": allow
-    "git add -p": deny
-    "git add -p *": deny
-    "git add -i": deny
-    "git add -i *": deny
-    "git commit --amend": deny
-    "git commit --amend *": deny
-    "git push": deny
-    "git push *": deny
-    "git rebase": deny
-    "git rebase *": deny
-    "git reset": deny
-    "git reset *": deny
-    "git checkout": deny
-    "git checkout *": deny
-    "git switch": deny
-    "git switch *": deny
-    "git restore": deny
-    "git restore *": deny
-    "git rm": deny
-    "git rm *": deny
-    "git mv": deny
-    "git mv *": deny
-    "git clean": deny
-    "git clean *": deny
-    "git stash": deny
-    "git stash *": deny
-  runEvidence: deny
-  inspectGitRange: deny
-  task:
-    "*": deny
-  workflow_state_*: deny
-  workflow_state_workflow_committer_get: allow
-  workflow_state_workflow_prepare_commit: allow
-  workflow_state_workflow_submit_commit_result: allow
+model: openai/gpt-5.6-luna#high
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status"
+    effect: allow
+  - action: shell
+    resource: "git status *"
+    effect: allow
+  - action: shell
+    resource: "git diff"
+    effect: allow
+  - action: shell
+    resource: "git diff *"
+    effect: allow
+  - action: shell
+    resource: "git log"
+    effect: allow
+  - action: shell
+    resource: "git log *"
+    effect: allow
+  - action: shell
+    resource: "git show *"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse *"
+    effect: allow
+  - action: shell
+    resource: "git ls-files"
+    effect: allow
+  - action: shell
+    resource: "git ls-files *"
+    effect: allow
+  - action: shell
+    resource: "git add *"
+    effect: allow
+  - action: shell
+    resource: "git commit"
+    effect: allow
+  - action: shell
+    resource: "git commit *"
+    effect: allow
+  - action: shell
+    resource: "bun .codex/agents/change-receipt.ts *"
+    effect: allow
+  - action: shell
+    resource: "git add -p"
+    effect: deny
+  - action: shell
+    resource: "git add -p *"
+    effect: deny
+  - action: shell
+    resource: "git add -i"
+    effect: deny
+  - action: shell
+    resource: "git add -i *"
+    effect: deny
+  - action: shell
+    resource: "git commit --amend"
+    effect: deny
+  - action: shell
+    resource: "git commit --amend *"
+    effect: deny
+  - action: shell
+    resource: "git push"
+    effect: deny
+  - action: shell
+    resource: "git push *"
+    effect: deny
+  - action: shell
+    resource: "git rebase"
+    effect: deny
+  - action: shell
+    resource: "git rebase *"
+    effect: deny
+  - action: shell
+    resource: "git reset"
+    effect: deny
+  - action: shell
+    resource: "git reset *"
+    effect: deny
+  - action: shell
+    resource: "git checkout"
+    effect: deny
+  - action: shell
+    resource: "git checkout *"
+    effect: deny
+  - action: shell
+    resource: "git switch"
+    effect: deny
+  - action: shell
+    resource: "git switch *"
+    effect: deny
+  - action: shell
+    resource: "git restore"
+    effect: deny
+  - action: shell
+    resource: "git restore *"
+    effect: deny
+  - action: shell
+    resource: "git rm"
+    effect: deny
+  - action: shell
+    resource: "git rm *"
+    effect: deny
+  - action: shell
+    resource: "git mv"
+    effect: deny
+  - action: shell
+    resource: "git mv *"
+    effect: deny
+  - action: shell
+    resource: "git clean"
+    effect: deny
+  - action: shell
+    resource: "git clean *"
+    effect: deny
+  - action: shell
+    resource: "git stash"
+    effect: deny
+  - action: shell
+    resource: "git stash *"
+    effect: deny
+  - action: runEvidence
+    resource: "*"
+    effect: deny
+  - action: inspectGitRange
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
+  - action: workflow_state_workflow_committer_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_prepare_commit
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_submit_commit_result
+    resource: "*"
+    effect: allow
 ---
 You are the custom "committer" subagent.
 

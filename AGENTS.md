@@ -10,7 +10,7 @@ definitions are host adapters: Codex TOML under `.codex/agents/` and OpenCode Ma
 byte-identical to the generator output (`bun run test:agents` enforces this). The project-scoped
 configuration in `.codex/config.toml` registers the local workflow-state server for Codex; the
 root `opencode.json` registers the same server for direct OpenCode use of this repository and applies
-the native built-in `agent.plan` mediator override, and
+the native V2 built-in `agents.plan` mediator override, and
 `install-into.ts` registers it for OpenCode in target repositories. The generated
 `implementer`, `code_reviewer`, and `committer` files are the shared cross-host worker adapters;
 .opencode also receives OpenCode-only generated `planner` and hidden read-only `explorer` adapters;
@@ -18,10 +18,14 @@ the native built-in `agent.plan` mediator override, and
 the shared generator and must not be added to the host-neutral contracts or overwritten by
 generation. The root `opencode.json` selects that primary with `default_agent: "orchestrator"` and
 does not inject orchestration instructions globally into the built-in Build agent. The installer
-copies the orchestrator into target repositories, adds the canonical Plan override only when
-`agent.plan` is absent, refuses malformed agent shapes, defaults a new OpenCode config (or one without
-`default_agent`) to `orchestrator`, and preserves existing explicit `default_agent`, `agent.plan`,
-and unrelated configuration while still installing the orchestrator as an available primary agent.
+copies the orchestrator into target repositories, emits native V2 configuration for fresh installs,
+merges managed fields into existing native V2 `opencode.json`/`opencode.jsonc`, adds the canonical
+Plan override only when `agents.plan` is absent, refuses malformed native V2 structures, and
+requires existing target configuration to already be compatible with OpenCode 2.0.8+ before
+installation. It
+defaults a new OpenCode config (or one without `default_agent`) to `orchestrator`, and preserves
+existing explicit `default_agent`, unrelated agents, and native V2 configuration while still
+installing the orchestrator as an available primary agent.
 The historical v2
 implementation spec and the TypeScript/SDK-v2 migration records live under `docs/archive/`.
 

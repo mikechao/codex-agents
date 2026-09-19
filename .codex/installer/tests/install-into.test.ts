@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { parse as parseJsonc } from "jsonc-parser";
 import {
   hasWorkflowStateRegistration,
   materializeAgentDefinitions,
@@ -154,30 +155,36 @@ test("install-into.ts scaffolds reviewer policy once and preserves target custom
   }
 });
 
-test("install-into.ts preserves an existing OpenCode default_agent preference", () => {
+test("install-into.ts preserves default_agent while merging the managed agent", () => {
   const { root, write } = fixture();
   try {
     write(
       "opencode.json",
       JSON.stringify({
         default_agent: "plan",
-        agent: { plan: { prompt: "target-owned", permission: { edit: "allow" }, custom: true } },
+        agents: {
+          plan: {
+            system: "target-owned",
+            permissions: [{ action: "edit", resource: "*", effect: "allow" }],
+            custom: true,
+          },
+        },
       }),
     );
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);
     const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
-      subagent_depth: number;
-      mcp: Record<string, unknown>;
-      agent: { plan: Record<string, unknown> };
+      experimental: { subagent_depth: number };
+      mcp: { servers: Record<string, unknown> };
+      agents: { plan: Record<string, unknown> };
     };
     assert.equal(config.default_agent, "plan");
-    assert.equal(config.subagent_depth, 2);
-    assert.ok(config.mcp.workflow_state);
-    assert.deepEqual(config.agent.plan, {
-      prompt: "target-owned",
-      permission: { edit: "allow" },
+    assert.equal(config.experimental.subagent_depth, 2);
+    assert.ok(config.mcp.servers.workflow_state);
+    assert.deepEqual(config.agents.plan, {
+      system: "target-owned",
+      permissions: [{ action: "edit", resource: "*", effect: "allow" }],
       custom: true,
     });
     assert.ok(existsSync(join(root, ".opencode/agents/orchestrator.md")));
@@ -186,16 +193,50 @@ test("install-into.ts preserves an existing OpenCode default_agent preference", 
   }
 });
 
-test("install-into.ts preserves an explicit OpenCode subagent_depth", () => {
+test("install-into.ts merges managed fields into an existing native V2 config", () => {
   const { root, write } = fixture();
   try {
     write(
-      "opencode.json",
-      '{\n  "$schema": "https://opencode.ai/config.json",\n  "subagent_depth": 5\n}\n',
+      "opencode.jsonc",
+      `{
+  // target-owned settings must survive installation
+  "default_agent": "build",
+  "agents": {
+    "build": {
+      "system": "target build prompt",
+      "model": "acme/build",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "allow" },
+      ],
+    }
+  },
+  "mcp": {
+    "servers": {
+      "target-server": { "type": "remote", "url": "https://target.invalid/mcp", "disabled": true },
+      "native-target": { "type": "remote", "url": "https://native.invalid/mcp" },
+    },
+  },
+  "experimental": { "subagent_depth": 4, "custom": true },
+}
+`,
     );
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")).subagent_depth, 5);
+    const staged = readFileSync(join(root, "opencode.jsonc"), "utf8");
+    assert.match(staged, /target-owned settings must survive installation/u);
+    const config = parseJsonc(staged) as Record<string, any>;
+    assert.equal(config.default_agent, "build");
+    assert.equal(config.experimental.subagent_depth, 4);
+    assert.equal(config.experimental.custom, true);
+    assert.equal(config.agents.build.system, "target build prompt");
+    assert.equal(config.agents.build.model, "acme/build");
+    assert.deepEqual(config.agents.build.permissions, [
+      { action: "edit", resource: "*", effect: "allow" },
+    ]);
+    assert.ok(config.mcp.servers["target-server"]);
+    assert.ok(config.mcp.servers["native-target"]);
+    assert.ok(config.mcp.servers.workflow_state);
+    assert.ok(config.agents.plan);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

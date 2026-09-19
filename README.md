@@ -113,12 +113,15 @@ continue to be validated through `Bun.TOML.parse` and the existing semantic asse
 ## Use this repository directly
 
 Opening `codex-agents` itself in Codex loads the three shared agents from `.codex/agents/` and registers
-the local `workflow_state` bootstrap supervisor via `.codex/config.toml`. Opening it in OpenCode loads the
-the execution subagents plus generated `planner`/`explorer` and the `orchestrator` primary agent from `.opencode/agents/`, applies the native built-in `agent.plan` mediator override, and registers the same server as a local MCP
-(`mcp.workflow_state`) via the root `opencode.json`, using the same Bun entrypoint
-  (a temporary copy materialized from `git show HEAD:.codex/workflow-mcp/bootstrap.ts`) and the same `enabled`/`timeout` semantics as
-installer-generated registrations. The self-host OpenCode registration is checked into the
-repository and a test keeps it from silently diverging from the installer's registration shape.
+the local `workflow_state` bootstrap supervisor via `.codex/config.toml`. Opening it in OpenCode loads
+the execution subagents plus generated `planner`/`explorer` and the `orchestrator` primary agent from
+`.opencode/agents/`, applies the native V2 built-in Plan mediator override at `agents.plan`, and
+registers the same server under `mcp.servers.workflow_state` via the root `opencode.json`, using the
+same Bun entrypoint (a temporary copy materialized from `git show
+HEAD:.codex/workflow-mcp/bootstrap.ts`) and V2 timeout semantics as installer-generated registrations.
+The self-host OpenCode registration is checked into the repository and a test keeps it from silently
+diverging from the installer's registration shape. OpenCode 2.x is the supported runtime line, with
+v2.0.8 as the validated minimum/baseline.
 
 OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
 `default_agent`. See the [OpenCode orchestration flow](docs/opencode-orchestration-flow.md) for the
@@ -192,10 +195,9 @@ in one all-or-nothing step:
 
 - Codex: materializes fresh policy-resolved agent definitions into `.codex/agents/` and registers
   the target-local `.codex/runtime/workflow-mcp` executable directly in `.codex/config.toml`.
-- OpenCode: materializes fresh policy-resolved agent definitions (including planner and explorer) into `.opencode/agents/` and registers the same target-local
-  executable directly as a local MCP (`mcp.workflow_state`) in the project's
-  `opencode.json` (or extends an existing `opencode.json`/`opencode.jsonc` without touching
-  unrelated settings).
+- OpenCode: materializes fresh policy-resolved agent definitions (including planner and explorer) into
+  `.opencode/agents/` and registers the same target-local executable directly as a local MCP
+  (`mcp.servers.workflow_state`) in the project's native V2 `opencode.json`.
 - The reviewer validation runner is installed at `.codex/agents/reviewer-validation.ts`, and a
   project-owned `.codex/reviewer-validation.json` policy is scaffolded only when absent. The policy
   contains exact argv arrays, timeout limits, and output limits (not workflow validation IDs);
@@ -223,13 +225,17 @@ registration has no runtime-artifact affinity lifecycle, and the executable uses
 repository's Git and durable state without requiring Bun, target `node_modules`, or the provider
 checkout at runtime.
 
-For OpenCode, a new config or an existing config without `default_agent` defaults to
-`orchestrator`, and a new or depth-absent config gets `subagent_depth: 2`. Installation adds the
-canonical native `agent.plan` override only when `agent.plan` is absent. Existing explicit
-`default_agent`, `subagent_depth`, `agent.plan`, unrelated agent/config settings, comments, and
-trailing commas are preserved; malformed `agent` or `agent.plan` shapes fail closed before partial
-installation. The orchestrator is still installed and can be selected with the primary-agent
-switcher.
+For OpenCode, a new config or an existing native V2 config without `default_agent` defaults to
+`orchestrator`, and a new or depth-absent config gets `experimental.subagent_depth: 2`. Installation
+adds the canonical native V2 `agents.plan` override only when `agents.plan` is absent. Existing
+native V2 `default_agent`, unrelated agents, models, providers, MCP servers, permissions, comments,
+and trailing commas are preserved as far as the JSONC edit mechanism permits. Existing target
+OpenCode configuration must already be compatible with OpenCode 2.0.8+ before installation; the
+installer does not inspect or migrate arbitrary legacy configuration. The orchestrator is still
+installed and can be selected with the primary-agent switcher.
+
+The ordinary configuration integration does not implement OpenCode custom-tool V2 registration or
+execute/Workflow-MCP routing restrictions; those remain separately scoped compatibility work.
 
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
 `code_reviewer.md`, `committer.md`, `planner.md`, `explorer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated

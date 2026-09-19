@@ -1,65 +1,175 @@
 ---
 description: Coordinates the workflow-backed implementation, review, remediation, and commit handoffs.
 mode: primary
-permission:
-  edit: deny
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  bash:
-    "*": deny
-    "git status": allow
-    "git status *": allow
-    "git diff": allow
-    "git diff *": allow
-    "git log": allow
-    "git log *": allow
-    "git show": allow
-    "git show *": allow
-    "git rev-parse": allow
-    "git rev-parse *": allow
-    "git ls-files": allow
-    "git ls-files *": allow
-  task:
-    "*": deny
-    "implementer": allow
-    "code_reviewer": allow
-    "committer": allow
-  external_directory: deny
-  webfetch: deny
-  websearch: deny
-  lsp: deny
-  skill: deny
-  todowrite: deny
-  question: deny
-  workflow_state_*: deny
-  runEvidence: deny
-  inspectGitRange: deny
-  workflow_state_plan_parent_get: allow
-  workflow_state_workflow_create_from_plan: allow
-  workflow_state_workflow_create: allow
-  workflow_state_workflow_adopt_dirty_scope: allow
-  workflow_state_workflow_expand_scope: allow
-  workflow_state_workflow_parent_get: allow
-  workflow_state_workflow_operator_decision_get: allow
-  workflow_state_workflow_reconcile_commit_result: allow
-  workflow_state_workflow_get_audit: allow
-  workflow_state_workflow_resume_implementation: allow
-  workflow_state_workflow_rebind_implementation_plan: allow
-  workflow_state_workflow_accept_concerns: allow
-  workflow_state_workflow_record_manual_validation: allow
-  workflow_state_workflow_authorize_repair: allow
-  workflow_state_workflow_adjudicate_findings: allow
-  workflow_state_workflow_resume_review: allow
-  workflow_state_workflow_finalize_repair_exhausted: allow
-  workflow_state_workflow_create_linked_followup: allow
-  workflow_state_workflow_create_linked_followup_from_plan: allow
-  workflow_state_workflow_authorize_commit: allow
-  workflow_state_workflow_retry_commit_preparation: allow
-  workflow_state_workflow_reconcile_staged_scope: allow
-  workflow_state_workflow_return_commit_to_review: allow
-  workflow_state_workflow_retry_commit: allow
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status"
+    effect: allow
+  - action: shell
+    resource: "git status *"
+    effect: allow
+  - action: shell
+    resource: "git diff"
+    effect: allow
+  - action: shell
+    resource: "git diff *"
+    effect: allow
+  - action: shell
+    resource: "git log"
+    effect: allow
+  - action: shell
+    resource: "git log *"
+    effect: allow
+  - action: shell
+    resource: "git show"
+    effect: allow
+  - action: shell
+    resource: "git show *"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse *"
+    effect: allow
+  - action: shell
+    resource: "git ls-files"
+    effect: allow
+  - action: shell
+    resource: "git ls-files *"
+    effect: allow
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "implementer"
+    effect: allow
+  - action: subagent
+    resource: "code_reviewer"
+    effect: allow
+  - action: subagent
+    resource: "committer"
+    effect: allow
+  - action: external_directory
+    resource: "*"
+    effect: deny
+  - action: webfetch
+    resource: "*"
+    effect: deny
+  - action: websearch
+    resource: "*"
+    effect: deny
+  - action: lsp
+    resource: "*"
+    effect: deny
+  - action: skill
+    resource: "*"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: deny
+  - action: question
+    resource: "*"
+    effect: deny
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
+  - action: runEvidence
+    resource: "*"
+    effect: deny
+  - action: inspectGitRange
+    resource: "*"
+    effect: deny
+  - action: workflow_state_plan_parent_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_create_from_plan
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_create
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_adopt_dirty_scope
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_expand_scope
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_parent_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_operator_decision_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_reconcile_commit_result
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_get_audit
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_resume_implementation
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_rebind_implementation_plan
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_accept_concerns
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_record_manual_validation
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_authorize_repair
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_adjudicate_findings
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_resume_review
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_finalize_repair_exhausted
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_create_linked_followup
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_create_linked_followup_from_plan
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_authorize_commit
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_retry_commit_preparation
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_reconcile_staged_scope
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_return_commit_to_review
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_retry_commit
+    resource: "*"
+    effect: allow
 ---
 You are the OpenCode workflow orchestrator.
 

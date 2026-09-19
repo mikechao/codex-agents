@@ -21,26 +21,28 @@ test("the repository's own opencode.json registers the supervised self-host serv
     $schema: string;
     default_agent: string;
     experimental: { subagent_depth: number };
-    agent: { plan: Record<string, unknown> };
-    mcp: { workflow_state: Record<string, unknown> };
+    agents: { plan: Record<string, unknown> };
+    mcp: { servers: { workflow_state: Record<string, unknown> } };
   };
   const expected = {
     $schema: "https://opencode.ai/config.json",
     default_agent: "orchestrator",
-    agent: { plan: openCodePlanAgent() },
+    agents: { plan: openCodePlanAgent() },
     mcp: {
-      workflow_state: {
-        type: "local",
-        command: trustedBootstrapCommand(relativeServerPath),
-        timeout: 30000,
-        codemode: false,
+      servers: {
+        workflow_state: {
+          type: "local",
+          command: trustedBootstrapCommand(relativeServerPath),
+          timeout: { catalog: 30000, execution: 30000 },
+          codemode: false,
+        },
       },
     },
   };
   assert.equal(parsed.$schema, expected.$schema);
   assert.equal(parsed.default_agent, expected.default_agent);
   assert.equal(parsed.experimental.subagent_depth, 2);
-  assert.deepEqual(parsed.agent, expected.agent);
+  assert.deepEqual(parsed.agents, expected.agents);
   assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
   assert.equal(parsed.default_agent, "orchestrator");
@@ -60,15 +62,20 @@ test("self-host OpenCode exposes structured evidence only to explorer", () => {
   assert.ok(!source.includes("Bun.$"));
   assert.ok(!source.includes("spawnSync"));
   const explorer = readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8");
-  assert.match(explorer, /^  runEvidence: allow$/m);
+  assert.match(explorer, /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m);
   for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
     assert.match(
       readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
-      /^  runEvidence: deny$/m,
+      /^  - action: runEvidence\n    resource: "\*"\n    effect: deny$/m,
     );
   }
-  const permission = openCodePlanAgent().permission as Record<string, unknown>;
-  assert.equal(permission.runEvidence, "deny");
+  const planPermissions = openCodePlanAgent().permissions as Array<{
+    action: string;
+    effect: string;
+  }>;
+  assert.ok(
+    planPermissions.some((rule) => rule.action === "runEvidence" && rule.effect === "deny"),
+  );
 });
 
 test("self-host OpenCode isolates structured Git range inspection to explorer", () => {
@@ -83,23 +90,28 @@ test("self-host OpenCode isolates structured Git range inspection to explorer", 
   assert.ok(!source.includes("workflow_state"));
   assert.match(
     readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8"),
-    /^  inspectGitRange: allow$/m,
+    /^  - action: inspectGitRange\n    resource: "\*"\n    effect: allow$/m,
   );
   for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
     assert.match(
       readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
-      /^  inspectGitRange: deny$/m,
+      /^  - action: inspectGitRange\n    resource: "\*"\n    effect: deny$/m,
     );
   }
-  const permission = openCodePlanAgent().permission as Record<string, unknown>;
-  assert.equal(permission.inspectGitRange, "deny");
+  const planPermissions = openCodePlanAgent().permissions as Array<{
+    action: string;
+    effect: string;
+  }>;
+  assert.ok(
+    planPermissions.some((rule) => rule.action === "inspectGitRange" && rule.effect === "deny"),
+  );
 });
 
 test("the self-host Native Plan prompt keeps the CTA outside the exact plan rendering", () => {
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
-    agent: { plan: { prompt: string } };
+    agents: { plan: { system: string } };
   };
-  const prompt = parsed.agent.plan.prompt;
+  const prompt = parsed.agents.plan.system;
   const normalized = prompt.replace(/\s+/gu, " ");
   const sourceSection = normalized.indexOf("Authoritative task-source preservation:");
   const delegation = normalized.indexOf(
@@ -192,16 +204,26 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   const orchestrator = readFileSync(orchestratorFile, "utf8");
   const normalized = orchestrator.replace(/\s+/gu, " ");
   assert.match(orchestrator, /^mode: primary$/m);
-  assert.match(orchestrator, /^  edit: deny$/m);
-  assert.match(orchestrator, /^  task:\n    "\*": deny$/m);
-  assert.ok(!orchestrator.match(/^    "planner": allow$/m));
-  assert.ok(!orchestrator.match(/^    "explorer": allow$/m));
+  assert.match(orchestrator, /^  - action: edit\n    resource: "\*"\n    effect: deny$/m);
+  assert.match(orchestrator, /^  - action: subagent\n    resource: "\*"\n    effect: deny$/m);
+  assert.ok(!orchestrator.match(/^    resource: "planner"$/m));
+  assert.ok(!orchestrator.match(/^    resource: "explorer"$/m));
   for (const agent of ["implementer", "code_reviewer", "committer"]) {
-    assert.match(orchestrator, new RegExp(`^    "${agent}": allow$`, "m"));
+    assert.match(
+      orchestrator,
+      new RegExp(`^  - action: subagent\\n    resource: "${agent}"\\n    effect: allow$`, "m"),
+    );
   }
-  assert.match(orchestrator, /^  workflow_state_\*: deny$/m);
-  const allowedWorkflowTools = [...orchestrator.matchAll(/^  workflow_state_([^:]+): allow$/gmu)]
-    .map((match) => match[1])
+  assert.match(
+    orchestrator,
+    /^  - action: workflow_state_\*\n    resource: "\*"\n    effect: deny$/m,
+  );
+  const allowedWorkflowTools = [
+    ...orchestrator.matchAll(
+      /^  - action: (workflow_state_[^\n]+)\n    resource: "\*"\n    effect: allow$/gmu,
+    ),
+  ]
+    .map((match) => match[1].replace(/^workflow_state_/u, ""))
     .sort();
   assert.deepEqual(
     allowedWorkflowTools,
@@ -307,9 +329,11 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
 test("the orchestrator exposes the complete parent planning tool surface", () => {
   const orchestrator = readFileSync(resolve(repoRoot, orchestratorPath), "utf8");
   const allowed = new Set(
-    [...orchestrator.matchAll(/^  workflow_state_([a-z0-9_]+): allow$/gmu)].map(
-      (match) => match[1],
-    ),
+    [
+      ...orchestrator.matchAll(
+        /^  - action: workflow_state_([a-z0-9_]+)\n    resource: "\*"\n    effect: allow$/gmu,
+      ),
+    ].map((match) => match[1]),
   );
   const serverTools = new Set(tools.map((tool) => tool.name));
   for (const name of [
@@ -355,12 +379,19 @@ test("the repository's own OpenCode registration keeps the installer server sema
   const { experimental, mcp } = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     experimental: { subagent_depth: number };
     mcp: {
-      workflow_state: { type: string; command: string[]; timeout: number; codemode: boolean };
+      servers: {
+        workflow_state: {
+          type: string;
+          command: string[];
+          timeout: { catalog: number; execution: number };
+          codemode: boolean;
+        };
+      };
     };
   };
-  const registration = mcp.workflow_state;
+  const registration = mcp.servers.workflow_state;
   assert.equal(registration.type, "local");
-  assert.equal(registration.timeout, 30000);
+  assert.deepEqual(registration.timeout, { catalog: 30000, execution: 30000 });
   assert.equal(registration.codemode, false);
   assert.equal(experimental.subagent_depth, 2);
   assert.deepEqual(registration.command, trustedBootstrapCommand(relativeServerPath));

@@ -1,32 +1,71 @@
 ---
 description: Performs an independent, read-only review of an approved implementation diff.
 mode: subagent
-model: openai/gpt-5.6-luna
-reasoningEffort: high
-permission:
-  edit: deny
-  bash:
-    "*": deny
-    "git status": allow
-    "git status *": allow
-    "git diff": allow
-    "git diff *": allow
-    "git log": allow
-    "git log *": allow
-    "git show *": allow
-    "git rev-parse *": allow
-    "git grep": allow
-    "git grep *": allow
-    "bun .codex/agents/change-receipt.ts *": allow
-    "bun .codex/agents/reviewer-validation.ts *": allow
-  runEvidence: deny
-  inspectGitRange: deny
-  task:
-    "*": deny
-  workflow_state_*: deny
-  workflow_state_workflow_reviewer_get: allow
-  workflow_state_workflow_begin_review: allow
-  workflow_state_workflow_submit_review: allow
+model: openai/gpt-5.6-luna#high
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status"
+    effect: allow
+  - action: shell
+    resource: "git status *"
+    effect: allow
+  - action: shell
+    resource: "git diff"
+    effect: allow
+  - action: shell
+    resource: "git diff *"
+    effect: allow
+  - action: shell
+    resource: "git log"
+    effect: allow
+  - action: shell
+    resource: "git log *"
+    effect: allow
+  - action: shell
+    resource: "git show *"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse *"
+    effect: allow
+  - action: shell
+    resource: "git grep"
+    effect: allow
+  - action: shell
+    resource: "git grep *"
+    effect: allow
+  - action: shell
+    resource: "bun .codex/agents/change-receipt.ts *"
+    effect: allow
+  - action: shell
+    resource: "bun .codex/agents/reviewer-validation.ts *"
+    effect: allow
+  - action: runEvidence
+    resource: "*"
+    effect: deny
+  - action: inspectGitRange
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
+  - action: workflow_state_workflow_reviewer_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_begin_review
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_submit_review
+    resource: "*"
+    effect: allow
 ---
 You are the custom "code_reviewer" subagent.
 

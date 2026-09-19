@@ -24,70 +24,36 @@ Native Plan -> Orchestrator reviewer-first `review_only` dogfood is a post-commi
 manual activity described in [the provider-only live dogfood guide](../.codex/agents/DOGFOOD.md); it is
 not an installed-target pre-commit gate.
 
-## Authoritative-source transport investigation
+## OpenCode 2.x host configuration
 
-The exact installed OpenCode binary used as the investigation anchor was `/opt/homebrew/bin/opencode`.
-On 2026-09-02 in the repository working tree on Darwin 25.6.0 (arm64), `opencode --version` produced
-the complete output:
+This repository supports OpenCode 2.x only. OpenCode v2.0.8 is the validated minimum/baseline for
+the orchestration surface documented here. The checked-in `opencode.json` and installed target
+configuration use the native V2 representation:
 
-```text
-1.18.26
-```
+- `agents` contains named agent definitions; the built-in Plan mediator is projected as
+  `agents.plan`, and generated role definitions use `system`, `model: provider/model#variant`,
+  and ordered `permissions` rules. Permission order is semantic: the last matching rule wins.
+- `experimental.subagent_depth: 2` is the canonical nested-delegation setting.
+- Workflow MCP is registered under `mcp.servers.workflow_state` with direct semantic tools
+  (`codemode: false`) and the V2 timeout object containing `catalog` and `execution` values.
+- `default_agent: "orchestrator"` keeps the project-owned primary in control while Native Plan
+  remains the user-facing planning mediator.
 
-The version-matched release is [v1.18.26](https://github.com/anomalyco/opencode/releases/tag/v1.18.26),
-tagged at commit [`774cc7c1914e4329eefde5a669f938b0cf566661`](https://github.com/anomalyco/opencode/commit/774cc7c1914e4329eefde5a669f938b0cf566661).
-The corresponding tagged source and documentation inspected were:
+The installer emits native V2 configuration for fresh installs and merges codex-agents-managed
+fields into an existing native V2 `opencode.json` or `opencode.jsonc`. Unrelated target-owned agents,
+models, providers, MCP servers, permissions, default-agent choices, comments, and JSONC
+trailing-comma style are preserved where the JSONC edit mechanism permits. Existing target
+OpenCode configuration must already be compatible with OpenCode 2.0.8+ before installation; the
+installer does not inspect or migrate arbitrary legacy configuration.
 
-- [`packages/opencode/src/tool/task.ts`](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.26/packages/opencode/src/tool/task.ts)
-  defines `description`, textual `prompt`, `subagent_type`, and optional `task_id`, `command`, and
-  `background` task arguments. It resolves the one `prompt` string into ordinary child prompt parts;
-  there is no `authoritativeSource`/`instructions` pair or separate opaque source argument.
-- [`packages/web/src/content/docs/agents.mdx`](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.26/packages/web/src/content/docs/agents.mdx)
-  documents static agent prompts, permissions, modes, and task-target permissions. It does not
-  document a per-invocation immutable source payload or deterministic child-prompt constructor.
-- [`packages/web/src/content/docs/plugins.mdx`](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.26/packages/web/src/content/docs/plugins.mdx)
-  documents project/global plugins, `tool.execute.before`/`after` hooks, and custom tools. These can
-  observe or mutate model-produced tool arguments, but do not independently capture the semantically
-  authoritative source before task construction or guarantee the placement of host/system context.
-  Replacing `task` with a custom tool would still require the mediation model to supply the source and
-  would be a new host-coupled integration, not a host-captured opaque payload.
-- [`packages/web/src/content/docs/server.mdx`](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.26/packages/web/src/content/docs/server.mdx)
-  and [`packages/web/src/content/docs/sdk.mdx`](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.26/packages/web/src/content/docs/sdk.mdx)
-  expose ordinary session message/text parts and programmatic session APIs. They do not document a
-  configured built-in Plan interception point that separates source text before model-authored task
-  construction.
+The canonical sources remain the host-neutral role contracts under `.codex/agents/contracts/` and
+NaN.codex/agents/model-policy.yaml`. The model policy is the only source for managed worker model and
+reasoning assignments; OpenCode projects those assignments into native model variants. Custom-tool
+registration and execute/Workflow-MCP routing restrictions are separate compatibility concerns and are
+not absorbed into this ordinary configuration integration.
 
-The host boundary is therefore:
-
-| Mechanism | What it provides | Boundary for authoritative source |
-| --- | --- | --- |
-| Native `task` | One model-authored textual `prompt` plus task metadata | No independent typed/opaque source field; source and wrapper share one text value |
-| Agent configuration | Static prompt, permissions, mode, and task allowlist | No per-request source channel or deterministic child assembly |
-| Plugin hooks and project-local custom tools | Generic tool-argument mutation and custom tools, including auto-discovered `.opencode/tools/*.ts` definitions | Can inspect/mutate the resulting task call or expose a bounded custom capability, but cannot establish source authority independently or guarantee context placement |
-| Server/SDK | Session creation and ordinary text/file message parts | No documented Plan-specific pre-dispatch source interception |
-
-The native Plan delegation path therefore retains the #77 compatibility fallback: wrapper first, a
-contiguous source section, the closing marker immediately after the supplied source's final character,
-and host/system reminders outside that section. This is the strongest currently supported prompt-level
-fallback, not an immutable or typed transport, collision-proof parser, or semantic sandbox. Delimiters
-are convention only and do not make source trusted or resist model-level prompt injection. A future
-upstream structured task field or deterministic pre-dispatch hook can reopen this decision; until then,
-no plugin, task replacement, source artifact/reference, or Workflow MCP transport bookkeeping is added.
-
-This repository did not run a live provider-backed Plan-to-planner dogfood during this implementation
-pass. The [provider-only live dogfood guide](../.codex/agents/DOGFOOD.md) describes how to reproduce
-that check. The exact installed version and its version-corresponding source anchor are recorded, but
-static configuration and source inspection must not be presented as end-to-end mechanical
-preservation.
-Upstream `dev` documentation/source may be useful for comparison, but it is supplemental and is not
-the basis of the #84 unavailability conclusion. Re-run the version check and provider-guide checks
-after an OpenCode upgrade or other host change.
-
-Ordinary conversational requests remain bounded and never copy arbitrary history. When complete source
-contents are explicitly supplied, the planner uses them directly without redundant source retrieval;
-known payload-limit inability fails closed with bounded input or clarification. No Workflow MCP
-persistence, phase, source artifact, transport bookkeeping, or duplicate task-intent model is involved.
-
+Workflow MCP state/projections and the self-contained role contracts are the mechanical execution
+authority.
 Workflow MCP state/projections and the self-contained role contracts are the mechanical execution
 authority. [`.codex/agents/WORKFLOW.md`](../.codex/agents/WORKFLOW.md) is retained explanatory
 architecture documentation, not a runtime precondition or independent transition authority. This

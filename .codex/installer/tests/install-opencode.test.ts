@@ -71,10 +71,10 @@ function openCodeAgentsBackups(root: string) {
 
 test("fresh OpenCode config exposes only the canonical native Plan override", () => {
   const parsed = JSON.parse(createOpenCodeConfig("/provider/server.ts")) as Record<string, unknown>;
-  assert.deepEqual(parsed.agent, { plan: openCodePlanAgent() });
-  const plan = (parsed.agent as Record<string, unknown>).plan as Record<string, unknown>;
-  const prompt = plan.prompt as string;
-  assert.equal(prompt, openCodePlanAgent().prompt);
+  assert.deepEqual(parsed.agents, { plan: openCodePlanAgent() });
+  const plan = (parsed.agents as Record<string, unknown>).plan as Record<string, unknown>;
+  const prompt = plan.system as string;
+  assert.equal(prompt, openCodePlanAgent().system);
   const sourceSection = prompt.indexOf("Authoritative task-source preservation:");
   const delegation = prompt.indexOf(
     "For every substantial non-trivial change-planning request, and for every material refinement,",
@@ -142,28 +142,20 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   ]) {
     assert.ok(prompt.includes(phrase), `missing plan-reference presentation contract: ${phrase}`);
   }
-  assert.deepEqual(plan.permission, {
-    edit: "deny",
-    bash: "deny",
-    runEvidence: "deny",
-    inspectGitRange: "deny",
-    question: "deny",
-    task: { "*": "deny", planner: "allow", explorer: "allow" },
-    "workflow_state_*": "deny",
-    workflow_state_plan_parent_get: "allow",
-    workflow_state_plan_approve: "allow",
-  });
+  assert.deepEqual(plan.permissions, openCodePlanAgent().permissions);
+  assert.equal(plan.prompt, undefined);
+  assert.equal(plan.permission, undefined);
   assert.equal(parsed.instructions, undefined);
 });
 
-test("install-into.ts refuses malformed agent and agent.plan shapes before installation", () => {
+test("install-into.ts refuses malformed native agents.plan shapes before installation", () => {
   const cases = [
-    { agent: null },
-    { agent: [] },
-    { agent: "invalid" },
-    { agent: { plan: null } },
-    { agent: { plan: [] } },
-    { agent: { plan: "invalid" } },
+    { agents: null },
+    { agents: [] },
+    { agents: "invalid" },
+    { agents: { plan: null } },
+    { agents: { plan: [] } },
+    { agents: { plan: "invalid" } },
   ];
   for (const value of cases) {
     const { root, write } = fixture();
@@ -172,7 +164,7 @@ test("install-into.ts refuses malformed agent and agent.plan shapes before insta
       write("opencode.json", original);
       const result = runInstaller(root);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /agent(?:\.plan)? must be an object/);
+      assert.match(result.stderr, /agents(?:\.plan)? must be an object/);
       assert.equal(readFileSync(join(root, "opencode.json"), "utf8"), original);
       assert.ok(!existsSync(join(root, ".opencode/agents")));
       assert.ok(!existsSync(join(root, ".codex/agents")));
@@ -184,8 +176,8 @@ test("install-into.ts refuses malformed agent and agent.plan shapes before insta
 
 test("install-into.ts refuses an existing OpenCode workflow_state registration", () => {
   for (const content of [
-    JSON.stringify({ mcp: { workflow_state: { type: "local" } } }),
-    '{\n  "mcp": {\n    "workflow_state": "something",\n  },\n}\n',
+    JSON.stringify({ mcp: { servers: { workflow_state: { type: "local" } } } }),
+    '{\n  "mcp": {\n    "servers": {\n      "workflow_state": "something",\n    },\n  },\n}\n',
   ]) {
     const { root, write } = fixture();
     try {
@@ -366,13 +358,15 @@ test("install-into.ts refuses a second run without overwriting either host adapt
   }
 });
 
-test("hasOpenCodeWorkflowStateRegistration is presence-based", () => {
+test("hasOpenCodeWorkflowStateRegistration recognizes only native V2 registration", () => {
   const { root, write } = fixture();
   try {
     const config = join(root, "opencode.json");
     assert.equal(hasOpenCodeWorkflowStateRegistration(config), false);
-    write("opencode.json", '{"mcp": {"workflow_state": "something"}}');
+    write("opencode.json", '{"mcp": {"servers": {"workflow_state": "something"}}}');
     assert.equal(hasOpenCodeWorkflowStateRegistration(config), true);
+    write("opencode.json", '{"mcp": {"workflow_state": "legacy"}}');
+    assert.equal(hasOpenCodeWorkflowStateRegistration(config), false);
     write("opencode.json", '{"workflow_state": "top-level"}');
     assert.equal(hasOpenCodeWorkflowStateRegistration(config), false);
     write("opencode.json", '{"mcp": 5}');

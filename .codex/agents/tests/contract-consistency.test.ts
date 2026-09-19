@@ -93,12 +93,16 @@ const opencode = (name: string) =>
   readFileSync(resolve(import.meta.dir, "../../../.opencode/agents", name), "utf8");
 
 function opencodeBashPermission(content: string, command: string): string {
-  const rules = [...content.matchAll(/^    "((?:\\.|[^"\\])*)": (allow|ask|deny)$/gmu)].map(
-    (match) => ({
-      pattern: JSON.parse(`"${match[1]}"`) as string,
-      action: match[2] as string,
-    }),
-  );
+  const rules = [
+    ...content.matchAll(
+      /^  - action: (?:"((?:\\.|[^"\\])*)"|([^\n]+))\n    resource: "((?:\\.|[^"\\])*)"\n    effect: (allow|ask|deny)$/gmu,
+    ),
+  ]
+    .filter((match) => (match[1] ?? match[2]) === "shell")
+    .map((match) => ({
+      pattern: JSON.parse(`"${match[3]}"`) as string,
+      action: match[4] as string,
+    }));
   let action = "ask";
   for (const rule of rules) {
     let source = "^";
@@ -110,6 +114,21 @@ function opencodeBashPermission(content: string, command: string): string {
     if (new RegExp(`${source}$`, "u").test(command)) action = rule.action;
   }
   return action;
+}
+
+function assertOpenCodePermission(
+  content: string,
+  action: string,
+  resource: string,
+  effect: "allow" | "ask" | "deny",
+): void {
+  assert.match(
+    content,
+    new RegExp(
+      `^  - action: ${action}\\n    resource: "${resource}"\\n    effect: ${effect}$`,
+      "m",
+    ),
+  );
 }
 
 test("reusable agent definitions contain no concrete work-item instances", () => {
@@ -272,18 +291,17 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
     assert.match(content, /^mode: subagent$/m, `${name} must be a subagent`);
     assert.match(
       content,
-      new RegExp(`^model: ${assignment.model}$`, "m"),
+      new RegExp(`^model: ${assignment.model}#${assignment.reasoning}$`, "m"),
       `${name} must pin its configured OpenCode model`,
     );
     assert.match(
       content,
-      new RegExp(`^reasoningEffort: ${assignment.reasoning}$`, "m"),
-      `${name} must pin its configured reasoning effort`,
+      /^  - action: subagent\n    resource: "\*"\n    effect: deny$/m,
+      `${name} must not delegate`,
     );
-    assert.match(content, /^  task:\n    "\*": deny$/m, `${name} must not delegate`);
     assert.match(
       content,
-      /^  workflow_state_\*: deny$/m,
+      /^  - action: workflow_state_\*\n    resource: "\*"\n    effect: deny$/m,
       `${name} must gate MCP tools behind the role allowlist`,
     );
     const getter =
@@ -292,7 +310,33 @@ test("OpenCode definitions are subagents with host-native permissions", () => {
         : role === "code_reviewer"
           ? "workflow_reviewer_get"
           : "workflow_committer_get";
-    assert.match(content, new RegExp(`^  workflow_state_${getter}: allow$`, "m"));
+    assert.match(
+      content,
+      new RegExp(
+        `^  - action: workflow_state_${getter}\\n    resource: "\\*"\\n    effect: allow$`,
+        "m",
+      ),
+    );
+  }
+});
+
+test("OpenCode permissions remain ordered native V2 rules", () => {
+  const generator = readFileSync(resolve(agentsDir, "generate-host-definitions.ts"), "utf8");
+  assert.match(generator, /permissions: readonly OpenCodePermissionRule\[\]/u);
+  assert.doesNotMatch(generator, /permission: string\[\]/u);
+  assert.doesNotMatch(generator, /function openCodePermissionRules/u);
+
+  for (const name of [
+    "implementer.md",
+    "code_reviewer.md",
+    "committer.md",
+    "planner.md",
+    "explorer.md",
+  ]) {
+    const content = opencode(name);
+    assert.match(content, /^permissions:\n/mu);
+    assert.doesNotMatch(content, /^permission:/mu);
+    assert.doesNotMatch(content, /^\s+(bash|task):/mu);
   }
 });
 
@@ -305,13 +349,24 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
 
   const planner = opencode("planner.md");
   assert.match(planner, /^mode: subagent$/m);
-  assert.match(planner, /^  task:\n    "\*": deny\n    "explorer": allow$/m);
+  assert.match(planner, /^  - action: subagent\n    resource: "\*"\n    effect: deny$/m);
+  assert.match(planner, /^  - action: subagent\n    resource: "explorer"\n    effect: allow$/m);
   assert.deepEqual(
-    [...planner.matchAll(/^  workflow_state_([^:]+): allow$/gmu)].map((match) => match[1]),
-    ["plan_create", "plan_get", "plan_revise"],
+    [
+      ...planner.matchAll(
+        /^  - action: (workflow_state_[^\n]+)\n    resource: "\*"\n    effect: allow$/gmu,
+      ),
+    ].map((match) => match[1]),
+    ["workflow_state_plan_create", "workflow_state_plan_get", "workflow_state_plan_revise"],
   );
   for (const tool of ["plan_create", "plan_get", "plan_revise"]) {
-    assert.match(planner, new RegExp(`^  workflow_state_${tool}: allow$`, "m"));
+    assert.match(
+      planner,
+      new RegExp(
+        `^  - action: workflow_state_${tool}\\n    resource: "\\*"\\n    effect: allow$`,
+        "m",
+      ),
+    );
   }
   for (const forbidden of [
     "workflow_state_plan_parent_get",
@@ -331,58 +386,60 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
     "doom_loop",
     "question",
   ]) {
-    assert.match(planner, new RegExp(`^  ${denied}: deny$`, "m"));
+    assertOpenCodePermission(planner, denied, "\\*", "deny");
   }
   for (const allowed of ["webfetch", "websearch"]) {
-    assert.match(planner, new RegExp(`^  ${allowed}: allow$`, "m"));
-    assert.ok(!planner.includes(`  ${allowed}: deny`), `planner must allow ${allowed}`);
+    assertOpenCodePermission(planner, allowed, "\\*", "allow");
+    assert.ok(
+      !planner.includes(`- action: ${allowed}\\n    resource: "*"\\n    effect: deny`),
+      `planner must allow ${allowed}`,
+    );
   }
 
   const explorer = opencode("explorer.md");
   assert.match(explorer, /^hidden: true$/m);
-  assert.match(explorer, /^  edit: deny$/m);
-  assert.match(explorer, /^  bash:\n    "\*": deny$/m);
+  assertOpenCodePermission(explorer, "edit", "\\*", "deny");
+  assertOpenCodePermission(explorer, "shell", "\\*", "deny");
   for (const allowed of [
-    '"git status": allow',
-    '"git status --short": allow',
-    '"git status --porcelain": allow',
-    '"git diff": allow',
-    '"git diff --cached": allow',
-    '"git diff HEAD": allow',
-    '"git log": allow',
-    '"git log -1": allow',
-    '"git log --oneline": allow',
-    '"git show": allow',
-    '"git show HEAD": allow',
-    '"git rev-parse --show-toplevel": allow',
-    '"git rev-parse --is-inside-work-tree": allow',
-    '"git ls-files": allow',
-    '"git grep": allow',
-    "runEvidence: allow",
+    "git status",
+    "git status --short",
+    "git status --porcelain",
+    "git diff",
+    "git diff --cached",
+    "git diff HEAD",
+    "git log",
+    "git log -1",
+    "git log --oneline",
+    "git show",
+    "git show HEAD",
+    "git rev-parse --show-toplevel",
+    "git rev-parse --is-inside-work-tree",
+    "git ls-files",
+    "git grep",
   ]) {
-    assert.ok(explorer.includes(allowed), `explorer bash allowlist must include ${allowed}`);
+    assertOpenCodePermission(explorer, "shell", allowed, "allow");
   }
   for (const unsafe of [
-    '"git status *": allow',
-    '"git diff *": allow',
-    '"git log *": allow',
-    '"git show *": allow',
-    '"git rev-parse *": allow',
-    '"git ls-files *": allow',
-    '"git grep *": allow',
+    'resource: "git status *"',
+    'resource: "git diff *"',
+    'resource: "git log *"',
+    'resource: "git show *"',
+    'resource: "git rev-parse *"',
+    'resource: "git ls-files *"',
+    'resource: "git grep *"',
     "git diff --output",
     "git diff --no-index",
   ]) {
     assert.ok(!explorer.includes(unsafe), `explorer must reject unsafe Git pattern ${unsafe}`);
   }
-  assert.match(explorer, /^  task: deny$/m);
-  assert.match(explorer, /^  workflow_state_\*: deny$/m);
+  assertOpenCodePermission(explorer, "subagent", "\\*", "deny");
+  assertOpenCodePermission(explorer, "workflow_state_\\*", "\\*", "deny");
   assert.ok(!explorer.includes("workflow_state_plan_create"));
   for (const role of ["implementer", "code_reviewer", "committer", "planner"])
-    assert.match(opencode(`${role}.md`), /^  runEvidence: deny$/m);
-  assert.match(explorer, /^  inspectGitRange: allow$/m);
+    assertOpenCodePermission(opencode(`${role}.md`), "runEvidence", "\\*", "deny");
+  assertOpenCodePermission(explorer, "inspectGitRange", "\\*", "allow");
   for (const role of ["implementer", "code_reviewer", "committer", "planner"])
-    assert.match(opencode(`${role}.md`), /^  inspectGitRange: deny$/m);
+    assertOpenCodePermission(opencode(`${role}.md`), "inspectGitRange", "\\*", "deny");
 });
 
 test("planning contracts enforce bounded synthesis and disposable context", () => {
@@ -448,7 +505,7 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
 
 test("explorer exposes only the structured evidence capability", () => {
   const explorer = opencode("explorer.md");
-  assert.match(explorer, /^  runEvidence: allow$/m);
+  assert.match(explorer, /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m);
   assert.ok(!explorer.includes("reviewer-validation.ts --evidence-id"));
   assert.equal(
     opencodeBashPermission(
@@ -465,7 +522,7 @@ test("Explorer revision inspection is structured, isolated, and shell-free", () 
     resolve(import.meta.dir, "../../../.opencode/tools/inspectGitRange.ts"),
     "utf8",
   );
-  assert.match(explorer, /^  inspectGitRange: allow$/m);
+  assert.match(explorer, /^  - action: inspectGitRange\n    resource: "\*"\n    effect: allow$/m);
   assert.match(source, /base: tool\.schema\.string\(\)/u);
   assert.match(source, /head: tool\.schema\.string\(\)/u);
   assert.match(source, /context\.agent !== "explorer"/u);
@@ -481,14 +538,14 @@ test("planner clarification and native Plan refinement remain portable and fail 
   const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
   const generated = opencode("planner.md");
   const materializedPlan = openCodePlanAgent() as {
-    permission: Record<string, unknown>;
-    prompt: string;
+    permissions: unknown[];
+    system: string;
   };
-  const planPrompt = materializedPlan.prompt;
+  const planPrompt = materializedPlan.system;
   const planConfig = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
-  ) as { agent: { plan: { prompt: string; permission: Record<string, unknown> } } };
-  const planCopies = [planPrompt, planConfig.agent.plan.prompt];
+  ) as { agents: { plan: { system: string; permissions: unknown[] } } };
+  const planCopies = [planPrompt, planConfig.agents.plan.system];
 
   for (const contract of [canonical, generated]) {
     const normalized = contract.replace(/\s+/gu, " ");
@@ -547,10 +604,22 @@ test("planner clarification and native Plan refinement remain portable and fail 
     assert.match(normalized, /never create a workflow or dispatch an implementer/iu);
   }
 
-  assert.equal(planConfig.agent.plan.permission.question, "deny");
-  assert.equal(planConfig.agent.plan.permission.question, materializedPlan.permission.question);
-  assert.equal(planConfig.agent.plan.permission.workflow_state_plan_get, undefined);
-  assert.equal(planConfig.agent.plan.permission.workflow_state_plan_revise, undefined);
+  assert.ok(
+    planConfig.agents.plan.permissions.some((rule) =>
+      JSON.stringify(rule).includes('"action":"question"'),
+    ),
+  );
+  assert.deepEqual(planConfig.agents.plan.permissions, materializedPlan.permissions);
+  assert.ok(
+    planConfig.agents.plan.permissions.some((rule) =>
+      JSON.stringify(rule).includes('"action":"workflow_state_plan_parent_get"'),
+    ),
+  );
+  assert.ok(
+    !planConfig.agents.plan.permissions.some((rule) =>
+      JSON.stringify(rule).includes('"action":"workflow_state_plan_get"'),
+    ),
+  );
 });
 
 test("planner preserves authoritative task-source provenance boundaries", () => {
@@ -594,15 +663,22 @@ test("the OpenCode orchestrator is a host-specific primary outside shared genera
   );
   const content = opencode("orchestrator.md");
   assert.match(content, /^mode: primary$/m);
-  assert.match(content, /^  edit: deny$/m);
-  assert.match(content, /^  task:\n    "\*": deny$/m);
+  assert.match(content, /^  - action: edit\n    resource: "\*"\n    effect: deny$/m);
+  assert.match(content, /^  - action: subagent\n    resource: "\*"\n    effect: deny$/m);
   for (const role of ["implementer", "code_reviewer", "committer"]) {
-    assert.match(content, new RegExp(`^    "${role}": allow$`, "m"));
+    assert.match(
+      content,
+      new RegExp(`^  - action: subagent\\n    resource: "${role}"\\n    effect: allow$`, "m"),
+    );
   }
-  assert.ok(!content.includes('    "planner": allow'));
-  assert.match(content, /^  workflow_state_\*: deny$/m);
-  const allowedWorkflowTools = [...content.matchAll(/^  workflow_state_([^:]+): allow$/gmu)]
-    .map((match) => match[1])
+  assert.ok(!content.includes('resource: "planner"'));
+  assert.match(content, /^  - action: workflow_state_\*\n    resource: "\*"\n    effect: deny$/m);
+  const allowedWorkflowTools = [
+    ...content.matchAll(
+      /^  - action: (workflow_state_[^\n]+)\n    resource: "\*"\n    effect: allow$/gmu,
+    ),
+  ]
+    .map((match) => match[1].replace(/^workflow_state_/u, ""))
     .sort();
   assert.deepEqual(
     allowedWorkflowTools,
@@ -790,9 +866,11 @@ test("descriptor version 5 is the only executable descriptor", () => {
   // These are host worker-route capabilities, not route-to-operation protocol knowledge.
   const hostDispatchRoutes = new Set(["implement", "review", "re_review", "commit"]);
   const hostParentTools = new Set(
-    [...orchestratorSource.matchAll(/^\s+workflow_state_(workflow_[a-z_]+): allow$/gmu)].map(
-      (match) => match[1],
-    ),
+    [
+      ...orchestratorSource.matchAll(
+        /^\s+- action: (workflow_state_workflow_[a-z_]+)\n\s+resource: "\*"\n\s+effect: allow$/gmu,
+      ),
+    ].map((match) => match[1].replace(/^workflow_state_/u, "")),
   );
   const hostWorkerTools = new Set<string>();
   for (const role of ["implementer", "code_reviewer", "committer"] as const) {
@@ -1947,23 +2025,13 @@ test("the checked-in native Plan override is canonical and isolated from generat
   const config = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../../../opencode.json"), "utf8"),
   ) as {
-    agent?: { plan?: unknown };
+    agents?: { plan?: unknown };
     instructions?: unknown;
   };
-  assert.deepEqual(config.agent, { plan: openCodePlanAgent() });
+  assert.deepEqual(config.agents, { plan: openCodePlanAgent() });
   assert.equal(config.instructions, undefined);
-  const plan = config.agent?.plan as { permission?: Record<string, unknown> };
-  assert.deepEqual(plan.permission, {
-    edit: "deny",
-    bash: "deny",
-    runEvidence: "deny",
-    inspectGitRange: "deny",
-    question: "deny",
-    task: { "*": "deny", planner: "allow", explorer: "allow" },
-    "workflow_state_*": "deny",
-    workflow_state_plan_parent_get: "allow",
-    workflow_state_plan_approve: "allow",
-  });
+  const plan = config.agents?.plan as { permissions?: unknown[] };
+  assert.deepEqual(plan.permissions, openCodePlanAgent().permissions);
   const generatedPaths = Object.keys(generateDefinitions());
   assert.ok(!generatedPaths.some((path) => path.endsWith("/.opencode/agents/plan.md")));
 });
@@ -2352,23 +2420,27 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   const content = opencode("code_reviewer.md");
   const frontmatter = content.split("---\n")[1] ?? "";
   assert.notEqual(frontmatter, "", "reviewer must have frontmatter");
-  assert.match(content, /^  edit: deny$/m, "reviewer must not edit");
-  assert.match(content, /^    "\*": deny$/m, "reviewer bash must fail closed");
+  assertOpenCodePermission(content, "edit", "\\*", "deny");
+  assertOpenCodePermission(content, "shell", "\\*", "deny");
   for (const allowed of [
-    '"git status": allow',
-    '"git status *": allow',
-    '"git diff": allow',
-    '"git diff *": allow',
-    '"git log": allow',
-    '"git log *": allow',
-    '"git show *": allow',
-    '"git rev-parse *": allow',
-    '"git grep": allow',
-    '"git grep *": allow',
-    '"bun .codex/agents/change-receipt.ts *": allow',
-    '"bun .codex/agents/reviewer-validation.ts *": allow',
+    "git status",
+    "git status *",
+    "git diff",
+    "git diff *",
+    "git log",
+    "git log *",
+    "git show *",
+    "git rev-parse *",
+    "git grep",
+    "git grep *",
+    "bun .codex/agents/change-receipt.ts *",
+    "bun .codex/agents/reviewer-validation.ts *",
   ]) {
-    assert.ok(content.includes(allowed), `reviewer bash allowlist must include ${allowed}`);
+    assert.equal(
+      opencodeBashPermission(content, allowed),
+      "allow",
+      `reviewer shell allowlist must include ${allowed}`,
+    );
   }
   for (const denied of [
     "add",
@@ -2387,12 +2459,12 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     "stash",
   ]) {
     assert.ok(
-      !new RegExp(`^\\s+"git ${denied}[^"]*": allow$`, "m").test(frontmatter),
+      opencodeBashPermission(content, `git ${denied}`) !== "allow",
       `reviewer bash must not allow git ${denied}`,
     );
   }
-  assert.match(content, /^  workflow_state_workflow_submit_review: allow$/m);
-  assert.match(content, /^  workflow_state_workflow_begin_review: allow$/m);
+  assertOpenCodePermission(content, "workflow_state_workflow_submit_review", "\\*", "allow");
+  assertOpenCodePermission(content, "workflow_state_workflow_begin_review", "\\*", "allow");
   assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
@@ -2400,7 +2472,13 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
 
 test("reviewer validation is the only executable validation path", () => {
   const content = opencode("code_reviewer.md");
-  assert.ok(content.includes('"bun .codex/agents/reviewer-validation.ts *": allow'));
+  assert.equal(
+    opencodeBashPermission(
+      content,
+      "bun .codex/agents/reviewer-validation.ts --evidence-id x --argv-json []",
+    ),
+    "allow",
+  );
   assert.ok(!content.includes('"bun run *": allow'));
   assert.ok(!content.includes('"npm *": allow'));
   assert.ok(!content.includes('"npx *": allow'));
@@ -2470,26 +2548,30 @@ test("reviewer contract keeps semantic context separate from ownership and valid
 
 test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {
   const content = opencode("committer.md");
-  assert.match(content, /^  edit: deny$/m, "committer must not modify source files");
-  assert.match(content, /^  bash:\n    "\*": deny$/m, "committer bash must fail closed");
+  assertOpenCodePermission(content, "edit", "\\*", "deny");
+  assertOpenCodePermission(content, "shell", "\\*", "deny");
   for (const allowed of [
-    '"git status": allow',
-    '"git status *": allow',
-    '"git diff": allow',
-    '"git diff *": allow',
-    '"git log": allow',
-    '"git log *": allow',
-    '"git show *": allow',
-    '"git rev-parse": allow',
-    '"git rev-parse *": allow',
-    '"git ls-files": allow',
-    '"git ls-files *": allow',
-    '"git add *": allow',
-    '"git commit": allow',
-    '"git commit *": allow',
-    '"bun .codex/agents/change-receipt.ts *": allow',
+    "git status",
+    "git status *",
+    "git diff",
+    "git diff *",
+    "git log",
+    "git log *",
+    "git show *",
+    "git rev-parse",
+    "git rev-parse *",
+    "git ls-files",
+    "git ls-files *",
+    "git add *",
+    "git commit",
+    "git commit *",
+    "bun .codex/agents/change-receipt.ts *",
   ]) {
-    assert.ok(content.includes(allowed), `committer bash allowlist must include ${allowed}`);
+    assert.equal(
+      opencodeBashPermission(content, allowed),
+      "allow",
+      `committer shell allowlist must include ${allowed}`,
+    );
   }
   for (const denied of [
     "git add -p",
@@ -2507,12 +2589,13 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
     "git stash",
   ]) {
     assert.ok(
-      content.includes(`"${denied}": deny`) && content.includes(`"${denied} *": deny`),
+      opencodeBashPermission(content, denied) === "deny" &&
+        opencodeBashPermission(content, `${denied} x`) === "deny",
       `committer bash must deny ${denied} with and without arguments`,
     );
   }
-  assert.match(content, /^  workflow_state_workflow_prepare_commit: allow$/m);
-  assert.match(content, /^  workflow_state_workflow_submit_commit_result: allow$/m);
+  assertOpenCodePermission(content, "workflow_state_workflow_prepare_commit", "\\*", "allow");
+  assertOpenCodePermission(content, "workflow_state_workflow_submit_commit_result", "\\*", "allow");
   assert.ok(!content.includes("workflow_state_workflow_submit_implementation"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));
   assert.ok(!content.includes("workflow_state_workflow_adjudicate_findings"));
@@ -2545,12 +2628,8 @@ test("committer references are authoritative, neutral, and non-closing", () => {
 
 test("implementer may edit but never stages, commits, or rewrites history", () => {
   const content = opencode("implementer.md");
-  assert.match(content, /^  edit: allow$/m, "implementer must be able to edit the approved scope");
-  assert.match(
-    content,
-    /^  bash:\n    "\*": allow$/m,
-    "implementer bash must allow validation by default",
-  );
+  assertOpenCodePermission(content, "edit", "\\*", "allow");
+  assertOpenCodePermission(content, "shell", "\\*", "allow");
   for (const denied of [
     "git add",
     "git commit",
@@ -2568,11 +2647,17 @@ test("implementer may edit but never stages, commits, or rewrites history", () =
     "git stash",
   ]) {
     assert.ok(
-      content.includes(`"${denied}": deny`) && content.includes(`"${denied} *": deny`),
+      opencodeBashPermission(content, denied) === "deny" &&
+        opencodeBashPermission(content, `${denied} x`) === "deny",
       `implementer bash must deny ${denied} with and without arguments`,
     );
   }
-  assert.match(content, /^  workflow_state_workflow_submit_implementation: allow$/m);
+  assertOpenCodePermission(
+    content,
+    "workflow_state_workflow_submit_implementation",
+    "\\*",
+    "allow",
+  );
   assert.ok(!content.includes("workflow_state_workflow_prepare_commit"));
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
   assert.ok(!content.includes("workflow_state_workflow_submit_review"));

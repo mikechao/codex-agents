@@ -1,47 +1,116 @@
 ---
 description: Executes an approved implementation plan, validates the changes, and reports the results.
 mode: subagent
-model: openai/gpt-5.6-luna
-reasoningEffort: high
-permission:
-  edit: allow
-  bash:
-    "*": allow
-    "git add": deny
-    "git add *": deny
-    "git commit": deny
-    "git commit *": deny
-    "git push": deny
-    "git push *": deny
-    "git reset": deny
-    "git reset *": deny
-    "git rebase": deny
-    "git rebase *": deny
-    "git checkout": deny
-    "git checkout *": deny
-    "git switch": deny
-    "git switch *": deny
-    "git restore": deny
-    "git restore *": deny
-    "git revert": deny
-    "git revert *": deny
-    "git cherry-pick": deny
-    "git cherry-pick *": deny
-    "git rm": deny
-    "git rm *": deny
-    "git mv": deny
-    "git mv *": deny
-    "git clean": deny
-    "git clean *": deny
-    "git stash": deny
-    "git stash *": deny
-  runEvidence: deny
-  inspectGitRange: deny
-  task:
-    "*": deny
-  workflow_state_*: deny
-  workflow_state_workflow_implementer_get: allow
-  workflow_state_workflow_submit_implementation: allow
+model: openai/gpt-5.6-luna#high
+permissions:
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "git add"
+    effect: deny
+  - action: shell
+    resource: "git add *"
+    effect: deny
+  - action: shell
+    resource: "git commit"
+    effect: deny
+  - action: shell
+    resource: "git commit *"
+    effect: deny
+  - action: shell
+    resource: "git push"
+    effect: deny
+  - action: shell
+    resource: "git push *"
+    effect: deny
+  - action: shell
+    resource: "git reset"
+    effect: deny
+  - action: shell
+    resource: "git reset *"
+    effect: deny
+  - action: shell
+    resource: "git rebase"
+    effect: deny
+  - action: shell
+    resource: "git rebase *"
+    effect: deny
+  - action: shell
+    resource: "git checkout"
+    effect: deny
+  - action: shell
+    resource: "git checkout *"
+    effect: deny
+  - action: shell
+    resource: "git switch"
+    effect: deny
+  - action: shell
+    resource: "git switch *"
+    effect: deny
+  - action: shell
+    resource: "git restore"
+    effect: deny
+  - action: shell
+    resource: "git restore *"
+    effect: deny
+  - action: shell
+    resource: "git revert"
+    effect: deny
+  - action: shell
+    resource: "git revert *"
+    effect: deny
+  - action: shell
+    resource: "git cherry-pick"
+    effect: deny
+  - action: shell
+    resource: "git cherry-pick *"
+    effect: deny
+  - action: shell
+    resource: "git rm"
+    effect: deny
+  - action: shell
+    resource: "git rm *"
+    effect: deny
+  - action: shell
+    resource: "git mv"
+    effect: deny
+  - action: shell
+    resource: "git mv *"
+    effect: deny
+  - action: shell
+    resource: "git clean"
+    effect: deny
+  - action: shell
+    resource: "git clean *"
+    effect: deny
+  - action: shell
+    resource: "git stash"
+    effect: deny
+  - action: shell
+    resource: "git stash *"
+    effect: deny
+  - action: runEvidence
+    resource: "*"
+    effect: deny
+  - action: inspectGitRange
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: workflow_state_*
+    resource: "*"
+    effect: deny
+  - action: workflow_state_workflow_implementer_get
+    resource: "*"
+    effect: allow
+  - action: workflow_state_workflow_submit_implementation
+    resource: "*"
+    effect: allow
 ---
 You are the custom "implementer" subagent.
 

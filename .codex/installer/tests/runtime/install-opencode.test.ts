@@ -90,22 +90,40 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       $schema: string;
       default_agent: string;
-      subagent_depth: number;
+      experimental: { subagent_depth: number };
       mcp: {
-        workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number };
+        servers: {
+          workflow_state: {
+            type: string;
+            command: string[];
+            timeout: { catalog: number; execution: number };
+          };
+        };
       };
-      agent: { plan: { permission: { task: Record<string, unknown> } } };
+      agents: { plan: { permissions: Array<Record<string, string>> } };
     };
     assert.equal(config.$schema, "https://opencode.ai/config.json");
     assert.equal(config.default_agent, "orchestrator");
-    assert.equal(config.subagent_depth, 2);
-    assert.equal(config.agent.plan.permission.task.planner, "allow");
-    assert.equal(config.agent.plan.permission.task.explorer, "allow");
-    assert.equal(config.mcp.workflow_state.type, "local");
-    assert.equal(config.mcp.workflow_state.enabled, true);
-    assert.equal(config.mcp.workflow_state.timeout, 30000);
+    assert.equal(config.experimental.subagent_depth, 2);
+    assert.ok(
+      config.agents.plan.permissions.some(
+        (rule) =>
+          rule.action === "subagent" && rule.resource === "planner" && rule.effect === "allow",
+      ),
+    );
+    assert.ok(
+      config.agents.plan.permissions.some(
+        (rule) =>
+          rule.action === "subagent" && rule.resource === "explorer" && rule.effect === "allow",
+      ),
+    );
+    assert.equal(config.mcp.servers.workflow_state.type, "local");
+    assert.deepEqual(config.mcp.servers.workflow_state.timeout, {
+      catalog: 30000,
+      execution: 30000,
+    });
     assert.deepEqual(
-      config.mcp.workflow_state.command,
+      config.mcp.servers.workflow_state.command,
       providerServerCommand(resolve(root, ".codex/runtime/workflow-mcp")),
     );
     assert.ok(existsSync(join(root, ".codex/runtime/workflow-mcp")));
@@ -169,9 +187,15 @@ test("install-into.ts preserves unrelated existing OpenCode configuration", () =
         {
           $schema: "https://opencode.ai/config.json",
           model: "some-provider/some-model",
-          autoupdate: false,
+          update: "disable",
           mcp: {
-            other_server: { type: "local", command: ["npx", "-y", "something"], enabled: false },
+            servers: {
+              other_server: {
+                type: "local",
+                command: ["npx", "-y", "something"],
+                disabled: true,
+              },
+            },
           },
         },
         null,
@@ -182,10 +206,10 @@ test("install-into.ts preserves unrelated existing OpenCode configuration", () =
     assert.equal(result.status, 0, result.stderr);
     const parsed = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8"));
     assert.equal(parsed.model, "some-provider/some-model");
-    assert.equal(parsed.autoupdate, false);
-    assert.equal(parsed.mcp.other_server.command[0], "npx");
-    assert.equal(parsed.mcp.workflow_state.type, "local");
-    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
+    assert.equal(parsed.update, "disable");
+    assert.equal(parsed.mcp.servers.other_server.command[0], "npx");
+    assert.equal(parsed.mcp.servers.workflow_state.type, "local");
+    assert.deepEqual(parsed.agents.plan, openCodePlanAgent());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -200,14 +224,16 @@ test("install-into.ts preserves comments and trailing commas in existing OpenCod
         "{",
         "  // project model override",
         '  "model": "some-provider/some-model",',
-        '  "agent": {',
-        '    "build": { "prompt": "keep build", },',
+        '  "agents": {',
+        '    "build": { "system": "keep build", "permissions": [{ "action": "read", "resource": "*", "effect": "allow" }], },',
         "  },",
         '  "mcp": {',
-        "    // existing server, keep me",
-        '    "other_server": {',
-        '      "type": "local",',
-        '      "command": ["npx", "-y", "something"],',
+        '    "servers": {',
+        "      // existing server, keep me",
+        '      "other_server": {',
+        '        "type": "local",',
+        '        "command": ["npx", "-y", "something"],',
+        "      },",
         "    },",
         "  },",
         "}",
@@ -220,10 +246,13 @@ test("install-into.ts preserves comments and trailing commas in existing OpenCod
     assert.ok(content.includes("// project model override"));
     assert.ok(content.includes("// existing server, keep me"));
     const parsed = JSON.parse(content.replace(/\/\/.*$/gm, "").replace(/,\s*([}\]])/g, "$1"));
-    assert.equal(parsed.mcp.other_server.type, "local");
-    assert.equal(parsed.mcp.workflow_state.type, "local");
-    assert.equal(parsed.agent.build.prompt, "keep build");
-    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
+    assert.equal(parsed.mcp.servers.other_server.type, "local");
+    assert.equal(parsed.mcp.servers.workflow_state.type, "local");
+    assert.equal(parsed.agents.build.system, "keep build");
+    assert.deepEqual(parsed.agents.build.permissions, [
+      { action: "read", resource: "*", effect: "allow" },
+    ]);
+    assert.deepEqual(parsed.agents.plan, openCodePlanAgent());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -235,15 +264,23 @@ test("install-into.ts inserts Plan without changing other agents", () => {
     write(
       "opencode.json",
       JSON.stringify({
-        agent: { build: { prompt: "keep build", permission: { edit: "allow" } } },
+        agents: {
+          build: {
+            system: "keep build",
+            permissions: [{ action: "edit", resource: "*", effect: "allow" }],
+          },
+        },
         default_agent: "build",
       }),
     );
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);
     const parsed = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8"));
-    assert.deepEqual(parsed.agent.build, { prompt: "keep build", permission: { edit: "allow" } });
-    assert.deepEqual(parsed.agent.plan, openCodePlanAgent());
+    assert.deepEqual(parsed.agents.build, {
+      permissions: [{ action: "edit", resource: "*", effect: "allow" }],
+      system: "keep build",
+    });
+    assert.deepEqual(parsed.agents.plan, openCodePlanAgent());
     assert.equal(parsed.default_agent, "build");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -254,16 +291,19 @@ test("install-into.ts preserves an explicit custom Plan object", () => {
   const { root, write } = fixture();
   try {
     const custom = {
-      prompt: "project-owned Plan prompt",
-      permission: { edit: "allow", "workflow_state_*": "deny" },
+      system: "project-owned Plan prompt",
+      permissions: [
+        { action: "edit", resource: "*", effect: "allow" },
+        { action: "workflow_state_*", resource: "*", effect: "deny" },
+      ],
       model: "project/model",
       nested: { keep: true },
     };
-    write("opencode.json", JSON.stringify({ agent: { plan: custom } }));
+    write("opencode.json", JSON.stringify({ agents: { plan: custom } }));
     const result = runInstaller(root);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(
-      JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")).agent.plan,
+      JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")).agents.plan,
       custom,
     );
   } finally {
