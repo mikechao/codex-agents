@@ -43,8 +43,10 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/contracts/planner.md",
   ".codex/agents/contracts/explorer.md",
   ".opencode/agents/orchestrator.md",
-  ".opencode/tools/runEvidence.ts",
-  ".opencode/tools/inspectGitRange.ts",
+  ".opencode/plugins/codex-agents-explorer-tools/index.ts",
+  ".opencode/plugins/codex-agents-explorer-tools/inspect-git-range.ts",
+  ".opencode/plugins/codex-agents-explorer-tools/run-evidence.ts",
+  ".opencode/plugins/codex-agents-explorer-tools/worktree.ts",
 ];
 const COPY_SOURCE_FILES = [
   ".codex/agents/change-receipt.ts",
@@ -52,7 +54,7 @@ const COPY_SOURCE_FILES = [
   ".codex/agents/WORKFLOW.md",
 ];
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
-const OPENCODE_CUSTOM_TOOL_FILES = ["runEvidence.ts", "inspectGitRange.ts"] as const;
+const OPENCODE_PLUGIN_DIRECTORY = ".opencode/plugins/codex-agents-explorer-tools";
 
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
@@ -699,9 +701,7 @@ export function main(args: readonly string[]): number {
     error(`Refusing to replace existing workflow_state registration: ${config}`);
   }
   const opencodeAgentsTarget = resolve(target, ".opencode/agents");
-  const opencodeCustomToolTargets = OPENCODE_CUSTOM_TOOL_FILES.map((file) =>
-    resolve(target, ".opencode/tools", file),
-  );
+  const opencodePluginTarget = resolve(target, OPENCODE_PLUGIN_DIRECTORY);
   const codexDirectory = resolve(target, ".codex");
   const runtimeDirectory = resolve(codexDirectory, "runtime");
   const runtimeTarget = resolve(
@@ -709,18 +709,19 @@ export function main(args: readonly string[]): number {
     process.platform === "win32" ? "workflow-mcp.exe" : "workflow-mcp",
   );
   const opencodeDirectory = resolve(target, ".opencode");
-  const opencodeToolsDirectory = resolve(opencodeDirectory, "tools");
+  const opencodePluginsDirectory = resolve(opencodeDirectory, "plugins");
   const codexDirectoryExisting = pathEntryExists(codexDirectory);
   const runtimeDirectoryExisting = pathEntryExists(runtimeDirectory);
   if (runtimeDirectoryExisting && !lstatSync(runtimeDirectory).isDirectory()) {
     error(`Refusing to use a non-directory Workflow MCP runtime parent: ${runtimeDirectory}`);
   }
   const opencodeDirectoryExisting = pathEntryExists(opencodeDirectory);
-  const opencodeToolsDirectoryExisting = pathEntryExists(opencodeToolsDirectory);
-  for (const opencodeCustomToolTarget of opencodeCustomToolTargets) {
-    if (pathEntryExists(opencodeCustomToolTarget)) {
-      error(`Refusing to replace existing OpenCode custom tool: ${opencodeCustomToolTarget}`);
-    }
+  const opencodePluginsDirectoryExisting = pathEntryExists(opencodePluginsDirectory);
+  if (opencodePluginsDirectoryExisting && !lstatSync(opencodePluginsDirectory).isDirectory()) {
+    error(`Refusing to use a non-directory OpenCode plugin parent: ${opencodePluginsDirectory}`);
+  }
+  if (pathEntryExists(opencodePluginTarget)) {
+    error(`Refusing to replace existing OpenCode plugin: ${opencodePluginTarget}`);
   }
   if (pathEntryExists(runtimeTarget)) {
     error(`Refusing to replace existing Workflow MCP runtime executable: ${runtimeTarget}`);
@@ -808,12 +809,12 @@ export function main(args: readonly string[]): number {
   mkdirSync(codexDirectory, { recursive: true });
   mkdirSync(runtimeDirectory, { recursive: true });
   mkdirSync(opencodeDirectory, { recursive: true });
-  mkdirSync(opencodeToolsDirectory, { recursive: true });
+  mkdirSync(opencodePluginsDirectory, { recursive: true });
   const agentsStaging = mkdtempSync(resolve(target, ".codex/.agents.install."));
   const configStaging = mkdtempSync(resolve(target, ".codex/.config.install."));
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
-  const opencodeCustomToolStaging = mkdtempSync(resolve(target, ".opencode-custom-tool.install."));
+  const opencodePluginStaging = mkdtempSync(resolve(target, ".opencode-plugin.install."));
   const reviewerPolicyStaging = mkdtempSync(
     resolve(target, ".codex/.reviewer-validation.install."),
   );
@@ -843,11 +844,8 @@ export function main(args: readonly string[]): number {
         throw new Error(`Staged Workflow MCP runtime is not executable: ${stagedRuntime}`);
       }
     }
-    const stagedCustomTools = OPENCODE_CUSTOM_TOOL_FILES.map((file) => {
-      const staged = resolve(opencodeCustomToolStaging, file);
-      cpSync(resolve(projectRoot, ".opencode/tools", file), staged);
-      return staged;
-    });
+    const stagedPlugin = resolve(opencodePluginStaging, basename(opencodePluginTarget));
+    cpSync(resolve(projectRoot, OPENCODE_PLUGIN_DIRECTORY), stagedPlugin, { recursive: true });
     if (reviewerPolicyOriginal === null) {
       cpSync(
         resolve(projectRoot, ".codex/reviewer-validation.json"),
@@ -894,11 +892,7 @@ export function main(args: readonly string[]): number {
           }
         : undefined,
       [
-        ...stagedCustomTools.map((staging, index) => ({
-          staging,
-          target: opencodeCustomToolTargets[index] as string,
-          original: null,
-        })),
+        { staging: stagedPlugin, target: opencodePluginTarget, original: null },
         {
           staging: stagedRuntime,
           target: runtimeTarget,
@@ -911,13 +905,13 @@ export function main(args: readonly string[]): number {
     rmSync(configStaging, { recursive: true, force: true });
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
-    rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
+    rmSync(opencodePluginStaging, { recursive: true, force: true });
     rmSync(reviewerPolicyStaging, { recursive: true, force: true });
     rmSync(runtimeStaging, { recursive: true, force: true });
     rmSync(buildRoot, { recursive: true, force: true });
     cleanupOpenCodeAgentsBackup(opencodeAgentsBackup, recoveryState);
     cleanupCreatedInstallDirectories([
-      { path: opencodeToolsDirectory, existed: opencodeToolsDirectoryExisting },
+      { path: opencodePluginsDirectory, existed: opencodePluginsDirectoryExisting },
       { path: opencodeDirectory, existed: opencodeDirectoryExisting },
       { path: runtimeDirectory, existed: runtimeDirectoryExisting },
       { path: codexDirectory, existed: codexDirectoryExisting },
@@ -926,7 +920,7 @@ export function main(args: readonly string[]): number {
   }
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
-  rmSync(opencodeCustomToolStaging, { recursive: true, force: true });
+  rmSync(opencodePluginStaging, { recursive: true, force: true });
   rmSync(reviewerPolicyStaging, { recursive: true, force: true });
   rmSync(runtimeStaging, { recursive: true, force: true });
   rmSync(buildRoot, { recursive: true, force: true });

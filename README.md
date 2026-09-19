@@ -207,17 +207,17 @@ in one all-or-nothing step:
   mutations fail closed. Validation requirements use `kind: "command"` with a non-empty exact `argv`
   array for executable checks, or `kind: "inspection"` without `argv` for non-executable checks;
   inspection requirements are never executed.
-- OpenCode also installs the structured, explorer-only `runEvidence({ evidenceId, argv })` project-local
-  custom tool at `.opencode/tools/runEvidence.ts`, which OpenCode auto-discovers by filename. OpenCode
-  creates and synchronizes its writable `.opencode/package.json`, lockfiles, `.opencode/node_modules`,
-  and generated `.opencode/.gitignore` at startup to the running InstallationVersion. These ignored
-  host artifacts are not pinned by this repository and are not installer mutation targets; existing
-  host state is left untouched. Evidence remains exact-policy-authorized, shell-free, bounded, and
-  non-authoritative; explorers never fall back to Bash.
-- OpenCode separately installs the structured, Explorer-only `inspectGitRange({ base, head })`
-  project-local tool at `.opencode/tools/inspectGitRange.ts`. It performs bounded, read-only,
-  shell-free revision-range inspection using resolved commit IDs; it is not executable evidence,
-  Workflow state, or a generic Git API.
+- OpenCode also installs one native V2 plugin at
+  `.opencode/plugins/codex-agents-explorer-tools/`, which registers the structured, Explorer-only
+  `runEvidence({ evidenceId, argv })` and `inspectGitRange({ base, head })` capabilities through
+  `@opencode/plugin`. Each invocation resolves the owning checkout from its session location before
+  using the bounded, shell-free implementation. Evidence remains exact-policy-authorized,
+  shell-free, bounded, and non-authoritative; explorers never fall back to Bash. The old V1
+  filename-based `.opencode/tools/*.ts` registration surface is not installed.
+- OpenCode creates and synchronizes its writable `.opencode/package.json`, lockfiles,
+  `.opencode/node_modules`, and generated `.opencode/.gitignore` at startup to the running
+  InstallationVersion. These ignored host artifacts are not pinned by this repository and are not
+  installer mutation targets; existing host state is left untouched.
 
 Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
 sources. Installation places a standalone executable at `.codex/runtime/workflow-mcp`; its direct
@@ -234,8 +234,8 @@ OpenCode configuration must already be compatible with OpenCode 2.0.8+ before in
 installer does not inspect or migrate arbitrary legacy configuration. The orchestrator is still
 installed and can be selected with the primary-agent switcher.
 
-The ordinary configuration integration does not implement OpenCode custom-tool V2 registration or
-execute/Workflow-MCP routing restrictions; those remain separately scoped compatibility work.
+The ordinary configuration integration does not implement execute/Workflow-MCP routing restrictions;
+those remain separately scoped compatibility work.
 
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
 `code_reviewer.md`, `committer.md`, `planner.md`, `explorer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated

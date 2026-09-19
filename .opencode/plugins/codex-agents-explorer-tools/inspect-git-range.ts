@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { tool, type ToolResult } from "@opencode-ai/plugin";
 
 const MAX_REVISION_LENGTH = 200;
 const MAX_RESOLUTION_OUTPUT_BYTES = 4096;
@@ -9,6 +8,7 @@ const MAX_DIFF_OUTPUT_BYTES = 512 * 1024;
 const MAX_TIMEOUT_MS = 30_000;
 const OID = /^[0-9a-f]{40,64}$/u;
 const REVISION = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
+const HEAD_ANCESTRY = /^HEAD~[0-9]+$/u;
 
 export interface GitRangeRequest {
   base: string;
@@ -32,7 +32,10 @@ interface GitInvocation {
   incomplete: boolean;
 }
 
-function boundedText(value: Buffer, maximum: number): {
+function boundedText(
+  value: Buffer,
+  maximum: number,
+): {
   text: string;
   truncated: boolean;
   malformed: boolean;
@@ -59,12 +62,14 @@ function boundedText(value: Buffer, maximum: number): {
 }
 
 function validRevision(value: string): boolean {
-  const components = value.split("/");
+  const isHeadAncestry = HEAD_ANCESTRY.test(value);
+  const revisionBase = isHeadAncestry ? "HEAD" : value;
+  const components = revisionBase.split("/");
   return (
     value.length > 0 &&
     value.length <= MAX_REVISION_LENGTH &&
     !value.startsWith("-") &&
-    REVISION.test(value) &&
+    (REVISION.test(value) || isHeadAncestry) &&
     !value.includes("..") &&
     !value.includes("@") &&
     !value.includes("//") &&
@@ -107,7 +112,10 @@ function invokeGit(worktree: string, args: readonly string[], maximum: number): 
   };
 }
 
-function resolveRevision(worktree: string, revision: string): GitInvocation & { oid: string | null } {
+function resolveRevision(
+  worktree: string,
+  revision: string,
+): GitInvocation & { oid: string | null } {
   const invocation = invokeGit(
     worktree,
     ["rev-parse", "--verify", "--end-of-options", `${revision}^{commit}`],
@@ -128,7 +136,11 @@ function resolveRevision(worktree: string, revision: string): GitInvocation & { 
   return { ...invocation, oid, incomplete: invocation.incomplete || oid === null };
 }
 
-function parseChangedPaths(value: Buffer): { paths: string[]; malformed: boolean; truncated: boolean } {
+function parseChangedPaths(value: Buffer): {
+  paths: string[];
+  malformed: boolean;
+  truncated: boolean;
+} {
   const bounded = boundedText(value, MAX_PATH_OUTPUT_BYTES);
   if (bounded.truncated) return { paths: [], malformed: bounded.malformed, truncated: true };
   if (bounded.malformed) return { paths: [], malformed: true, truncated: false };
@@ -148,7 +160,11 @@ function parseChangedPaths(value: Buffer): { paths: string[]; malformed: boolean
   return { paths, malformed: false, truncated: false };
 }
 
-function failedInspection(base: string, head: string, exitStatus: number | null): GitRangeInspection {
+export function failedInspection(
+  base: string,
+  head: string,
+  exitStatus: number | null,
+): GitRangeInspection {
   return {
     requested: { base, head },
     resolved: { base: null, head: null },
@@ -160,10 +176,7 @@ function failedInspection(base: string, head: string, exitStatus: number | null)
   };
 }
 
-export function inspectGitRange(
-  request: GitRangeRequest,
-  worktree: string,
-): GitRangeInspection {
+export function inspectGitRange(request: GitRangeRequest, worktree: string): GitRangeInspection {
   const { base, head } = request;
   if (!validRevision(base) || !validRevision(head)) return failedInspection(base, head, null);
 
@@ -222,38 +235,10 @@ export function inspectGitRange(
   return {
     requested: { base, head },
     resolved,
-    exitStatus:
-      paths.status !== 0
-        ? paths.status
-        : stat.status !== 0
-          ? stat.status
-          : patch.status,
+    exitStatus: paths.status !== 0 ? paths.status : stat.status !== 0 ? stat.status : patch.status,
     changedPaths: parsedPaths.paths,
     stat: statText.text,
     diff: diffText.text,
     incomplete,
   };
 }
-
-function result(inspection: GitRangeInspection): ToolResult {
-  return {
-    title: `Git range ${inspection.requested.base}...${inspection.requested.head}`,
-    output: JSON.stringify(inspection),
-    metadata: inspection,
-  };
-}
-
-export default tool({
-  description:
-    "Inspect one bounded, read-only Git revision range. Explorer-only and non-authoritative.",
-  args: {
-    base: tool.schema.string().min(1).max(MAX_REVISION_LENGTH),
-    head: tool.schema.string().min(1).max(MAX_REVISION_LENGTH),
-  },
-  async execute(args, context) {
-    if (context.agent !== "explorer") {
-      return result(failedInspection(args.base, args.head, null));
-    }
-    return result(inspectGitRange({ base: args.base, head: args.head }, context.worktree));
-  },
-});

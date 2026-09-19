@@ -128,14 +128,18 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
     );
     assert.ok(existsSync(join(root, ".codex/runtime/workflow-mcp")));
     assert.deepEqual(openCodeAgentsBackups(root), []);
-    for (const toolName of ["runEvidence.ts", "inspectGitRange.ts"]) {
-      const installedTool = join(root, ".opencode/tools", toolName);
-      assert.ok(existsSync(installedTool));
+    const installedPlugin = join(root, ".opencode/plugins/codex-agents-explorer-tools");
+    const sourcePlugin = resolve(
+      import.meta.dir,
+      "../../../../.opencode/plugins/codex-agents-explorer-tools",
+    );
+    for (const file of ["index.ts", "inspect-git-range.ts", "run-evidence.ts", "worktree.ts"]) {
       assert.equal(
-        readFileSync(installedTool, "utf8"),
-        readFileSync(resolve(import.meta.dir, "../../../../.opencode/tools", toolName), "utf8"),
+        readFileSync(join(installedPlugin, file), "utf8"),
+        readFileSync(join(sourcePlugin, file), "utf8"),
       );
     }
+    assert.ok(!existsSync(join(root, ".opencode/tools")));
     for (const artifact of [
       ".opencode/package.json",
       ".opencode/package-lock.json",
@@ -161,6 +165,7 @@ test("install-into.ts preserves arbitrary OpenCode host artifacts byte-for-byte"
       '{"name":"@opencode-ai/plugin","version":"9.9.9"}\n',
     ".opencode/node_modules/@opencode-ai/plugin/host-state.txt": "keep this entry\n",
     ".opencode/plugins/pre-existing.ts": "// target-owned plugin\n",
+    ".opencode/tools/target-owned-v1.ts": "// target-owned V1 tool\n",
   } as const;
   try {
     for (const [path, content] of Object.entries(artifacts)) write(path, content);
@@ -171,7 +176,7 @@ test("install-into.ts preserves arbitrary OpenCode host artifacts byte-for-byte"
       assert.equal(readFileSync(join(root, path), "utf8"), content);
     assert.deepEqual(
       readdirSync(join(root, ".opencode")).sort(),
-      [...originalEntries, "agents", "tools"].sort(),
+      [...originalEntries, "agents"].sort(),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

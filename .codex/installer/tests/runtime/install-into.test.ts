@@ -275,14 +275,18 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
         `provider-only guide must not be installed: .codex/agents/${file}`,
       );
     }
-    for (const file of ["runEvidence.ts", "inspectGitRange.ts"]) {
-      const installed = join(root, ".opencode/tools", file);
-      assert.ok(existsSync(installed), `missing .opencode/tools/${file}`);
+    const pluginSource = resolve(
+      import.meta.dir,
+      "../../../../.opencode/plugins/codex-agents-explorer-tools",
+    );
+    const pluginTarget = join(root, ".opencode/plugins/codex-agents-explorer-tools");
+    for (const file of ["index.ts", "inspect-git-range.ts", "run-evidence.ts", "worktree.ts"]) {
       assert.equal(
-        readFileSync(installed, "utf8"),
-        readFileSync(resolve(import.meta.dir, "../../../../.opencode/tools", file), "utf8"),
+        readFileSync(join(pluginTarget, file), "utf8"),
+        readFileSync(join(pluginSource, file), "utf8"),
       );
     }
+    assert.equal(existsSync(join(root, ".opencode/tools")), false);
     const installedManifest = generateDefinitionManifest({
       codexWorkflowMcp: enabledCodexWorkflowMcp(resolve(root, ".codex/runtime/workflow-mcp")),
     });

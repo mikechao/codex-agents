@@ -49,50 +49,30 @@ test("the repository's own opencode.json registers the supervised self-host serv
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
 });
 
-test("self-host OpenCode exposes structured evidence only to explorer", () => {
-  const customTool = resolve(repoRoot, ".opencode/tools/runEvidence.ts");
-  assert.ok(existsSync(customTool));
-  assert.equal(customTool.split("/").pop()?.replace(/\.ts$/u, ""), "runEvidence");
-  assert.ok(!existsSync(resolve(repoRoot, ".opencode/plugins/run-evidence.ts")));
-  const source = readFileSync(customTool, "utf8");
-  assert.match(source, /export default tool\(/u);
-  assert.doesNotMatch(source, /Plugin/u);
-  assert.match(source, /context\.agent !== "explorer"/);
-  assert.match(source, /context\.worktree/);
-  assert.ok(!source.includes("Bun.$"));
-  assert.ok(!source.includes("spawnSync"));
+test("self-host OpenCode exposes the V2 Explorer plugin with structured capabilities", () => {
+  const pluginDirectory = resolve(repoRoot, ".opencode/plugins/codex-agents-explorer-tools");
+  const plugin = readFileSync(resolve(pluginDirectory, "index.ts"), "utf8");
+  assert.match(plugin, /Plugin\.define/u);
+  assert.match(plugin, /ctx\.tool\.transform/u);
+  assert.match(plugin, /name: "runEvidence"/u);
+  assert.match(plugin, /name: "inspectGitRange"/u);
+  assert.doesNotMatch(plugin, /@opencode-ai\/plugin/u);
+  assert.doesNotMatch(plugin, /\btool\(/u);
+  assert.doesNotMatch(plugin, /title:/u);
+  assert.ok(!existsSync(resolve(repoRoot, ".opencode/tools/runEvidence.ts")));
+  assert.ok(!existsSync(resolve(repoRoot, ".opencode/tools/inspectGitRange.ts")));
+  const worktree = readFileSync(resolve(pluginDirectory, "worktree.ts"), "utf8");
+  assert.match(worktree, /session\.get/u);
+  assert.match(worktree, /--show-toplevel/u);
+  assert.match(worktree, /shell: false/u);
   const explorer = readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8");
   assert.match(explorer, /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m);
+  assert.match(explorer, /^  - action: inspectGitRange\n    resource: "\*"\n    effect: allow$/m);
   for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
     assert.match(
       readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
       /^  - action: runEvidence\n    resource: "\*"\n    effect: deny$/m,
     );
-  }
-  const planPermissions = openCodePlanAgent().permissions as Array<{
-    action: string;
-    effect: string;
-  }>;
-  assert.ok(
-    planPermissions.some((rule) => rule.action === "runEvidence" && rule.effect === "deny"),
-  );
-});
-
-test("self-host OpenCode isolates structured Git range inspection to explorer", () => {
-  const customTool = resolve(repoRoot, ".opencode/tools/inspectGitRange.ts");
-  assert.ok(existsSync(customTool));
-  const source = readFileSync(customTool, "utf8");
-  assert.match(source, /export default tool\(/u);
-  assert.match(source, /context\.agent !== "explorer"/u);
-  assert.match(source, /shell: false/u);
-  assert.ok(!source.includes("Bun.$"));
-  assert.ok(!source.includes("runEvidence"));
-  assert.ok(!source.includes("workflow_state"));
-  assert.match(
-    readFileSync(resolve(repoRoot, ".opencode/agents/explorer.md"), "utf8"),
-    /^  - action: inspectGitRange\n    resource: "\*"\n    effect: allow$/m,
-  );
-  for (const role of ["implementer", "code_reviewer", "committer", "planner", "orchestrator"]) {
     assert.match(
       readFileSync(resolve(repoRoot, `.opencode/agents/${role}.md`), "utf8"),
       /^  - action: inspectGitRange\n    resource: "\*"\n    effect: deny$/m,
@@ -104,6 +84,9 @@ test("self-host OpenCode isolates structured Git range inspection to explorer", 
   }>;
   assert.ok(
     planPermissions.some((rule) => rule.action === "inspectGitRange" && rule.effect === "deny"),
+  );
+  assert.ok(
+    planPermissions.some((rule) => rule.action === "runEvidence" && rule.effect === "deny"),
   );
 });
 

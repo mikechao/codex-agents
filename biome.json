@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       ".codex/**/*.ts",
+      ".opencode/**/*.ts",
       "install-into.ts",
       "scripts/**/*.ts",
       "package.json",

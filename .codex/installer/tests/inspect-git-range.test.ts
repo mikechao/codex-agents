@@ -1,20 +1,15 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { inspectGitRange } from "../../../.opencode/plugins/codex-agents-explorer-tools/inspect-git-range.js";
 
-const sourcePath = resolve(import.meta.dir, "../../../.opencode/tools/inspectGitRange.ts");
+const sourcePath = resolve(
+  import.meta.dir,
+  "../../../.opencode/plugins/codex-agents-explorer-tools/inspect-git-range.ts",
+);
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "inspect-git-range-"));
@@ -37,34 +32,10 @@ function fixture() {
   return { root, base, head: git("rev-parse", "HEAD").trim() };
 }
 
-async function loadTool() {
-  const root = mkdtempSync(join(tmpdir(), "inspect-git-range-module-"));
-  const toolDirectory = join(root, ".opencode/tools");
-  const pluginDirectory = join(root, "node_modules/@opencode-ai/plugin");
-  mkdirSync(toolDirectory, { recursive: true });
-  mkdirSync(pluginDirectory, { recursive: true });
-  cpSync(sourcePath, join(toolDirectory, "inspectGitRange.ts"));
-  writeFileSync(join(pluginDirectory, "package.json"), '{"type":"module"}\n');
-  writeFileSync(
-    join(pluginDirectory, "index.js"),
-    [
-      "const schema = { string: () => ({ min() { return this; }, max() { return this; } }) };",
-      "export const tool = (definition) => definition;",
-      "tool.schema = schema;",
-    ].join("\n"),
-  );
-  const module = await import(`${join(toolDirectory, "inspectGitRange.ts")}?test=${Date.now()}`);
-  return { root, module };
-}
-
-test("inspectGitRange resolves revisions independently and returns bounded diff metadata", async () => {
+test("inspectGitRange resolves revisions independently and supports bounded ancestry", () => {
   const fixtureData = fixture();
-  const loaded = await loadTool();
   try {
-    const result = loaded.module.inspectGitRange(
-      { base: fixtureData.base, head: fixtureData.head },
-      fixtureData.root,
-    );
+    const result = inspectGitRange({ base: "HEAD~1", head: "HEAD" }, fixtureData.root);
     assert.deepEqual(result.resolved, { base: fixtureData.base, head: fixtureData.head });
     assert.equal(result.incomplete, false);
     assert.deepEqual(result.changedPaths.sort(), ["new.txt", "tracked.txt"]);
@@ -72,19 +43,20 @@ test("inspectGitRange resolves revisions independently and returns bounded diff 
     assert.match(result.diff, /diff --git/u);
   } finally {
     rmSync(fixtureData.root, { recursive: true, force: true });
-    rmSync(loaded.root, { recursive: true, force: true });
   }
 });
 
-test("inspectGitRange rejects revision expressions before Git access and enforces Explorer", async () => {
-  const loaded = await loadTool();
+test("inspectGitRange rejects unsafe revision expressions before Git access", () => {
   const notRepository = mkdtempSync(join(tmpdir(), "inspect-git-range-not-git-"));
   try {
     for (const revision of [
       "",
       "-HEAD",
       "HEAD^",
-      "HEAD~1",
+      "HEAD~",
+      "HEAD~1~1",
+      "main~1",
+      `${"a".repeat(40)}~2`,
       "HEAD..main",
       "HEAD:path",
       "HEAD;touch",
@@ -92,28 +64,18 @@ test("inspectGitRange rejects revision expressions before Git access and enforce
       "feature.lock/topic",
       "feature./topic",
     ]) {
-      const result = loaded.module.inspectGitRange({ base: revision, head: "HEAD" }, notRepository);
+      const result = inspectGitRange({ base: revision, head: "HEAD" }, notRepository);
       assert.equal(result.incomplete, true);
       assert.equal(result.resolved.base, null);
       assert.equal(result.resolved.head, null);
     }
-    const toolDefinition = loaded.module.default;
-    const denied = await toolDefinition.execute(
-      { base: "HEAD", head: "HEAD" },
-      { agent: "implementer", worktree: notRepository },
-    );
-    const deniedInspection = JSON.parse(denied.output);
-    assert.equal(deniedInspection.incomplete, true);
-    assert.equal(deniedInspection.exitStatus, null);
   } finally {
     rmSync(notRepository, { recursive: true, force: true });
-    rmSync(loaded.root, { recursive: true, force: true });
   }
 });
 
-test("inspectGitRange disables configured external diff and textconv helpers", async () => {
+test("inspectGitRange disables configured external diff and textconv helpers", () => {
   const fixtureData = fixture();
-  const loaded = await loadTool();
   const marker = join(fixtureData.root, "helper-invoked");
   const helper = join(fixtureData.root, "hostile-diff-helper.mjs");
   writeFileSync(
@@ -125,7 +87,7 @@ test("inspectGitRange disables configured external diff and textconv helpers", a
     execFileSync("git", ["-C", fixtureData.root, "config", "diff.external", helper]);
     execFileSync("git", ["-C", fixtureData.root, "config", "diff.hostile.textconv", helper]);
     writeFileSync(join(fixtureData.root, ".gitattributes"), "tracked.txt diff=hostile\n");
-    const result = loaded.module.inspectGitRange(
+    const result = inspectGitRange(
       { base: fixtureData.base, head: fixtureData.head },
       fixtureData.root,
     );
@@ -133,26 +95,20 @@ test("inspectGitRange disables configured external diff and textconv helpers", a
     assert.equal(existsSync(marker), false);
   } finally {
     rmSync(fixtureData.root, { recursive: true, force: true });
-    rmSync(loaded.root, { recursive: true, force: true });
   }
 });
 
-test("inspectGitRange reports incomplete output rather than claiming a complete large patch", async () => {
+test("inspectGitRange reports incomplete output rather than claiming a complete large patch", () => {
   const fixtureData = fixture();
-  const loaded = await loadTool();
   try {
     writeFileSync(join(fixtureData.root, "large.txt"), `${"large line\n".repeat(100_000)}`);
     execFileSync("git", ["-C", fixtureData.root, "add", "large.txt"]);
     execFileSync("git", ["-C", fixtureData.root, "commit", "-qm", "large"]);
-    const result = loaded.module.inspectGitRange(
-      { base: fixtureData.base, head: "HEAD" },
-      fixtureData.root,
-    );
+    const result = inspectGitRange({ base: fixtureData.base, head: "HEAD" }, fixtureData.root);
     assert.equal(result.incomplete, true);
     assert.match(result.diff, /output truncated/u);
   } finally {
     rmSync(fixtureData.root, { recursive: true, force: true });
-    rmSync(loaded.root, { recursive: true, force: true });
   }
 });
 

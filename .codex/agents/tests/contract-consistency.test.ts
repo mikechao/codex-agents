@@ -519,19 +519,34 @@ test("explorer exposes only the structured evidence capability", () => {
 test("Explorer revision inspection is structured, isolated, and shell-free", () => {
   const explorer = opencode("explorer.md");
   const source = readFileSync(
-    resolve(import.meta.dir, "../../../.opencode/tools/inspectGitRange.ts"),
+    resolve(import.meta.dir, "../../../.opencode/plugins/codex-agents-explorer-tools/index.ts"),
     "utf8",
   );
   assert.match(explorer, /^  - action: inspectGitRange\n    resource: "\*"\n    effect: allow$/m);
-  assert.match(source, /base: tool\.schema\.string\(\)/u);
-  assert.match(source, /head: tool\.schema\.string\(\)/u);
-  assert.match(source, /context\.agent !== "explorer"/u);
-  assert.match(source, /shell: false/u);
-  assert.match(source, /--end-of-options/u);
-  assert.match(source, /--no-renames/u);
-  assert.match(source, /, "--"\]/u);
+  assert.match(source, /Plugin\.define/u);
+  assert.match(source, /ctx\.tool\.transform/u);
+  assert.match(source, /name: "inspectGitRange"/u);
+  assert.match(source, /base: \{ type: "string", minLength: 1, maxLength: MAX_REVISION_LENGTH \}/u);
+  assert.match(source, /head: \{ type: "string", minLength: 1, maxLength: MAX_REVISION_LENGTH \}/u);
+  assert.match(source, /toolContext\.agent !== "explorer"/u);
+  assert.match(source, /content:/u);
+  assert.match(source, /output:/u);
+  assert.doesNotMatch(source, /@opencode-ai\/plugin/u);
+  assert.doesNotMatch(source, /\btool\(/u);
+  assert.doesNotMatch(source, /title:/u);
+  const implementation = readFileSync(
+    resolve(
+      import.meta.dir,
+      "../../../.opencode/plugins/codex-agents-explorer-tools/inspect-git-range.ts",
+    ),
+    "utf8",
+  );
+  assert.match(implementation, /shell: false/u);
+  assert.match(implementation, /--end-of-options/u);
+  assert.match(implementation, /--no-renames/u);
+  assert.match(implementation, /, "--"\]/u);
   for (const forbidden of ["Bun.$", "runEvidence", "workflow_state", "--output", "--no-index"])
-    assert.ok(!source.includes(forbidden), `range tool must not expose ${forbidden}`);
+    assert.ok(!implementation.includes(forbidden), `range tool must not expose ${forbidden}`);
 });
 
 test("planner clarification and native Plan refinement remain portable and fail closed", () => {

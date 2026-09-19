@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "include": [
     "install-into.ts",
+    ".opencode/plugins/**/*.ts",
     ".codex/installer/tests/**/*.ts",
     "scripts/create-dogfood-target.ts"
   ]
