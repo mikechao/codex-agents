@@ -20,27 +20,26 @@ test("the repository's own opencode.json registers the supervised self-host serv
   const parsed = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
     $schema: string;
     default_agent: string;
-    subagent_depth: number;
+    experimental: { subagent_depth: number };
     agent: { plan: Record<string, unknown> };
     mcp: { workflow_state: Record<string, unknown> };
   };
   const expected = {
     $schema: "https://opencode.ai/config.json",
     default_agent: "orchestrator",
-    subagent_depth: 2,
     agent: { plan: openCodePlanAgent() },
     mcp: {
       workflow_state: {
         type: "local",
         command: trustedBootstrapCommand(relativeServerPath),
-        enabled: true,
         timeout: 30000,
+        codemode: false,
       },
     },
   };
   assert.equal(parsed.$schema, expected.$schema);
   assert.equal(parsed.default_agent, expected.default_agent);
-  assert.equal(parsed.subagent_depth, expected.subagent_depth);
+  assert.equal(parsed.experimental.subagent_depth, 2);
   assert.deepEqual(parsed.agent, expected.agent);
   assert.deepEqual(parsed.mcp, expected.mcp);
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
@@ -353,13 +352,17 @@ test("the orchestrator preflights the exact reviewer validation policy", () => {
 });
 
 test("the repository's own OpenCode registration keeps the installer server semantics", () => {
-  const { mcp } = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
-    mcp: { workflow_state: { type: string; command: string[]; enabled: boolean; timeout: number } };
+  const { experimental, mcp } = JSON.parse(readFileSync(selfHostConfig, "utf8")) as {
+    experimental: { subagent_depth: number };
+    mcp: {
+      workflow_state: { type: string; command: string[]; timeout: number; codemode: boolean };
+    };
   };
   const registration = mcp.workflow_state;
   assert.equal(registration.type, "local");
-  assert.equal(registration.enabled, true);
   assert.equal(registration.timeout, 30000);
+  assert.equal(registration.codemode, false);
+  assert.equal(experimental.subagent_depth, 2);
   assert.deepEqual(registration.command, trustedBootstrapCommand(relativeServerPath));
   assert.ok(existsSync(resolve(repoRoot, relativeServerPath)), "the bootstrap source must exist");
 });
