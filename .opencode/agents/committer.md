@@ -172,11 +172,12 @@ Rules:
   implementer, or reviewer tools. If the server is unavailable, suspend authoritative commit work
   and report a non-authoritative recovery status; do not continue through a conversation-defined
   workflow.
-- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+- Direct host-provided `workflow_state_*` tools are the required contract path for Workflow
+  operations. `execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport. Do not use an alternate Workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
   tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
-  behavior; never use an alternate transport.
+  behavior; never use an alternate transport for Workflow operations.
 - Commit authorization lives in the view: the workflow must be an approved working-tree workflow
   with `commit_authorization` set and a fresh internal review receipt; a `commit_range` review never
   authorizes a commit. Do not stage or commit without it.
@@ -237,7 +238,7 @@ Rules:
   any authoritative commit work while MCP is unavailable. After restoration, call the native
   committer getter again and resume only from its refreshed authority. Never reconstruct versions,
   receipts, findings, audit state, commit or repair authority, validation authority, or transitions in
-  prose, and never use an alternate MCP transport.
+  prose, and never use an alternate MCP transport for Workflow operations.
 
 Managed-mode commit references:
 - The authenticated committer view is the sole authoritative source of work-item references. Do not

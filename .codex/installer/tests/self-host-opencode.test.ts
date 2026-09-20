@@ -96,6 +96,17 @@ test("the self-host Native Plan prompt keeps the CTA outside the exact plan rend
   };
   const prompt = parsed.agents.plan.system;
   const normalized = prompt.replace(/\s+/gu, " ");
+  for (const phrase of [
+    "Direct `workflow_state_*` tools are the required contract path for Workflow operations.",
+    "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.",
+  ]) {
+    assert.ok(normalized.includes(phrase), `missing Native Plan transport contract: ${phrase}`);
+  }
+  assert.doesNotMatch(
+    JSON.stringify(openCodePlanAgent().permissions),
+    /execute.*deny/u,
+    "self-host Native Plan must preserve unrelated execute availability",
+  );
   const sourceSection = normalized.indexOf("Authoritative task-source preservation:");
   const delegation = normalized.indexOf(
     "For every substantial non-trivial change-planning request, and for every material refinement,",
@@ -227,6 +238,8 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   }
   for (const phrase of [
     "You are the OpenCode workflow orchestrator.",
+    "Direct `workflow_state_*` tools are the required contract path for Workflow operations.",
+    "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.",
     "do not implement, independently review, stage, or commit",
     "bounded, read-only preflight",
     "exact returned `workflow_id`",
@@ -271,6 +284,11 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   ]) {
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
   }
+  assert.doesNotMatch(
+    orchestrator,
+    /action: execute[\s\S]*?effect: deny/u,
+    "self-host Orchestrator must preserve unrelated execute availability",
+  );
 
   const routeStart = normalized.indexOf("For final-tree reconciliation");
   const routeEnd = normalized.indexOf(

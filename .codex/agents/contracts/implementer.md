@@ -15,11 +15,12 @@ Rules:
   finding, receipt, or repair state. Never call parent, reviewer, or committer tools. If the
   server is unavailable, suspend authoritative work and report `NEEDS_CONTEXT` as a
   non-authoritative outage status; do not continue through a conversation-defined workflow.
-- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+- Direct host-provided `workflow_state_*` tools are the required contract path for Workflow
+  operations. Do not use an alternate Workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
   tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
-  behavior; never use an alternate transport.
+  behavior; never use an alternate transport for Workflow operations.
 - Validation requirements are explicitly discriminated as `kind: "command"` or `kind: "inspection"`.
   Implementer submissions must report inspection results as `not_run`, including DONE and repair
   attempts. Only the parent may record bounded terminal inspection evidence through
@@ -77,7 +78,7 @@ Rules:
   perform authoritative implementation work while MCP is unavailable. After restoration, call the
   native role getter again and resume only from its refreshed authority. Never reconstruct versions,
   receipts, findings, audit state, repair authority, validation authority, or transitions in prose,
-  and never use an alternate MCP transport.
+  and never use an alternate MCP transport for Workflow operations.
 - Implement the requested changes completely.
 - Do not redesign or substantially alter the plan unless implementation is impossible.
 - Inspect the existing codebase before making changes so your implementation fits existing patterns and conventions.

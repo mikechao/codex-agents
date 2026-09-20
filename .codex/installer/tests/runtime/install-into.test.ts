@@ -379,9 +379,25 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     const opencodeConfig = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as {
       default_agent: string;
       experimental: { subagent_depth: number };
+      agents: { plan: { system: string; permissions: unknown } };
+      mcp: { servers: { workflow_state: { codemode: boolean } } };
     };
     assert.equal(opencodeConfig.default_agent, "orchestrator");
     assert.equal(opencodeConfig.experimental.subagent_depth, 2);
+    assert.equal(opencodeConfig.mcp.servers.workflow_state.codemode, false);
+    assert.match(
+      opencodeConfig.agents.plan.system.replace(/\s+/gu, " "),
+      /Direct `workflow_state_\*` tools are the required contract path for Workflow operations\./u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(opencodeConfig.agents.plan.permissions),
+      /execute.*deny/u,
+      "installed Native Plan must preserve unrelated execute availability",
+    );
+    assert.match(
+      readFileSync(join(root, ".opencode/agents/orchestrator.md"), "utf8").replace(/\s+/gu, " "),
+      /Direct `workflow_state_\*` tools are the required contract path for Workflow operations\./u,
+    );
     assert.ok(!existsSync(join(root, ".codex/planner-policy.json")));
     const config = readFileSync(join(root, ".codex/config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.workflow_state\]/);

@@ -74,7 +74,17 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
   assert.deepEqual(parsed.agents, { plan: openCodePlanAgent() });
   const plan = (parsed.agents as Record<string, unknown>).plan as Record<string, unknown>;
   const prompt = plan.system as string;
+  const normalizedPrompt = prompt.replace(/\s+/gu, " ");
   assert.equal(prompt, openCodePlanAgent().system);
+  for (const phrase of [
+    "Direct `workflow_state_*` tools are the required contract path for Workflow operations.",
+    "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.",
+  ]) {
+    assert.ok(
+      normalizedPrompt.includes(phrase),
+      `missing Native Plan transport contract: ${phrase}`,
+    );
+  }
   const sourceSection = prompt.indexOf("Authoritative task-source preservation:");
   const delegation = prompt.indexOf(
     "For every substantial non-trivial change-planning request, and for every material refinement,",
@@ -143,9 +153,19 @@ test("fresh OpenCode config exposes only the canonical native Plan override", ()
     assert.ok(prompt.includes(phrase), `missing plan-reference presentation contract: ${phrase}`);
   }
   assert.deepEqual(plan.permissions, openCodePlanAgent().permissions);
+  assert.doesNotMatch(
+    JSON.stringify(plan.permissions),
+    /execute.*deny/u,
+    "Native Plan must not use a broad execute denial fallback",
+  );
   assert.equal(plan.prompt, undefined);
   assert.equal(plan.permission, undefined);
   assert.equal(parsed.instructions, undefined);
+
+  const workflowState = (
+    (parsed.mcp as Record<string, unknown>).servers as Record<string, Record<string, unknown>>
+  ).workflow_state;
+  assert.equal(workflowState.codemode, false);
 });
 
 test("install-into.ts refuses malformed native agents.plan shapes before installation", () => {

@@ -2680,6 +2680,8 @@ test("implementer may edit but never stages, commits, or rewrites history", () =
 });
 
 test("Codex and OpenCode contracts carry equivalent role behavior", () => {
+  const openCodeWorkflowClarification =
+    "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.";
   const normalize = (body: string) =>
     body.replace(/"Agent: [a-z_]+ \| Model: .*"/, '"Agent: <role> | Model: __HOST_IDENTITY__"');
   const bodies = new Map<string, string>();
@@ -2692,6 +2694,7 @@ test("Codex and OpenCode contracts carry equivalent role behavior", () => {
       .slice(2)
       .join("---\n")
       .split(OPENCODE_TERMINAL_SECTION_HEADING)[0]
+      .replace(`${openCodeWorkflowClarification} `, "")
       .trimEnd();
     assert.equal(
       normalize(tomlBody),
@@ -2819,31 +2822,86 @@ test("contract fragments are host-neutral and each host injects its own identity
   }
 });
 
-test("role contracts require native workflow transport and forbid alternate access", () => {
+test("role contracts state the direct Workflow contract and forbid alternate access", () => {
   const contractsDir = resolve(import.meta.dir, "../contracts");
-  const required = [
-    "Host-provided `workflow_state_*` tools are the only authorized workflow transport.",
+  const sharedRequired = [
+    "Direct host-provided `workflow_state_*` tools are the required contract path for Workflow operations.",
     "Do not import the MCP client SDK",
     "launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`",
     "invoke MCP through shell/Bun/Node scripts",
     "access Workflow MCP SQLite files directly",
-    "never use an alternate transport",
+    "Do not use an alternate Workflow transport",
   ];
+  const openCodeOnly =
+    "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.";
   for (const role of ["implementer", "code_reviewer", "committer"]) {
     const contract = readFileSync(resolve(contractsDir, `${role}.md`), "utf8");
     const normalizedContract = contract.replace(/\s+/gu, " ");
-    const generated = Object.entries(generateDefinitions()).find(([path]) =>
+    const generatedCodex = Object.entries(generateDefinitions()).find(([path]) =>
       path.endsWith(`/${role}.toml`),
     )?.[1];
-    assert.ok(generated, `${role} Codex definition must be generated`);
-    for (const phrase of required) {
+    const generatedOpenCode = Object.entries(generateDefinitions()).find(([path]) =>
+      path.endsWith(`/${role}.md`),
+    )?.[1];
+    assert.ok(generatedCodex, `${role} Codex definition must be generated`);
+    assert.ok(generatedOpenCode, `${role} OpenCode definition must be generated`);
+    for (const phrase of sharedRequired) {
       assert.ok(normalizedContract.includes(phrase), `${role} contract must include: ${phrase}`);
       assert.ok(
-        generated.replace(/\s+/gu, " ").includes(phrase),
+        generatedCodex.replace(/\s+/gu, " ").includes(phrase),
         `${role} definition must include: ${phrase}`,
       );
+      assert.ok(
+        generatedOpenCode.replace(/\s+/gu, " ").includes(phrase),
+        `${role} OpenCode definition must include: ${phrase}`,
+      );
     }
+    assert.doesNotMatch(normalizedContract, /`execute` remains available for unrelated work/u);
+    assert.doesNotMatch(generatedCodex, /`execute` remains available for unrelated work/u);
+    assert.match(
+      generatedOpenCode,
+      new RegExp(openCodeOnly.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+    assert.doesNotMatch(
+      generatedOpenCode,
+      /^  - action: execute\n    resource: "\*"\n    effect: deny$/mu,
+      `${role} must preserve unrelated execute availability`,
+    );
   }
+});
+
+test("OpenCode roles preserve unrelated execute availability", () => {
+  const broadExecuteDeny = /^  - action: execute\n    resource: "\*"\n    effect: deny$/mu;
+  const definitions = generateDefinitions();
+  for (const role of ["implementer", "code_reviewer", "committer", "planner", "explorer"]) {
+    const definition = Object.entries(definitions).find(([path]) =>
+      path.endsWith(`/${role}.md`),
+    )?.[1];
+    assert.ok(definition, `${role} OpenCode definition must be generated`);
+    assert.doesNotMatch(
+      definition,
+      broadExecuteDeny,
+      `${role} must preserve unrelated execute availability`,
+    );
+  }
+
+  const directContract =
+    "Direct `workflow_state_*` tools are the required contract path for Workflow operations. `execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.";
+  const plan = openCodePlanAgent();
+  const planPrompt = String(plan.system).replace(/\s+/gu, " ");
+  assert.ok(planPrompt.includes(directContract));
+  assert.doesNotMatch(
+    JSON.stringify(plan.permissions),
+    /execute.*deny/u,
+    "Native Plan must not use a broad execute denial fallback",
+  );
+  const orchestrator = opencode("orchestrator.md").replace(/\s+/gu, " ");
+  assert.ok(orchestrator.includes(directContract));
+  assert.doesNotMatch(
+    orchestrator,
+    broadExecuteDeny,
+    "Orchestrator must not use a broad execute denial fallback",
+  );
 });
 
 test("README documents the current runtime authority boundary", () => {

@@ -58,6 +58,10 @@ export interface GeneratedAgentDefinition {
 
 export const HOST_IDENTITY_MARKER = "__HOST_IDENTITY__";
 export const OPENCODE_TERMINAL_SECTION_HEADING = "## Required terminal response (OpenCode-only)";
+const SHARED_WORKFLOW_TRANSPORT_PATTERN =
+  /Direct host-provided `workflow_state_\*` tools are the required contract path for Workflow\s+operations\./gu;
+const OPENCODE_WORKFLOW_TRANSPORT_CLARIFICATION =
+  "`execute` remains available for unrelated work and must not be intentionally selected as a Workflow transport.";
 
 interface CodexMetadata {
   sandboxMode: string;
@@ -552,6 +556,20 @@ function injectHostIdentity(body: string, identity: string, role: RoleName): str
   return body.replace(HOST_IDENTITY_MARKER, identity);
 }
 
+function opencodeProjectionBody(spec: RoleSpec, body: string): string {
+  if (!EXECUTION_ROLE_NAMES.some((role) => role === spec.name)) return body;
+  const occurrences = body.match(SHARED_WORKFLOW_TRANSPORT_PATTERN) ?? [];
+  if (occurrences.length !== 1) {
+    throw new Error(
+      `contract for ${spec.name} must contain exactly one shared Workflow transport sentence`,
+    );
+  }
+  return body.replace(
+    SHARED_WORKFLOW_TRANSPORT_PATTERN,
+    (sentence) => `${sentence} ${OPENCODE_WORKFLOW_TRANSPORT_CLARIFICATION}`,
+  );
+}
+
 function codexToml(
   spec: RoleSpec,
   assignment: { model: string; reasoning: ReasoningEffort },
@@ -601,7 +619,7 @@ function opencodeMarkdown(
     "---",
   ].join("\n");
   const identity = `${assignment.model} | Reasoning: ${assignment.reasoning}`;
-  return `${frontmatter}\n${injectHostIdentity(body, identity, spec.name)}${
+  return `${frontmatter}\n${injectHostIdentity(opencodeProjectionBody(spec, body), identity, spec.name)}${
     spec.opencode.terminalTool === undefined ? "" : opencodeTerminalHandoff(spec)
   }\n`;
 }

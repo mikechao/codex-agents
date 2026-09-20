@@ -234,8 +234,11 @@ OpenCode configuration must already be compatible with OpenCode 2.0.8+ before in
 installer does not inspect or migrate arbitrary legacy configuration. The orchestrator is still
 installed and can be selected with the primary-agent switcher.
 
-The ordinary configuration integration does not implement execute/Workflow-MCP routing restrictions;
-those remain separately scoped compatibility work.
+OpenCode v2.0.8 keeps the registered Workflow MCP tools direct-only through `codemode: false`.
+Direct `workflow_state_*` tools are the required contract path for Workflow operations; `execute`
+remains available for unrelated work and must not be intentionally selected as a Workflow transport.
+The repository does not add a wrapper, plugin interception, or broad role-scoped `execute: deny`
+fallback for this boundary.
 
 It refuses to replace existing Codex agent definitions or any existing `implementer.md`,
 `code_reviewer.md`, `committer.md`, `planner.md`, `explorer.md`, or `orchestrator.md` under `.opencode/agents/`, while preserving unrelated

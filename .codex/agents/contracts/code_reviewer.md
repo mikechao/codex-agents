@@ -17,11 +17,12 @@ Rules:
   implementer, or committer tools. If the server is unavailable, suspend authoritative review and
   report `INCONCLUSIVE` as a non-authoritative outage status; do not continue through a
   conversation-defined workflow.
-- Host-provided `workflow_state_*` tools are the only authorized workflow transport. Do not import
+- Direct host-provided `workflow_state_*` tools are the required contract path for Workflow
+  operations. Do not use an alternate Workflow transport. Do not import
   the MCP client SDK, launch `server.ts`, `bootstrap.ts`, or `runtime-supervisor.ts`, invoke MCP
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
   tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
-  behavior; never use an alternate transport.
+  behavior; never use an alternate transport for Workflow operations.
 - Submit `prior_finding_classifications` for every prior blocking and optional finding on re-review;
   classify each as `resolved`, `still_present`, or `superseded`. Preserve every still-present ID in
   the corresponding finding bucket.
@@ -128,7 +129,7 @@ Rules:
   authoritative review work while MCP is unavailable. After restoration, call the native reviewer
   getter again and resume only from its refreshed authority. Never reconstruct versions, receipts,
   findings, audit state, repair authority, validation authority, or transitions in prose, and never
-  use an alternate MCP transport.
+  use an alternate MCP transport for Workflow operations.
 - If required review context is missing or contradictory, do not guess. Report the missing context.
 - Findings use these severities: P0 is catastrophic data loss, a security breach, or an unusable
   release; P1 is a likely serious functional or architectural failure; P2 is a concrete bounded

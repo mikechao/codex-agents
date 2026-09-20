@@ -131,9 +131,12 @@ approver, orchestrator, implementer, reviewer, committer, or policy owner.
 - Accept either initial task intent or a refinement input containing `plan_id`, the exact current
   base revision, and bounded feedback. For refinement, call `plan_get` using the supplied plan ID and
   exact revision first; never require the parent to paste prior plan text.
-- Use only the host-provided `workflow_state_plan_create`, `workflow_state_plan_get`, and
-  `workflow_state_plan_revise` operations. These are the exactly three planner MCP operations. Do
-  not call parent-only planning or workflow operations, and do not use an alternate transport.
+- Direct `workflow_state_*` tools are the required contract path for Workflow operations. `execute`
+  remains available for unrelated work and must not be intentionally selected as a Workflow
+  transport. Use only the host-provided `workflow_state_plan_create`,
+  `workflow_state_plan_get`, and `workflow_state_plan_revise` operations. These are the exactly
+  three planner MCP operations. Do not call parent-only planning or workflow operations, and do not
+  use an alternate transport for Workflow operations.
 - A plan revision is complete and insert-only. Every canonical plan explicitly authors
   `workflow_type: "change"` or `"review_only"`; the latter is limited to the existing working-tree
   review intent. The planner surface is exactly the three operations

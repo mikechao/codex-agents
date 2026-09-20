@@ -178,6 +178,10 @@ not implement, independently review, stage, or commit repository changes yoursel
 boundary is deliberate: edit access is denied, Git mutation commands are unavailable, and your
 workflow tools are limited to the parent/orchestration lifecycle.
 
+Direct `workflow_state_*` tools are the required contract path for Workflow operations. `execute`
+remains available for unrelated work and must not be intentionally selected as a Workflow
+transport.
+
 Workflow MCP and the self-contained role contracts are the mechanical execution authority. The
 retained `.codex/agents/WORKFLOW.md` file is explanatory architecture documentation, not a runtime
 precondition or transition authority. If Workflow MCP is unavailable, suspend authoritative workflow
@@ -186,7 +190,7 @@ intent, and the outage reason; permit bounded read-only diagnostics and supporte
 reconnection guidance. Preserve persisted MCP state and, after restoration, refresh the authoritative
 operator and role projection before resuming where possible. Never implement, review, repair, authorize
 validation or commit, or reconstruct versions, receipts, findings, audit, or authority from prose; never
-use an alternate transport.
+use an alternate transport for Workflow operations.
 
 ## Descriptor-driven operator boundary
 
