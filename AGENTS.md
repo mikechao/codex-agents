@@ -21,7 +21,7 @@ does not inject orchestration instructions globally into the built-in Build agen
 copies the orchestrator into target repositories, emits native V2 configuration for fresh installs,
 merges managed fields into existing native V2 `opencode.json`/`opencode.jsonc`, adds the canonical
 Plan override only when `agents.plan` is absent, refuses malformed native V2 structures, and
-requires existing target configuration to already be compatible with OpenCode 2.0.8+ before
+requires existing target configuration to already be compatible with OpenCode 2.0.11+ before
 installation. It
 defaults a new OpenCode config (or one without `default_agent`) to `orchestrator`, and preserves
 existing explicit `default_agent`, unrelated agents, and native V2 configuration while still

@@ -121,7 +121,7 @@ same Bun entrypoint (a temporary copy materialized from `git show
 HEAD:.codex/workflow-mcp/bootstrap.ts`) and V2 timeout semantics as installer-generated registrations.
 The self-host OpenCode registration is checked into the repository and a test keeps it from silently
 diverging from the installer's registration shape. OpenCode 2.x is the supported runtime line, with
-v2.0.8 as the validated minimum/baseline.
+v2.0.11 as the validated minimum/baseline.
 
 OpenCode defaults new sessions in this repository to the `orchestrator` primary agent through
 `default_agent`. See the [OpenCode orchestration flow](docs/opencode-orchestration-flow.md) for the
@@ -232,11 +232,11 @@ For OpenCode, a new config or an existing native V2 config without `default_agen
 adds the canonical native V2 `agents.plan` override only when `agents.plan` is absent. Existing
 native V2 `default_agent`, unrelated agents, models, providers, MCP servers, permissions, comments,
 and trailing commas are preserved as far as the JSONC edit mechanism permits. Existing target
-OpenCode configuration must already be compatible with OpenCode 2.0.8+ before installation; the
+OpenCode configuration must already be compatible with OpenCode 2.0.11+ before installation; the
 installer does not inspect or migrate arbitrary legacy configuration. The orchestrator is still
 installed and can be selected with the primary-agent switcher.
 
-OpenCode v2.0.8 keeps the registered Workflow MCP tools direct-only through `codemode: false`.
+OpenCode v2.0.11 keeps the registered Workflow MCP tools direct-only through `codemode: false`.
 Direct `workflow_state_*` tools are the required contract path for Workflow operations; `execute`
 remains available for unrelated work and must not be intentionally selected as a Workflow transport.
 The repository does not add a wrapper, plugin interception, or broad role-scoped `execute: deny`

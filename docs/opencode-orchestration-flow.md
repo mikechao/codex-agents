@@ -26,7 +26,7 @@ not an installed-target pre-commit gate.
 
 ## OpenCode 2.x host configuration
 
-This repository supports OpenCode 2.x only. OpenCode v2.0.8 is the validated minimum/baseline for
+This repository supports OpenCode 2.x only. OpenCode v2.0.11 is the validated minimum/baseline for
 the orchestration surface documented here. The checked-in `opencode.json` and installed target
 configuration use the native V2 representation:
 
@@ -39,13 +39,13 @@ configuration use the native V2 representation:
 - `default_agent: "orchestrator"` keeps the project-owned primary in control while Native Plan
   remains the user-facing planning mediator.
 
-### Workflow transport boundary in OpenCode v2.0.8
+### Workflow transport boundary in OpenCode v2.0.11
 
-The pinned OpenCode v2.0.8 source (tag `v2.0.8`, commit `7673ed6`) establishes the transport
+The pinned OpenCode v2.0.11 source (tag `v2.0.11`, commit `9eb6902aaf3c35ce985b67c605a775992249066b`) establishes the transport
 boundary mechanically. The MCP adapter propagates the server's `codemode` setting onto each
-discovered tool in [`packages/core/src/mcp/index.ts`](https://github.com/anomalyco/opencode/blob/v2.0.8/packages/core/src/mcp/index.ts), and the MCP tool adapter registers each tool with
+discovered tool in [`packages/core/src/mcp/index.ts`](https://github.com/anomalyco/opencode/blob/v2.0.11/packages/core/src/mcp/index.ts), and the MCP tool adapter registers each tool with
 `codemode: false` when the server has that setting in
-[`packages/core/src/tool/mcp.ts`](https://github.com/anomalyco/opencode/blob/v2.0.8/packages/core/src/tool/mcp.ts). The V2 tool registry then partitions the active tools: `codemode: false` tools become direct definitions, while only the other tools form the Code Mode inventory and are passed to `execute` in [`packages/core/src/tool.ts`](https://github.com/anomalyco/opencode/blob/v2.0.8/packages/core/src/tool.ts). The Code Mode runtime itself builds its callable catalog from that supplied inventory in [`packages/core/src/codemode/tool.ts`](https://github.com/anomalyco/opencode/blob/v2.0.8/packages/core/src/codemode/tool.ts).
+[`packages/core/src/tool/mcp.ts`](https://github.com/anomalyco/opencode/blob/v2.0.11/packages/core/src/tool/mcp.ts). The V2 tool registry then partitions the active tools: `codemode: false` tools become direct definitions, while only the other tools form the Code Mode inventory and are passed to `execute` in [`packages/core/src/tool.ts`](https://github.com/anomalyco/opencode/blob/v2.0.11/packages/core/src/tool.ts). The Code Mode runtime itself builds its callable catalog from that supplied inventory in [`packages/core/src/codemode/tool.ts`](https://github.com/anomalyco/opencode/blob/v2.0.11/packages/core/src/codemode/tool.ts).
 
 Therefore direct `workflow_state_*` tools are the required contract path for Workflow operations.
 `execute` remains available for unrelated work and must not be intentionally selected as a Workflow
@@ -56,7 +56,7 @@ tools, `codemode: false` registrations, and installer ownership/merge behavior r
 This conclusion reconciles the earlier generated-TypeScript dogfood observation: that observation
 alone does not establish inner `execute` reachability. It may have used a stale catalog or session,
 pre-#168 configuration, non-resolvable generated references, or another host path. The pinned
-v2.0.8 source and the current #168 configuration are the authority for this boundary; any future
+v2.0.11 source and the current #168 configuration are the authority for this boundary; any future
 manual pass must use a fresh host/session and verify both direct `workflow_state_*` calls and the
 unrelated `execute` tool.
 
@@ -64,7 +64,7 @@ The installer emits native V2 configuration for fresh installs and merges codex-
 fields into an existing native V2 `opencode.json` or `opencode.jsonc`. Unrelated target-owned agents,
 models, providers, MCP servers, permissions, default-agent choices, comments, and JSONC
 trailing-comma style are preserved where the JSONC edit mechanism permits. Existing target
-OpenCode configuration must already be compatible with OpenCode 2.0.8+ before installation; the
+OpenCode configuration must already be compatible with OpenCode 2.0.11+ before installation; the
 installer does not inspect or migrate arbitrary legacy configuration.
 
 The canonical sources remain the host-neutral role contracts under `.codex/agents/contracts/` and
