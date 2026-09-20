@@ -57,7 +57,7 @@ const COPY_SOURCE_FILES = [
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
 const OPENCODE_PACKAGE_MANIFEST = ".opencode/package.json";
 const OPENCODE_PLUGIN_DIRECTORY = ".opencode/plugins/codex-agents-explorer-tools";
-const OPENCODE_PLUGIN_VERSION = "2.0.8";
+const OPENCODE_PLUGIN_VERSION = "2.0.11";
 const OPENCODE_PACKAGE_CONTENT = `${JSON.stringify(
   { dependencies: { "@opencode/plugin": OPENCODE_PLUGIN_VERSION } },
   null,
