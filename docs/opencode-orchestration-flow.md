@@ -530,11 +530,13 @@ than an OS-level sandbox. Explorer evidence is available only through the struct
 with an explicit `purpose: evidence` entry and the owning session worktree. The plugin rejects
 non-explorer callers, returns bounded provenance for success and failure, and never provides a Bash
 fallback; no report, explorer transcript, or investigation workflow is persisted. The old V1
-`.opencode/tools/*.ts` registration surface is not used. OpenCode owns dependency synchronization in
-its writable configuration directory: it creates or updates `package.json`, lockfiles,
-`node_modules/@opencode/plugin`, and its generated `.gitignore` to the running InstallationVersion.
-The installer does not create, validate, pin, or otherwise mutate those ignored host artifacts, and
-they are not repository authority or workflow persistence.
+`.opencode/tools/*.ts` registration surface is not used. Codex-agents owns the tracked
+`.opencode/package.json` declaration for the pinned `@opencode/plugin` runtime dependency. The
+installer creates it for a fresh target and preserves an existing manifest byte-for-byte only when
+it already declares the exact required dependency; incompatible manifests fail closed before
+mutation. OpenCode owns synchronization of the generated lockfiles, `node_modules/@opencode/plugin`,
+and `.gitignore` in its writable configuration directory. Those generated host artifacts are not
+repository authority or workflow persistence.
 
 Revision-range inspection is a separate structured `inspectGitRange({ base, head })` capability from
 the same V2 plugin. It is Explorer-only, bounded, read-only, and shell-free: revisions are resolved

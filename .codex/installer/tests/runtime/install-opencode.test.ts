@@ -140,8 +140,15 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
       );
     }
     assert.ok(!existsSync(join(root, ".opencode/tools")));
+    const sourcePackage = readFileSync(
+      resolve(import.meta.dir, "../../../../.opencode/package.json"),
+      "utf8",
+    );
+    assert.deepEqual(JSON.parse(sourcePackage), {
+      dependencies: { "@opencode/plugin": "2.0.8" },
+    });
+    assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), sourcePackage);
     for (const artifact of [
-      ".opencode/package.json",
       ".opencode/package-lock.json",
       ".opencode/bun.lock",
       ".opencode/node_modules",
@@ -157,7 +164,7 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
 test("install-into.ts preserves arbitrary OpenCode host artifacts byte-for-byte", () => {
   const { root, write } = fixture();
   const artifacts = {
-    ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"},"custom":true}\n',
+    ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.8"},"custom":true}\n',
     ".opencode/package-lock.json": '{"lockfileVersion":99,"custom":"keep"}\n',
     ".opencode/bun.lock": "# host-generated lock\ncustom-entry\n",
     ".opencode/.gitignore": "package.json\nnode_modules/\n",

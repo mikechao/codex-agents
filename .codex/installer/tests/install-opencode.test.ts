@@ -301,7 +301,7 @@ test("install-into.ts refuses a managed OpenCode V2 plugin collision before muta
     const original = "// target-owned plugin\n";
     write(`${plugin}/index.ts`, original);
     const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+      ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.8"}}\n',
       ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
       ".opencode/.gitignore": "node_modules/\n",
     } as const;
@@ -328,7 +328,7 @@ test("install-into.ts refuses a dangling managed OpenCode V2 plugin collision", 
     const managedPlugin = join(plugins, "codex-agents-explorer-tools");
     symlinkSync("missing-codex-agents-explorer-tools", managedPlugin);
     const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n',
+      ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.8"}}\n',
       ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
       ".opencode/.gitignore": "node_modules/\n",
       ".opencode/node_modules/@opencode-ai/plugin/package.json": '{"version":"9.9.9"}\n',
@@ -355,6 +355,32 @@ test("install-into.ts refuses a dangling managed OpenCode V2 plugin collision", 
     assert.ok(!existsSync(join(root, "opencode.json")));
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("install-into.ts refuses an incompatible existing OpenCode package manifest before mutation", () => {
+  for (const [label, content, message] of [
+    ["malformed", '{"dependencies":', /not valid JSON/],
+    ["missing dependency", '{"dependencies":{}}\n', /must declare dependencies/],
+    [
+      "wrong version",
+      '{"dependencies":{"@opencode/plugin":"2.0.7"}}\n',
+      /must declare dependencies/,
+    ],
+  ] as const) {
+    const { root, write } = fixture();
+    try {
+      write(".opencode/package.json", content);
+      const result = runInstaller(root);
+      assert.notEqual(result.status, 0, label);
+      assert.match(result.stderr, message, label);
+      assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), content);
+      assert.ok(!existsSync(join(root, ".codex/agents")));
+      assert.ok(!existsSync(join(root, ".opencode/agents")));
+      assert.ok(!existsSync(join(root, "opencode.json")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -560,13 +586,14 @@ test("install-into.ts refuses a symlinked OpenCode plugin parent before mutation
   }
 });
 
-test("commitBothHosts rolls back a newly installed V2 plugin after a later failure", () => {
+test("commitBothHosts rolls back a newly installed OpenCode package and V2 plugin after a later failure", () => {
   const { root, staging, agentsDir } = commitFixture();
   try {
     const codexAgentsTarget = join(root, ".codex/agents");
     const codexConfigTarget = join(root, ".codex/config.toml");
     const opencodeAgentsTarget = join(root, ".opencode/agents");
     const opencodeConfigTarget = join(root, "opencode.json");
+    const packageTarget = join(root, ".opencode/package.json");
     const pluginTarget = join(root, ".opencode/plugins/codex-agents-explorer-tools");
     const runtimeTarget = join(root, ".codex/runtime/workflow-mcp");
     const laterTarget = join(root, ".opencode/tools/later.txt");
@@ -574,12 +601,11 @@ test("commitBothHosts rolls back a newly installed V2 plugin after a later failu
     mkdirSync(dirname(runtimeTarget), { recursive: true });
     mkdirSync(dirname(opencodeConfigTarget), { recursive: true });
     mkdirSync(dirname(pluginTarget), { recursive: true });
-    const hostPackage = '{"dependencies":{"@opencode-ai/plugin":"9.9.9"}}\n';
-    writeFileSync(join(root, ".opencode/package.json"), hostPackage);
     const codexAgents = agentsDir("codex-agents-tool-rollback");
     const codexConfig = staging("codex-config-tool-rollback");
     const opencodeAgents = agentsDir("opencode-agents-tool-rollback");
     const opencodeConfig = staging("opencode-config-tool-rollback");
+    const openCodePackage = staging("opencode-package-tool-rollback");
     const plugin = staging("plugin-tool-rollback");
     const runtime = staging("runtime-tool-rollback");
     const later = staging("later-tool-rollback");
@@ -587,6 +613,10 @@ test("commitBothHosts rolls back a newly installed V2 plugin after a later failu
     writeFileSync(join(codexConfig, "config.toml"), "[mcp_servers.workflow_state]\n");
     writeFileSync(join(opencodeAgents, "implementer.md"), "---\nmode: subagent\n---\n");
     writeFileSync(join(opencodeConfig, "opencode.json"), '{"mcp":{"workflow_state":{}}}\n');
+    writeFileSync(
+      join(openCodePackage, "package.json"),
+      '{\n  "dependencies": {\n    "@opencode/plugin": "2.0.8"\n  }\n}\n',
+    );
     writeFileSync(join(plugin, "index.ts"), "// installed plugin\n");
     writeFileSync(join(runtime, "workflow-mcp"), Buffer.from([0, 1, 2, 3]));
     writeFileSync(join(later, "later.txt"), "later file\n");
@@ -614,6 +644,11 @@ test("commitBothHosts rolls back a newly installed V2 plugin after a later failu
           undefined,
           [
             {
+              staging: join(openCodePackage, "package.json"),
+              target: packageTarget,
+              original: null,
+            },
+            {
               staging: plugin,
               target: pluginTarget,
               original: null,
@@ -625,12 +660,12 @@ test("commitBothHosts rolls back a newly installed V2 plugin after a later failu
       /injected later project-file failure/,
     );
     assert.ok(!existsSync(pluginTarget), "new V2 plugin must be rolled back");
+    assert.ok(!existsSync(packageTarget), "new OpenCode package must be rolled back");
     assert.ok(!existsSync(runtimeTarget), "new runtime executable must be rolled back");
     assert.ok(!existsSync(laterTarget), "failed later project file must not remain");
     assert.ok(!existsSync(codexAgentsTarget));
     assert.ok(!existsSync(opencodeAgentsTarget));
     assert.ok(!existsSync(opencodeConfigTarget));
-    assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), hostPackage);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

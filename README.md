@@ -214,10 +214,12 @@ in one all-or-nothing step:
   using the bounded, shell-free implementation. Evidence remains exact-policy-authorized,
   shell-free, bounded, and non-authoritative; explorers never fall back to Bash. The old V1
   filename-based `.opencode/tools/*.ts` registration surface is not installed.
-- OpenCode creates and synchronizes its writable `.opencode/package.json`, lockfiles,
-  `.opencode/node_modules`, and generated `.opencode/.gitignore` at startup to the running
-  InstallationVersion. These ignored host artifacts are not pinned by this repository and are not
-  installer mutation targets; existing host state is left untouched.
+- Codex-agents tracks and installs `.opencode/package.json` with the pinned `@opencode/plugin`
+  runtime dependency. A target's existing manifest is preserved byte-for-byte only when it already
+  declares that exact dependency; incompatible manifests fail closed. OpenCode creates and
+  synchronizes its writable lockfiles, `.opencode/node_modules`, and generated `.opencode/.gitignore`
+  at startup to the running InstallationVersion. Those generated host artifacts are not pinned by
+  this repository and are not installer mutation targets.
 
 Installed repositories do not receive the Workflow MCP bootstrap, supervisor, or runtime-artifact
 sources. Installation places a standalone executable at `.codex/runtime/workflow-mcp`; its direct

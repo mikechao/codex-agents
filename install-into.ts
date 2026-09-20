@@ -43,6 +43,7 @@ const REQUIRED_SOURCE_FILES = [
   ".codex/agents/contracts/planner.md",
   ".codex/agents/contracts/explorer.md",
   ".opencode/agents/orchestrator.md",
+  ".opencode/package.json",
   ".opencode/plugins/codex-agents-explorer-tools/index.ts",
   ".opencode/plugins/codex-agents-explorer-tools/inspect-git-range.ts",
   ".opencode/plugins/codex-agents-explorer-tools/run-evidence.ts",
@@ -54,7 +55,14 @@ const COPY_SOURCE_FILES = [
   ".codex/agents/WORKFLOW.md",
 ];
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
+const OPENCODE_PACKAGE_MANIFEST = ".opencode/package.json";
 const OPENCODE_PLUGIN_DIRECTORY = ".opencode/plugins/codex-agents-explorer-tools";
+const OPENCODE_PLUGIN_VERSION = "2.0.8";
+const OPENCODE_PACKAGE_CONTENT = `${JSON.stringify(
+  { dependencies: { "@opencode/plugin": OPENCODE_PLUGIN_VERSION } },
+  null,
+  2,
+)}\n`;
 
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
@@ -448,6 +456,30 @@ function parseJsoncConfig(configPath: string, text: string): unknown {
   return parsed;
 }
 
+function compatibleOpenCodePackageManifest(path: string): string {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (cause) {
+    error(`Unable to read existing OpenCode package manifest: ${path} (${errorMessage(cause)})`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (cause) {
+    error(
+      `Existing OpenCode package manifest is not valid JSON; refusing to modify: ${path} (${errorMessage(cause)})`,
+    );
+  }
+  const dependencies = isRecord(parsed) ? parsed.dependencies : undefined;
+  if (!isRecord(dependencies) || dependencies["@opencode/plugin"] !== OPENCODE_PLUGIN_VERSION) {
+    error(
+      `Existing OpenCode package manifest is incompatible; ${path} must declare dependencies["@opencode/plugin"] = "${OPENCODE_PLUGIN_VERSION}"`,
+    );
+  }
+  return content;
+}
+
 function pathEntryExists(path: string): boolean {
   try {
     lstatSync(path);
@@ -713,6 +745,7 @@ export function main(args: readonly string[]): number {
     process.platform === "win32" ? "workflow-mcp.exe" : "workflow-mcp",
   );
   const opencodeDirectory = resolve(target, ".opencode");
+  const opencodePackageTarget = resolve(target, OPENCODE_PACKAGE_MANIFEST);
   const opencodePluginsDirectory = resolve(opencodeDirectory, "plugins");
   const codexDirectoryExisting = pathEntryExists(codexDirectory);
   const runtimeDirectoryExisting = pathEntryExists(runtimeDirectory);
@@ -742,6 +775,13 @@ export function main(args: readonly string[]): number {
       error(`Required agent definition missing: ${projectRoot}/${file}`);
     }
   }
+  const opencodePackageSource = resolve(projectRoot, OPENCODE_PACKAGE_MANIFEST);
+  if (readFileSync(opencodePackageSource, "utf8") !== OPENCODE_PACKAGE_CONTENT) {
+    error(`Required OpenCode package manifest has unexpected content: ${opencodePackageSource}`);
+  }
+  const opencodePackageOriginal = pathEntryExists(opencodePackageTarget)
+    ? compatibleOpenCodePackageManifest(opencodePackageTarget)
+    : null;
   let generatedManifest: readonly GeneratedAgentDefinition[];
   try {
     generatedManifest = generateDefinitionManifest({
@@ -819,6 +859,7 @@ export function main(args: readonly string[]): number {
   const opencodeAgentsStaging = mkdtempSync(resolve(target, ".opencode/.agents.install."));
   const opencodeConfigStaging = mkdtempSync(resolve(target, ".opencode/.config.install."));
   const opencodePluginStaging = mkdtempSync(resolve(target, ".opencode-plugin.install."));
+  const opencodePackageStaging = mkdtempSync(resolve(target, ".opencode-package.install."));
   const reviewerPolicyStaging = mkdtempSync(
     resolve(target, ".codex/.reviewer-validation.install."),
   );
@@ -850,6 +891,10 @@ export function main(args: readonly string[]): number {
     }
     const stagedPlugin = resolve(opencodePluginStaging, basename(opencodePluginTarget));
     cpSync(resolve(projectRoot, OPENCODE_PLUGIN_DIRECTORY), stagedPlugin, { recursive: true });
+    const stagedOpenCodePackage = resolve(opencodePackageStaging, basename(opencodePackageTarget));
+    if (opencodePackageOriginal === null) {
+      cpSync(opencodePackageSource, stagedOpenCodePackage);
+    }
     if (reviewerPolicyOriginal === null) {
       cpSync(
         resolve(projectRoot, ".codex/reviewer-validation.json"),
@@ -896,6 +941,15 @@ export function main(args: readonly string[]): number {
           }
         : undefined,
       [
+        ...(opencodePackageOriginal === null
+          ? [
+              {
+                staging: stagedOpenCodePackage,
+                target: opencodePackageTarget,
+                original: null,
+              },
+            ]
+          : []),
         { staging: stagedPlugin, target: opencodePluginTarget, original: null },
         {
           staging: stagedRuntime,
@@ -910,6 +964,7 @@ export function main(args: readonly string[]): number {
     rmSync(opencodeAgentsStaging, { recursive: true, force: true });
     rmSync(opencodeConfigStaging, { recursive: true, force: true });
     rmSync(opencodePluginStaging, { recursive: true, force: true });
+    rmSync(opencodePackageStaging, { recursive: true, force: true });
     rmSync(reviewerPolicyStaging, { recursive: true, force: true });
     rmSync(runtimeStaging, { recursive: true, force: true });
     rmSync(buildRoot, { recursive: true, force: true });
@@ -925,6 +980,7 @@ export function main(args: readonly string[]): number {
   rmSync(configStaging, { recursive: true, force: true });
   rmSync(opencodeConfigStaging, { recursive: true, force: true });
   rmSync(opencodePluginStaging, { recursive: true, force: true });
+  rmSync(opencodePackageStaging, { recursive: true, force: true });
   rmSync(reviewerPolicyStaging, { recursive: true, force: true });
   rmSync(runtimeStaging, { recursive: true, force: true });
   rmSync(buildRoot, { recursive: true, force: true });
