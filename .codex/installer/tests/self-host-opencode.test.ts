@@ -281,8 +281,39 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
     "supported active source states",
     "exact current finding IDs",
     "fresh combined review",
+    "If a worker reports `ERROR_NOT_FOUND` for a role-owned Workflow MCP lookup or use",
+    "identity/handoff failure",
+    "before the worker's first successful getter or during a later terminal Workflow MCP call",
+    "verify the exact authoritative `workflow_id` from the parent with `workflow_operator_decision_get`",
+    "Never copy, repair, normalize, typo-correct, discover, or select a workflow ID",
+    "Consume only the fresh returned descriptor",
+    "a successful parent read does not authorize dispatch by itself",
+    "Redispatch one fresh worker with the same exact authoritative workflow ID only when that descriptor still selects the same worker route",
+    "returned `wait`, `parent_mutation`, `terminal`, or different route",
+    "identity/handoff retry guard execution-local and allow at most one such redispatch",
+    "A second equivalent failure stops for explicit intervention",
+    "If the exact parent read fails or Workflow MCP is unavailable",
+    "do not infer or reconstruct workflow state",
   ]) {
     assert.ok(normalized.includes(phrase), `missing orchestrator contract: ${phrase}`);
+  }
+  assert.match(
+    normalized,
+    /`ERROR_NOT_FOUND`[\s\S]*?`workflow_operator_decision_get`[\s\S]*?fresh returned descriptor[\s\S]*?same worker route[\s\S]*?at most one such redispatch/u,
+    "worker identity recovery must verify the parent before bounded redispatch",
+  );
+  assert.match(
+    normalized,
+    /If the exact parent read fails or Workflow MCP is unavailable[\s\S]*?MCP-unavailable suspension/u,
+    "failed parent verification must preserve MCP-unavailable recovery",
+  );
+  for (const forbidden of [
+    "Session.Metadata routing",
+    "session binding map",
+    "Workflow MCP-side session registry",
+    "implicit current workflow",
+  ]) {
+    assert.ok(!normalized.includes(forbidden), `recovery must not add ${forbidden}`);
   }
   assert.doesNotMatch(
     orchestrator,

@@ -445,15 +445,29 @@ Do not duplicate objective, criteria, evidence, findings, receipts, or repair st
    reviewer. On the third consecutive incomplete result, stop for explicit intervention while the
    workflow remains active. This bound is an operational guard, not a workflow correctness or
    authorization invariant, and must not be persisted in Workflow MCP.
-3. For every parent mutation, present its bounded semantic proposal, obtain fresh affirmative
+3. If a worker reports `ERROR_NOT_FOUND` for a role-owned Workflow MCP lookup or use, treat that
+   as an identity/handoff failure candidate and immediately verify the exact authoritative
+   `workflow_id` from the parent with `workflow_operator_decision_get`. This applies whether the
+   failure occurs before the worker's first successful getter or during a later terminal Workflow
+   MCP call. Never copy, repair, normalize, typo-correct, discover, or select a workflow ID from
+   the failed worker attempt. If the exact parent read succeeds, Workflow MCP is available and the
+   worker attempt is an identity/handoff failure. Consume only the fresh returned descriptor: a
+   successful parent read does not authorize dispatch by itself. Redispatch one fresh worker with
+   the same exact authoritative workflow ID only when that descriptor still selects the same worker
+   route; obey a returned `wait`, `parent_mutation`, `terminal`, or different route. Keep this
+   identity/handoff retry guard execution-local and allow at most one such redispatch for the failed
+   handoff. A second equivalent failure stops for explicit intervention. If the exact parent read
+   fails or Workflow MCP is unavailable, preserve the existing MCP-unavailable suspension,
+   recovery, and reload/bootstrap guidance; do not infer or reconstruct workflow state.
+4. For every parent mutation, present its bounded semantic proposal, obtain fresh affirmative
    authorization when required, bind only declared inputs, invoke the advertised operation, and
    process its committed or freshly refetched descriptor. A definitive failed, rejected, unavailable,
    or contradictory mutation has no dispatch consequence; an ambiguous or stale completion follows
    the mutation-specific reconciliation rule before any retry or routing.
-4. For every worker dispatch, pass only the exact workflow ID and require the worker's dedicated
+5. For every worker dispatch, pass only the exact workflow ID and require the worker's dedicated
    authoritative getter and role-local fail-closed checks. A fresh descriptor—not retained findings,
    phase names, or a prior route—selects the next worker.
-5. Report semantic outcomes, optional findings, recovery choices, and terminal results from the
+6. Report semantic outcomes, optional findings, recovery choices, and terminal results from the
    refreshed projection. Optional findings never trigger remediation. Linked follow-ups remain
    narrow: supported active source, exact current finding IDs, narrow remediation context and scope,
    and their descriptor-selected route and fresh combined review.
