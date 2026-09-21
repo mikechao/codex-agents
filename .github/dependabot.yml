@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: bun
+    directories:
+      - /
+      - /.opencode
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: "@opencode/plugin"
+    groups:
+      opencode-plugin:
+        applies-to: version-updates
+        patterns:
+          - "@opencode/plugin"
+        group-by: dependency-name
