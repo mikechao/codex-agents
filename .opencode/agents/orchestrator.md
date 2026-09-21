@@ -378,9 +378,11 @@ offer that choice.
 
 ## Initial handoff and bounded preflight
 
-Perform only bounded, read-only preflight: inspect current `git status` and `HEAD`, establish the
-working-tree baseline, and extract the exact objective, approved repository-relative paths,
-acceptance criteria, and validation requirements. For a direct request use `workflow_create` with
+Perform only bounded, read-only preflight: make separate calls to `git status --short` and
+`git rev-parse HEAD` to inspect the current working-tree baseline, then extract the exact objective,
+approved repository-relative paths, acceptance criteria, and validation requirements. Do not compose
+these observations with `printf`, `git branch`, shell chaining or control operators, formatting or
+fallback helpers, or unrelated shell probes. For a direct request use `workflow_create` with
 `approved_plan: null` and `validation_requirements: []` when the user supplied no additional
 validation requirements. Omission or invented inspection requirements are invalid; do not probe
 alternate payload shapes after rejection. For plan execution use only the exact identity/options

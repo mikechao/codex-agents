@@ -2485,6 +2485,48 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
   assert.ok(!content.includes("workflow_state_workflow_submit_commit_result"));
 });
 
+test("reviewer uses direct git grep and does not broaden shell permissions", () => {
+  const content = opencode("code_reviewer.md");
+  const contract = readFileSync(resolve(agentsDir, "contracts/code_reviewer.md"), "utf8");
+  for (const definition of [contract, content]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(normalized, /invoke `git grep` directly/u);
+    assert.match(normalized, /exit code `1` means semantic no-match success/u);
+    assert.match(normalized, /`\|\| true`, `; true`, `sh -c`, or equivalent shell constructs/u);
+  }
+  assert.equal(opencodeBashPermission(content, "git grep pattern"), "allow");
+  assert.equal(opencodeBashPermission(content, "pwd"), "deny");
+  assertOpenCodePermission(content, "shell", "\\*", "deny");
+  assert.ok(
+    !content.includes(
+      "resource: \"git grep -n -E '2\\.0\\.8|v2\\.0\\.8|OpenCode 2\\.0\\.8' -- ':!docs/archive' || true\"",
+    ),
+    "reviewer must not add the observed status-masking compound command",
+  );
+  for (const helper of ["true", "sh -c", "pwd"]) {
+    assert.ok(!content.includes(`resource: "${helper}"`), `reviewer must not allow ${helper}`);
+  }
+  assert.match(content, /^  - action: shell\n    resource: "git grep \*"\n    effect: allow$/m);
+});
+
+test("orchestrator permits only individual bounded preflight Git calls", () => {
+  const content = opencode("orchestrator.md");
+  const normalized = content.replace(/\s+/gu, " ");
+  assert.match(normalized, /separate calls to `git status --short` and `git rev-parse HEAD`/u);
+  assert.match(
+    normalized,
+    /Do not compose these observations with `printf`, `git branch`, shell chaining or control operators, formatting or fallback helpers, or unrelated shell probes/u,
+  );
+  assert.equal(opencodeBashPermission(content, "git status --short"), "allow");
+  assert.equal(opencodeBashPermission(content, "git rev-parse HEAD"), "allow");
+  assert.equal(opencodeBashPermission(content, "pwd"), "deny");
+  for (const helper of ["printf", "git branch", "pwd", "true", "sh -c"]) {
+    assert.ok(!content.includes(`resource: "${helper}"`), `orchestrator must not allow ${helper}`);
+  }
+  assertOpenCodePermission(content, "shell", "git status *", "allow");
+  assertOpenCodePermission(content, "shell", "git rev-parse *", "allow");
+});
+
 test("reviewer validation is the only executable validation path", () => {
   const content = opencode("code_reviewer.md");
   assert.equal(
@@ -2623,6 +2665,83 @@ test("committer is read-only with a fail-closed bash allowlist for the commit fl
     contract.replace(/\s+/gu, " "),
     /staged changes outside the approved scope, do not unstage or commit them\. When `workflow_prepare_commit` is permitted, call it once to persist the staged-scope failure/u,
   );
+});
+
+test("committer keeps working-tree inspections separate without shell probes", () => {
+  const content = opencode("committer.md");
+  const contract = readFileSync(resolve(agentsDir, "contracts/committer.md"), "utf8");
+  for (const definition of [contract, content]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /separate calls to `git status --short`, `git diff --name-status`, and `git diff --cached --name-status`/u,
+    );
+    assert.match(normalized, /rather than probing with `pwd` or another unrelated helper/u);
+  }
+  for (const command of [
+    "git status --short",
+    "git diff --name-status",
+    "git diff --cached --name-status",
+  ]) {
+    assert.equal(
+      opencodeBashPermission(content, command),
+      "allow",
+      `${command} must remain allowed`,
+    );
+  }
+  assert.equal(opencodeBashPermission(content, "pwd"), "deny");
+  for (const helper of ["pwd", "true", "sh -c"]) {
+    assert.ok(!content.includes(`resource: "${helper}"`), `committer must not allow ${helper}`);
+  }
+  assert.match(content, /^  - action: shell\n    resource: "git diff \*"\n    effect: allow$/m);
+});
+
+test("committer keeps post-commit verification within separate authorized Git calls", () => {
+  const content = opencode("committer.md");
+  const contract = readFileSync(resolve(agentsDir, "contracts/committer.md"), "utf8");
+  for (const definition of [contract, content]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /After a successful commit, perform each necessary verification observation as a separate call within the existing authorized Git surface/u,
+    );
+    assert.match(
+      normalized,
+      /Do not combine observations with `;`, `&&`, `\|\|`, `printf`, or other formatting or fallback helpers, and do not use `git diff-tree`/u,
+    );
+    assert.match(
+      normalized,
+      /post-commit shell command is denied, return to the required authorized Git observations rather than probing/u,
+    );
+  }
+  for (const command of [
+    "git show HEAD",
+    "git status --short",
+    "git diff --cached",
+    "git diff",
+    "git rev-parse HEAD",
+  ]) {
+    assert.equal(
+      opencodeBashPermission(content, command),
+      "allow",
+      `${command} must remain allowed`,
+    );
+  }
+  assert.equal(opencodeBashPermission(content, "git diff-tree HEAD^ HEAD"), "deny");
+  assertOpenCodePermission(content, "shell", "\\*", "deny");
+  for (const compound of [
+    "git show HEAD; git diff-tree HEAD^ HEAD",
+    "git show HEAD; printf '\\n'",
+    "git status --short && pwd",
+  ]) {
+    assert.ok(
+      !content.includes(`resource: "${compound}"`),
+      `${compound} must not be an explicit shell permission`,
+    );
+  }
+  for (const helper of ["printf", "pwd", "true", "sh -c", "git diff-tree"]) {
+    assert.ok(!content.includes(`resource: "${helper}`), `committer must not allow ${helper}`);
+  }
 });
 
 test("committer references are authoritative, neutral, and non-closing", () => {

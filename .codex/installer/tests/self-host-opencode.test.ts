@@ -382,6 +382,32 @@ test("the repository's own OpenCode setup uses a dedicated primary orchestrator"
   assert.ok(!existsSync(resolve(repoRoot, ".opencode/ORCHESTRATION.md")));
 });
 
+test("the orchestrator keeps preflight observations separate and shell permissions narrow", () => {
+  const orchestrator = readFileSync(resolve(repoRoot, orchestratorPath), "utf8");
+  const normalized = orchestrator.replace(/\s+/gu, " ");
+  assert.match(normalized, /separate calls to `git status --short` and `git rev-parse HEAD`/u);
+  assert.match(
+    normalized,
+    /Do not compose these observations with `printf`, `git branch`, shell chaining or control operators, formatting or fallback helpers, or unrelated shell probes/u,
+  );
+
+  const shellRules = [
+    ...orchestrator.matchAll(
+      /^  - action: shell\n    resource: "((?:\\.|[^"\\])*)"\n    effect: (allow|ask|deny)$/gmu,
+    ),
+  ].map((match) => ({ resource: match[1], effect: match[2] }));
+  const allows = shellRules.filter((rule) => rule.effect === "allow").map((rule) => rule.resource);
+  assert.ok(allows.includes("git status") && allows.includes("git status *"));
+  assert.ok(allows.includes("git rev-parse") && allows.includes("git rev-parse *"));
+  for (const helper of ["printf", "git branch", "pwd", "true", "sh -c"]) {
+    assert.ok(!allows.includes(helper), `orchestrator must not allow helper ${helper}`);
+  }
+  assert.equal(
+    shellRules.filter((rule) => rule.resource === "*" && rule.effect === "deny").length,
+    1,
+  );
+});
+
 test("the orchestrator exposes the complete parent planning tool surface", () => {
   const orchestrator = readFileSync(resolve(repoRoot, orchestratorPath), "utf8");
   const allowed = new Set(

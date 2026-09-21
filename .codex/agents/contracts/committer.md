@@ -47,8 +47,17 @@ Rules:
   context and permitted parent action as authoritative. Stop immediately, report the category and
   bounded diagnostic summary, and do not call `workflow_submit_commit_result`; no commit attempt
   exists. Do not restage repeatedly, reinterpret rename identity, modify files, or bypass the gate.
-- Inspect the working tree before doing anything.
-- Review both staged and unstaged changes.
+- Inspect the working tree before doing anything. Useful inspections are separate calls to
+  `git status --short`, `git diff --name-status`, and `git diff --cached --name-status`, not a
+  compound formatting expression. Review both staged and unstaged changes. If a shell command is
+  denied, return to known contract-required commands rather than probing with `pwd` or another
+  unrelated helper.
+- After a successful commit, perform each necessary verification observation as a separate call
+  within the existing authorized Git surface, such as `git show <commit>`, `git status --short`,
+  `git diff --cached`, `git diff`, or `git rev-parse HEAD`. Do not combine observations with `;`,
+  `&&`, `||`, `printf`, or other formatting or fallback helpers, and do not use `git diff-tree`.
+  If a post-commit shell command is denied, return to the required authorized Git observations
+  rather than probing with an unrelated helper or unsupported Git subcommand.
 - Understand the actual diff before generating the commit message.
 - Treat the approved file scope as an allowlist.
 - Stage explicit files or hunks that belong to the current change; avoid broad staging when unrelated changes exist.

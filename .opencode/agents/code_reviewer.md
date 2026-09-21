@@ -130,9 +130,11 @@ Rules:
   are outside the semantic corpus and must not become findings merely because they are present in
   the checkout. `include_untracked: true` includes untracked state only for those exact approved
   paths; it does not authorize a checkout-wide untracked search.
-- Use Git-aware searches for repository-wide semantic or reference scans: use `git grep` over the
-  tracked working-tree corpus, then inspect an approved untracked path separately with an exact
-  literal path read when needed. Do not use `git grep --untracked`, `--no-index`,
+- Use Git-aware searches for repository-wide semantic or reference scans: invoke `git grep` directly
+  over the tracked working-tree corpus, then inspect an approved untracked path separately with an
+  exact literal path read when needed. Its exit code `1` means semantic no-match success, not a
+  review failure. Do not mask that status with `|| true`, `; true`, `sh -c`, or equivalent shell
+  constructs. Do not use `git grep --untracked`, `--no-index`,
   `--recurse-submodules`, recursive-submodule search, or native workspace-wide grep/LSP searches
   whose corpus cannot be bounded to the review corpus. Git grep exit code `1` means no matches and
   is not a review failure. Command patterns cannot bind arguments to workflow state, so these
