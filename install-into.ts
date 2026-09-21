@@ -57,12 +57,8 @@ const COPY_SOURCE_FILES = [
 const OPENCODE_COPY_SOURCE_FILES = [".opencode/agents/orchestrator.md"];
 const OPENCODE_PACKAGE_MANIFEST = ".opencode/package.json";
 const OPENCODE_PLUGIN_DIRECTORY = ".opencode/plugins/codex-agents-explorer-tools";
-const OPENCODE_PLUGIN_VERSION = "2.0.11";
-const OPENCODE_PACKAGE_CONTENT = `${JSON.stringify(
-  { dependencies: { "@opencode/plugin": OPENCODE_PLUGIN_VERSION } },
-  null,
-  2,
-)}\n`;
+const STRICT_EXACT_VERSION =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 const MINIMUM_BUN = [1, 3, 0];
 const OPENCODE_SERVER_NAME = "workflow_state";
@@ -456,7 +452,37 @@ function parseJsoncConfig(configPath: string, text: string): unknown {
   return parsed;
 }
 
-function compatibleOpenCodePackageManifest(path: string): string {
+type OpenCodePackageManifest = {
+  content: string;
+  version: string;
+};
+
+function providerOpenCodePackageManifest(path: string): OpenCodePackageManifest {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (cause) {
+    error(`Unable to read provider OpenCode package manifest: ${path} (${errorMessage(cause)})`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (cause) {
+    error(
+      `Provider OpenCode package manifest is not valid JSON; refusing to install: ${path} (${errorMessage(cause)})`,
+    );
+  }
+  const dependencies = isRecord(parsed) ? parsed.dependencies : undefined;
+  const version = isRecord(dependencies) ? dependencies["@opencode/plugin"] : undefined;
+  if (typeof version !== "string" || !STRICT_EXACT_VERSION.test(version)) {
+    error(
+      `Provider OpenCode package manifest is invalid; ${path} must declare dependencies["@opencode/plugin"] as a strict exact version string`,
+    );
+  }
+  return { content, version };
+}
+
+function compatibleOpenCodePackageManifest(path: string, version: string): string {
   let content: string;
   try {
     content = readFileSync(path, "utf8");
@@ -472,9 +498,9 @@ function compatibleOpenCodePackageManifest(path: string): string {
     );
   }
   const dependencies = isRecord(parsed) ? parsed.dependencies : undefined;
-  if (!isRecord(dependencies) || dependencies["@opencode/plugin"] !== OPENCODE_PLUGIN_VERSION) {
+  if (!isRecord(dependencies) || dependencies["@opencode/plugin"] !== version) {
     error(
-      `Existing OpenCode package manifest is incompatible; ${path} must declare dependencies["@opencode/plugin"] = "${OPENCODE_PLUGIN_VERSION}"`,
+      `Existing OpenCode package manifest is incompatible; ${path} must declare dependencies["@opencode/plugin"] = "${version}"`,
     );
   }
   return content;
@@ -776,11 +802,17 @@ export function main(args: readonly string[]): number {
     }
   }
   const opencodePackageSource = resolve(projectRoot, OPENCODE_PACKAGE_MANIFEST);
-  if (readFileSync(opencodePackageSource, "utf8") !== OPENCODE_PACKAGE_CONTENT) {
+  const providerPackage = providerOpenCodePackageManifest(opencodePackageSource);
+  const expectedOpenCodePackageContent = `${JSON.stringify(
+    { dependencies: { "@opencode/plugin": providerPackage.version } },
+    null,
+    2,
+  )}\n`;
+  if (providerPackage.content !== expectedOpenCodePackageContent) {
     error(`Required OpenCode package manifest has unexpected content: ${opencodePackageSource}`);
   }
   const opencodePackageOriginal = pathEntryExists(opencodePackageTarget)
-    ? compatibleOpenCodePackageManifest(opencodePackageTarget)
+    ? compatibleOpenCodePackageManifest(opencodePackageTarget, providerPackage.version)
     : null;
   let generatedManifest: readonly GeneratedAgentDefinition[];
   try {

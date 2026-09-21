@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -43,6 +44,29 @@ function runInstaller(target: string) {
     return {
       status: 0,
       stdout: execFileSync(installer, [target], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+      stderr: "",
+    };
+  } catch (cause) {
+    assert.ok(cause instanceof Error && "status" in cause);
+    const failure = cause as Error & { status?: number; stdout?: string; stderr?: string };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
+}
+
+function runInstallerFrom(source: string, target: string) {
+  const copiedInstaller = resolve(source, "install-into.ts");
+  try {
+    return {
+      status: 0,
+      stdout: execFileSync(copiedInstaller, [target], {
+        cwd: source,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
@@ -422,6 +446,64 @@ test("install-into.ts runs as an executable and installs agents plus workflow_st
     assert.ok(!existsSync(join(root, ".codex/.config.install.")));
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("copied install-into.ts rejects invalid provider OpenCode package manifests before mutation", () => {
+  const cases = [
+    ["malformed JSON", '{"dependencies":', /Provider OpenCode package manifest is not valid JSON/],
+    [
+      "missing dependency",
+      JSON.stringify({ dependencies: {} }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+    [
+      "non-string dependency",
+      JSON.stringify({ dependencies: { "@opencode/plugin": 1 } }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+    [
+      "empty dependency",
+      JSON.stringify({ dependencies: { "@opencode/plugin": "" } }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+    [
+      "range dependency",
+      JSON.stringify({ dependencies: { "@opencode/plugin": "^9.9.9" } }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+    [
+      "tag dependency",
+      JSON.stringify({ dependencies: { "@opencode/plugin": "latest" } }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+    [
+      "wildcard dependency",
+      JSON.stringify({ dependencies: { "@opencode/plugin": "*" } }),
+      /Provider OpenCode package manifest is invalid/,
+    ],
+  ] as const;
+
+  for (const [label, content, message] of cases) {
+    const source = sourceCopy();
+    const target = fixture().root;
+    const sentinel = join(target, "target-owned.txt");
+    writeFileSync(sentinel, "keep me\n");
+    try {
+      writeFileSync(join(source, ".opencode/package.json"), content);
+      const entries = readdirSync(target).sort();
+      const result = runInstallerFrom(source, target);
+      assert.notEqual(result.status, 0, label);
+      assert.match(result.stderr, message, label);
+      assert.deepEqual(readdirSync(target).sort(), entries, label);
+      assert.equal(readFileSync(sentinel, "utf8"), "keep me\n", label);
+      assert.equal(existsSync(join(target, ".codex")), false, label);
+      assert.equal(existsSync(join(target, ".opencode")), false, label);
+      assert.equal(existsSync(join(target, "opencode.json")), false, label);
+    } finally {
+      rmSync(source, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
   }
 });
 

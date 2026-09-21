@@ -12,8 +12,13 @@ import { PARENT_WORKFLOW_ACTION_VALUES } from "../../workflow-mcp/workflow-actio
 
 const repoRoot = resolve(import.meta.dir, "../../../");
 const selfHostConfig = resolve(repoRoot, "opencode.json");
+const providerPackage = resolve(repoRoot, ".opencode/package.json");
+const rootPackage = resolve(repoRoot, "package.json");
 const relativeServerPath = ".codex/workflow-mcp/bootstrap.ts";
 const orchestratorPath = ".opencode/agents/orchestrator.md";
+
+const strictExactVersion =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 test("the repository's own opencode.json registers the supervised self-host server", () => {
   assert.ok(existsSync(selfHostConfig), `missing self-host config: ${selfHostConfig}`);
@@ -47,6 +52,25 @@ test("the repository's own opencode.json registers the supervised self-host serv
   assert.equal(parsed.$schema, "https://opencode.ai/config.json");
   assert.equal(parsed.default_agent, "orchestrator");
   assert.ok(hasOpenCodeWorkflowStateRegistration(selfHostConfig));
+});
+
+test("self-host package manifests agree on the exact OpenCode plugin version", () => {
+  const provider = JSON.parse(readFileSync(providerPackage, "utf8")) as {
+    dependencies?: Record<string, unknown>;
+  };
+  const root = JSON.parse(readFileSync(rootPackage, "utf8")) as {
+    devDependencies?: Record<string, unknown>;
+  };
+  const providerVersion = provider.dependencies?.["@opencode/plugin"];
+  const rootVersion = root.devDependencies?.["@opencode/plugin"];
+  assert.equal(typeof providerVersion, "string");
+  assert.equal(typeof rootVersion, "string");
+  if (typeof providerVersion !== "string" || typeof rootVersion !== "string") {
+    throw new Error("OpenCode plugin versions must be strings");
+  }
+  assert.match(providerVersion, strictExactVersion);
+  assert.match(rootVersion, strictExactVersion);
+  assert.equal(providerVersion, rootVersion);
 });
 
 test("self-host OpenCode exposes the V2 Explorer plugin with structured capabilities", () => {

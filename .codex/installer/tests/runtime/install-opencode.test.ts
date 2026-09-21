@@ -62,6 +62,17 @@ function openCodeAgentsBackups(root: string) {
   return readdirSync(opencode).filter((name) => name.startsWith(".agents.backup."));
 }
 
+function providerPluginVersion(): string {
+  const manifest = JSON.parse(
+    readFileSync(resolve(projectRoot, ".opencode/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const version = manifest.dependencies?.["@opencode/plugin"];
+  assert.equal(typeof version, "string");
+  if (typeof version !== "string") throw new Error("provider plugin version must be a string");
+  assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u);
+  return version;
+}
+
 test("install-into.ts installs OpenCode agents and the workflow_state MCP registration", () => {
   const { root } = fixture();
   try {
@@ -144,9 +155,11 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
       resolve(import.meta.dir, "../../../../.opencode/package.json"),
       "utf8",
     );
-    assert.deepEqual(JSON.parse(sourcePackage), {
-      dependencies: { "@opencode/plugin": "2.0.11" },
-    });
+    const sourceManifest = JSON.parse(sourcePackage) as {
+      dependencies: Record<string, unknown>;
+    };
+    assert.equal(typeof sourceManifest.dependencies["@opencode/plugin"], "string");
+    assert.equal(sourceManifest.dependencies["@opencode/plugin"], providerPluginVersion());
     assert.equal(readFileSync(join(root, ".opencode/package.json"), "utf8"), sourcePackage);
     for (const artifact of [
       ".opencode/package-lock.json",
@@ -163,8 +176,12 @@ test("install-into.ts installs OpenCode agents and the workflow_state MCP regist
 
 test("install-into.ts preserves arbitrary OpenCode host artifacts byte-for-byte", () => {
   const { root, write } = fixture();
+  const compatibleVersion = providerPluginVersion();
   const artifacts = {
-    ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.11"},"custom":true}\n',
+    ".opencode/package.json": `${JSON.stringify({
+      dependencies: { "@opencode/plugin": compatibleVersion },
+      custom: true,
+    })}\n`,
     ".opencode/package-lock.json": '{"lockfileVersion":99,"custom":"keep"}\n',
     ".opencode/bun.lock": "# host-generated lock\ncustom-entry\n",
     ".opencode/.gitignore": "package.json\nnode_modules/\n",

@@ -69,6 +69,22 @@ function openCodeAgentsBackups(root: string) {
   return readdirSync(opencode).filter((name) => name.startsWith(".agents.backup."));
 }
 
+function providerPluginVersion(): string {
+  const manifest = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../../../.opencode/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const version = manifest.dependencies?.["@opencode/plugin"];
+  assert.equal(typeof version, "string");
+  if (typeof version !== "string") throw new Error("provider plugin version must be a string");
+  return version;
+}
+
+function mismatchedProviderPackage(): string {
+  const version = providerPluginVersion();
+  const mismatch = version === "0.0.0" ? "0.0.1" : "0.0.0";
+  return `${JSON.stringify({ dependencies: { "@opencode/plugin": mismatch } })}\n`;
+}
+
 test("fresh OpenCode config exposes only the canonical native Plan override", () => {
   const parsed = JSON.parse(createOpenCodeConfig("/provider/server.ts")) as Record<string, unknown>;
   assert.deepEqual(parsed.agents, { plan: openCodePlanAgent() });
@@ -301,7 +317,7 @@ test("install-into.ts refuses a managed OpenCode V2 plugin collision before muta
     const original = "// target-owned plugin\n";
     write(`${plugin}/index.ts`, original);
     const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.8"}}\n',
+      ".opencode/package.json": mismatchedProviderPackage(),
       ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
       ".opencode/.gitignore": "node_modules/\n",
     } as const;
@@ -328,7 +344,7 @@ test("install-into.ts refuses a dangling managed OpenCode V2 plugin collision", 
     const managedPlugin = join(plugins, "codex-agents-explorer-tools");
     symlinkSync("missing-codex-agents-explorer-tools", managedPlugin);
     const hostArtifacts = {
-      ".opencode/package.json": '{"dependencies":{"@opencode/plugin":"2.0.8"}}\n',
+      ".opencode/package.json": mismatchedProviderPackage(),
       ".opencode/package-lock.json": '{"lockfileVersion":99}\n',
       ".opencode/.gitignore": "node_modules/\n",
       ".opencode/node_modules/@opencode-ai/plugin/package.json": '{"version":"9.9.9"}\n',
@@ -359,12 +375,13 @@ test("install-into.ts refuses a dangling managed OpenCode V2 plugin collision", 
 });
 
 test("install-into.ts refuses an incompatible existing OpenCode package manifest before mutation", () => {
+  const mismatch = providerPluginVersion() === "0.0.0" ? "0.0.1" : "0.0.0";
   for (const [label, content, message] of [
     ["malformed", '{"dependencies":', /not valid JSON/],
     ["missing dependency", '{"dependencies":{}}\n', /must declare dependencies/],
     [
       "wrong version",
-      '{"dependencies":{"@opencode/plugin":"2.0.7"}}\n',
+      `${JSON.stringify({ dependencies: { "@opencode/plugin": mismatch } })}\n`,
       /must declare dependencies/,
     ],
   ] as const) {
