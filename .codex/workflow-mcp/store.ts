@@ -38,6 +38,7 @@ import {
   parseRuntimeManifest,
   type RuntimeArtifact,
 } from "./runtime-artifact.js";
+import { inspectionPlanRebindStateReady } from "./transitions/queries.js";
 import { manualValidationRepairDecisionAudit } from "./transitions/shared.js";
 import type {
   LinkedFollowupPlan,
@@ -1386,8 +1387,11 @@ export class WorkflowStore {
 
   #implementationPlanRecovery(state: WorkflowState): ImplementationPlanRecoveryPreflight {
     if (
-      state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" ||
-      !implementationRecoveryStateReady(state) ||
+      !(
+        (state.phase === "STOPPED_IMPLEMENTATION_BLOCKED" &&
+          implementationRecoveryStateReady(state)) ||
+        inspectionPlanRebindStateReady(state)
+      ) ||
       state.plan_provenance === null ||
       state.workflow_type !== "change" ||
       state.review_target.review_mode !== "working_tree" ||
@@ -2511,11 +2515,14 @@ export class WorkflowStore {
           fail("ERROR_VERSION_CONFLICT", "workflow version is stale");
         }
         const state = parseState(row);
-        if (state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED") {
+        if (
+          state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" &&
+          state.phase !== "STOPPED_INCONCLUSIVE"
+        ) {
           fail("ERROR_INVALID_TRANSITION", `phase ${state.phase}`);
         }
-        if (!implementationRecoveryStateReady(state)) {
-          fail("ERROR_STATE_CORRUPT", "blocked implementation stop context is invalid");
+        if (!implementationRecoveryStateReady(state) && !inspectionPlanRebindStateReady(state)) {
+          fail("ERROR_STATE_CORRUPT", "implementation plan rebind stop context is invalid");
         }
         if (state.plan_provenance === null) {
           fail("ERROR_PLAN_INVALID", "blocked workflow has no approved plan provenance");

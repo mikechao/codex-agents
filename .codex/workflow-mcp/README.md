@@ -264,7 +264,8 @@ STOPPED_COMMIT_MISMATCH, COMMITTED
 - Implementation context and block stops resume to their prior active phase with
   `workflow_resume_implementation`; a concerns stop enters review under explicit user authorization
   with `workflow_accept_concerns`.
-- A plan-backed `STOPPED_IMPLEMENTATION_BLOCKED` workflow may instead use
+- A plan-backed `STOPPED_IMPLEMENTATION_BLOCKED` workflow, or the narrow
+  pending-inspection `STOPPED_INCONCLUSIVE` exception, may instead use
   `workflow_rebind_implementation_plan` when PlanStore resolves a newer current approved revision of
   the same PlanArtifact. The replacement must remain a working-tree `change`, retain every effective
   approved path, fit persisted scope limits, and add only clean or absent paths. Rebind preserves the

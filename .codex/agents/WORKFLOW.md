@@ -536,6 +536,12 @@ and repair cycle; after expansion the implementer must submit fresh evidence bef
   explicitly with `workflow_resume_review`; otherwise resume directly once the context is available.
   A complete change result set with a genuine failed required validation keeps the existing
   exemption during normal `REVIEWING`, but does not bypass stopped-state evidence recovery.
+  A narrow exception applies when the stopped change workflow is plan-backed and still has a pending
+  plan-defined inspection: if the exact same PlanArtifact has a newer approved compatible revision,
+  the fresh descriptor may expose only `workflow_rebind_implementation_plan`. That descriptor-only
+  recovery replaces the plan contract, conservatively clears dependent evidence, and resumes
+  `IMPLEMENTING`; it must not fabricate or manually complete the superseded inspection. Ordinary
+  inconclusive recovery remains unchanged when no exact compatible replacement is available.
 - `STOPPED_NEEDS_CONTEXT`: resume implementation with `workflow_resume_implementation` once the
   missing context is resolved. `STOPPED_IMPLEMENTATION_BLOCKED` ordinarily resumes the same way
   when no newer approved revision exists. A newer current approved revision of the same

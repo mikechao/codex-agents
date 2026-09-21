@@ -285,6 +285,7 @@ const ACTION_MATRIX: Partial<
     STOPPED_INCONCLUSIVE: [
       "workflow_adopt_dirty_scope",
       "workflow_record_manual_validation",
+      "workflow_rebind_implementation_plan",
       "workflow_resume_review",
     ],
     STOPPED_NOT_COMMITTED: ["workflow_retry_commit"],
@@ -465,6 +466,20 @@ export function reviewRecoveryStateReady(state: WorkflowState): boolean {
   return state.phase === "STOPPED_INCONCLUSIVE" && pendingInspectionValidations(state).length === 0;
 }
 
+/** Whether an inconclusive review stop is eligible for a plan-authority rebind. */
+export function inspectionPlanRebindStateReady(state: WorkflowState): boolean {
+  return (
+    state.phase === "STOPPED_INCONCLUSIVE" &&
+    state.stop_context?.status === "INCONCLUSIVE" &&
+    state.stop_context.stopped_from === "REVIEWING" &&
+    state.workflow_type === "change" &&
+    state.review_target.review_mode === "working_tree" &&
+    state.superseded_by_workflow_id === null &&
+    state.plan_provenance !== null &&
+    pendingInspectionValidations(state).length > 0
+  );
+}
+
 export function implementationRecoveryStateReady(state: WorkflowState): boolean {
   const expectedStatus =
     state.phase === "STOPPED_NEEDS_CONTEXT"
@@ -484,9 +499,11 @@ export function implementationPlanRebindStateReadiness(
   state: WorkflowState,
   contract: AuthoritativeImplementationContract,
 ): "ready" | "incompatible" | "unavailable" {
+  const blockedSource =
+    state.phase === "STOPPED_IMPLEMENTATION_BLOCKED" && implementationRecoveryStateReady(state);
+  const inspectionSource = inspectionPlanRebindStateReady(state);
   if (
-    state.phase !== "STOPPED_IMPLEMENTATION_BLOCKED" ||
-    !implementationRecoveryStateReady(state) ||
+    (!blockedSource && !inspectionSource) ||
     state.workflow_type !== "change" ||
     state.review_target.review_mode !== "working_tree" ||
     state.superseded_by_workflow_id !== null ||
@@ -602,6 +619,14 @@ function actionsForRole(
           action !== "workflow_resume_implementation" &&
           action !== "workflow_expand_scope",
       );
+    } else {
+      actions = actions.filter((action) => action !== "workflow_rebind_implementation_plan");
+    }
+  }
+  if (actorRole === "parent" && state.phase === "STOPPED_INCONCLUSIVE") {
+    const recovery = readiness.implementation_plan_recovery?.status ?? "no_replacement";
+    if (recovery === "rebind") {
+      actions = actions.filter((action) => action === "workflow_rebind_implementation_plan");
     } else {
       actions = actions.filter((action) => action !== "workflow_rebind_implementation_plan");
     }
@@ -750,6 +775,9 @@ function nextStep(
 ): WorkflowNextStep {
   if (state.superseded_by_workflow_id)
     return { kind: "unsupported", reason: "the workflow has been superseded" };
+  if (actions.parent.includes("workflow_rebind_implementation_plan")) {
+    return { kind: "recovery", action: "workflow_rebind_implementation_plan" };
+  }
   if (actions.parent.includes("workflow_adopt_dirty_scope")) {
     return { kind: "recovery", action: "workflow_adopt_dirty_scope" };
   }

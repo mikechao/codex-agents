@@ -504,6 +504,116 @@ test("stale legacy recovery mutations reject a compatible approved plan revision
   }
 });
 
+test("pending inspection inconclusive review rebinds to an exact approved plan revision", () => {
+  const target = fixture();
+  const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });
+  try {
+    const draft = store.planCreate({
+      ...revisionInput(),
+      validation_requirements: [
+        { description: "executable", kind: "command", argv: ["bun", "run", "test:workflow-mcp"] },
+        { description: "stale inspection", kind: "inspection" },
+      ],
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: draft.revision,
+      user_authorization: "approve inspection plan",
+    });
+    const created = store.createFromPlan({ plan_id: draft.plan_id, revision: draft.revision });
+    const id = created.workflow_id;
+    store.submitImplementation({
+      workflow_id: id,
+      expected_version: 0,
+      status: "DONE",
+      summary: "implementation is ready for review",
+      agent_touched_paths: [],
+      acceptance_results: [{ criterion_id: "AC-001", status: "satisfied", evidence: "done" }],
+      validation_results: [
+        { validation_id: "VAL-001", status: "passed", evidence: "command passed" },
+        { validation_id: "VAL-002", status: "not_run", evidence: "review inspection pending" },
+      ],
+      known_failures: [],
+      finding_resolution_map: {},
+    });
+    const stopped = workflowState(store, id);
+    stopped.phase = "STOPPED_INCONCLUSIVE";
+    stopped.stop_context = {
+      status: "INCONCLUSIVE",
+      summary: "review context unavailable",
+      stopped_from: "REVIEWING",
+    };
+    persistWorkflowState(store, id, stopped);
+
+    const revised = store.planRevise({
+      plan_id: draft.plan_id,
+      base_revision: draft.revision,
+      replacements: {
+        full_plan: "replace stale inspection authority",
+        validation_requirements: [
+          {
+            description: "replacement command",
+            kind: "command",
+            argv: ["bun", "run", "test:workflow-mcp"],
+          },
+        ],
+      },
+    });
+    store.planApprove({
+      plan_id: draft.plan_id,
+      revision: revised.revision,
+      user_authorization: "approve replacement inspection plan",
+    });
+
+    const decision = store.operatorDecisionGet(id);
+    assert.deepEqual(decision.primary, {
+      kind: "approve_recovery",
+      recovery: "rebind_implementation_plan",
+      authorization_required: true,
+    });
+    assert.equal(decision.execution.primary.mode, "parent_mutation");
+    if (decision.execution.primary.mode !== "parent_mutation") throw new Error("expected rebind");
+    const invocation = decision.execution.primary.invocations[0];
+    assert.equal(invocation.operation, "workflow_rebind_implementation_plan");
+    assert.deepEqual(invocation.fixed_arguments, {
+      workflow_id: id,
+      expected_version: 1,
+      plan_id: draft.plan_id,
+      revision: revised.revision,
+    });
+    assert.deepEqual(invocation.plan_binding, {
+      plan_id: draft.plan_id,
+      revision: revised.revision,
+      source: "approved_recovery_plan_context",
+    });
+
+    const rebound = store.rebindImplementationPlan({
+      ...invocation.fixed_arguments,
+      user_authorization: "authorize inconclusive rebind",
+    });
+    assert.equal(rebound.phase, "IMPLEMENTING");
+    assert.equal(rebound.plan_provenance?.revision, revised.revision);
+    assert.deepEqual(rebound.validation_requirements, [
+      {
+        validation_id: "VAL-001",
+        description: "replacement command",
+        kind: "command",
+        argv: ["bun", "run", "test:workflow-mcp"],
+      },
+    ]);
+    assert.deepEqual(rebound.validation_results, []);
+    assert.equal(rebound.stop_context, null);
+    const reboundState = workflowState(store, id);
+    assert.equal(reboundState.implementation_receipt, null);
+    assert.equal(reboundState.review_receipt, null);
+    assert.deepEqual(reboundState.validation_results, []);
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM workflows").get().count, 1);
+  } finally {
+    store.close();
+    disposeFixture(target.root);
+  }
+});
+
 test("stale legacy recovery mutations fail closed for an incompatible approved plan revision", () => {
   const target = fixture();
   const store: any = new WorkflowStore({ repositoryRoot: target.root, databasePath: ":memory:" });

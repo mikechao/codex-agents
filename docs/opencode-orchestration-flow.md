@@ -175,14 +175,17 @@ changed-intent classification, final reconciliation, and commit authorization re
 policies. The parent compares newly supplied objective, outcome, criteria, and logical-change scope at
 its input boundary; an ID-only projection never makes that classification.
 
-Blocked plan-backed implementations have one descriptor-only recovery exception. When the same
-PlanArtifact has a newer current approved compatible revision, the server advertises
+Blocked plan-backed implementations have one descriptor-only recovery exception. The same exception
+also applies to a stopped inconclusive change whose plan-defined inspection is still pending. When the
+same PlanArtifact has a newer current approved compatible revision, the server advertises
 `workflow_rebind_implementation_plan` with fixed plan identity and suppresses ordinary resume and
 scope expansion. Rebind keeps the workflow, original Git baseline, and partial tree; replaces
 plan-derived authority; invalidates stale lifecycle evidence; and resumes fresh implementation.
 Added paths are monotonic and must be clean or absent. Raw recovery authorization remains audit
 evidence, while the semantic recovery summary is deterministic server text. Draft revisions leave
 ordinary resume unchanged, and incompatible newer approved revisions fail closed.
+Orchestrator must refresh and use that exact descriptor and must not manually complete an inspection
+removed or changed by the replacement plan.
 
 Explicit linked chains can report their existing combined-review requirement. Separately created
 workflows are not joined through matching work items, paths, branches, or conversation history. If

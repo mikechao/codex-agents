@@ -28,6 +28,7 @@ import {
   hasFailedRequiredValidation,
   implementationPlanRebindStateReadiness,
   implementationRecoveryStateReady,
+  inspectionPlanRebindStateReady,
   scopeMutationReadiness,
   stagedScopeReconciliationFeasible,
 } from "./queries.js";
@@ -480,9 +481,9 @@ export function rebindImplementationPlan(
   addedReceipt: ChangeReceipt,
   userAuthorizationValue: string,
 ): WorkflowState {
-  ensurePhase(state, "STOPPED_IMPLEMENTATION_BLOCKED");
-  if (!implementationRecoveryStateReady(state)) {
-    fail("ERROR_STATE_CORRUPT", "blocked implementation stop context is invalid");
+  ensurePhase(state, "STOPPED_IMPLEMENTATION_BLOCKED", "STOPPED_INCONCLUSIVE");
+  if (!implementationRecoveryStateReady(state) && !inspectionPlanRebindStateReady(state)) {
+    fail("ERROR_STATE_CORRUPT", "implementation plan rebind stop context is invalid");
   }
   if (implementationPlanRebindStateReadiness(state, contract) !== "ready") {
     fail("ERROR_PLAN_INVALID", "approved replacement plan is incompatible with this workflow");
