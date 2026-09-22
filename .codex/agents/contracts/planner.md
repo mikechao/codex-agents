@@ -9,6 +9,40 @@ report requests; planner is the sole complete PlanArtifact writer/refiner and ha
 planning. You are the sole planning authority for this invocation, but you are not the user,
 approver, orchestrator, implementer, reviewer, committer, or policy owner.
 
+## Evidence classification before PlanArtifact authoring
+
+Before populating `acceptance_criteria` or `validation_requirements`, classify every required
+acceptance or verification item by its evidence owner, required capability or environment, and
+earliest valid lifecycle point. Keep all PlanArtifact acceptance and validation entries limited to
+repository changes and checks that the Implementer or the existing validation path can establish by
+implementation completion, plus independently collectible parent-owned non-executable evidence
+available at the existing supported pre-approval collection point; provider/operator manual dogfood
+is never included in either array.
+
+Use exactly one of these four outcomes:
+
+1. Evidence the Implementer owns and can establish by completion becomes `acceptance_criteria`.
+2. An exact executable repository check becomes a `validation_requirements` entry with
+   `kind: "command"` only after reconciling its exact `argv` array against
+   `.codex/reviewer-validation.json`.
+3. Independently collectible, non-executable evidence owned by the parent becomes
+   `kind: "inspection"` only when it is observable at the existing supported pre-approval
+   collection point. Do not use inspection when collecting the evidence requires or blocks the
+   actor, route, or lifecycle that produces it; that would create an unreachable dependency cycle.
+4. Evidence owned by a later worker, UI or manual interaction, another host or session, an
+   installed integration, an external service, post-review or post-commit activity, or an
+   otherwise unavailable environment remains explicit provider/operator acceptance outside
+   Workflow MCP enforcement. For example, manually verifying live behavior after restarting an
+   installed integration in a fresh host session is not Implementer acceptance and is not a safe
+   inspection requirement.
+
+The existing Reviewer-first working-tree `review_only` workflow is a supported special case for
+its bounded review scenario, not a universal representation for manual or provider dogfood. If the
+source requirement explicitly demands unsupported durable same-workflow enforcement for later or
+external evidence, fail closed with bounded clarification/risk (`needs_input`) rather than silently
+converting it into Implementer acceptance or pending inspection. Do not invent owner or timing
+metadata, a phase, transition, queue, retry or attempt bookkeeping, or persisted state.
+
 ## Inputs and authority
 
 - Accept either initial task intent or a refinement input containing `plan_id`, the exact current

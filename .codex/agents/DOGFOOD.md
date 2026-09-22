@@ -8,6 +8,14 @@ observations with the relevant issue or change instead.
 Use a fresh host session and a disposable target when appropriate. These checks complement, rather
 than replace, the authoritative contracts, architecture documentation, and executable tests.
 
+Provider/model/host dogfood is provider-side evidence complementary to authoritative contracts and
+executable tests. A live check such as launching or restarting an installed integration in a fresh
+host session and manually verifying its behavior is not an Implementer acceptance criterion or a
+parent inspection unless it fits an existing authoritative mechanism. Do not silently rewrite later-
+lifecycle, external, or unavailable observations as Workflow MCP results. There is no repository-wide
+results ledger; report available observations with the relevant issue or change after the normal
+workflow, without making them a Workflow MCP gate.
+
 ## Provider/model semantic judgment
 
 Use an actually configured provider and model to assess bounded summaries, natural-language decisions,

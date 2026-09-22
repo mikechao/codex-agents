@@ -576,6 +576,48 @@ test("planning contracts enforce bounded synthesis and disposable context", () =
   }
 });
 
+test("Planner classifies lifecycle evidence without creating unreachable gates", () => {
+  const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  for (const definition of [canonical, generated]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    const ordered = [
+      "classify every required acceptance or verification item by its evidence owner",
+      "Use exactly one of these four outcomes",
+      "Evidence the Implementer owns and can establish by completion becomes `acceptance_criteria`",
+      'exact executable repository check becomes a `validation_requirements` entry with `kind: "command"`',
+      '`kind: "inspection"` only when it is observable at the existing supported pre-approval collection point',
+      "Evidence owned by a later worker, UI or manual interaction, another host or session",
+      "remains explicit provider/operator acceptance outside Workflow MCP enforcement",
+      "fail closed with bounded clarification/risk (`needs_input`)",
+    ];
+    let previous = -1;
+    for (const phrase of ordered) {
+      const position = normalized.indexOf(phrase);
+      assert.ok(
+        position > previous,
+        `Planner contract must order classification phrase: ${phrase}`,
+      );
+      previous = position;
+    }
+    for (const phrase of [
+      "required capability or environment",
+      "earliest valid lifecycle point",
+      "plus independently collectible parent-owned non-executable evidence available at the existing supported pre-approval collection point",
+      "reconciling its exact `argv` array against `.codex/reviewer-validation.json`",
+      "requires or blocks the actor, route, or lifecycle",
+      "unreachable dependency cycle",
+      "installed integration in a fresh host session",
+      "not Implementer acceptance and is not a safe inspection requirement",
+      "Reviewer-first working-tree `review_only` workflow is a supported special case",
+      "not a universal representation for manual or provider dogfood",
+      "Do not invent owner or timing metadata, a phase, transition, queue, retry or attempt bookkeeping, or persisted state",
+    ]) {
+      assert.ok(normalized.includes(phrase), `Planner lifecycle boundary must include: ${phrase}`);
+    }
+  }
+});
+
 test("explorer exposes only the structured evidence capability", () => {
   const explorer = opencode("explorer.md");
   assert.match(explorer, /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m);

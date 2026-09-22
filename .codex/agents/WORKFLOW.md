@@ -382,6 +382,20 @@ also declare a closed `repository_paths` dependency set drawn from its approved 
 policy authorizes exact argv entries independently, so descriptions are never parsed as commands
 and inspection requirements are never executed.
 
+Plan authoring classifies each required acceptance or verification item by evidence owner, required
+capability or environment, and earliest valid lifecycle point before placing it in a PlanArtifact.
+Implementer-owned completion evidence belongs in `acceptance_criteria`; exact executable repository
+checks belong in command validations only after exact reviewer-policy `argv` reconciliation; and
+parent-owned inspection is limited to independently observable non-executable evidence available at
+the existing supported pre-approval collection point. Evidence that requires or blocks the actor,
+route, or lifecycle producing it is not an inspection. Later-worker, UI/manual, other-host/session,
+installed-integration, external-service, post-review, post-commit, and unavailable-environment
+evidence is provider/operator acceptance outside Workflow MCP enforcement, not an Implementer gate.
+The Reviewer-first working-tree `review_only` workflow remains a bounded supported special case,
+not a universal manual-dogfood mechanism. Unsupported durable same-workflow enforcement fails closed
+to bounded clarification/risk rather than adding owner/timing metadata, phases, transitions, queues,
+retry or attempt bookkeeping, or persisted state.
+
 Required inspection evidence is authoritative workflow evidence, not a prompt or conversation claim.
 Implementers must submit `not_run` for every inspection requirement; only the parent may
 record bounded terminal `passed` or `failed` evidence. A complete implementation may enter
