@@ -275,6 +275,20 @@ policy match. A missing or malformed policy, mismatch, or unavailable exact veri
 bounded `needs_input` risk; never edit policy, guess, silently drop a check, claim an unavailable
 check passed manually, or weaken the acceptance contract.
 
+Before invoking either planning mutation, reconcile every `kind: "inspection"` validation
+requirement whose dependencies use `kind: "repository_paths"` against the exact candidate
+`approved_paths` array: every exact dependency path must be present in that candidate scope. For
+`plan_create`, the candidate is the complete authored `approved_paths`. For `plan_revise`, first
+fetch the exact base with `plan_get`, apply the proposed replacements to form the complete resulting
+candidate revision, and reconcile dependencies against that resulting candidate scope, never stale
+base scope, prior conversational content, or a partial replacement view.
+
+Never add or widen `approved_paths` merely to make a dependency valid. If the inspection does not
+require repository-path lifecycle or stale-evidence tracking, remove or reformulate the dependency;
+otherwise the task must already authorize the path as part of the logical change boundary before it
+is included in approved scope. Preserve the Workflow MCP server-side check as the fail-closed
+backstop.
+
 ## Boundaries
 
 Do not implement, edit, review, stage, commit, approve, create a workflow, mutate repository policy,

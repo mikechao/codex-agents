@@ -618,6 +618,44 @@ test("Planner classifies lifecycle evidence without creating unreachable gates",
   }
 });
 
+test("Planner reconciles repository-path inspection dependencies before planning mutations", () => {
+  const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  for (const definition of [canonical, generated]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /Before invoking either planning mutation.*every `kind: "inspection"` validation requirement whose dependencies use `kind: "repository_paths"`.*every exact dependency path must be present in that candidate scope/u,
+      "Planner must reconcile repository-path dependencies against candidate approved paths",
+    );
+    assert.match(
+      normalized,
+      /For `plan_create`, the candidate is the complete authored `approved_paths`/u,
+      "Planner must use complete authored scope for plan creation",
+    );
+    assert.match(
+      normalized,
+      /For `plan_revise`, first fetch the exact base with `plan_get`, apply the proposed replacements to form the complete resulting candidate revision.*reconcile dependencies against that resulting candidate scope, never stale base scope, prior conversational content, or a partial replacement view/u,
+      "Planner must reconcile revisions against the complete resulting candidate",
+    );
+    assert.match(
+      normalized,
+      /Never add or widen `approved_paths` merely to make a dependency valid/u,
+      "Planner must not widen approved scope to satisfy a dependency",
+    );
+    assert.match(
+      normalized,
+      /If the inspection does not require repository-path lifecycle or stale-evidence tracking, remove or reformulate the dependency/u,
+      "Planner must remove or reformulate unnecessary path dependencies",
+    );
+    assert.match(
+      normalized,
+      /Preserve the Workflow MCP server-side check as the fail-closed backstop/u,
+      "Planner must preserve the server-side backstop",
+    );
+  }
+});
+
 test("explorer exposes only the structured evidence capability", () => {
   const explorer = opencode("explorer.md");
   assert.match(explorer, /^  - action: runEvidence\n    resource: "\*"\n    effect: allow$/m);
