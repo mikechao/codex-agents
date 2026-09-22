@@ -204,6 +204,8 @@ const ROLES: readonly RoleSpec[] = [
         { action: "shell", resource: "git log *", effect: "allow" },
         { action: "shell", resource: "git show *", effect: "allow" },
         { action: "shell", resource: "git rev-parse *", effect: "allow" },
+        { action: "shell", resource: "git ls-files", effect: "allow" },
+        { action: "shell", resource: "git ls-files *", effect: "allow" },
         { action: "shell", resource: "git grep", effect: "allow" },
         { action: "shell", resource: "git grep *", effect: "allow" },
         { action: "shell", resource: "bun .codex/agents/change-receipt.ts *", effect: "allow" },

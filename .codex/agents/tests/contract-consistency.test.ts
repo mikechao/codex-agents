@@ -2599,6 +2599,8 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
     "git log *",
     "git show *",
     "git rev-parse *",
+    "git ls-files",
+    "git ls-files *",
     "git grep",
     "git grep *",
     "bun .codex/agents/change-receipt.ts *",
@@ -2610,6 +2612,10 @@ test("reviewer is read-only with a narrow bash allowlist", () => {
       `reviewer shell allowlist must include ${allowed}`,
     );
   }
+  assert.equal(
+    opencodeBashPermission(content, "git ls-files --others --exclude-standard"),
+    "allow",
+  );
   for (const denied of [
     "add",
     "commit",

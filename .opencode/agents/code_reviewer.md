@@ -34,6 +34,12 @@ permissions:
     resource: "git rev-parse *"
     effect: allow
   - action: shell
+    resource: "git ls-files"
+    effect: allow
+  - action: shell
+    resource: "git ls-files *"
+    effect: allow
+  - action: shell
     resource: "git grep"
     effect: allow
   - action: shell
