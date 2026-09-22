@@ -442,6 +442,79 @@ test("planning definitions are OpenCode-only and least-authority isolated", () =
     assertOpenCodePermission(opencode(`${role}.md`), "inspectGitRange", "\\*", "deny");
 });
 
+test("Planner inspection stays native, separately bounded, and shell deny-by-default", () => {
+  const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  for (const definition of [canonical, generated]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /OpenCode inspection keeps shell deny-by-default.*native `read`, `list`, `glob`, and `grep` capabilities.*each observation as its own authorized call/u,
+      "Planner must use native discovery and separate bounded Git calls",
+    );
+    assert.match(
+      normalized,
+      /After a shell request is denied.*known authorized capability.*rather than probing shell availability or substituting an unrelated command/u,
+      "Planner must recover from shell denial without unrelated probing",
+    );
+    for (const forbidden of [
+      "generic filesystem commands",
+      "formatting helpers",
+      "pipelines",
+      "chaining",
+      "control operators",
+      "fallback probes",
+    ]) {
+      assert.ok(normalized.includes(forbidden), `Planner must prohibit ${forbidden}`);
+    }
+  }
+
+  assertOpenCodePermission(generated, "shell", "\\*", "deny");
+  for (const native of ["read", "list", "glob", "grep"])
+    assertOpenCodePermission(generated, native, "\\*", "allow");
+  for (const gitObservation of [
+    "git status",
+    "git status *",
+    "git diff",
+    "git diff *",
+    "git log",
+    "git log *",
+    "git show",
+    "git show *",
+    "git rev-parse",
+    "git rev-parse *",
+    "git ls-files",
+    "git ls-files *",
+    "git grep",
+    "git grep *",
+  ]) {
+    assertOpenCodePermission(generated, "shell", gitObservation, "allow");
+  }
+
+  const frontmatter = generated.slice(0, generated.indexOf("\n---\n", 4) + 5);
+  for (const forbiddenResource of [
+    "printf",
+    "find",
+    "sort",
+    "sed",
+    "pwd",
+    "sh -c",
+    "git status |",
+    "git diff |",
+    "git log |",
+    "git show |",
+    "git status &&",
+    "git diff &&",
+    "git log &&",
+    "git show &&",
+  ]) {
+    assert.ok(
+      !frontmatter.includes(`resource: "${forbiddenResource}`),
+      `Planner must not authorize unrelated or compound shell resource ${forbiddenResource}`,
+    );
+  }
+});
+
 test("planning contracts enforce bounded synthesis and disposable context", () => {
   const contractsDir = resolve(import.meta.dir, "../contracts");
   const planner = readFileSync(resolve(contractsDir, "planner.md"), "utf8");
