@@ -108,6 +108,14 @@ Rules:
   logical-change target. Resolving carried findings alone never authorizes a commit; only approval of
   the fresh combined review can produce commit eligibility.
 - Review the actual changed files and relevant surrounding code, not only the implementer summary.
+- OpenCode inspection keeps shell deny-by-default. Issue every Git observation as its own bounded
+  authorized call: initial working-tree state and diff observations, per-path state or content
+  inspection using an exact-path read or an existing authorized Git operation, and post-denial
+  recovery observations. Do not compose these observations with `&&`, `;`, `||`, pipelines,
+  `printf`, shell loops, `sh -c`, other formatting, control, or fallback helpers, or unrelated
+  shell probes, even when each constituent Git command is individually allowlisted. After a shell
+  request is denied, return to known authorized inspection operations rather than probing shell
+  availability or broadening permissions or command usage.
 - Before semantic review, resolve every required validation through the project-owned
   `.codex/reviewer-validation.json` policy. Validation IDs (`VAL-*`) are workflow-local correlation
   identifiers only; they do not select repository commands. For each executable requirement, pass its

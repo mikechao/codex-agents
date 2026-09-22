@@ -2582,6 +2582,61 @@ test("reviewer uses direct git grep and does not broaden shell permissions", () 
   assert.match(content, /^  - action: shell\n    resource: "git grep \*"\n    effect: allow$/m);
 });
 
+test("reviewer keeps every Git observation separate and recovers from denial", () => {
+  const contract = readFileSync(resolve(agentsDir, "contracts/code_reviewer.md"), "utf8");
+  const generated = opencode("code_reviewer.md");
+  for (const definition of [contract, generated]) {
+    const normalized = definition.replace(/\s+/gu, " ");
+    assert.match(
+      normalized,
+      /OpenCode inspection keeps shell deny-by-default.*every Git observation as its own bounded authorized call.*initial working-tree state and diff observations.*per-path state or content inspection using an exact-path read or an existing authorized Git operation.*post-denial recovery observations/u,
+      "Reviewer must issue separate bounded Git observations for each inspection phase",
+    );
+    assert.match(
+      normalized,
+      /Do not compose these observations with `&&`, `;`, `\|\|`, pipelines, `printf`, shell loops, `sh -c`, other formatting, control, or fallback helpers, or unrelated shell probes/u,
+      "Reviewer must prohibit compound Git observations and unrelated helpers",
+    );
+    assert.match(
+      normalized,
+      /After a shell request is denied.*known authorized inspection operations rather than probing shell availability or broadening permissions or command usage/u,
+      "Reviewer must recover from denial without probing or permission broadening",
+    );
+  }
+
+  for (const command of [
+    "git status --short",
+    "git diff --name-status",
+    "git diff -- .codex/agents/contracts/code_reviewer.md",
+    "git rev-parse HEAD",
+  ]) {
+    assert.equal(opencodeBashPermission(generated, command), "allow");
+  }
+  const frontmatter = generated.slice(0, generated.indexOf("\n---\n", 4) + 5);
+  for (const command of [
+    "git diff --name-status && printf '\\n'",
+    "git status --short; git diff",
+    "git diff | sed -n '1,20p'",
+    "git status --short || true",
+  ]) {
+    assert.ok(
+      !frontmatter.includes(`resource: "${command}`),
+      `Reviewer must not add a compound shell permission for ${command}`,
+    );
+  }
+  for (const command of ["sh -c 'git diff'", "pwd"]) {
+    assert.notEqual(
+      opencodeBashPermission(generated, command),
+      "allow",
+      `Reviewer must not authorize compound or unrelated observation ${command}`,
+    );
+  }
+  assertOpenCodePermission(generated, "shell", "\\*", "deny");
+  for (const helper of ["printf", "pwd", "true", "sh -c"]) {
+    assert.ok(!generated.includes(`resource: "${helper}`), `Reviewer must not allow ${helper}`);
+  }
+});
+
 test("orchestrator permits only individual bounded preflight Git calls", () => {
   const content = opencode("orchestrator.md");
   const normalized = content.replace(/\s+/gu, " ");
