@@ -139,10 +139,20 @@ test("the TUI plugin registers its command in the app render scope and cleans up
   assert.deepEqual(command.slash, { name: "agent-models" });
   command.run();
   assert.equal(alert?.title, "OpenCode agent model defaults (read-only)");
-  assert.equal(alert?.message.split("\n").length, 6);
-  assert.match(alert?.message ?? "", /orchestrator: model: inherits OpenCode\/session default/);
-  assert.match(alert?.message ?? "", /reasoning: inherits OpenCode\/session default/);
-  assert.match(alert?.message ?? "", /planner: model: openai\/gpt-5\.6-luna; reasoning: high/);
+  const message = alert?.message ?? "";
+  assert.equal(message.split("\n").length, 9);
+  assert.match(message, /Agent\s+Model\s+Reasoning/);
+  assert.deepEqual(
+    message
+      .split("\n")
+      .slice(1, 7)
+      .map((line) => line.trimStart().split(/\s{2,}/u)[0]),
+    ["Orchestrator", "Planner", "Explorer", "Implementer", "Code Reviewer", "Committer"],
+  );
+  assert.match(message, /Orchestrator\s+Session default\s+Session default/);
+  assert.match(message, /Planner\s+openai\/gpt-5\.6-luna\s+high/);
+  assert.match(message, /Read-only · values loaded when \/agent-models is opened/);
+  assert.doesNotMatch(message, /inherits OpenCode\/session default/);
   assert.equal(typeof cleanup, "function");
   if (typeof cleanup === "function") await cleanup();
   assert.equal(slots.size, 0);
@@ -166,6 +176,8 @@ test("the TUI plugin registers its command in the app render scope and cleans up
 test("model-default formatting remains a pure six-row presentation", () => {
   const rows = projectOpenCodeModelDefaults(parseModelPolicy(fixture));
   const output = formatOpenCodeModelDefaults(rows);
-  assert.equal(output.split("\n").length, 6);
-  assert.match(output, /code_reviewer: model: openai\/sol; reasoning: high/);
+  assert.equal(output.split("\n").length, 9);
+  assert.match(output, /Code Reviewer\s+openai\/sol\s+high/);
+  assert.match(output, /Orchestrator\s+Session default\s+Session default/);
+  assert.doesNotMatch(output, /inherits OpenCode\/session default/);
 });
