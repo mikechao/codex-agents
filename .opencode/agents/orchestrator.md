@@ -311,7 +311,13 @@ For the repair authorization invocation specifically, the fresh post-approval de
 executable binding algorithm, not merely a proposal display. Select the exact advertised repair
 invocation, require every `server_derived` required input to expose its exact invocation-relative
 `source_path`, and resolve that path against the fresh invocation's `repair_binding`. Copy each
-resolved value verbatim to the input's declared destination path. Merge only the invocation's
+resolved value verbatim to the input's declared destination path. A declared `server_derived`
+source is structurally complete when it resolves to a present value of the expected shape in the
+fresh invocation's `repair_binding`; server-produced bounded strings are authoritative as supplied,
+including a value ending in `…`, and must be copied byte-for-byte. Do not use punctuation, an
+ellipsis, string length, apparent natural-language truncation, comparison with reviewer prose, or
+character counting as a completeness test, and do not ask the user for extra clarification about a
+present server-derived value. Merge only the invocation's
 `fixed_arguments`, and place only the fresh affirmative user authorization at the declared
 `authorization.representation.path` (`repair_directive.user_authorization`). Do not normalize or
 recompute the proposal, regenerate or truncate any value, read `workflow_parent_get` for payload
