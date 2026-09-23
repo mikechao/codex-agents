@@ -968,6 +968,12 @@ test("orchestrator presents semantic proposals and consumes descriptor inputs", 
     assert.match(contract, /ambiguous.*fail(?:s)? closed/u);
     assert.match(contract, /After (?:(?:any )?required )?affirmative input.*(?:refetch|re-read)/u);
     assert.match(contract, /durable proposal state/u);
+    assert.match(
+      contract,
+      /current blocking finding details.*finding ID.*severity.*visible file\/location.*retained bounded summary.*failure scenario.*impact.*remediation/u,
+    );
+    assert.match(contract, /linked_followup_binding.*bucket entries.*server-derived finding IDs/u);
+    assert.match(contract, /worker transcripts.*raw reports.*pasted prose/u);
     assert.match(contract, /parent_context/u);
     assert.match(
       contract,
@@ -1143,7 +1149,15 @@ test("descriptor version 5 is the only executable descriptor", () => {
       selection_rule: "nonempty_subset_from_one_bucket",
       blocking_findings: [],
       optional_findings: [
-        { finding_id: "F-1", severity: "P2", summary: "A current optional concern." },
+        {
+          finding_id: "F-1",
+          severity: "P2",
+          file_and_line: "src/current.ts:10",
+          summary: "A current optional concern.",
+          failure_scenario: "The current scenario fails.",
+          impact: "A current optional concern.",
+          remediation: "Address the current concern.",
+        },
       ],
     },
     plan_binding: {
@@ -1372,8 +1386,16 @@ test("descriptor version 5 is the only executable descriptor", () => {
           typeof finding.finding_id === "string" &&
           finding.finding_id.length > 0 &&
           typeof finding.severity === "string" &&
+          typeof finding.file_and_line === "string" &&
+          finding.file_and_line.length > 0 &&
           typeof finding.summary === "string" &&
-          finding.summary.length > 0,
+          finding.summary.length > 0 &&
+          typeof finding.failure_scenario === "string" &&
+          finding.failure_scenario.length > 0 &&
+          typeof finding.impact === "string" &&
+          finding.impact.length > 0 &&
+          typeof finding.remediation === "string" &&
+          finding.remediation.length > 0,
       );
     if (
       !isRecord(value) ||

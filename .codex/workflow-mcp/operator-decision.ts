@@ -1,5 +1,6 @@
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { descriptorForLegality } from "./operator-action-descriptor.js";
+import { projectOperatorFinding } from "./operator-finding.js";
 import { repairProposalForFindings, repairProposalSelection } from "./repair-proposal.js";
 import {
   allRequiredValidationsPassed,
@@ -10,18 +11,15 @@ import {
   workflowLegality,
 } from "./transitions/queries.js";
 import type {
-  BlockingFinding,
   FindingId,
   OperatorDecision,
   OperatorPlanBinding,
-  OptionalFinding,
   WorkflowAction,
   WorkflowId,
   WorkflowState,
 } from "./types.js";
 import { recoveryForAction } from "./workflow-action-registry.js";
 
-const MAX_SUMMARY = 240;
 const MAX_OPTIONAL_FINDINGS = 200;
 
 export interface OperatorLineageRecord {
@@ -30,7 +28,7 @@ export interface OperatorLineageRecord {
   legality?: WorkflowLegality;
 }
 
-function bounded(value: string, limit = MAX_SUMMARY): string {
+function bounded(value: string, limit = 240): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
 }
@@ -73,10 +71,6 @@ function stateStatus(record: OperatorLineageRecord): OperatorDecision["outcome"]
   }
 }
 
-function blockerSummary(finding: BlockingFinding | OptionalFinding): string {
-  return bounded(finding.impact || finding.remediation || finding.violated_requirement);
-}
-
 function repairDecision(
   state: WorkflowState,
   selectedFindingIds?: ReadonlyArray<FindingId>,
@@ -91,10 +85,7 @@ function repairDecision(
   return {
     kind: "approve_exact_repairs",
     blocker_count: selection.selected_findings.length,
-    blockers: selection.selected_findings.map((finding) => ({
-      severity: finding.severity,
-      summary: blockerSummary(finding),
-    })),
+    blockers: selection.selected_findings.map(projectOperatorFinding),
     proposal: repairProposalForFindings(selection.selected_findings),
     authorization_required: true,
   };
@@ -113,8 +104,7 @@ function recoveryDecision(action: WorkflowAction): OperatorDecision["primary"] {
 
 function optionalFindingSummaries(state: WorkflowState): OperatorDecision["optional_findings"] {
   return state.optional_findings.slice(0, MAX_OPTIONAL_FINDINGS).map((finding) => ({
-    severity: finding.severity,
-    summary: blockerSummary(finding),
+    ...projectOperatorFinding(finding),
   }));
 }
 
@@ -143,8 +133,9 @@ function recoverySummary(
 function semanticFields(
   state: WorkflowState,
   primary: OperatorDecision["primary"],
-): Pick<OperatorDecision, "optional_findings" | "recovery_summary"> {
+): Pick<OperatorDecision, "current_blockers" | "optional_findings" | "recovery_summary"> {
   return {
+    current_blockers: effectiveBlockingFindings(state).map(projectOperatorFinding),
     optional_findings: optionalFindingSummaries(state),
     recovery_summary: recoverySummary(state, primary),
   };

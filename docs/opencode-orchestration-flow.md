@@ -158,6 +158,16 @@ current before invoking the advertised mutation. Do not ask for internal action/
 payloads. Contextual `yes`, `continue`, `go ahead`, and `commit it` are valid when unambiguous;
 ordinary equivalent wording is also valid.
 
+Before requesting repair authorization, present the selected repair subset from the fresh projection's
+`primary.blockers`, not all current blockers. Before adjudication authorization, present every finding
+in its authoritative `current_blockers` projection: the current blocking finding details corresponding
+to the adjudication set. Include finding ID, severity, visible file/location, retained bounded summary,
+and bounded failure scenario, impact, and remediation. Before linked-follow-up authorization, use only
+the selected blocking or optional `linked_followup_binding` bucket entries for displayed detail and
+their exact server-derived finding IDs, with the same structured fields. This is semantic explanation
+rather than execution authority; the fresh execution descriptor supplies the exact binding and
+operation. Never recover missing detail from worker transcripts, raw reports, or pasted prose.
+
 If an advertised descriptor input has source `parent_context`, use `workflow_parent_get` and its exact
 `source_path` to obtain the current value from the authoritative parent view. A `user_authored` input is a
 bounded model/user-authored semantic value, including recovery context; it is not synthesized from
@@ -316,7 +326,7 @@ terminal worker handoff before deciding what happens next.
 
 The refresh is descriptor-first. After every terminal implementation handoff—including an authorized
 repair completion—Orchestrator calls `workflow_operator_decision_get` before summarizing or routing.
-The returned execution descriptor, not the semantic decision or retained blocker summary, determines
+The returned execution descriptor, not the semantic decision or retained finding details, determines
 whether the next step is dispatch, parent mutation, evidence collection, wait, or terminal reporting.
 Retained blockers are history/remediation context only and do not independently create a repair
 prompt. Full parent reads remain an exact-mutation-input or explicit debug/status escape hatch.

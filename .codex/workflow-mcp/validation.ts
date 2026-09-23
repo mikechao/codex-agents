@@ -1024,6 +1024,12 @@ export function resolutionMap(
   ) as FindingResolutionMap;
 }
 
+function requiredFindingText(value: unknown, name: string, max: number): string {
+  const text = boundedString(value, name, max);
+  if (text.trim().length === 0) fail("ERROR_INVALID_FINDING", `${name} is invalid`);
+  return text;
+}
+
 export function finding(value: unknown, index: number, expectedBlocking: true): BlockingFinding;
 export function finding(value: unknown, index: number, expectedBlocking: false): OptionalFinding;
 export function finding(value: unknown, index: number, expectedBlocking?: boolean): ReviewFinding {
@@ -1039,19 +1045,19 @@ export function finding(value: unknown, index: number, expectedBlocking?: boolea
     fail("ERROR_INVALID_FINDING", `finding ${index} has unknown fields`);
   }
   const result = {
-    finding_id: boundedString(record.finding_id, "finding_id", 80) as FindingId,
+    finding_id: requiredFindingText(record.finding_id, "finding_id", 80) as FindingId,
     severity: record.severity as FindingSeverity,
     blocking: record.blocking as boolean,
-    file_and_line: boundedString(record.file_and_line, "file_and_line", 300),
-    failure_scenario: boundedString(record.failure_scenario, "failure_scenario", MAX_DETAIL),
-    impact: boundedString(record.impact, "impact", MAX_DETAIL),
-    violated_requirement: boundedString(
+    file_and_line: requiredFindingText(record.file_and_line, "file_and_line", 300),
+    failure_scenario: requiredFindingText(record.failure_scenario, "failure_scenario", MAX_DETAIL),
+    impact: requiredFindingText(record.impact, "impact", MAX_DETAIL),
+    violated_requirement: requiredFindingText(
       record.violated_requirement,
       "violated_requirement",
       MAX_DETAIL,
     ),
-    remediation: boundedString(record.remediation, "remediation", MAX_DETAIL),
-    missing_or_inadequate_test: boundedString(
+    remediation: requiredFindingText(record.remediation, "remediation", MAX_DETAIL),
+    missing_or_inadequate_test: requiredFindingText(
       record.missing_or_inadequate_test,
       "missing_or_inadequate_test",
       MAX_DETAIL,

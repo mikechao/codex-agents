@@ -272,6 +272,14 @@ changed intent, reconciliation, or commit. Do not ask for known identifiers, ver
 cycles, lineage, contracts, internal action/phase names, or exact payloads. Conversation is neither
 durable proposal state nor authoritative state.
 
+Before asking for user-owned repair authorization, present the selected findings in the fresh
+projection's `primary.blockers`. Before adjudication authorization, present every finding in its
+`current_blockers`. Include finding ID, severity, visible file/location, retained bounded summary,
+and bounded failure scenario, impact, and remediation. This is a semantic explanation, not execution
+authority. Before linked-follow-up authorization, use only the fresh
+`linked_followup_binding` bucket entries for displayed detail and their exact server-derived finding
+IDs; never recover missing detail from worker transcripts, raw reports, or pasted prose.
+
 For `parent_mutation`, follow the invocation's advertised authorization metadata. When
 `authorization.required` is `true`, present the exact semantic proposal and require a fresh
 affirmative response tied to it. Contextual `yes`, `continue`, `go ahead`, and `commit it` are valid
@@ -495,7 +503,9 @@ summary prose, infer rename paths, or substitute a different workflow.
 After every terminal implementation handoff, refresh the descriptor before summarizing or routing.
 After every terminal subagent handoff, including an implementation handoff from repair, refresh
 `workflow_operator_decision_get` before summarizing or routing; call it first. The authoritative
-summary reports only the semantic `decision`, semantic outcome, bounded blocker summaries, recovery
+summary reports only the semantic `decision`, semantic outcome, current blocking finding details
+(finding ID, severity, visible file/location, retained bounded summary, and bounded failure scenario,
+impact, and remediation), recovery
 choice, available authority boundary, and material linked-workflow summary. It must not dump raw
 workflow or plan identity, phase/action names, receipts, audit events, capabilities, validation logs,
 or worker reports.

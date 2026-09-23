@@ -239,11 +239,18 @@ export interface OperatorAdjudicationBinding {
   user_input_paths: string[][];
 }
 
-export interface OperatorLinkedFollowupFinding {
+export interface OperatorFinding {
   finding_id: FindingId;
   severity: FindingSeverity;
+  file_and_line: string;
   summary: string;
+  failure_scenario: string;
+  impact: string;
+  remediation: string;
 }
+
+export type OperatorBlocker = OperatorFinding;
+export type OperatorLinkedFollowupFinding = OperatorFinding;
 
 export interface OperatorLinkedFollowupBinding {
   /** Select a non-empty subset from exactly one of these authoritative buckets. */
@@ -321,11 +328,6 @@ export interface OperatorExecutionDescriptor {
   parent_actions: OperatorParentActionDescriptor[];
 }
 
-export interface OperatorBlocker {
-  severity: FindingSeverity;
-  summary: string;
-}
-
 export interface OperatorRepairProposal {
   required_outcome: string;
   strategy_constraints: string;
@@ -337,8 +339,6 @@ export interface OperatorRepairProposal {
 export type ParentMutationResult = ParentView & {
   committed_execution: OperatorExecutionDescriptor;
 };
-
-export type OperatorFinding = OperatorBlocker;
 
 export interface OperatorRecoverySummary {
   choice: OperatorRecovery | null;
@@ -395,6 +395,7 @@ export interface OperatorAuthorityBoundary {
 export interface OperatorDecision {
   primary: OperatorPrimaryDecision;
   execution: OperatorExecutionDescriptor;
+  current_blockers: OperatorBlocker[];
   optional_findings: OperatorFinding[];
   recovery_summary: OperatorRecoverySummary;
   authority_boundaries: {

@@ -9,6 +9,7 @@ import {
   descriptorForLegality,
 } from "../operator-action-descriptor.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
+import { projectOperatorFinding } from "../operator-finding.js";
 import { WorkflowStore } from "../store.js";
 import type { WorkflowLegality } from "../transitions/queries.js";
 import {
@@ -18,7 +19,7 @@ import {
   workflowLegality,
 } from "../transitions.js";
 import type { FindingId, WorkflowAction, WorkflowId, WorkflowState } from "../types.js";
-import { MAX_PATHS, objectDigest } from "../validation.js";
+import { MAX_PATHS, objectDigest, finding as validateFinding } from "../validation.js";
 import { WORKFLOW_ACTION_VALUES } from "../values.js";
 import { fixture } from "./test-fixtures.js";
 import { workflowState } from "./workflow-state-fixtures.js";
@@ -626,6 +627,32 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       finding("REPAIR-A"),
       { ...finding("REPAIR-B"), remediation: "repair the second finding" },
     ];
+    const decision = deriveOperatorDecision(state, [{ state }]);
+    assert.equal(decision.primary.kind, "approve_exact_repairs");
+    if (decision.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected multiple exact repairs");
+    assert.deepEqual(
+      decision.primary.blockers.map(({ finding_id, severity, file_and_line, summary }) => ({
+        finding_id,
+        severity,
+        file_and_line,
+        summary,
+      })),
+      [
+        {
+          finding_id: "REPAIR-A",
+          severity: "P1",
+          file_and_line: "operator-decision.ts:1",
+          summary: "the operator needs a deterministic bounded decision",
+        },
+        {
+          finding_id: "REPAIR-B",
+          severity: "P1",
+          file_and_line: "operator-decision.ts:1",
+          summary: "the operator needs a deterministic bounded decision",
+        },
+      ],
+    );
     const legality: WorkflowLegality = {
       actions: {
         parent: ["workflow_adjudicate_findings", "workflow_authorize_repair"],
@@ -659,6 +686,52 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       },
     });
     const subset = descriptorForLegality(state, legality, ["REPAIR-B"] as FindingId[]);
+    const subsetDecision = deriveOperatorDecision(
+      state,
+      [{ state, legality }],
+      ["REPAIR-B" as FindingId],
+    );
+    assert.equal(subsetDecision.primary.kind, "approve_exact_repairs");
+    if (subsetDecision.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected selected repair subset");
+    assert.deepEqual(
+      subsetDecision.primary.blockers.map((blocker) => blocker.finding_id),
+      ["REPAIR-B"],
+    );
+    assert.deepEqual(
+      subsetDecision.current_blockers.map(
+        ({ finding_id, severity, file_and_line, remediation }) => ({
+          finding_id,
+          severity,
+          file_and_line,
+          remediation,
+        }),
+      ),
+      [
+        {
+          finding_id: "REPAIR-A",
+          severity: "P1",
+          file_and_line: "operator-decision.ts:1",
+          remediation: "use the available semantic route",
+        },
+        {
+          finding_id: "REPAIR-B",
+          severity: "P1",
+          file_and_line: "operator-decision.ts:1",
+          remediation: "repair the second finding",
+        },
+      ],
+    );
+    const subsetAdjudication = subsetDecision.execution.parent_actions.find(
+      (action) => action.action === "workflow_adjudicate_findings",
+    );
+    assert.ok(subsetAdjudication && subsetAdjudication.status === "executable");
+    if (subsetAdjudication?.status !== "executable")
+      throw new Error("expected an executable adjudication descriptor");
+    assert.deepEqual(
+      subsetAdjudication.descriptor.invocations[0]?.adjudication_binding?.finding_ids,
+      subsetDecision.current_blockers.map((blocker) => blocker.finding_id),
+    );
     assert.equal(subset.primary.mode, "parent_mutation");
     if (subset.primary.mode !== "parent_mutation") throw new Error("expected subset mutation");
     assert.deepEqual((subset.primary as any).repair_binding, {
@@ -877,7 +950,11 @@ test("descriptor exposes secondary legal parent actions without changing primary
         {
           finding_id: "BLOCKER-SECONDARY",
           severity: "P1",
+          file_and_line: "operator-decision.ts:1",
           summary: "the operator needs a deterministic bounded decision",
+          failure_scenario: "the bounded projection does not route the state correctly",
+          impact: "the operator needs a deterministic bounded decision",
+          remediation: "use the available semantic route",
         },
       ],
       optional_findings: [],
@@ -1265,6 +1342,92 @@ function finding(id: string, severity: "P1" | "P3" = "P1") {
     missing_or_inadequate_test: "a focused projection test",
   };
 }
+
+function issue181Finding() {
+  return {
+    finding_id: "F-181",
+    severity: "P2" as const,
+    blocking: true,
+    file_and_line: "runtime-supervisor.test.ts:346-359",
+    failure_scenario:
+      "A runtime supervisor test can observe a stale child while the live runtime is still available.",
+    impact:
+      "The supervisor may route a valid workflow through historical recovery and lose the current runtime owner.",
+    violated_requirement:
+      "Runtime supervision must select the exact live child before resolving historical state.",
+    remediation:
+      "Stabilize the live-child selection test and preserve the current-runtime route when the child is valid.",
+    missing_or_inadequate_test:
+      "Add a regression assertion covering a valid live child alongside a historical workflow record.",
+  };
+}
+
+test("finding validation rejects whitespace-only required text and preserves submitted bytes", () => {
+  const source = finding("VALID");
+  for (const field of [
+    "finding_id",
+    "file_and_line",
+    "failure_scenario",
+    "impact",
+    "violated_requirement",
+    "remediation",
+    "missing_or_inadequate_test",
+  ] as const) {
+    assert.throws(() => validateFinding({ ...source, [field]: " \t\n " }, 0, true), {
+      category: "ERROR_INVALID_FINDING",
+    });
+  }
+  const fileAndLine = "  src/file.ts:1 \t";
+  const impact = "  spaced  text \n";
+  const validated = validateFinding({ ...source, file_and_line: fileAndLine, impact }, 0, true);
+  assert.equal(validated.file_and_line, fileAndLine);
+  assert.equal(validated.impact, impact);
+  assert.equal(projectOperatorFinding(validated).file_and_line, fileAndLine);
+});
+
+test("operator finding projection preserves structured reviewer detail and bounds prose", () => {
+  const { root, git } = fixture();
+  const store = new WorkflowStore({
+    repositoryRoot: root,
+    databasePath: join(root, "operator-finding-projection.sqlite"),
+  });
+  try {
+    const created = create(store, git);
+    const repair = structuredClone(created) as any;
+    repair.phase = "REPAIR_REQUIRED";
+    repair.review_result_version = 1;
+    const source = issue181Finding();
+    const longText = "  stale   live-child   observation  ".repeat(40);
+    const expectedBounded = `${longText.replace(/\s+/gu, " ").trim().slice(0, 239)}…`;
+    repair.blocking_findings = [
+      {
+        ...source,
+        failure_scenario: longText,
+        impact: longText,
+        remediation: longText,
+      },
+    ];
+
+    const decision = deriveOperatorDecision(repair, [{ state: repair }]);
+    assert.equal(decision.primary.kind, "approve_exact_repairs");
+    if (decision.primary.kind !== "approve_exact_repairs")
+      throw new Error("expected an exact repair decision");
+    assert.deepEqual(decision.primary.blockers[0], {
+      finding_id: "F-181",
+      severity: "P2",
+      file_and_line: "runtime-supervisor.test.ts:346-359",
+      summary: expectedBounded,
+      failure_scenario: expectedBounded,
+      impact: expectedBounded,
+      remediation: expectedBounded,
+    });
+    assert.equal("violated_requirement" in decision.primary.blockers[0]!, false);
+    assert.equal("missing_or_inadequate_test" in decision.primary.blockers[0]!, false);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("operator projection routes implementation and is read-only and sanitized", () => {
   const { root, git } = fixture();
@@ -2062,6 +2225,27 @@ test("operator projection finalizes rather than authorizes repair at the cycle l
       reason: "the bounded linked continuation is supported",
       authorization_required: true,
     });
+    const linkedDescriptor = continuation.execution.parent_actions.find(
+      (action) => action.action === "workflow_create_linked_followup",
+    );
+    assert.ok(linkedDescriptor && linkedDescriptor.status === "executable");
+    if (linkedDescriptor?.status !== "executable")
+      throw new Error("expected an executable linked follow-up descriptor");
+    assert.deepEqual(linkedDescriptor.descriptor.invocations[0]?.linked_followup_binding, {
+      selection_rule: "nonempty_subset_from_one_bucket",
+      blocking_findings: [
+        {
+          finding_id: "BLOCKER-CONTINUATION",
+          severity: "P1",
+          file_and_line: "operator-decision.ts:1",
+          summary: "the operator needs a deterministic bounded decision",
+          failure_scenario: "the bounded projection does not route the state correctly",
+          impact: "the operator needs a deterministic bounded decision",
+          remediation: "use the available semantic route",
+        },
+      ],
+      optional_findings: [],
+    });
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -2089,8 +2273,26 @@ test("operator projection includes sanitized optional findings and recovery summ
     ]);
     assert.equal(approvalDecision.optional_findings.length, 1);
     assert.equal(approvalDecision.optional_findings[0].severity, "P3");
+    assert.equal(approvalDecision.optional_findings[0].finding_id, "OPTIONAL-1");
+    assert.equal(approvalDecision.optional_findings[0].file_and_line, "operator-decision.ts:1");
     assert.ok(approvalDecision.optional_findings[0].summary.length <= 240);
-    assert.equal(JSON.stringify(approvalDecision).includes("OPTIONAL-1"), false);
+    assert.ok(approvalDecision.optional_findings[0].failure_scenario.length <= 240);
+    assert.ok(approvalDecision.optional_findings[0].impact.length <= 240);
+    assert.ok(approvalDecision.optional_findings[0].remediation.length <= 240);
+    assert.equal("violated_requirement" in approvalDecision.optional_findings[0], false);
+    assert.equal("missing_or_inadequate_test" in approvalDecision.optional_findings[0], false);
+
+    const capped = structuredClone(approved) as any;
+    const optionalIds = Array.from({ length: 205 }, (_, index) => `OPTIONAL-${205 - index}`);
+    capped.optional_findings = optionalIds.map((id) => finding(id, "P3"));
+    const cappedDecision = deriveOperatorDecision(capped, [{ state: capped }]);
+    assert.equal(cappedDecision.optional_findings.length, 200);
+    assert.deepEqual(
+      cappedDecision.optional_findings.map(({ finding_id }) => finding_id),
+      optionalIds.slice(0, 200),
+    );
+    assert.equal(cappedDecision.optional_findings[0].finding_id, "OPTIONAL-205");
+    assert.equal(cappedDecision.optional_findings.at(-1)?.finding_id, "OPTIONAL-6");
 
     const stopped = structuredClone(created) as any;
     stopped.phase = "STOPPED_INCONCLUSIVE";

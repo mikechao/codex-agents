@@ -1854,7 +1854,11 @@ test("plan-native linked follow-up binds only the exact current approved child a
         {
           finding_id: optional.finding_id,
           severity: optional.severity,
+          file_and_line: optional.file_and_line,
           summary: optional.impact,
+          failure_scenario: optional.failure_scenario,
+          impact: optional.impact,
+          remediation: optional.remediation,
         },
       ],
     });

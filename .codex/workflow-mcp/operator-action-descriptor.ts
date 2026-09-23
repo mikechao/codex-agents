@@ -1,3 +1,4 @@
+import { projectOperatorFinding } from "./operator-finding.js";
 import { repairProposalForFindings, repairProposalSelection } from "./repair-proposal.js";
 import {
   effectiveBlockingFindings,
@@ -51,17 +52,6 @@ const input = (
   ...(sourcePath ? { source_path: sourcePath } : {}),
   required: true,
 });
-
-function linkedFindingSummary(finding: {
-  impact: string;
-  remediation: string;
-  violated_requirement: string;
-}): string {
-  const summary = (finding.impact || finding.remediation || finding.violated_requirement)
-    .replace(/\s+/gu, " ")
-    .trim();
-  return summary.length <= 240 ? summary : `${summary.slice(0, 239)}…`;
-}
 
 export { ACTION_DESCRIPTOR_METADATA } from "./workflow-action-registry.js";
 
@@ -259,16 +249,8 @@ function invocation(
     action === "workflow_create_linked_followup_from_plan"
       ? {
           selection_rule: "nonempty_subset_from_one_bucket",
-          blocking_findings: effectiveBlockingFindings(state).map((finding) => ({
-            finding_id: finding.finding_id,
-            severity: finding.severity,
-            summary: linkedFindingSummary(finding),
-          })),
-          optional_findings: state.optional_findings.map((finding) => ({
-            finding_id: finding.finding_id,
-            severity: finding.severity,
-            summary: linkedFindingSummary(finding),
-          })),
+          blocking_findings: effectiveBlockingFindings(state).map(projectOperatorFinding),
+          optional_findings: state.optional_findings.map(projectOperatorFinding),
         }
       : null;
   const descriptor: OperatorMutationInvocation = {
