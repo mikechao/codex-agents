@@ -130,6 +130,15 @@ to select the built-in Plan mediator or Build for deliberate ordinary direct cod
 non-trivial plan, Plan delegates to generated `planner`, retrieves and renders the exact authoritative
 `full_plan` verbatim, and explicitly approves only after user confirmation; it never creates a
 workflow. Then switch to Orchestrator and say `implement the approved plan` (or equivalent).
+
+Use `/agent-models`, or choose **Show agent model defaults** from the command palette, to open a
+read-only six-row view sourced from `.codex/agents/model-policy.yaml`. It shows the project-owned
+`orchestrator`, `implementer`, `code_reviewer`, `committer`, `planner`, and `explorer` defaults;
+`orchestrator` explicitly inherits the OpenCode/session default, while the host-owned built-in Plan
+agent is excluded. The action only displays information: it does not switch or persist model,
+reasoning, provider, agent, or session state, and it is self-host-only rather than installed into
+downstream repositories.
+
 Orchestrator may consume the one exact identity from the immediately preceding approved Native Plan
 handoff without asking the user to repeat its `plan_id` and revision; it still performs bounded
 read-only preflight and parent-verifies the current approved plan,

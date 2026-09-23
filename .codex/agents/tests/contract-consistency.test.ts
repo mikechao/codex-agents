@@ -10,12 +10,10 @@ import { PARENT_WORKFLOW_ACTION_VALUES } from "../../workflow-mcp/workflow-actio
 import {
   CODEX_WORKFLOW_MCP_ENABLED_TOOLS,
   generateDefinitions,
-  loadModelPolicy,
   OPENCODE_TERMINAL_SECTION_HEADING,
-  parseModelPolicy,
-  resolveModelPolicy,
   SELF_HOST_CODEX_WORKFLOW_MCP,
 } from "../generate-host-definitions.js";
+import { loadModelPolicy, parseModelPolicy, resolveModelPolicy } from "../model-policy.js";
 
 const agentsDir = resolve(import.meta.dir, "..");
 
