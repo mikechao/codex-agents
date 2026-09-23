@@ -1163,6 +1163,7 @@ export interface ReviewerViewBase extends RoleViewCommon {
   validation_results: ValidationResultView[];
   dirty_baseline_paths: ExactRepoPath[];
   linked_findings: ReviewFinding[];
+  required_prior_finding_ids: FindingId[];
   blocking_findings: BlockingFinding[];
   optional_findings: OptionalFinding[];
   prior_finding_classifications: FindingResolutionMap;

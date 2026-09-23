@@ -5,6 +5,7 @@ import type {
   BlockingFinding,
   CommitterView,
   ExactRepoPath,
+  FindingId,
   GitCommitSha,
   ImplementerHandoffView,
   ImplementerView,
@@ -176,6 +177,11 @@ export const ROLE_VIEW_EXTRA = {
   readonly (keyof WorkflowState)[]
 >;
 
+/** Reviewer-only fields derived from current state rather than copied from WorkflowState. */
+export const ROLE_VIEW_DERIVED = {
+  reviewer: ["required_prior_finding_ids"],
+} as const satisfies Record<"reviewer", readonly (keyof ReviewerViewBase)[]>;
+
 type InternalReceiptField =
   | "initial_receipt"
   | "review_start_receipt"
@@ -205,13 +211,18 @@ type ImplementerExtraKeys = Exclude<keyof ImplementerView, keyof RoleViewCommon>
 type ReviewerExtraKeys =
   | Exclude<keyof ReviewerViewBase, keyof RoleViewCommon>
   | keyof ImplementerHandoffView;
+type ReviewerDerivedKeys = (typeof ROLE_VIEW_DERIVED.reviewer)[number];
+type ReviewerPersistedExtraKeys = Exclude<ReviewerExtraKeys, ReviewerDerivedKeys>;
 type CommitterExtraKeys = Exclude<keyof CommitterView, keyof RoleViewCommon>;
 
 type _ImplementerRegistryIsExact = AssertTrue<
   ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.implementer>, ImplementerExtraKeys>
 >;
 type _ReviewerRegistryIsExact = AssertTrue<
-  ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.reviewer>, ReviewerExtraKeys>
+  ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.reviewer>, ReviewerPersistedExtraKeys>
+>;
+type _ReviewerDerivedRegistryIsExact = AssertTrue<
+  ExactKeySet<(typeof ROLE_VIEW_DERIVED.reviewer)[number], ReviewerDerivedKeys>
 >;
 type _CommitterRegistryIsExact = AssertTrue<
   ExactKeySet<VisibleRegistryKeys<typeof ROLE_VIEW_EXTRA.committer>, CommitterExtraKeys>
@@ -228,6 +239,9 @@ type _ImplementerRegistryHasNoDuplicates = AssertTrue<
 type _ReviewerRegistryHasNoDuplicates = AssertTrue<
   NoDuplicateKeys<typeof ROLE_VIEW_EXTRA.reviewer>
 >;
+type _ReviewerDerivedRegistryHasNoDuplicates = AssertTrue<
+  NoDuplicateKeys<typeof ROLE_VIEW_DERIVED.reviewer>
+>;
 type _CommitterRegistryHasNoDuplicates = AssertTrue<
   NoDuplicateKeys<typeof ROLE_VIEW_EXTRA.committer>
 >;
@@ -237,13 +251,15 @@ type _HandoffRegistryHasNoDuplicates = AssertTrue<
 const ROLE_VIEW_REGISTRIES_ARE_EXACT: [
   _ImplementerRegistryIsExact,
   _ReviewerRegistryIsExact,
+  _ReviewerDerivedRegistryIsExact,
   _CommitterRegistryIsExact,
   _HandoffRegistryIsExact,
   _ImplementerRegistryHasNoDuplicates,
   _ReviewerRegistryHasNoDuplicates,
+  _ReviewerDerivedRegistryHasNoDuplicates,
   _CommitterRegistryHasNoDuplicates,
   _HandoffRegistryHasNoDuplicates,
-] = [true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true];
 void ROLE_VIEW_REGISTRIES_ARE_EXACT;
 
 const ACTION_MATRIX: Partial<
@@ -1077,6 +1093,22 @@ export function allRequiredValidationsPassed(state: WorkflowState): boolean {
   });
 }
 
+/**
+ * Derive the exact ordered set of prior finding IDs a reviewer must classify. This is a
+ * projection-only binding and is intentionally not persisted in WorkflowState.
+ */
+export function requiredPriorFindingClassificationIds(state: WorkflowState): FindingId[] {
+  const carriedIds =
+    state.linked_continuation?.review_stage === "remediation"
+      ? state.linked_findings.map((item) => item.finding_id)
+      : [];
+  return [
+    ...carriedIds,
+    ...state.blocking_findings.map((item) => item.finding_id),
+    ...state.optional_findings.map((item) => item.finding_id),
+  ].filter((id, index, ids) => ids.indexOf(id) === index);
+}
+
 export function roleView(
   state: WorkflowState,
   actorRole: "parent",
@@ -1173,6 +1205,9 @@ export function roleView(
       }
       if (key in raw) view[key] = clone(raw[key]);
     }
+  }
+  if (actorRole === "reviewer") {
+    view.required_prior_finding_ids = clone(requiredPriorFindingClassificationIds(state));
   }
   return view as RoleView;
 }

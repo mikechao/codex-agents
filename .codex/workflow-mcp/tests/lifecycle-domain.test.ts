@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { WorkflowError } from "../errors.js";
 import { authoritativeImplementationContract } from "../implementation-contract.js";
 import { repairProposalForFindings } from "../repair-proposal.js";
+import { requiredPriorFindingClassificationIds } from "../transitions/queries.js";
 import { replaceAuthoritativeImplementationContract } from "../transitions/state.js";
 import {
   adjudicateFindings,
@@ -250,6 +251,40 @@ function submitRepairReview(
   );
   return { before: begun, after };
 }
+
+test("reviewer prior-finding binding preserves remediation order and de-duplicates IDs", () => {
+  const state = workflowState({
+    phase: "REVIEWING",
+  });
+  state.blocking_findings = [blockingFinding("BLOCKER")];
+  state.optional_findings = [optionalFinding("OPTIONAL")];
+  state.linked_continuation = {
+    root_workflow_id: state.workflow_id as WorkflowId,
+    predecessor_workflow_id: state.workflow_id as WorkflowId,
+    lineage_workflow_ids: [state.workflow_id as WorkflowId],
+    original_base_head: state.base_head,
+    combined_review_paths: state.approved_paths,
+    review_stage: "remediation",
+    remediation_review_receipt: null,
+  };
+  state.linked_findings = [blockingFinding("CARRIED"), blockingFinding("BLOCKER")];
+
+  assert.deepEqual(requiredPriorFindingClassificationIds(state), [
+    "CARRIED",
+    "BLOCKER",
+    "OPTIONAL",
+  ]);
+  assert.deepEqual(roleView(state, "reviewer").required_prior_finding_ids, [
+    "CARRIED",
+    "BLOCKER",
+    "OPTIONAL",
+  ]);
+  assert.equal("required_prior_finding_ids" in state, false);
+
+  state.linked_continuation.review_stage = "combined";
+  assert.deepEqual(requiredPriorFindingClassificationIds(state), ["BLOCKER", "OPTIONAL"]);
+  assert.deepEqual(roleView(state, "reviewer").required_prior_finding_ids, ["BLOCKER", "OPTIONAL"]);
+});
 
 test("deterministic lifecycle phases expose the complete role action matrix", () => {
   const receipt = syntheticReceipt();

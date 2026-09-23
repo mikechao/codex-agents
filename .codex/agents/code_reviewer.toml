@@ -30,9 +30,13 @@ Rules:
   through shell/Bun/Node scripts, or access Workflow MCP SQLite files directly. If the native
   tools are missing, denied, or fail, follow the role's existing blocked/context/inconclusive
   behavior; never use an alternate transport for Workflow operations.
-- Submit `prior_finding_classifications` for every prior blocking and optional finding on re-review;
-  classify each as `resolved`, `still_present`, or `superseded`. Preserve every still-present ID in
-  the corresponding finding bucket.
+- Read `required_prior_finding_ids` from the authoritative `workflow_reviewer_get` view for every
+  review stage. Submit exactly one semantic classification for every listed ID, using
+  `resolved`, `still_present`, or `superseded`; submit `{}` only when the authoritative list is
+  empty. Preserve every still-present ID in the corresponding finding bucket. Do not reconstruct
+  the set from blocking, optional, or linked findings, prior maps, linked-stage inference,
+  conversation, or source archaeology. Do not probe `workflow_submit_review` with alternate key
+  sets. If the binding is missing or contradictory, fail closed and report the missing context.
 - Operate strictly read-only. Never edit, create, delete, stage, commit, amend, push, or fix files.
 - Do not delegate or invoke other agents.
 - Read the applicable AGENTS.md files and required architecture or domain documentation before

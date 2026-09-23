@@ -10,6 +10,7 @@ import type {
   RawReviewSubmissionMutation,
   RawWorkerMutation,
 } from "../store.js";
+import type { ROLE_VIEW_DERIVED } from "../transitions/queries.js";
 import {
   ensurePhase,
   type REVIEWER_IMPLEMENTER_HANDOFF,
@@ -332,7 +333,17 @@ type _ImplementerExtraKeysAreExhaustive = Expect<
 type _ReviewerExtraKeysAreExhaustive = Expect<
   ExactKeys<
     VisibleKeys<(typeof ROLE_VIEW_EXTRA)["reviewer"]>,
-    Exclude<keyof ReviewerViewBase, keyof RoleViewCommon> | keyof ImplementerHandoffView
+    | Exclude<
+        Exclude<keyof ReviewerViewBase, keyof RoleViewCommon>,
+        (typeof ROLE_VIEW_DERIVED)["reviewer"][number]
+      >
+    | keyof ImplementerHandoffView
+  >
+>;
+type _ReviewerDerivedKeysAreExhaustive = Expect<
+  ExactKeys<
+    (typeof ROLE_VIEW_DERIVED)["reviewer"][number],
+    Extract<Exclude<keyof ReviewerViewBase, keyof RoleViewCommon>, "required_prior_finding_ids">
   >
 >;
 type _CommitterExtraKeysAreExhaustive = Expect<
@@ -348,6 +359,9 @@ type _RoleRegistriesHaveNoDuplicates = Expect<
   NoDuplicates<(typeof ROLE_VIEW_EXTRA)["implementer"]>
 >;
 type _ReviewerRegistryHasNoDuplicates = Expect<NoDuplicates<(typeof ROLE_VIEW_EXTRA)["reviewer"]>>;
+type _ReviewerDerivedRegistryHasNoDuplicates = Expect<
+  NoDuplicates<(typeof ROLE_VIEW_DERIVED)["reviewer"]>
+>;
 type _CommitterRegistryHasNoDuplicates = Expect<
   NoDuplicates<(typeof ROLE_VIEW_EXTRA)["committer"]>
 >;

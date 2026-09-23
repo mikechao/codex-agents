@@ -34,6 +34,7 @@ import {
   hasFailedRequiredValidation,
   pendingInspectionValidations,
   repairCycleReadiness,
+  requiredPriorFindingClassificationIds,
   reviewBlockedByPendingInspection,
   reviewRecoveryStateReady,
   reviewTargetStateReady,
@@ -166,15 +167,7 @@ export function submitReview(
   if (new Set(unionIds).size !== unionIds.length) {
     fail("ERROR_INVALID_FINDING", "finding ID is duplicated across buckets");
   }
-  const carriedIds =
-    state.linked_continuation?.review_stage === "remediation"
-      ? state.linked_findings.map((item) => item.finding_id)
-      : [];
-  const priorIds = [
-    ...carriedIds,
-    ...state.blocking_findings.map((item) => item.finding_id),
-    ...state.optional_findings.map((item) => item.finding_id),
-  ].filter((id, index, ids) => ids.indexOf(id) === index);
+  const priorIds = requiredPriorFindingClassificationIds(state);
   const classifications = resolutionMap(
     args.prior_finding_classifications,
     priorIds,

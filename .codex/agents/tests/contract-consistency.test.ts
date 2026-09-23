@@ -2815,6 +2815,27 @@ test("reviewer contract keeps semantic context separate from ownership and valid
   assert.match(contract, /ambient checkout state/);
 });
 
+test("reviewer contract binds prior classifications to the server-provided list", () => {
+  for (const path of [
+    resolve(import.meta.dir, "../contracts/code_reviewer.md"),
+    resolve(import.meta.dir, "../../../.opencode/agents/code_reviewer.md"),
+    resolve(import.meta.dir, "../code_reviewer.toml"),
+  ]) {
+    const content = readFileSync(path, "utf8").replace(/\s+/gu, " ");
+    for (const phrase of [
+      "required_prior_finding_ids",
+      "exactly one semantic classification for every listed ID",
+      "submit `{}` only when the authoritative list is empty",
+      "Do not reconstruct the set",
+      "source archaeology",
+      "Do not probe `workflow_submit_review` with alternate key sets",
+      "fail closed",
+    ]) {
+      assert.ok(content.includes(phrase), `${path} must include: ${phrase}`);
+    }
+  }
+});
+
 test("committer is read-only with a fail-closed bash allowlist for the commit flow", () => {
   const content = opencode("committer.md");
   assertOpenCodePermission(content, "edit", "\\*", "deny");

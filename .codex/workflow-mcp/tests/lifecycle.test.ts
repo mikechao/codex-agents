@@ -828,6 +828,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
     }
     assert.equal("validation_results" in changeReviewer, true);
     assert.equal("implementation_receipt" in changeReviewer, false);
+    assert.deepEqual(changeReviewer.required_prior_finding_ids, []);
 
     doCreate(ctx, { workflow_type: "review_only", validation_requirements: [] });
     const reviewOnlyReviewer = store.reviewerGet(ctx.created.workflow_id);
@@ -835,6 +836,7 @@ test("reviewer projection conditionally includes the implementer handoff", () =>
       assert.equal(field in reviewOnlyReviewer, false, `review-only omits ${field}`);
     }
     assert.equal("validation_results" in reviewOnlyReviewer, true);
+    assert.deepEqual(reviewOnlyReviewer.required_prior_finding_ids, []);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

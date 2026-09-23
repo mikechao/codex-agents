@@ -85,7 +85,15 @@ test("repair retains only manually observed evidence with proven-disjoint exact-
       );
     }
 
-    review(store, created, undefined, "CHANGES_REQUESTED", [finding("REPAIR-1")]);
+    review(
+      store,
+      created,
+      undefined,
+      "CHANGES_REQUESTED",
+      [finding("REPAIR-1")],
+      [finding("OPTIONAL-1", "P3", false)],
+    );
+    assert.deepEqual(store.reviewerGet(id).required_prior_finding_ids, ["REPAIR-1", "OPTIONAL-1"]);
     store.authorizeRepair({
       workflow_id: id,
       expected_version: currentVersion(store, id),
@@ -99,6 +107,7 @@ test("repair retains only manually observed evidence with proven-disjoint exact-
       ["passed", "passed"],
     );
     submit("DONE", { "REPAIR-1": "resolved" });
+    assert.deepEqual(store.reviewerGet(id).required_prior_finding_ids, ["REPAIR-1", "OPTIONAL-1"]);
     let results = store.parentGet(id).validation_results;
     assert.equal(results[0].status, "not_run");
     assert.equal(results[0].manual_lifecycle.reason, "dependency_intersection");
@@ -132,9 +141,18 @@ test("repair retains only manually observed evidence with proven-disjoint exact-
       status: "passed",
       evidence: "note recollected",
     });
-    review(store, created, undefined, "CHANGES_REQUESTED", [finding("REPAIR-2")], [], {
-      "REPAIR-1": "resolved",
-    });
+    const requiredBeforeSecondReview = store.reviewerGet(id).required_prior_finding_ids;
+    review(
+      store,
+      created,
+      undefined,
+      "CHANGES_REQUESTED",
+      [finding("REPAIR-2")],
+      [],
+      Object.fromEntries(
+        requiredBeforeSecondReview.map((findingId: string) => [findingId, "resolved"]),
+      ),
+    );
     store.authorizeRepair({
       workflow_id: id,
       expected_version: currentVersion(store, id),
