@@ -253,10 +253,41 @@ test("project policy maps every required validation to its authoritative command
     ["bun", "run", "test:agents"],
     ["bun", "run", "test:installer"],
     ["bun", "run", "test:workflow-mcp"],
+    ["bun", "run", "check"],
+    ["bun", "run", "typecheck"],
+    ["bun", "run", "test:core"],
     ["bun", "run", "test:runtime"],
-    ["bun", "run", "validate"],
     ["bun", "run", "test:coverage"],
   ]);
+  for (const argv of [
+    ["bun", "run", "check"],
+    ["bun", "run", "typecheck"],
+    ["bun", "run", "test:core"],
+  ]) {
+    const command = policy.commands.find((candidate) =>
+      JSON.stringify(candidate.argv) === JSON.stringify(argv),
+    );
+    assert.deepEqual(command, {
+      argv,
+      purpose: "validation",
+      timeout_ms: 120000,
+      max_output_bytes: 65536,
+    });
+  }
+  assert.deepEqual(policy.commands.find((command) =>
+    JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "test:runtime"]),
+  ), {
+    argv: ["bun", "run", "test:runtime"],
+    purpose: "validation",
+    timeout_ms: 300000,
+    max_output_bytes: 65536,
+  });
+  assert.equal(
+    policy.commands.some((command) =>
+      JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "validate"]),
+    ),
+    false,
+  );
 });
 
 test("retained package helpers are not reviewer-selectable", () => {
@@ -265,7 +296,6 @@ test("retained package helpers are not reviewer-selectable", () => {
   try {
     for (const argv of [
       ["bun", "run", "test"],
-      ["bun", "run", "test:core"],
       ["bun", "run", "test:stress"],
     ]) {
       assert.throws(

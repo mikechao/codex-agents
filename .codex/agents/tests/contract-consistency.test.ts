@@ -513,6 +513,25 @@ test("Planner inspection stays native, separately bounded, and shell deny-by-def
   }
 });
 
+test("repository planner policy owns component-gate guidance", () => {
+  const plannerPolicy = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../../../.codex/planner-policy.json"), "utf8"),
+  ) as { testing_guidance?: unknown };
+  assert.deepEqual(plannerPolicy.testing_guidance, [
+    "Add focused coverage for changed behavior and preserve repository-required validation.",
+    "The full reviewer component gate is exactly `bun run check`, `bun run typecheck`, `bun run test:core`, and `bun run test:runtime`; it excludes aggregate `bun run validate`.",
+    "When the full reviewer component gate is required, do not add allowlisted focused commands merely because they are available; focused commands are for explicitly separate targeted evidence or a narrower stated scope.",
+  ]);
+
+  const canonical = readFileSync(resolve(agentsDir, "contracts/planner.md"), "utf8");
+  const generated = opencode("planner.md");
+  for (const definition of [canonical, generated]) {
+    assert.doesNotMatch(definition, /bun run (?:check|typecheck|test:core|test:runtime|validate)/u);
+    assert.doesNotMatch(definition, /full reviewer component gate/u);
+    assert.doesNotMatch(definition, /allowlisted focused commands/u);
+  }
+});
+
 test("planning contracts enforce bounded synthesis and disposable context", () => {
   const contractsDir = resolve(import.meta.dir, "../contracts");
   const planner = readFileSync(resolve(contractsDir, "planner.md"), "utf8");

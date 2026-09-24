@@ -5,7 +5,9 @@
     "Keep durable workflow state separate from disposable orchestration context."
   ],
   "testing_guidance": [
-    "Add focused coverage for changed behavior and preserve repository-required validation."
+    "Add focused coverage for changed behavior and preserve repository-required validation.",
+    "The full reviewer component gate is exactly `bun run check`, `bun run typecheck`, `bun run test:core`, and `bun run test:runtime`; it excludes aggregate `bun run validate`.",
+    "When the full reviewer component gate is required, do not add allowlisted focused commands merely because they are available; focused commands are for explicitly separate targeted evidence or a narrower stated scope."
   ],
   "documentation_guidance": [
     "Update repository documentation when topology, authority, or operator behavior changes."
