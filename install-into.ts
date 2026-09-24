@@ -226,7 +226,7 @@ export function hasWorkflowStateRegistration(configPath: string): boolean {
   return section !== undefined && section !== null;
 }
 
-interface CommitStep {
+export interface CommitStep {
   staging: string;
   target: string;
   original: string | null;
@@ -239,10 +239,9 @@ export interface CommitRecoveryState {
   openCodeAgentsBackup: OpenCodeAgentsBackupState;
 }
 
-export interface OptionalProjectFile {
-  staging: string;
-  target: string;
-  original: string | null;
+export interface CommitTransaction {
+  steps: readonly CommitStep[];
+  recoveryState: CommitRecoveryState;
 }
 
 function errorMessage(cause: unknown): string {
@@ -316,60 +315,11 @@ function rollback(
 }
 
 export function commitBothHosts(
-  codexAgentsStaging: string,
-  codexAgentsTarget: string,
-  codexConfigStaging: string,
-  codexConfigTarget: string,
-  opencodeAgentsStaging: string,
-  opencodeAgentsTarget: string,
-  opencodeConfigStaging: string,
-  opencodeConfigTarget: string,
-  originalCodexConfig: string | null,
-  originalOpenCodeConfig: string | null,
-  originalOpenCodeAgentsDir: string | null = null,
+  transaction: CommitTransaction,
   rename: (from: string, to: string) => void = renameSync,
   writeFile: (path: string, content: string) => void = writeFileSync,
-  recoveryState: CommitRecoveryState = { openCodeAgentsBackup: "unused" },
-  projectFile?: OptionalProjectFile,
-  projectFiles: readonly OptionalProjectFile[] = [],
 ): void {
-  const steps: readonly CommitStep[] = [
-    { staging: codexAgentsStaging, target: codexAgentsTarget, original: null, originalDir: null },
-    {
-      staging: codexConfigStaging,
-      target: codexConfigTarget,
-      original: originalCodexConfig,
-      originalDir: null,
-    },
-    {
-      staging: opencodeAgentsStaging,
-      target: opencodeAgentsTarget,
-      original: null,
-      originalDir: originalOpenCodeAgentsDir,
-    },
-    {
-      staging: opencodeConfigStaging,
-      target: opencodeConfigTarget,
-      original: originalOpenCodeConfig,
-      originalDir: null,
-    },
-    ...(projectFile === undefined
-      ? []
-      : [
-          {
-            staging: projectFile.staging,
-            target: projectFile.target,
-            original: projectFile.original,
-            originalDir: null,
-          },
-        ]),
-    ...projectFiles.map((file) => ({
-      staging: file.staging,
-      target: file.target,
-      original: file.original,
-      originalDir: null,
-    })),
-  ];
+  const { steps, recoveryState } = transaction;
   const committed: CommitStep[] = [];
   try {
     for (const step of steps) {
@@ -950,46 +900,58 @@ export function main(args: readonly string[]): number {
     writeFileSync(stagedConfig, stagedContent);
     const stagedOpenCodePath = resolve(opencodeConfigStaging, basename(opencodeConfigTarget));
     writeFileSync(stagedOpenCodePath, stagedOpenCode);
-    commitBothHosts(
-      agentsStaging,
-      resolve(target, ".codex/agents"),
-      stagedConfig,
-      config,
-      opencodeAgentsStaging,
-      opencodeAgentsTarget,
-      stagedOpenCodePath,
-      opencodeConfigTarget,
-      existing === "" ? null : existing.replace(/\n$/, ""),
-      opencodeConfigOriginal,
-      opencodeAgentsBackup,
-      renameSync,
-      writeFileSync,
-      recoveryState,
-      reviewerPolicyOriginal === null
-        ? {
-            staging: resolve(reviewerPolicyStaging, "reviewer-validation.json"),
-            target: reviewerPolicyTarget,
-            original: null,
-          }
-        : undefined,
-      [
+    const transaction: CommitTransaction = {
+      steps: [
+        {
+          staging: agentsStaging,
+          target: resolve(target, ".codex/agents"),
+          original: null,
+          originalDir: null,
+        },
+        {
+          staging: stagedConfig,
+          target: config,
+          original: existing === "" ? null : existing.replace(/\n$/, ""),
+          originalDir: null,
+        },
+        {
+          staging: opencodeAgentsStaging,
+          target: opencodeAgentsTarget,
+          original: null,
+          originalDir: opencodeAgentsBackup,
+        },
+        {
+          staging: stagedOpenCodePath,
+          target: opencodeConfigTarget,
+          original: opencodeConfigOriginal,
+          originalDir: null,
+        },
+        ...(reviewerPolicyOriginal === null
+          ? [
+              {
+                staging: resolve(reviewerPolicyStaging, "reviewer-validation.json"),
+                target: reviewerPolicyTarget,
+                original: null,
+                originalDir: null,
+              },
+            ]
+          : []),
         ...(opencodePackageOriginal === null
           ? [
               {
                 staging: stagedOpenCodePackage,
                 target: opencodePackageTarget,
                 original: null,
+                originalDir: null,
               },
             ]
           : []),
-        { staging: stagedPlugin, target: opencodePluginTarget, original: null },
-        {
-          staging: stagedRuntime,
-          target: runtimeTarget,
-          original: null,
-        },
+        { staging: stagedPlugin, target: opencodePluginTarget, original: null, originalDir: null },
+        { staging: stagedRuntime, target: runtimeTarget, original: null, originalDir: null },
       ],
-    );
+      recoveryState,
+    };
+    commitBothHosts(transaction);
   } catch (cause) {
     rmSync(agentsStaging, { recursive: true, force: true });
     rmSync(configStaging, { recursive: true, force: true });

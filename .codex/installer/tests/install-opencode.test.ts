@@ -488,17 +488,35 @@ test("commitBothHosts rolls back every completed step when any rename fails", ()
       assert.throws(
         () =>
           commitBothHosts(
-            codexAgents,
-            codexAgentsTarget,
-            join(codexConfig, "config.toml"),
-            codexConfigTarget,
-            opencodeAgents,
-            opencodeAgentsTarget,
-            join(opencodeConfig, "opencode.json"),
-            opencodeConfigTarget,
-            originalCodexConfig,
-            originalOpenCodeConfig,
-            null,
+            {
+              steps: [
+                {
+                  staging: codexAgents,
+                  target: codexAgentsTarget,
+                  original: null,
+                  originalDir: null,
+                },
+                {
+                  staging: join(codexConfig, "config.toml"),
+                  target: codexConfigTarget,
+                  original: originalCodexConfig,
+                  originalDir: null,
+                },
+                {
+                  staging: opencodeAgents,
+                  target: opencodeAgentsTarget,
+                  original: null,
+                  originalDir: null,
+                },
+                {
+                  staging: join(opencodeConfig, "opencode.json"),
+                  target: opencodeConfigTarget,
+                  original: originalOpenCodeConfig,
+                  originalDir: null,
+                },
+              ],
+              recoveryState: { openCodeAgentsBackup: "unused" },
+            },
             rename,
           ),
         /injected rename failure/,
@@ -545,17 +563,35 @@ test("commitBothHosts removes created config files when they did not exist befor
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          null,
-          null,
-          null,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+            ],
+            recoveryState: { openCodeAgentsBackup: "unused" },
+          },
           rename,
         ),
       /injected opencode config failure/,
@@ -644,35 +680,56 @@ test("commitBothHosts rolls back a newly installed OpenCode package and V2 plugi
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          null,
-          null,
-          null,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(openCodePackage, "package.json"),
+                target: packageTarget,
+                original: null,
+                originalDir: null,
+              },
+              { staging: plugin, target: pluginTarget, original: null, originalDir: null },
+              {
+                staging: join(runtime, "workflow-mcp"),
+                target: runtimeTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(later, "later.txt"),
+                target: laterTarget,
+                original: null,
+                originalDir: null,
+              },
+            ],
+            recoveryState: { openCodeAgentsBackup: "unused" },
+          },
           rename,
           writeFileSync,
-          undefined,
-          undefined,
-          [
-            {
-              staging: join(openCodePackage, "package.json"),
-              target: packageTarget,
-              original: null,
-            },
-            {
-              staging: plugin,
-              target: pluginTarget,
-              original: null,
-            },
-            { staging: join(runtime, "workflow-mcp"), target: runtimeTarget, original: null },
-            { staging: join(later, "later.txt"), target: laterTarget, original: null },
-          ],
         ),
       /injected later project-file failure/,
     );
@@ -724,25 +781,49 @@ test("rollback cleanup removes runtime and codex directories created for a targe
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          null,
-          null,
-          null,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(runtime, "workflow-mcp"),
+                target: runtimeTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(later, "later.txt"),
+                target: laterTarget,
+                original: null,
+                originalDir: null,
+              },
+            ],
+            recoveryState: { openCodeAgentsBackup: "unused" },
+          },
           rename,
           writeFileSync,
-          undefined,
-          undefined,
-          [
-            { staging: join(runtime, "workflow-mcp"), target: runtimeTarget, original: null },
-            { staging: join(later, "later.txt"), target: laterTarget, original: null },
-          ],
         ),
       /injected later project-file failure/,
     );
@@ -793,17 +874,35 @@ test("commitBothHosts restores a pre-existing OpenCode agents directory when a l
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          originalCodexConfig,
-          originalOpenCodeConfig,
-          backup,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: originalCodexConfig,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: backup,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: originalOpenCodeConfig,
+                originalDir: null,
+              },
+            ],
+            recoveryState: { openCodeAgentsBackup: "unused" },
+          },
           rename,
         ),
       /injected opencode config failure/,
@@ -861,20 +960,37 @@ test("commitBothHosts marks an unused backup for cleanup when an earlier commit 
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          null,
-          null,
-          backup,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: backup,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: null,
+                originalDir: null,
+              },
+            ],
+            recoveryState,
+          },
           rename,
           writeFileSync,
-          recoveryState,
         ),
       /injected codex config failure/,
     );
@@ -934,20 +1050,37 @@ test("commitBothHosts reports a failed backup restore and preserves the original
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          originalCodexConfig,
-          originalOpenCodeConfig,
-          backup,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: originalCodexConfig,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: backup,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: originalOpenCodeConfig,
+                originalDir: null,
+              },
+            ],
+            recoveryState,
+          },
           rename,
           writeFileSync,
-          recoveryState,
         ),
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -1028,17 +1161,35 @@ test("commitBothHosts reports a failed config restore and preserves the original
     assert.throws(
       () =>
         commitBothHosts(
-          codexAgents,
-          codexAgentsTarget,
-          join(codexConfig, "config.toml"),
-          codexConfigTarget,
-          opencodeAgents,
-          opencodeAgentsTarget,
-          join(opencodeConfig, "opencode.json"),
-          opencodeConfigTarget,
-          originalCodexConfig,
-          originalOpenCodeConfig,
-          null,
+          {
+            steps: [
+              {
+                staging: codexAgents,
+                target: codexAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(codexConfig, "config.toml"),
+                target: codexConfigTarget,
+                original: originalCodexConfig,
+                originalDir: null,
+              },
+              {
+                staging: opencodeAgents,
+                target: opencodeAgentsTarget,
+                original: null,
+                originalDir: null,
+              },
+              {
+                staging: join(opencodeConfig, "opencode.json"),
+                target: opencodeConfigTarget,
+                original: originalOpenCodeConfig,
+                originalDir: null,
+              },
+            ],
+            recoveryState: { openCodeAgentsBackup: "unused" },
+          },
           rename,
           writeFile,
         ),
