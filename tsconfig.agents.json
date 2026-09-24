@@ -1,6 +1,12 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid"
+  },
   "include": [
+    ".opencode/plugins/codex-agents-model-defaults/**/*.ts",
+    ".opencode/plugins/codex-agents-model-defaults/**/*.tsx",
     ".codex/agents/change-receipt.ts",
     ".codex/agents/reviewer-validation.ts",
     ".codex/agents/generate-host-definitions.ts",

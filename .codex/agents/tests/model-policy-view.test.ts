@@ -1,10 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import type { Context } from "@opencode/plugin/tui/context";
-import modelDefaultsPlugin, {
-  AGENT_MODELS_COMMAND_ID,
-  formatOpenCodeModelDefaults,
-} from "../../../.opencode/plugins/codex-agents-model-defaults/tui.js";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { formatOpenCodeModelDefaults } from "../../../.opencode/plugins/codex-agents-model-defaults/presentation.js";
 import { parseModelPolicy, projectOpenCodeModelDefaults } from "../model-policy.js";
 
 const fixture = `models:
@@ -66,117 +65,46 @@ test("aliases and host-specific reasoning flow through the shared policy resolve
   });
 });
 
-test("the TUI plugin registers its command in the app render scope and cleans up its slot", async () => {
-  type RegisteredCommand = {
-    id?: string;
-    palette?: boolean;
-    slash?: { name: string };
-    run: () => void;
-  };
-  type RegisteredLayer = { commands?: readonly RegisteredCommand[] };
-  type Slot = { render: () => unknown; disposeLayer: Array<() => void> };
-  const slots = new Set<Slot>();
-  const activeLayers = new Set<RegisteredLayer>();
-  let currentSlot: Slot | undefined;
-  let alert: { title: string; message: string } | undefined;
-  function disposeRender(slot: Slot) {
-    for (const dispose of slot.disposeLayer.splice(0)) dispose();
-  }
-  function renderSlot(slot: Slot) {
-    disposeRender(slot);
-    currentSlot = slot;
-    try {
-      assert.equal(slot.render(), null);
-    } finally {
-      currentSlot = undefined;
-    }
-  }
-  function activeCommands() {
-    return [...activeLayers].flatMap((layer) => layer.commands ?? []);
-  }
-  const context = {
-    keymap: {
-      layer(callback: () => unknown) {
-        assert.ok(currentSlot, "keymap registration requires the app provider");
-        const layer = callback() as RegisteredLayer;
-        activeLayers.add(layer);
-        currentSlot.disposeLayer.push(() => activeLayers.delete(layer));
-      },
-    },
-    ui: {
-      slot(claim: { append: string; render: () => unknown }) {
-        assert.equal(claim.append, "app");
-        const slot: Slot = { render: claim.render, disposeLayer: [] };
-        slots.add(slot);
-        return () => {
-          disposeRender(slot);
-          slots.delete(slot);
-        };
-      },
-      dialog: {
-        alert(options: { title: string; message: string }) {
-          alert = options;
-          return Promise.resolve();
-        },
-      },
-    },
-  } as unknown as Context;
-
-  const cleanup = await modelDefaultsPlugin.setup(context);
-  assert.equal(activeLayers.size, 0, "setup must not register outside the provider");
-  const slot = [...slots][0];
-  assert.ok(slot);
-  renderSlot(slot);
-  assert.equal(activeLayers.size, 1);
-  assert.equal(activeCommands().length, 1);
-  renderSlot(slot);
-  assert.equal(activeLayers.size, 1, "rerender must dispose the previous layer");
-  assert.equal(activeCommands().length, 1, "rerender must not duplicate the command");
-  const command = activeCommands()[0];
-  assert.ok(command);
-  assert.equal(command.id, AGENT_MODELS_COMMAND_ID);
-  assert.equal(command.palette, true);
-  assert.deepEqual(command.slash, { name: "agent-models" });
-  command.run();
-  assert.equal(alert?.title, "OpenCode agent model defaults (read-only)");
-  const message = alert?.message ?? "";
-  assert.equal(message.split("\n").length, 9);
-  assert.match(message, /Agent\s+Model\s+Reasoning/);
-  assert.deepEqual(
-    message
-      .split("\n")
-      .slice(1, 7)
-      .map((line) => line.trimStart().split(/\s{2,}/u)[0]),
-    ["Orchestrator", "Planner", "Explorer", "Implementer", "Code Reviewer", "Committer"],
+test("the source-first view uses literal host-runtime imports", () => {
+  const directory = resolve(
+    import.meta.dir,
+    "../../../.opencode/plugins/codex-agents-model-defaults",
   );
-  assert.match(message, /Orchestrator\s+Session default\s+Session default/);
-  assert.match(message, /Planner\s+openai\/gpt-5\.6-luna\s+high/);
-  assert.match(message, /Read-only · values loaded when \/agent-models is opened/);
-  assert.doesNotMatch(message, /inherits OpenCode\/session default/);
-  assert.equal(typeof cleanup, "function");
-  if (typeof cleanup === "function") await cleanup();
-  assert.equal(slots.size, 0);
-  assert.equal(activeLayers.size, 0);
-  assert.equal(activeCommands().length, 0);
+  const controller = readFileSync(resolve(directory, "tui.ts"), "utf8");
+  const view = readFileSync(resolve(directory, "AgentModelsView.tsx"), "utf8");
+  assert.match(controller, /import \{ AgentModelsDialog \} from "\.\/AgentModelsView\.js"/);
+  assert.match(view, /import \{ TextAttributes \} from "@opentui\/core"/);
+  assert.match(view, /from "@opentui\/solid"/);
+  assert.match(view, /from "solid-js"/);
+  assert.doesNotMatch(
+    controller + view,
+    /import\(|solid-js\/dist|createCliRenderer|renderer\.root/,
+  );
+});
 
-  const reloadCleanup = await modelDefaultsPlugin.setup(context);
-  assert.equal(activeLayers.size, 0);
-  const reloadedSlot = [...slots][0];
-  assert.ok(reloadedSlot);
-  renderSlot(reloadedSlot);
-  assert.equal(activeLayers.size, 1);
-  assert.equal(activeCommands().length, 1);
-  assert.equal(typeof reloadCleanup, "function");
-  if (typeof reloadCleanup === "function") await reloadCleanup();
-  assert.equal(slots.size, 0);
-  assert.equal(activeLayers.size, 0);
-  assert.equal(activeCommands().length, 0);
+test("the host-owned Solid dialog renders and releases its activation", () => {
+  // One bounded process selects Solid's public reactive export without changing
+  // package-wide Bun conditions or installing a second runtime in the plugin.
+  const result = spawnSync(
+    process.execPath,
+    ["--conditions=browser", resolve(import.meta.dir, "fixtures/model-policy-dialog.ts")],
+    { encoding: "utf8", timeout: 15000, maxBuffer: 1024 * 1024 },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
 });
 
 test("model-default formatting remains a pure six-row presentation", () => {
   const rows = projectOpenCodeModelDefaults(parseModelPolicy(fixture));
   const output = formatOpenCodeModelDefaults(rows);
   assert.equal(output.split("\n").length, 9);
+  assert.deepEqual(
+    output
+      .split("\n")
+      .slice(1, 7)
+      .map((line) => line.split(/\s{2,}/u)[0]),
+    ["Orchestrator", "Planner", "Explorer", "Implementer", "Code Reviewer", "Committer"],
+  );
   assert.match(output, /Code Reviewer\s+openai\/sol\s+high/);
   assert.match(output, /Orchestrator\s+Session default\s+Session default/);
   assert.doesNotMatch(output, /inherits OpenCode\/session default/);

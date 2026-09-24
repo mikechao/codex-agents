@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
+  "exclude": [".opencode/plugins/codex-agents-model-defaults"],
   "include": [
     "install-into.ts",
     ".opencode/plugins/**/*.ts",

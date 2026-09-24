@@ -4,6 +4,7 @@
     "includes": [
       ".codex/**/*.ts",
       ".opencode/**/*.ts",
+      ".opencode/**/*.tsx",
       "install-into.ts",
       "scripts/**/*.ts",
       "package.json",
