@@ -558,6 +558,22 @@ test("repair authorization accepts an exact subset of multiple current blockers"
       ...selected.primary.proposal,
       user_authorization: "authorize subset",
     };
+    const selectedInvocation = selected.execution.primary.invocations[0];
+    assert.ok(selectedInvocation);
+    assert.deepEqual(selectedInvocation.fixed_arguments, {
+      workflow_id: id,
+      expected_version: version,
+    });
+    assert.deepEqual(selectedInvocation.repair_binding, selected.execution.primary.repair_binding);
+    assert.deepEqual(
+      selectedInvocation.stale_binding.references.find(
+        (reference: any) => reference.kind === "repair_selection",
+      ),
+      {
+        kind: "repair_selection",
+        ...selected.execution.primary.repair_binding,
+      },
+    );
     assert.deepEqual(
       selected.primary.proposal,
       store.operatorDecisionGet(id, ["SUBSET-2"]).primary.proposal,

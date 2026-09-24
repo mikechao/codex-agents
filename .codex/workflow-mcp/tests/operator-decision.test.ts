@@ -10,6 +10,7 @@ import {
 } from "../operator-action-descriptor.js";
 import { deriveOperatorDecision } from "../operator-decision.js";
 import { projectOperatorFinding } from "../operator-finding.js";
+import { repairProposalBinding } from "../repair-proposal.js";
 import { WorkflowStore } from "../store.js";
 import type { WorkflowLegality } from "../transitions/queries.js";
 import {
@@ -662,7 +663,7 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       },
       next: { kind: "repair_required" },
     };
-    const all = descriptorForLegality(state, legality);
+    const all = descriptorForLegality(state, legality, repairProposalBinding(state));
     assert.equal(all.descriptor_version, 5);
     assert.equal(all.primary.mode, "parent_mutation");
     if (all.primary.mode !== "parent_mutation") throw new Error("expected repair mutation");
@@ -685,7 +686,16 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
         forbidden_paths: [],
       },
     });
-    const subset = descriptorForLegality(state, legality, ["REPAIR-B"] as FindingId[]);
+    assert.deepEqual(
+      (all.primary as any).repair_binding.proposal,
+      decision.primary.proposal,
+      "semantic and executable all-blocker proposals must agree",
+    );
+    const subset = descriptorForLegality(
+      state,
+      legality,
+      repairProposalBinding(state, ["REPAIR-B"] as FindingId[]),
+    );
     const subsetDecision = deriveOperatorDecision(
       state,
       [{ state, legality }],
@@ -825,6 +835,36 @@ test("#144 repair descriptors bind eligible and selected blockers to a subset pr
       ],
     );
     assert.deepEqual(invocation.repair_binding.selected_finding_ids, ["REPAIR-B"]);
+    assert.deepEqual(
+      invocation.repair_binding,
+      subsetDecision.primary.kind === "approve_exact_repairs"
+        ? {
+            eligible_finding_ids: ["REPAIR-A", "REPAIR-B"],
+            selected_finding_ids: subsetDecision.primary.blockers.map(
+              (blocker) => blocker.finding_id,
+            ),
+            proposal: subsetDecision.primary.proposal,
+          }
+        : undefined,
+      "semantic and primary executable repair bindings must agree",
+    );
+    const parentRepair = subsetDecision.execution.parent_actions.find(
+      (action) => action.action === "workflow_authorize_repair",
+    );
+    assert.ok(parentRepair && parentRepair.status === "executable");
+    if (parentRepair?.status !== "executable")
+      throw new Error("expected an executable parent repair authorization");
+    const parentInvocation = parentRepair.descriptor.invocations[0];
+    assert.ok(parentInvocation);
+    assert.deepEqual(parentInvocation.repair_binding, invocation.repair_binding);
+    assert.deepEqual(
+      parentInvocation.stale_binding.references.find(
+        (reference: any) => reference.kind === "repair_selection",
+      ),
+      invocation.stale_binding.references.find(
+        (reference: any) => reference.kind === "repair_selection",
+      ),
+    );
     assert.deepEqual(
       invocation.stale_binding.references.find(
         (reference: any) => reference.kind === "repair_selection",
@@ -1423,6 +1463,21 @@ test("operator finding projection preserves structured reviewer detail and bound
     });
     assert.equal("violated_requirement" in decision.primary.blockers[0]!, false);
     assert.equal("missing_or_inadequate_test" in decision.primary.blockers[0]!, false);
+    assert.equal(decision.primary.proposal.strategy_constraints, expectedBounded);
+    assert.equal(
+      decision.execution.primary.mode,
+      "parent_mutation",
+      "repair guidance should remain executable for bounded proposals",
+    );
+    if (decision.execution.primary.mode !== "parent_mutation")
+      throw new Error("expected an executable repair descriptor");
+    assert.ok("repair_binding" in decision.execution.primary);
+    if (!("repair_binding" in decision.execution.primary))
+      throw new Error("expected a repair binding");
+    assert.equal(
+      decision.execution.primary.repair_binding.proposal.strategy_constraints,
+      decision.primary.proposal.strategy_constraints,
+    );
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 import { lineageReferences, MAX_LINEAGE_RECORDS } from "./lineage.js";
 import { descriptorForLegality } from "./operator-action-descriptor.js";
 import { projectOperatorFinding } from "./operator-finding.js";
-import { repairProposalForFindings, repairProposalSelection } from "./repair-proposal.js";
+import { type RepairProposalBinding, repairProposalBinding } from "./repair-proposal.js";
 import {
   allRequiredValidationsPassed,
   effectiveBlockingFindings,
@@ -71,12 +71,8 @@ function stateStatus(record: OperatorLineageRecord): OperatorDecision["outcome"]
   }
 }
 
-function repairDecision(
-  state: WorkflowState,
-  selectedFindingIds?: ReadonlyArray<FindingId>,
-): OperatorDecision["primary"] {
-  const selection = repairProposalSelection(state, selectedFindingIds);
-  if (selection.selected_findings.length === 0) {
+function repairDecision(binding: RepairProposalBinding): OperatorDecision["primary"] {
+  if (binding.selected_findings.length === 0) {
     return {
       kind: "operator_intervention",
       reason: "current blocker state is unavailable or contradictory",
@@ -84,9 +80,9 @@ function repairDecision(
   }
   return {
     kind: "approve_exact_repairs",
-    blocker_count: selection.selected_findings.length,
-    blockers: selection.selected_findings.map(projectOperatorFinding),
-    proposal: repairProposalForFindings(selection.selected_findings),
+    blocker_count: binding.selected_findings.length,
+    blockers: binding.selected_findings.map(projectOperatorFinding),
+    proposal: binding.proposal,
     authorization_required: true,
   };
 }
@@ -144,7 +140,7 @@ function semanticFields(
 function primaryDecision(
   record: OperatorLineageRecord,
   legality: WorkflowLegality = legalityFor(record),
-  selectedFindingIds?: ReadonlyArray<FindingId>,
+  repairBinding?: RepairProposalBinding,
 ): OperatorDecision["primary"] {
   const { state } = record;
   const next = legality.next;
@@ -166,7 +162,8 @@ function primaryDecision(
         })),
       };
     case "repair_required":
-      return repairDecision(state, selectedFindingIds);
+      if (!repairBinding) throw new Error("repair-required decision requires a repair binding");
+      return repairDecision(repairBinding);
     case "finalize_repair_exhausted":
       return {
         kind: "finalize_repair_exhausted",
@@ -391,11 +388,15 @@ export function deriveOperatorDecision(
   ) ?? { state: requested };
   const record = requestedRecord;
   const legality = legalityFor(record);
+  const repairBinding =
+    legality.next.kind === "repair_required"
+      ? repairProposalBinding(record.state, selectedFindingIds)
+      : undefined;
   const lineageError = validateLineage(requested, records);
   if (lineageError) {
     return {
       primary: { kind: "operator_intervention", reason: lineageError },
-      execution: descriptorForLegality(record.state, legality, selectedFindingIds, planIdentity),
+      execution: descriptorForLegality(record.state, legality, repairBinding, planIdentity),
       ...semanticFields(requested, { kind: "operator_intervention", reason: lineageError }),
       authority_boundaries: {
         approve_scope_change: { availability: "unavailable", basis: "lineage is inconsistent" },
@@ -419,7 +420,7 @@ export function deriveOperatorDecision(
       commit: { eligible: false, authorization: "unavailable" },
     };
   }
-  const primary = primaryDecision(record, legality, selectedFindingIds);
+  const primary = primaryDecision(record, legality, repairBinding);
   const boundaries = boundaryDecision(record, records);
   const explicit = records.some((candidate) => candidate.state.linked_continuation !== null);
   const combined = records.some(
@@ -454,7 +455,7 @@ export function deriveOperatorDecision(
     legality.actions.parent.includes("workflow_authorize_commit");
   return {
     primary,
-    execution: descriptorForLegality(record.state, legality, selectedFindingIds, planIdentity),
+    execution: descriptorForLegality(record.state, legality, repairBinding, planIdentity),
     ...semanticFields(requested, primary),
     authority_boundaries: boundaries,
     intent: {

@@ -17,6 +17,11 @@ export interface RepairProposalSelection {
   selected_findings: BlockingFinding[];
 }
 
+/** The single validated repair selection and bounded proposal for one projection. */
+export interface RepairProposalBinding extends RepairProposalSelection {
+  readonly proposal: OperatorRepairProposal;
+}
+
 function bounded(value: string, limit = MAX_SUMMARY): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
@@ -69,6 +74,18 @@ export function repairProposalForFindings(
     ],
     required_paths: [],
     forbidden_paths: [],
+  };
+}
+
+/** Derive the immutable internal repair input shared by semantic and executable projections. */
+export function repairProposalBinding(
+  state: WorkflowState,
+  selectedFindingIds?: ReadonlyArray<FindingId>,
+): RepairProposalBinding {
+  const selection = repairProposalSelection(state, selectedFindingIds);
+  return {
+    ...selection,
+    proposal: repairProposalForFindings(selection.selected_findings),
   };
 }
 
