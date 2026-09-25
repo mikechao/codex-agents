@@ -1218,7 +1218,7 @@ test("inspection dependency authoring rejects unsupported, empty, and out-of-sco
 
 test("plan creation rejects non-exact or evidence-only validation commands atomically", () => {
   const rejectedArgv = [
-    ["bun", "run", "typecheck"],
+    ["bun", "run", "validate"],
     ["bun", "run", "test:workflow-mcp", "extra"],
     ["bun", "test:workflow-mcp", "run"],
     ["bun", "run", "test:workflow-mcpx"],
@@ -2044,7 +2044,7 @@ test("plan-native linked follow-up rejects unauthorized validation requirements 
         {
           description: "unauthorized child validation",
           kind: "command",
-          argv: ["bun", "run", "typecheck"],
+          argv: ["bun", "run", "validate"],
         },
       ],
     });
