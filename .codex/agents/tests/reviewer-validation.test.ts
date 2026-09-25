@@ -264,8 +264,8 @@ test("project policy maps every required validation to its authoritative command
     ["bun", "run", "typecheck"],
     ["bun", "run", "test:core"],
   ]) {
-    const command = policy.commands.find((candidate) =>
-      JSON.stringify(candidate.argv) === JSON.stringify(argv),
+    const command = policy.commands.find(
+      (candidate) => JSON.stringify(candidate.argv) === JSON.stringify(argv),
     );
     assert.deepEqual(command, {
       argv,
@@ -274,17 +274,20 @@ test("project policy maps every required validation to its authoritative command
       max_output_bytes: 65536,
     });
   }
-  assert.deepEqual(policy.commands.find((command) =>
-    JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "test:runtime"]),
-  ), {
-    argv: ["bun", "run", "test:runtime"],
-    purpose: "validation",
-    timeout_ms: 300000,
-    max_output_bytes: 65536,
-  });
+  assert.deepEqual(
+    policy.commands.find(
+      (command) => JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "test:runtime"]),
+    ),
+    {
+      argv: ["bun", "run", "test:runtime"],
+      purpose: "validation",
+      timeout_ms: 300000,
+      max_output_bytes: 65536,
+    },
+  );
   assert.equal(
-    policy.commands.some((command) =>
-      JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "validate"]),
+    policy.commands.some(
+      (command) => JSON.stringify(command.argv) === JSON.stringify(["bun", "run", "validate"]),
     ),
     false,
   );
