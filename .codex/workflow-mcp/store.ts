@@ -105,12 +105,14 @@ import type {
   CommitMismatchCategory,
   CommitPreparationEvidence,
   CommitPreparationFailureCategory,
+  CommitterView,
   DirtyScopeAdoptionAudit,
   DirtyScopeAdoptionIndexState,
   DirtyScopeAdoptionState,
   ExactRepoPath,
   FindingAdjudication,
   GitCommitSha,
+  ImplementerView,
   IsoTimestamp,
   ManualValidationRepairDecisionAudit,
   OperatorDecision,
@@ -121,8 +123,9 @@ import type {
   PlanRead,
   PlanRebindAudit,
   PlanRevisionArtifact,
+  ReviewerView,
   Role,
-  RoleView,
+  RoleViewForRole,
   RuntimeId,
   ScopeExpansionAudit,
   StateDigest,
@@ -776,14 +779,6 @@ type ExistingWorkflowTransition = {
   details: MutationAuditDetails;
 };
 
-// roleView's public overloads only accept literal roles; the store reaches the
-// implementation signature with the exact role selected by each dedicated getter.
-const roleViewForRole = roleView as unknown as (
-  state: WorkflowState,
-  actorRole: Role,
-  readiness?: WorkflowLegalityReadiness,
-) => RoleView;
-
 type ReviewPreflight = {
   readiness: WorkflowReviewReadiness;
   receipt: ChangeReceipt | null;
@@ -1176,10 +1171,13 @@ export class WorkflowStore {
         return state;
       })
       .immediate();
-    return this.#roleView(created, "parent") as ParentView;
+    return this.#roleView(created, "parent");
   }
 
-  #get(workflowIdValue: unknown, actorRole: Role): RoleView {
+  #get<SelectedRole extends Role>(
+    workflowIdValue: unknown,
+    actorRole: SelectedRole,
+  ): RoleViewForRole<SelectedRole> {
     this.#ensureOpen();
     const row = this.#row(workflowIdValue);
     const state = parseState(row);
@@ -1489,8 +1487,11 @@ export class WorkflowStore {
     return readiness;
   }
 
-  #roleView(state: WorkflowState, actorRole: Role): RoleView {
-    return roleViewForRole(state, actorRole, this.#legalityReadiness(state));
+  #roleView<SelectedRole extends Role>(
+    state: WorkflowState,
+    actorRole: SelectedRole,
+  ): RoleViewForRole<SelectedRole> {
+    return roleView(state, actorRole, this.#legalityReadiness(state));
   }
 
   planCreate(input: unknown): PlannerPlanRead {
@@ -1592,13 +1593,13 @@ export class WorkflowStore {
           "parent",
           auditEnvelope(null, state, null),
         );
-        return this.#roleView(state, "parent") as ParentView;
+        return this.#roleView(state, "parent");
       })
       .immediate();
   }
 
   parentGet(workflowIdValue: unknown): ParentView {
-    return this.#get(workflowIdValue, "parent") as ParentView;
+    return this.#get(workflowIdValue, "parent");
   }
 
   #withCommittedExecution(view: ParentView): ParentMutationResult {
@@ -1737,19 +1738,19 @@ export class WorkflowStore {
     return this.#isCrossRuntimeCommitReconciled(row, parseState(row));
   }
 
-  implementerGet(workflowIdValue: unknown): RoleView {
+  implementerGet(workflowIdValue: unknown): ImplementerView {
     return this.#get(workflowIdValue, "implementer");
   }
 
-  reviewerGet(workflowIdValue: unknown): RoleView {
+  reviewerGet(workflowIdValue: unknown): ReviewerView {
     return this.#get(workflowIdValue, "reviewer");
   }
 
-  committerGet(workflowIdValue: unknown): RoleView {
+  committerGet(workflowIdValue: unknown): CommitterView {
     return this.#get(workflowIdValue, "committer");
   }
 
-  expandScope(input: unknown): RoleView {
+  expandScope(input: unknown): ParentView {
     const args = parentMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -1795,7 +1796,7 @@ export class WorkflowStore {
     );
   }
 
-  adoptDirtyScope(input: unknown): RoleView {
+  adoptDirtyScope(input: unknown): ParentView {
     const args = parentMutation(input);
     let adoptedReceipt: ChangeReceipt | null = null;
     let adoptedIndexStates: DirtyScopeAdoptionIndexState[] | null = null;
@@ -2190,7 +2191,7 @@ export class WorkflowStore {
   }
 
   /** The only cross-runtime state mutation: finish a dirty adoption when the owner lacks the tool. */
-  adoptDirtyScopeCrossRuntime(input: unknown): RoleView {
+  adoptDirtyScopeCrossRuntime(input: unknown): ParentView {
     const args = parentMutation(input);
     const expectedVersionNumber = expectedVersion(args.expected_version);
     let adoptedReceipt: ChangeReceipt | null = null;
@@ -2291,7 +2292,7 @@ export class WorkflowStore {
   }
 
   /** Establish the review-start receipt in the narrow historical-runtime recovery boundary. */
-  beginReviewCrossRuntime(input: unknown): RoleView {
+  beginReviewCrossRuntime(input: unknown): ReviewerView {
     const args = workerMutation(input);
     exactKeys(args, ["workflow_id", "expected_version"], "review begin");
     const expectedVersionNumber = expectedVersion(args.expected_version);
@@ -2345,16 +2346,16 @@ export class WorkflowStore {
     return this.#roleView(result, "reviewer");
   }
 
-  #mutate(
+  #mutate<SelectedRole extends Role>(
     workflowIdValue: unknown,
-    actorRole: Role,
+    actorRole: SelectedRole,
     expected: unknown,
     eventType: AuditEventType | ((next: WorkflowState) => AuditEventType),
     action: (state: WorkflowState) => WorkflowState,
     outcome: AuditOutcome | null | ((next: WorkflowState) => AuditOutcome | null) = null,
     details: (before: WorkflowState, next: WorkflowState) => MutationAuditDetails = () => ({}),
     ownership: "normal" | "reconciliation" = "normal",
-  ): RoleView {
+  ): RoleViewForRole<SelectedRole> {
     this.#ensureOpen();
     const expectedVersionNumber = expectedVersion(expected);
     const next = this.db
@@ -2417,7 +2418,7 @@ export class WorkflowStore {
     return this.#roleView(next, actorRole);
   }
 
-  submitImplementation(input: unknown): RoleView {
+  submitImplementation(input: unknown): ImplementerView {
     const args = implementationMutation(input);
     const eventType =
       args.status === "DONE"
@@ -2457,7 +2458,7 @@ export class WorkflowStore {
     );
   }
 
-  beginReview(input: unknown): RoleView {
+  beginReview(input: unknown): ReviewerView {
     const args = workerMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2484,7 +2485,7 @@ export class WorkflowStore {
     );
   }
 
-  resumeImplementation(input: unknown): RoleView {
+  resumeImplementation(input: unknown): ParentView {
     const args = parentContextMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2499,7 +2500,7 @@ export class WorkflowStore {
     );
   }
 
-  rebindImplementationPlan(input: unknown): RoleView {
+  rebindImplementationPlan(input: unknown): ParentView {
     const args = parentMutation(input);
     exactKeys(
       args,
@@ -2616,7 +2617,7 @@ export class WorkflowStore {
     return this.#roleView(result, "parent");
   }
 
-  acceptConcerns(input: unknown): RoleView {
+  acceptConcerns(input: unknown): ParentView {
     const args = parentAuthorizationMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2627,7 +2628,7 @@ export class WorkflowStore {
     );
   }
 
-  submitReview(input: unknown): RoleView {
+  submitReview(input: unknown): ReviewerView {
     const args = reviewMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2681,7 +2682,7 @@ export class WorkflowStore {
       "REPAIR_AUTHORIZED",
       (state) => authorizeRepair(state, args, this.root),
     );
-    return this.#withCommittedExecution(result as ParentView);
+    return this.#withCommittedExecution(result);
   }
 
   adjudicateFindings(input: unknown): ParentMutationResult {
@@ -2699,10 +2700,10 @@ export class WorkflowStore {
         ),
       }),
     );
-    return this.#withCommittedExecution(result as ParentView);
+    return this.#withCommittedExecution(result);
   }
 
-  resumeReview(input: unknown): RoleView {
+  resumeReview(input: unknown): ParentView {
     const args = parentContextMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2721,7 +2722,7 @@ export class WorkflowStore {
     );
   }
 
-  finalizeRepairExhausted(input: unknown): RoleView {
+  finalizeRepairExhausted(input: unknown): ParentView {
     const args = parentMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2733,7 +2734,7 @@ export class WorkflowStore {
     );
   }
 
-  authorizeCommit(input: unknown): RoleView {
+  authorizeCommit(input: unknown): ParentView {
     const args = parentAuthorizationMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2749,7 +2750,7 @@ export class WorkflowStore {
     );
   }
 
-  recordManualValidation(input: unknown): RoleView {
+  recordManualValidation(input: unknown): ParentView {
     const args = parentManualValidationMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2772,7 +2773,7 @@ export class WorkflowStore {
     );
   }
 
-  prepareCommit(input: unknown): RoleView {
+  prepareCommit(input: unknown): CommitterView {
     const args = workerMutation(input);
     exactKeys(args, ["workflow_id", "expected_version"], "commit preparation");
     return this.#mutate(
@@ -2800,7 +2801,7 @@ export class WorkflowStore {
     );
   }
 
-  retryCommitPreparation(input: unknown): RoleView {
+  retryCommitPreparation(input: unknown): ParentView {
     const args = parentRetryContextMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2823,7 +2824,7 @@ export class WorkflowStore {
     );
   }
 
-  reconcileStagedScope(input: unknown): RoleView {
+  reconcileStagedScope(input: unknown): ParentView {
     const args = parentMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2845,7 +2846,7 @@ export class WorkflowStore {
     );
   }
 
-  returnCommitToReview(input: unknown): RoleView {
+  returnCommitToReview(input: unknown): ParentView {
     const args = parentReviewContextMutation(input);
     return this.#mutate(
       args.workflow_id,
@@ -2886,7 +2887,7 @@ export class WorkflowStore {
     );
   }
 
-  submitCommitResult(input: unknown): RoleView {
+  submitCommitResult(input: unknown): CommitterView {
     const args = commitResultMutation(input);
     exactKeys(
       args,
@@ -2911,7 +2912,7 @@ export class WorkflowStore {
     );
   }
 
-  reconcileCommitResult(input: unknown): RoleView {
+  reconcileCommitResult(input: unknown): ParentView {
     const args = parentMutation(input);
     exactKeys(args, ["workflow_id", "expected_version", "attempt_id"], "commit reconciliation");
     const result = {
@@ -2953,7 +2954,7 @@ export class WorkflowStore {
     );
   }
 
-  retryCommit(input: unknown): RoleView {
+  retryCommit(input: unknown): ParentView {
     const args = parentRetryContextMutation(input);
     exactKeys(args, ["workflow_id", "expected_version", "retry_context"], "commit retry");
     return this.#mutate(
@@ -3045,7 +3046,7 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return this.#roleView(result, "parent") as ParentView;
+    return this.#roleView(result, "parent");
   }
 
   createLinkedFollowupFromPlan(input: unknown): ParentView {
@@ -3097,7 +3098,7 @@ export class WorkflowStore {
         return this.#createLinkedFollowupSuccessor(row, state, expectedVersionNumber, followup);
       })
       .immediate();
-    return this.#roleView(result, "parent") as ParentView;
+    return this.#roleView(result, "parent");
   }
 }
 

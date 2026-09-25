@@ -10,12 +10,10 @@ import type {
   ImplementerHandoffView,
   ImplementerView,
   LinkedContinuation,
-  ParentView,
-  ReviewerView,
   ReviewerViewBase,
   Role,
-  RoleView,
   RoleViewCommon,
+  RoleViewForRole,
   ValidationRequirement,
   ValidationResult,
   ValidationResultView,
@@ -1109,31 +1107,11 @@ export function requiredPriorFindingClassificationIds(state: WorkflowState): Fin
   ].filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
-export function roleView(
+export function roleView<SelectedRole extends Role>(
   state: WorkflowState,
-  actorRole: "parent",
-  readiness?: WorkflowLegalityReadiness,
-): ParentView;
-export function roleView(
-  state: WorkflowState,
-  actorRole: "implementer",
-  readiness?: WorkflowLegalityReadiness,
-): ImplementerView;
-export function roleView(
-  state: WorkflowState,
-  actorRole: "reviewer",
-  readiness?: WorkflowLegalityReadiness,
-): ReviewerView;
-export function roleView(
-  state: WorkflowState,
-  actorRole: "committer",
-  readiness?: WorkflowLegalityReadiness,
-): CommitterView;
-export function roleView(
-  state: WorkflowState,
-  actorRole: Role,
+  actorRole: SelectedRole,
   readiness: WorkflowLegalityReadiness = {},
-): RoleView {
+): RoleViewForRole<SelectedRole> {
   role(actorRole);
   const view: Record<string, unknown> = {};
   const raw = state as unknown as Record<string, unknown>;
@@ -1177,12 +1155,13 @@ export function roleView(
       view[key] = clone(raw[key]);
     }
   } else {
+    const workerRole = actorRole as "implementer" | "reviewer" | "committer";
     const extra =
-      actorRole === "reviewer" && state.workflow_type === "review_only"
-        ? ROLE_VIEW_EXTRA[actorRole].filter(
+      workerRole === "reviewer" && state.workflow_type === "review_only"
+        ? ROLE_VIEW_EXTRA[workerRole].filter(
             (key) => !(REVIEWER_IMPLEMENTER_HANDOFF as readonly string[]).includes(key),
           )
-        : ROLE_VIEW_EXTRA[actorRole];
+        : ROLE_VIEW_EXTRA[workerRole];
     for (const key of extra) {
       if (
         key === "linked_findings" &&
@@ -1209,7 +1188,7 @@ export function roleView(
   if (actorRole === "reviewer") {
     view.required_prior_finding_ids = clone(requiredPriorFindingClassificationIds(state));
   }
-  return view as RoleView;
+  return view as RoleViewForRole<SelectedRole>;
 }
 
 export function effectiveBlockingFindings(state: WorkflowState): BlockingFinding[] {

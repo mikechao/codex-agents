@@ -9,6 +9,7 @@ import type {
   RawParentMutation,
   RawReviewSubmissionMutation,
   RawWorkerMutation,
+  WorkflowStore,
 } from "../store.js";
 import type { ROLE_VIEW_DERIVED } from "../transitions/queries.js";
 import {
@@ -16,6 +17,7 @@ import {
   type REVIEWER_IMPLEMENTER_HANDOFF,
   type ROLE_VIEW_COMMON,
   type ROLE_VIEW_EXTRA,
+  roleView,
   type V10_STATE_KEYS,
 } from "../transitions.js";
 import type {
@@ -35,6 +37,7 @@ import type {
   ImplementerView,
   OperatorParentMutationOperation,
   OperatorWorkerDispatchOperation,
+  ParentMutationResult,
   ParentView,
   PersistedImplementationAuthority,
   PlanAuthoringContent,
@@ -45,11 +48,15 @@ import type {
   PlanRevisionReplacements,
   RepairConformance,
   RepairDirective,
+  ReviewerView,
   ReviewerViewBase,
   ReviewRangePath,
   ReviewStatus,
   Role,
+  RoleView,
+  RoleViewByRole,
   RoleViewCommon,
+  RoleViewForRole,
   RuntimeId,
   ValidationRequirement,
   ValidationRequirementId,
@@ -271,6 +278,29 @@ function _compileDirectParentView(): void {
   parent.workflow;
 }
 
+function _compileReviewerDiscriminant(): void {
+  const change = undefined as unknown as Extract<ReviewerView, { workflow_type: "change" }>;
+  const reviewOnly = undefined as unknown as Extract<
+    ReviewerView,
+    { workflow_type: "review_only" }
+  >;
+  const implementationSummary: string | null = change.implementation_summary;
+  void implementationSummary;
+  // @ts-expect-error review-only reviewers do not receive the implementer handoff
+  reviewOnly.implementation_summary;
+}
+
+function _compileRoleViewLookup(): void {
+  const state = undefined as unknown as WorkflowState;
+  const role = undefined as unknown as Role;
+  const genericView: RoleView = roleView(state, role);
+  const parentView: ParentView = roleView(state, "parent");
+  const reviewerView: ReviewerView = roleView(state, "reviewer");
+  void genericView;
+  void parentView;
+  void reviewerView;
+}
+
 function _compilePlannerAuthoringView(): void {
   const planner = undefined as unknown as PlannerPlanRead;
   const replacements: PlanRevisionReplacements = {
@@ -318,6 +348,49 @@ const _extendedClassification: Record<
 > = undefined as unknown as WorkflowStateFieldClassification;
 void _extendedClassification;
 type _RoleValuesAreCanonical = Expect<Equal<Role, (typeof ROLE_VALUES)[number]>>;
+type _RoleViewMappingIsExact = Expect<
+  Equal<
+    RoleViewByRole,
+    {
+      parent: ParentView;
+      implementer: ImplementerView;
+      reviewer: ReviewerView;
+      committer: CommitterView;
+    }
+  >
+>;
+type _RoleViewGenericLookupIsComplete = Expect<Equal<RoleViewForRole<Role>, RoleView>>;
+type _RoleViewParentLookupIsExact = Expect<Equal<RoleViewForRole<"parent">, ParentView>>;
+type _RoleViewImplementerLookupIsExact = Expect<
+  Equal<RoleViewForRole<"implementer">, ImplementerView>
+>;
+type _RoleViewReviewerLookupIsExact = Expect<Equal<RoleViewForRole<"reviewer">, ReviewerView>>;
+type _RoleViewCommitterLookupIsExact = Expect<Equal<RoleViewForRole<"committer">, CommitterView>>;
+type _StoreParentGetterIsExact = Expect<Equal<ReturnType<WorkflowStore["parentGet"]>, ParentView>>;
+type _StoreImplementerGetterIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["implementerGet"]>, ImplementerView>
+>;
+type _StoreReviewerGetterIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["reviewerGet"]>, ReviewerView>
+>;
+type _StoreCommitterGetterIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["committerGet"]>, CommitterView>
+>;
+type _StoreParentMutationIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["expandScope"]>, ParentView>
+>;
+type _StoreParentResultMutationIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["authorizeRepair"]>, ParentMutationResult>
+>;
+type _StoreImplementerMutationIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["submitImplementation"]>, ImplementerView>
+>;
+type _StoreReviewerMutationIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["submitReview"]>, ReviewerView>
+>;
+type _StoreCommitterMutationIsExact = Expect<
+  Equal<ReturnType<WorkflowStore["prepareCommit"]>, CommitterView>
+>;
 type _PhaseValuesAreCanonical = Expect<
   Equal<WorkflowPhase, (typeof WORKFLOW_PHASE_VALUES)[number]>
 >;

@@ -1205,6 +1205,17 @@ export interface CommitterView extends RoleViewCommon {
 
 export type RoleView = ParentView | ImplementerView | ReviewerView | CommitterView;
 
+/** The authoritative projection selected for each workflow role. */
+export interface RoleViewByRole {
+  parent: ParentView;
+  implementer: ImplementerView;
+  reviewer: ReviewerView;
+  committer: CommitterView;
+}
+
+/** Look up the exact projected view for a literal role, or the complete union for Role. */
+export type RoleViewForRole<SelectedRole extends Role> = RoleViewByRole[SelectedRole];
+
 // ---------------------------------------------------------------------------
 // 10. Persistence rows (distinct from parsed domain types)
 // ---------------------------------------------------------------------------

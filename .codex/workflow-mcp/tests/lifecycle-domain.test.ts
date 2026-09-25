@@ -286,6 +286,33 @@ test("reviewer prior-finding binding preserves remediation order and de-duplicat
   assert.deepEqual(roleView(state, "reviewer").required_prior_finding_ids, ["BLOCKER", "OPTIONAL"]);
 });
 
+test("role projections preserve role-specific redaction and review-only omission", () => {
+  const change = workflowState({ phase: "REVIEWING" });
+  const parent = roleView(change, "parent");
+  const implementer = roleView(change, "implementer");
+  const reviewer = roleView(change, "reviewer");
+  const committer = roleView(change, "committer");
+
+  assert.equal("initial_receipt" in parent, false);
+  assert.equal("validation_results" in parent, true);
+  assert.equal("approved_plan" in implementer, true);
+  assert.equal("implementation_receipt" in implementer, false);
+  assert.equal("implementation_summary" in reviewer, true);
+  assert.equal("required_prior_finding_ids" in reviewer, true);
+  assert.equal("review_receipt" in reviewer, false);
+  assert.equal("commit_preparation" in committer, true);
+  assert.deepEqual(reviewer.permitted_next_actions, []);
+
+  const reviewOnly = workflowState({ workflow_type: "review_only", phase: "REVIEWING" });
+  const reviewOnlyView = roleView(reviewOnly, "reviewer");
+  assert.equal("implementation_summary" in reviewOnlyView, false);
+  assert.equal("agent_touched_paths" in reviewOnlyView, false);
+  assert.equal("required_prior_finding_ids" in reviewOnlyView, true);
+
+  parent.approved_paths.push("mutated-in-view" as never);
+  assert.equal(change.approved_paths.includes("mutated-in-view" as never), false);
+});
+
 test("deterministic lifecycle phases expose the complete role action matrix", () => {
   const receipt = syntheticReceipt();
   const blocker = blockingFinding();
